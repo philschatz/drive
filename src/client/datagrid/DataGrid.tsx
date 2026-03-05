@@ -25,11 +25,10 @@ import './datagrid.css';
 
 registerCustomFunctions();
 
-export function DataGrid({ docId }: { docId?: string; path?: string }) {
-  // Read initial sheet from URL without going through the router (avoids remount on sheet switch)
-  const initialSheetId = docId
-    ? (window.location.hash.match(/\/sheets\/([^/?#]+)/)?.[1])
-    : undefined;
+export function DataGrid({ docId, sheetId }: { docId?: string; sheetId?: string; path?: string }) {
+  // Read initial sheet from URL — prefer router-provided sheetId, fall back to parsing hash
+  const initialSheetId = sheetId
+    || (docId ? window.location.hash.match(/\/sheets\/([^/?#]+)/)?.[1] : undefined);
   const [status, setStatus] = useState('Loading spreadsheet...');
   const [gridName, setGridName] = useState('Spreadsheet');
   const [peerStates, setPeerStates] = useState<Record<string, PeerState<PresenceState>>>({});

@@ -14,6 +14,7 @@ export function App() {
       <AllCalendars path="/calendars/" />
       <Calendar path="/calendars/:docId" />
       <Tasks path="/tasks/:docId" />
+      <DataGrid path="/datagrids/:docId/sheets/:sheetId" />
       <DataGrid path="/datagrids/:docId" />
       <SourceViewer path="/source/:docId/:rest*" />
       <SourceViewer path="/source/:docId" />

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'preact/hooks';
-import { repo, Automerge, Presence, useConnectionStatus, getPublicWsUrl, setPublicWsUrl } from '../../shared/automerge';
+import { repo, Automerge, Presence, useConnectionStatus, getWsUrl, setWsUrl, findDocWithProgress } from '../../shared/automerge';
 import type { DocHandle } from '../../shared/automerge';
 import { peerColor } from '../../shared/presence';
 import { usePresenceLog, PresenceLogTable } from '../../shared/PresenceLog';
@@ -9,23 +9,62 @@ import dayjs from 'dayjs';
 import relativeTimePlugin from 'dayjs/plugin/relativeTime';
 import { a1ToInternal } from '@/datagrid/helpers';
 
-type DocType = 'calendar' | 'tasklist' | 'datagrid' | 'unknown';
+type DocType = 'Calendar' | 'TaskList' | 'DataGrid' | 'unknown';
 
 interface DocEntry {
   type: DocType;
   documentId: string;
-  handle: DocHandle<any>;
+  handle: DocHandle<any> | null;
   name: string;
-  count: number;
+  count: number | null;
   lastUpdated: number | null;
+  progress: number | null;
 }
 
-function getSavedIds(): string[] {
-  try { return JSON.parse(localStorage.getItem('automerge-doc-ids') || '[]'); } catch { return []; }
+interface DocCache {
+  type?: DocType;
+  name?: string;
 }
 
-function saveIds(ids: string[]) {
-  localStorage.setItem('automerge-doc-ids', JSON.stringify(ids));
+type DocMap = Record<string, DocCache>;
+
+const DOC_STORAGE_KEY = 'automerge-doc-ids';
+
+function getDocMap(): DocMap {
+  try {
+    const raw = JSON.parse(localStorage.getItem(DOC_STORAGE_KEY) || '{}');
+    // Migrate from old array format
+    if (Array.isArray(raw)) {
+      const map: DocMap = {};
+      for (const id of raw) map[id] = {};
+      localStorage.setItem(DOC_STORAGE_KEY, JSON.stringify(map));
+      return map;
+    }
+    return raw;
+  } catch { return {}; }
+}
+
+function saveDocMap(map: DocMap) {
+  localStorage.setItem(DOC_STORAGE_KEY, JSON.stringify(map));
+}
+
+function addDocId(id: string, cache?: DocCache) {
+  const map = getDocMap();
+  map[id] = cache || map[id] || {};
+  saveDocMap(map);
+}
+
+function removeDocId(id: string) {
+  const map = getDocMap();
+  delete map[id];
+  saveDocMap(map);
+}
+
+function updateDocCache(id: string, cache: DocCache) {
+  const map = getDocMap();
+  if (!(id in map)) return;
+  map[id] = { ...map[id], ...cache };
+  saveDocMap(map);
 }
 
 // Migrate old per-type storage keys into the unified key
@@ -37,9 +76,8 @@ function migrateOldStorageKeys() {
   try { calIds = JSON.parse(localStorage.getItem(oldCalKey) || '[]'); } catch {}
   try { taskIds = JSON.parse(localStorage.getItem(oldTaskKey) || '[]'); } catch {}
   if (calIds.length > 0 || taskIds.length > 0) {
-    const existing = getSavedIds();
-    const merged = [...new Set([...existing, ...calIds, ...taskIds])];
-    saveIds(merged);
+    for (const id of calIds) addDocId(id);
+    for (const id of taskIds) addDocId(id);
     localStorage.removeItem(oldCalKey);
     localStorage.removeItem(oldTaskKey);
   }
@@ -67,16 +105,14 @@ function relativeTime(ts: number | null): string {
 
 function docTypeFromDoc(doc: any): DocType {
   const t = doc?.['@type'];
-  if (t === 'Calendar') return 'calendar';
-  if (t === 'TaskList') return 'tasklist';
-  if (t === 'DataGrid') return 'datagrid';
+  if (t === 'Calendar' || t === 'TaskList' || t === 'DataGrid') return t;
   return 'unknown';
 }
 
 function docItemCount(doc: any, type: DocType): number {
-  if (type === 'calendar') return Object.keys(doc?.events || {}).length;
-  if (type === 'tasklist') return Object.keys(doc?.tasks || {}).length;
-  if (type === 'datagrid') {
+  if (type === 'Calendar') return Object.keys(doc?.events || {}).length;
+  if (type === 'TaskList') return Object.keys(doc?.tasks || {}).length;
+  if (type === 'DataGrid') {
     if (doc?.sheets) return Object.values(doc.sheets).reduce((sum: number, s: any) => sum + Object.keys(s.cells || {}).length, 0);
     return Object.keys(doc?.cells || {}).length;
   }
@@ -85,22 +121,35 @@ function docItemCount(doc: any, type: DocType): number {
 
 
 function viewPathForEntry(entry: DocEntry): string {
-  if (entry.type === 'calendar') return `#/calendars/${entry.documentId}`;
-  if (entry.type === 'tasklist') return `#/tasks/${entry.documentId}`;
-  if (entry.type === 'datagrid') return `#/datagrids/${entry.documentId}`;
+  if (entry.type === 'Calendar') return `#/calendars/${entry.documentId}`;
+  if (entry.type === 'TaskList') return `#/tasks/${entry.documentId}`;
+  if (entry.type === 'DataGrid') return `#/datagrids/${entry.documentId}`;
   return `#/source/${entry.documentId}`;
 }
 
 function iconForType(type: DocType): string {
-  if (type === 'calendar') return 'calendar_month';
-  if (type === 'tasklist') return 'checklist';
-  if (type === 'datagrid') return 'grid_on';
+  if (type === 'Calendar') return 'calendar_month';
+  if (type === 'TaskList') return 'checklist';
+  if (type === 'DataGrid') return 'grid_on';
   return 'help';
 }
 
+function initialEntries(): DocEntry[] {
+  migrateOldStorageKeys();
+  const docMap = getDocMap();
+  return Object.keys(docMap).map(id => ({
+    type: (docMap[id].type || 'unknown') as DocType,
+    documentId: id,
+    handle: null as DocHandle<any> | null,
+    name: docMap[id].name || id.slice(0, 8),
+    count: null as number | null,
+    lastUpdated: null as number | null,
+    progress: 0 as number | null,
+  }));
+}
+
 export function Home({ path }: { path?: string }) {
-  const [entries, setEntries] = useState<DocEntry[]>([]);
-  const [pendingIds, setPendingIds] = useState<string[]>([]);
+  const [entries, setEntries] = useState<DocEntry[]>(initialEntries);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [docPeers, setDocPeers] = useState<Record<string, { peerId: string; color: string }[]>>({});
@@ -112,57 +161,91 @@ export function Home({ path }: { path?: string }) {
   const resolveOne = useCallback(async (documentId: string) => {
     if (resolvedIdsRef.current.has(documentId)) return;
     resolvedIdsRef.current.add(documentId);
-    const drop = () => setPendingIds(prev => prev.filter(id => id !== documentId));
     try {
-      const timeout = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('timeout')), 2000)
-      );
-      const handle = repo.find(documentId as any);
-      // Suppress unhandled-rejection if the handle goes unavailable after we've
-      // already moved on (e.g. stale IDs from a previous session).
-      handle.catch?.(() => {});
-      const resolved = await Promise.race([handle, timeout]);
+      const resolved = await findDocWithProgress(documentId, (pct) => {
+        setEntries(prev => prev.map(e =>
+          e.documentId === documentId ? { ...e, progress: pct } : e
+        ));
+      });
       const doc = resolved.doc() as any;
-      if (!doc) { drop(); return; }
+      if (!doc) return; // entry stays as-is (stale)
       const type = docTypeFromDoc(doc);
-      const entry: DocEntry = { type, documentId, handle: resolved, name: doc.name || '', count: docItemCount(doc, type), lastUpdated: getLastChangeTime(doc) };
-      setEntries(prev => [...prev.filter(e => e.documentId !== documentId), entry]);
-      setPendingIds(prev => prev.filter(id => id !== documentId));
+      const name = doc.name || '';
+      updateDocCache(documentId, { type, name });
+      setEntries(prev => prev.map(e =>
+        e.documentId === documentId
+          ? { ...e, type, name, handle: resolved, count: docItemCount(doc, type), lastUpdated: getLastChangeTime(doc), progress: null }
+          : e
+      ));
     } catch {
-      drop();
+      setEntries(prev => prev.map(e =>
+        e.documentId === documentId ? { ...e, progress: null } : e
+      ));
     }
   }, []);
 
-  const loadAll = useCallback(async () => {
-    migrateOldStorageKeys();
-    const savedIds = getSavedIds();
-    if (savedIds.length > 0) {
-      setPendingIds(savedIds);
-      savedIds.forEach(id => resolveOne(id));
-    }
+  const loadAll = useCallback(() => {
+    const docMap = getDocMap();
+    const ids = Object.keys(docMap);
+    if (ids.length === 0) return;
+    // Add entries from cache for any IDs not already in the list
+    setEntries(prev => {
+      const existing = new Set(prev.map(e => e.documentId));
+      const newEntries = ids
+        .filter(id => !existing.has(id))
+        .map(id => ({
+          type: (docMap[id].type || 'unknown') as DocType,
+          documentId: id,
+          handle: null as DocHandle<any> | null,
+          name: docMap[id].name || id.slice(0, 8),
+          count: null as number | null,
+          lastUpdated: null as number | null,
+          progress: 0 as number | null,
+        }));
+      return newEntries.length > 0 ? [...prev, ...newEntries] : prev;
+    });
+    // Resolve each sequentially, yielding between loads
+    (async () => {
+      for (const id of ids) await resolveOne(id);
+    })();
   }, [resolveOne]);
 
-  useEffect(() => { loadAll(); }, [loadAll]);
+  // On mount, resolve entries one at a time, yielding between each so the browser stays responsive
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      for (const e of entries) {
+        if (cancelled) break;
+        await resolveOne(e.documentId);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const unsubs: (() => void)[] = [];
     for (const entry of entries) {
+      if (!entry.handle) continue;
       const onChange = () => {
-        const doc = entry.handle.doc();
+        const doc = entry.handle!.doc();
         if (!doc) return;
+        const name = doc.name || '';
+        const type = docTypeFromDoc(doc);
+        updateDocCache(entry.documentId, { type, name });
         setEntries(prev => prev.map(e =>
           e.documentId === entry.documentId
             ? {
                 ...e,
-                name: doc.name || '',
-                count: docItemCount(doc, e.type),
+                type,
+                name,
+                count: docItemCount(doc, type),
                 lastUpdated: Date.now(),
               }
             : e
         ));
       };
-      entry.handle.on('change', onChange);
-      unsubs.push(() => entry.handle.off('change', onChange));
+      entry.handle!.on('change', onChange);
+      unsubs.push(() => entry.handle!.off('change', onChange));
     }
     return () => unsubs.forEach(fn => fn());
   }, [entries.map(e => e.documentId).join(',')]);
@@ -180,6 +263,7 @@ export function Home({ path }: { path?: string }) {
     }
 
     for (const entry of entries) {
+      if (!entry.handle) continue;
       if (map.has(entry.documentId)) continue;
       const presence = new Presence<{ viewing: boolean }, any>({ handle: entry.handle });
       presence.start({ initialState: { viewing: false }, heartbeatMs: 5000, peerTtlMs: 15000 });
@@ -229,7 +313,7 @@ export function Home({ path }: { path?: string }) {
       d.name = 'Untitled';
       d.events = {};
     });
-    saveIds([...getSavedIds(), handle.documentId]);
+    addDocId(handle.documentId);
     setMessage('Calendar created');
     setError('');
     await loadAll();
@@ -242,7 +326,7 @@ export function Home({ path }: { path?: string }) {
       d.name = 'Untitled';
       d.tasks = {};
     });
-    saveIds([...getSavedIds(), handle.documentId]);
+    addDocId(handle.documentId);
     setMessage('Task list created');
     setError('');
     await loadAll();
@@ -275,7 +359,7 @@ export function Home({ path }: { path?: string }) {
       }
       d.sheets = { [sheetId]: sheet };
     });
-    saveIds([...getSavedIds(), handle.documentId]);
+    addDocId(handle.documentId);
     setMessage('Spreadsheet created');
     setError('');
     await loadAll();
@@ -426,7 +510,7 @@ export function Home({ path }: { path?: string }) {
         });
       }
 
-      saveIds([...getSavedIds(), handle.documentId]);
+      addDocId(handle.documentId);
       // location.href = `/datagrids/${handle.documentId}`;
       console.log(`/datagrids/${handle.documentId}`, handle.doc())
       alert(`/datagrids/${handle.documentId}`)
@@ -436,10 +520,10 @@ export function Home({ path }: { path?: string }) {
   }, []);
 
   const handleDelete = (entry: DocEntry) => {
-    const label = entry.type === 'calendar' ? 'calendar' : entry.type === 'tasklist' ? 'task list' : entry.type === 'datagrid' ? 'spreadsheet' : 'document';
+    const label = entry.type === 'Calendar' ? 'calendar' : entry.type === 'TaskList' ? 'task list' : entry.type === 'DataGrid' ? 'spreadsheet' : 'document';
     if (!confirm(`Delete "${entry.name || 'Untitled'}" ${label}?`)) return;
-    repo.delete(entry.documentId as any);
-    saveIds(getSavedIds().filter(id => id !== entry.documentId));
+    if (entry.handle) repo.delete(entry.documentId as any);
+    removeDocId(entry.documentId);
     setMessage(`${label.charAt(0).toUpperCase() + label.slice(1)} deleted`);
     setError('');
     setEntries(prev => prev.filter(e => e.documentId !== entry.documentId));
@@ -465,7 +549,7 @@ export function Home({ path }: { path?: string }) {
           d.events[uid] = event;
         }
       });
-      saveIds([...getSavedIds(), handle.documentId]);
+      addDocId(handle.documentId);
       setMessage(`Imported ${parsed.length} event${parsed.length !== 1 ? 's' : ''} into "${calName}"`);
       setError('');
       await loadAll();
@@ -474,25 +558,14 @@ export function Home({ path }: { path?: string }) {
     }
   }, [loadAll]);
 
-  const [addDocId, setAddDocId] = useState('');
-  const [publicWsInput, setPublicWsInput] = useState(() => getPublicWsUrl());
-
-  const handleAddDocId = useCallback(async (e: Event) => {
-    e.preventDefault();
-    const id = addDocId.trim();
-    if (!id) return;
-    const existing = getSavedIds();
-    if (!existing.includes(id)) {
-      saveIds([...existing, id]);
-    }
-    setAddDocId('');
-    resolvedIdsRef.current.delete(id);
-    setPendingIds(prev => prev.includes(id) ? prev : [...prev, id]);
-    resolveOne(id);
-  }, [addDocId, resolveOne]);
+  const defaultWsUrl = location.protocol === 'http:'
+    ? `ws://${location.host}`
+    : 'wss://sync.automerge.org';
+  const savedWsUrl = getWsUrl();
+  const [wsInput, setWsInput] = useState(() => savedWsUrl || defaultWsUrl);
+  const wsIsSet = !!savedWsUrl;
 
   const sorted = [...entries].sort((a, b) => (b.lastUpdated || 0) - (a.lastUpdated || 0));
-  const loadingIds = pendingIds.filter(id => !entries.some(e => e.documentId === id));
 
   return (
     <div>
@@ -529,8 +602,8 @@ export function Home({ path }: { path?: string }) {
               className="flex items-center gap-2 py-1 px-1 flex-nowrap border-b border-border"
             >
               <span className="material-symbols-outlined" style={{ width: '1.2rem', textAlign: 'center', color: '#666' }}>{icon}</span>
-              <a href={viewPath} className="text-sm flex-1 hover:underline">
-                {entry.name || 'Untitled'}
+              <a href={viewPath} className={`text-sm flex-1 hover:underline${!entry.handle && entry.progress == null ? ' text-muted-foreground' : ''}`}>
+                {entry.name || 'Untitled'}{!entry.handle && entry.progress == null ? ' (stale)' : ''}
               </a>
               {(docPeers[entry.documentId] || []).map(p => (
                 <div
@@ -540,19 +613,29 @@ export function Home({ path }: { path?: string }) {
                   title={`Peer ${p.peerId.slice(0, 8)} is viewing`}
                 />
               ))}
-              <a href={viewPath} className="text-xs text-muted-foreground no-underline" style={{ minWidth: '4rem', textAlign: 'right' }}>
-                {relativeTime(entry.lastUpdated)}
-              </a>
-              <a href={viewPath} className="text-xs text-muted-foreground no-underline">
-                ({entry.count})
-              </a>
-              <a
-                href={`#/source/${entry.documentId}`}
-                className="inline-flex items-center justify-center h-8 w-8 rounded-md text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-                title="View Source"
-              >
-                <span className="material-symbols-outlined">code</span>
-              </a>
+              {entry.progress != null ? (
+                <div className="w-16 h-1.5 bg-muted rounded-full overflow-hidden" title={`Loading ${entry.progress}%`}>
+                  <div className="h-full bg-foreground/30 rounded-full transition-all" style={{ width: `${entry.progress}%` }} />
+                </div>
+              ) : (
+                <>
+                  <a href={viewPath} className="text-xs text-muted-foreground no-underline" style={{ minWidth: '4rem', textAlign: 'right' }}>
+                    {relativeTime(entry.lastUpdated)}
+                  </a>
+                  <a href={viewPath} className="text-xs text-muted-foreground no-underline">
+                    ({entry.count ?? 0})
+                  </a>
+                </>
+              )}
+              {entry.handle && (
+                <a
+                  href={`#/source/${entry.documentId}`}
+                  className="inline-flex items-center justify-center h-8 w-8 rounded-md text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                  title="View Source"
+                >
+                  <span className="material-symbols-outlined">code</span>
+                </a>
+              )}
               <button
                 className="inline-flex items-center justify-center h-8 w-8 rounded-md text-destructive hover:bg-destructive/10"
                 title="Delete"
@@ -563,16 +646,7 @@ export function Home({ path }: { path?: string }) {
             </div>
           );
         })}
-        {loadingIds.map(id => (
-          <div
-            key={id}
-            className="flex items-center gap-2 py-1 px-1 flex-nowrap border-b border-border animate-pulse"
-          >
-            <div className="w-[1.2rem] h-4 rounded bg-muted" />
-            <div className="flex-1 h-4 rounded bg-muted" />
-          </div>
-        ))}
-        {sorted.length === 0 && loadingIds.length === 0 && (
+        {sorted.length === 0 && (
           <p className="text-sm text-muted-foreground py-4">No documents yet.</p>
         )}
       </div>
@@ -601,37 +675,29 @@ export function Home({ path }: { path?: string }) {
           <span className="material-symbols-outlined">upload_file</span> Import .xlsx
         </Button>
       </div>
-      <form className="flex items-center gap-2 mb-6" onSubmit={handleAddDocId as any}>
-        <input
-          type="text"
-          placeholder="Add document by ID…"
-          value={addDocId}
-          onInput={(e) => setAddDocId((e.target as HTMLInputElement).value)}
-          className="border border-border rounded px-2 py-1 text-sm flex-1 max-w-xs"
-        />
-        <button type="submit" className="border border-border rounded px-3 py-1 text-sm hover:bg-accent disabled:opacity-50" disabled={!addDocId.trim()}>
-          Add
-        </button>
-      </form>
-
       <form
         className="flex items-center gap-2 mb-6"
         onSubmit={(e) => {
           e.preventDefault();
-          setPublicWsUrl(publicWsInput);
+          if (wsIsSet) {
+            setWsUrl('');
+          } else {
+            setWsUrl(wsInput);
+          }
           location.reload();
         }}
       >
-        <span className="text-xs text-muted-foreground shrink-0">Public sync server</span>
+        <span className="text-xs text-muted-foreground shrink-0">Sync server</span>
         <input
           type="url"
           placeholder="wss://sync.automerge.org"
-          value={publicWsInput}
-          onInput={(e) => setPublicWsInput((e.target as HTMLInputElement).value)}
+          value={wsInput}
+          onInput={(e) => setWsInput((e.target as HTMLInputElement).value)}
           className="border border-border rounded px-2 py-1 text-sm flex-1 max-w-xs"
+          disabled={wsIsSet}
         />
         <button type="submit" className="border border-border rounded px-3 py-1 text-sm hover:bg-accent">
-          Save & reload
+          {wsIsSet ? 'Remove & reload' : 'Set & reload'}
         </button>
       </form>
 

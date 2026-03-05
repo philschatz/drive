@@ -7,30 +7,25 @@ export { Presence } from '@automerge/automerge-repo';
 export type { DocHandle, DocumentId, PeerId } from '@automerge/automerge-repo';
 export type { PeerState, PresenceState } from '@automerge/automerge-repo';
 
-const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-const wsUrl = `${wsProtocol}//${location.host}`;
+const REPO_WEBSOCKET_KEY = 'automerge-ws-url';
 
-const PUBLIC_WS_KEY = 'amcal-public-ws-url';
-
-export function getPublicWsUrl(): string {
-  return localStorage.getItem(PUBLIC_WS_KEY) ?? '';
+export function getWsUrl(): string {
+  return localStorage.getItem(REPO_WEBSOCKET_KEY) ?? '';
 }
 
-export function setPublicWsUrl(url: string) {
+export function setWsUrl(url: string) {
   const trimmed = url.trim();
   if (trimmed === '') {
-    localStorage.removeItem(PUBLIC_WS_KEY);
+    localStorage.removeItem(REPO_WEBSOCKET_KEY);
   } else {
-    localStorage.setItem(PUBLIC_WS_KEY, trimmed);
+    localStorage.setItem(REPO_WEBSOCKET_KEY, trimmed);
   }
 }
 
-const publicWsUrl = getPublicWsUrl();
-
-const network = [new BrowserWebSocketClientAdapter(wsUrl)];
-if (publicWsUrl) {
-  network.push(new BrowserWebSocketClientAdapter(publicWsUrl));
-}
+const savedWsUrl = getWsUrl();
+const network = savedWsUrl
+  ? [new BrowserWebSocketClientAdapter(savedWsUrl)]
+  : [];
 
 export const repo = new Repo({
   network,
