@@ -317,7 +317,6 @@ export function SourceViewer({ docId, rest }: { docId?: string; rest?: string; p
       const msg = err?.message || 'Failed to load document';
       setStatus(msg);
       setLoadProgress(null);
-      alert(`Document unavailable: ${msg}`);
     });
 
     return () => {

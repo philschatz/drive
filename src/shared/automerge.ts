@@ -44,6 +44,12 @@ export function setWsUrl(url: string) {
   worker.postMessage({ type: 'set-ws-url', wsUrl: trimmed });
 }
 
+// --- Repo network ready promise (resolves when main-thread repo connects to worker peer) ---
+
+let resolveRepoReady: () => void;
+export const workerReady = new Promise<void>(r => { resolveRepoReady = r; });
+repo.networkSubsystem.on('peer', () => { resolveRepoReady(); });
+
 /**
  * Load a document via findWithProgress, calling `onProgress(0-100)` as loading advances.
  * `onProgress` is called with `null` once the document is ready (caller should hide the bar).
@@ -52,41 +58,16 @@ export async function findDocWithProgress<T>(
   docId: string,
   onProgress: (pct: number | null) => void,
 ): Promise<import('@automerge/automerge-repo').DocHandle<T>> {
-  const progress = repo.findWithProgress<T>(docId as any);
-  if ('subscribe' in progress) {
-    if (progress.state === 'loading') onProgress(progress.progress ?? 0);
-    return new Promise((resolve, reject) => {
-      const unsub = progress.subscribe((p) => {
-        if (p.state === 'loading') {
-          onProgress(p.progress ?? 0);
-        } else if (p.state === 'ready') {
-          unsub();
-          onProgress(null);
-          resolve(p.handle);
-        } else if (p.state === 'failed') {
-          unsub();
-          onProgress(null);
-          reject((p as any).error ?? new Error('Load failed'));
-        } else {
-          unsub();
-          onProgress(null);
-          reject(new Error(`Document ${p.state}`));
-        }
-      });
-    });
-  } else {
+  await workerReady;
+  const handle = await repo.find<T>(docId as any);
+  if (handle.isReady()) {
     onProgress(null);
-    if (progress.state === 'ready') return progress.handle;
-    if (progress.state === 'failed') throw (progress as any).error ?? new Error('Load failed');
-    throw new Error(`Document ${progress.state}`);
+    return handle;
   }
+  await handle.whenReady();
+  onProgress(null);
+  return handle;
 }
-
-// --- Repo network ready promise (resolves when main-thread repo connects to worker peer) ---
-
-let resolveRepoReady: () => void;
-export const workerReady = new Promise<void>(r => { resolveRepoReady = r; });
-repo.networkSubsystem.on('peer', () => { resolveRepoReady(); });
 
 // --- Connection status (listens to worker messages) ---
 

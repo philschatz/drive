@@ -308,7 +308,6 @@ export function Calendar({ docId }: { docId?: string; path?: string }) {
       const msg = err?.message || 'Failed to load document';
       setStatus(msg);
       setLoadProgress(null);
-      alert(`Document unavailable: ${msg}`);
     });
 
     return () => {
