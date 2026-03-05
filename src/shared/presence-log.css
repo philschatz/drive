@@ -1,0 +1,122 @@
+/* Presence log */
+.presence-log {
+  margin-top: 2rem;
+  border: 1px solid #333;
+  border-radius: 6px;
+  background: #1e1e1e;
+  font-family: 'SF Mono', 'Consolas', 'Menlo', monospace;
+  font-size: 0.78rem;
+}
+
+.presence-log-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid #333;
+  color: #ccc;
+  cursor: default;
+}
+
+.presence-log-toggle {
+  cursor: pointer;
+  color: #888;
+  user-select: none;
+}
+
+.presence-log-count {
+  font-size: 0.7rem;
+  color: #888;
+  background: #333;
+  padding: 0.1rem 0.4rem;
+  border-radius: 8px;
+}
+
+.presence-log-body {
+  max-height: 300px;
+  overflow: auto;
+}
+
+.presence-log table {
+  width: 100%;
+  border-collapse: collapse;
+  color: #d4d4d4;
+}
+
+.presence-log th {
+  text-align: left;
+  padding: 0.3rem 0.5rem;
+  color: #888;
+  font-weight: 600;
+  border-bottom: 1px solid #333;
+  white-space: nowrap;
+  position: sticky;
+  top: 0;
+  background: #1e1e1e;
+}
+
+.presence-log td {
+  padding: 0.2rem 0.5rem;
+  border-bottom: 1px solid #2a2a2a;
+  vertical-align: top;
+}
+
+.presence-log .log-time {
+  color: #888;
+  white-space: nowrap;
+}
+
+.presence-log .log-dir {
+  text-align: center;
+  width: 1.5rem;
+}
+
+.presence-log .log-doc {
+  white-space: nowrap;
+}
+
+.presence-log .log-doc a {
+  color: #c586c0;
+  text-decoration: none;
+}
+
+.presence-log .log-doc a:hover {
+  text-decoration: underline;
+}
+
+.presence-log .log-peer {
+  color: #9cdcfe;
+  white-space: nowrap;
+}
+
+.presence-log .log-detail {
+  color: #ce9178;
+  word-break: break-all;
+  max-width: 400px;
+}
+
+.presence-log tr.log-sent .log-dir { color: #98c379; }
+.presence-log tr.log-recv .log-dir { color: #61afef; }
+
+.presence-log-empty {
+  padding: 1rem;
+  text-align: center;
+  color: #666;
+}
+
+.presence-log-clear {
+  font-size: 0.7rem;
+  padding: 0 0.3rem;
+  border: 1px solid #555;
+  background: transparent;
+  color: #aaa;
+  border-radius: 2px;
+  cursor: pointer;
+  line-height: 1.4;
+  font-family: inherit;
+}
+
+.presence-log-clear:hover {
+  background: #333;
+  color: #ddd;
+}

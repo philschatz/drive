@@ -1,0 +1,12 @@
+*, *::before, *::after { box-sizing: border-box; }
+body { font-family: system-ui, sans-serif; max-width: 1100px; margin: 0 auto; padding: 2rem 1rem; }
+#sx-cal { height: 80vh; }
+#sx-cal [data-event-id] { cursor: grab; }
+#sx-cal [data-event-id]:active { cursor: grabbing; }
+.drag-ghost { position: fixed; pointer-events: none; opacity: 0.7; z-index: 10000; box-shadow: 0 4px 12px rgba(0,0,0,0.3); border-radius: 4px; transition: none; }
+.drag-source { opacity: 0.4; }
+.resize-cursor { cursor: ns-resize !important; }
+body.dragging { user-select: none; }
+body.dragging--move { cursor: grabbing; }
+body.dragging--resize { cursor: ns-resize; }
+.hidden { display: none; }

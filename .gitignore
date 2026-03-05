@@ -1,0 +1,44 @@
+# Data files
+.data/
+.data-cypress/
+.data-test/
+.data-jest/
+
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+public/
+*.tsbuildinfo
+
+# Test coverage
+coverage/
+.nyc_output/
+
+# IDE
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Environment
+.env
+.env.local
+
+# Cypress
+cypress/videos/
+cypress/screenshots/
+
+# Temporary files
+*.tmp
+test.ics
+test-parser.js

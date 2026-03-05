@@ -1,0 +1,52 @@
+/* Dark-themed validation panel (used in SourceViewer) */
+.validation-panel-dark {
+  margin-bottom: 0.75rem;
+  border: 1px solid #e5c07b40;
+  border-radius: 6px;
+  background: #2d2d2d;
+  font-size: 0.8rem;
+  overflow: hidden;
+}
+
+.validation-panel-dark .validation-panel-header {
+  padding: 0.4rem 0.7rem;
+  background: #e5c07b18;
+  color: #e5c07b;
+  font-weight: 600;
+}
+
+.validation-panel-dark .validation-panel-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 20rem;
+  overflow-y: auto;
+}
+
+.validation-panel-dark .validation-panel-item {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.3rem 0.7rem;
+  cursor: pointer;
+  border-top: 1px solid #333;
+  color: #ccc;
+}
+
+.validation-panel-dark .validation-panel-item:hover {
+  background: #353535;
+}
+
+.validation-panel-dark .validation-panel-kind {
+  flex-shrink: 0;
+  font-size: 0.85em;
+}
+
+.validation-panel-dark .validation-panel-path {
+  color: #9cdcfe;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.validation-panel-dark .validation-panel-msg {
+  color: #e5c07b;
+}

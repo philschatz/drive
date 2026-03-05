@@ -1,0 +1,21 @@
+{
+  "recommendations": [
+    // TypeScript and Node.js
+    "dbaeumer.vscode-eslint",
+    "esbenp.prettier-vscode",
+
+    // Testing
+    "orta.vscode-jest",
+
+    // REST API testing
+    "humao.rest-client",
+
+    // CalDAV and iCalendar
+    "hediet.vscode-drawio",
+
+    // General productivity
+    "christian-kohler.path-intellisense",
+    "usernamehw.errorlens",
+    "eamodio.gitlens"
+  ]
+}

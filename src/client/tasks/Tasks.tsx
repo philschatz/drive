@@ -1,0 +1,378 @@
+import { useState, useEffect, useRef, useCallback, useMemo } from 'preact/hooks';
+import './tasks.css';
+import { findDocWithProgress } from '../../shared/automerge';
+import type { DocHandle, PeerState, Presence } from '../../shared/automerge';
+import { peerColor, initPresence, PresenceBar, type PresenceState } from '../../shared/presence';
+import { usePresenceLog, PresenceLogTable } from '../../shared/PresenceLog';
+import { deepAssign } from '../../shared/deep-assign';
+import type { TaskDocument, Task } from './schema';
+import { TaskEditor } from './TaskEditor';
+import { useDocumentValidation } from '../../shared/useDocumentValidation';
+import { ValidationPanel } from '../../shared/ValidationPanel';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Badge } from '@/components/ui/badge';
+
+interface EditorState {
+  uid: string;
+  task: Task;
+  isNew: boolean;
+}
+
+
+const PATH_PROP_TO_FIELDS: Record<string, string[]> = {
+  title: ['ted-title'],
+  due: ['ted-due'],
+  priority: ['ted-priority'],
+  progress: ['ted-progress'],
+  description: ['ted-desc'],
+};
+
+function generateUid() {
+  return Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+}
+
+function sortedTasks(tasks: Record<string, Task>): { uid: string; task: Task }[] {
+  const entries = Object.entries(tasks).map(([uid, task]) => ({ uid, task }));
+  const incomplete = entries.filter(e => e.task.progress !== 'completed' && e.task.progress !== 'cancelled');
+  const done = entries.filter(e => e.task.progress === 'completed' || e.task.progress === 'cancelled');
+
+  const byDueThenUid = (a: { uid: string; task: Task }, b: { uid: string; task: Task }) => {
+    const ad = a.task.due || '';
+    const bd = b.task.due || '';
+    if (ad && !bd) return -1;
+    if (!ad && bd) return 1;
+    if (ad !== bd) return ad < bd ? -1 : 1;
+    return a.uid < b.uid ? -1 : 1;
+  };
+
+  incomplete.sort(byDueThenUid);
+  done.sort(byDueThenUid);
+  return [...incomplete, ...done];
+}
+
+export function Tasks({ docId }: { docId?: string; path?: string }) {
+  const [status, setStatus] = useState('Loading task list...');
+  const [loadProgress, setLoadProgress] = useState<number | null>(null);
+  const [listName, setListName] = useState('Tasks');
+  const [listDesc, setListDesc] = useState('');
+  const [tasks, setTasks] = useState<Record<string, Task>>({});
+  const [editorState, setEditorState] = useState<EditorState | null>(null);
+  const [peerStates, setPeerStates] = useState<Record<string, PeerState<PresenceState>>>({});
+  const [quickAddText, setQuickAddText] = useState('');
+
+  const [validationHandle, setValidationHandle] = useState<DocHandle<TaskDocument> | null>(null);
+  const validationErrors = useDocumentValidation(validationHandle);
+  const handleRef = useRef<DocHandle<TaskDocument> | null>(null);
+  const presenceRef = useRef<Presence<PresenceState, TaskDocument> | null>(null);
+  const presenceCleanupRef = useRef<(() => void) | null>(null);
+  const { entries: presenceLog, clear: clearLog, attachToPresence } = usePresenceLog();
+  const editorStateRef = useRef(editorState);
+  editorStateRef.current = editorState;
+  const titleFocusedRef = useRef(false);
+  const descFocusedRef = useRef(false);
+
+  const saveTask = useCallback((uid: string, taskData: Task) => {
+    const handle = handleRef.current;
+    if (!handle) return;
+    handle.change((d: any) => {
+      if (!d.tasks[uid]) {
+        const clean: any = {};
+        for (const key in taskData) {
+          if ((taskData as any)[key] !== undefined) clean[key] = (taskData as any)[key];
+        }
+        d.tasks[uid] = clean;
+      } else {
+        deepAssign(d.tasks[uid], taskData);
+      }
+    });
+    setTasks({ ...(handle.doc()?.tasks || {}) });
+    setEditorState(null);
+  }, []);
+
+  const deleteTask = useCallback((uid: string) => {
+    const handle = handleRef.current;
+    if (!handle) return;
+    handle.change((d: any) => { delete d.tasks[uid]; });
+    setTasks({ ...(handle.doc()?.tasks || {}) });
+    setEditorState(null);
+  }, []);
+
+  const openEditor = useCallback((uid: string | null, task: Task | null) => {
+    const isNew = !uid;
+    if (isNew) {
+      uid = generateUid();
+      task = { '@type': 'Task', title: '', progress: 'needs-action' };
+    }
+    setEditorState({ uid: uid!, task: task!, isNew });
+  }, []);
+
+  const handleQuickAdd = useCallback(() => {
+    const title = quickAddText.trim();
+    if (!title) return;
+    const uid = generateUid();
+    const task: Task = { '@type': 'Task', title, progress: 'needs-action' };
+    saveTask(uid, task);
+    setQuickAddText('');
+  }, [quickAddText, saveTask]);
+
+  const deleteCompleted = useCallback(() => {
+    const handle = handleRef.current;
+    if (!handle) return;
+    const doc = handle.doc();
+    if (!doc) return;
+    const uids = Object.entries(doc.tasks)
+      .filter(([, t]) => t.progress === 'completed' || t.progress === 'cancelled')
+      .map(([uid]) => uid);
+    if (uids.length === 0) return;
+    handle.change((d: any) => {
+      for (const uid of uids) delete d.tasks[uid];
+    });
+    setTasks({ ...(handle.doc()?.tasks || {}) });
+    if (editorStateRef.current && uids.includes(editorStateRef.current.uid)) {
+      setEditorState(null);
+    }
+  }, []);
+
+  const toggleComplete = useCallback((uid: string, task: Task) => {
+    const newProgress = task.progress === 'completed' ? 'needs-action' : 'completed';
+    const handle = handleRef.current;
+    if (!handle) return;
+    handle.change((d: any) => { d.tasks[uid].progress = newProgress; });
+    setTasks({ ...(handle.doc()?.tasks || {}) });
+  }, []);
+
+  useEffect(() => {
+    const p = presenceRef.current;
+    if (!p || !p.running) return;
+    if (!editorState) p.broadcast('focusedField', null);
+  }, [editorState]);
+
+  const handleFieldFocus = useCallback((path: (string | number)[] | null) => {
+    const p = presenceRef.current;
+    if (!p || !p.running) return;
+    p.broadcast('focusedField', path);
+  }, []);
+
+  const peerFocusedFields = useMemo(() => {
+    const result: Record<string, { color: string; peerId: string }> = {};
+    if (!editorState) return result;
+    for (const peer of Object.values(peerStates)) {
+      const pf = peer.value.focusedField;
+      if (!pf || pf.length < 3) continue;
+      if (pf[0] !== 'tasks' || pf[1] !== editorState.uid) continue;
+      const prop = pf[2] as string;
+      const inputIds = PATH_PROP_TO_FIELDS[prop];
+      if (inputIds) {
+        const info = { color: peerColor(peer.peerId), peerId: peer.peerId };
+        for (const id of inputIds) result[id] = info;
+      }
+    }
+    return result;
+  }, [peerStates, editorState]);
+
+  useEffect(() => {
+    if (!docId) {
+      setStatus('No document ID. Go to the home page to select a task list.');
+      return;
+    }
+
+    let mounted = true;
+
+    (async () => {
+      setLoadProgress(0);
+      const handle = await findDocWithProgress<TaskDocument>(docId, setLoadProgress);
+      const doc = handle.doc();
+      if (!mounted) return;
+      if (!doc) { setStatus('Document not found. Check the URL.'); return; }
+
+      handleRef.current = handle;
+      setValidationHandle(handle);
+      setTasks({ ...(doc.tasks || {}) });
+      if (doc.name) setListName(doc.name);
+      if (doc.description) setListDesc(doc.description);
+      document.title = (doc.name || 'Tasks') + ' - Tasks';
+      setStatus('');
+
+      const { presence, cleanup: presenceCleanup } = initPresence<PresenceState>(
+        handle,
+        () => ({ viewing: true, focusedField: null }),
+        (states) => { if (mounted) setPeerStates(states); },
+      );
+      presenceRef.current = presence;
+      presenceCleanupRef.current = presenceCleanup;
+      attachToPresence(presence, { current: mounted });
+
+      handle.on('change', () => {
+        const d = handle.doc();
+        if (!d) return;
+        setTasks({ ...(d.tasks || {}) });
+        if (d.name && !titleFocusedRef.current) {
+          setListName(d.name);
+          document.title = d.name + ' - Tasks';
+        }
+        if (!descFocusedRef.current) setListDesc(d.description || '');
+
+        const es = editorStateRef.current;
+        if (es && !es.isNew) {
+          const fresh = d.tasks[es.uid];
+          if (fresh) {
+            setEditorState(prev => {
+              if (!prev || prev.uid !== es.uid) return prev;
+              return { ...prev, task: fresh };
+            });
+          } else {
+            setEditorState(null);
+          }
+        }
+      });
+    })();
+
+    return () => {
+      mounted = false;
+      setValidationHandle(null);
+      presenceCleanupRef.current?.();
+      presenceRef.current = null;
+      presenceCleanupRef.current = null;
+    };
+  }, [docId]);
+
+  const peerList = Object.values(peerStates).filter(p => p.value.viewing);
+  const peerEditingTasks = useMemo(() => {
+    const result: Record<string, { color: string; peerId: string }> = {};
+    for (const peer of Object.values(peerStates)) {
+      const pf = peer.value.focusedField;
+      if (pf && pf[0] === 'tasks' && pf[1]) {
+        result[pf[1] as string] = { color: peerColor(peer.peerId), peerId: peer.peerId };
+      }
+    }
+    return result;
+  }, [peerStates]);
+  const sorted = sortedTasks(tasks);
+
+  return (
+    <>
+      <div className="flex items-center gap-1 mb-1">
+        <a href="#/" className="inline-flex items-center justify-center h-10 w-10 rounded-md hover:bg-accent hover:text-accent-foreground">
+          <span className="material-symbols-outlined">arrow_back</span>
+        </a>
+        <a href={`#/source/${docId}`} className="inline-flex items-center justify-center h-10 w-10 rounded-md hover:bg-accent hover:text-accent-foreground" title="View Source">
+          <span className="material-symbols-outlined">code</span>
+        </a>
+        <input
+          className="border-0 bg-transparent text-xl font-bold outline-none flex-1"
+          value={listName}
+          onFocus={() => { titleFocusedRef.current = true; }}
+          onInput={(e: any) => setListName(e.currentTarget.value)}
+          onBlur={(e: any) => {
+            titleFocusedRef.current = false;
+            const name = e.currentTarget.value.trim() || 'Tasks';
+            setListName(name);
+            const handle = handleRef.current;
+            if (handle) {
+              handle.change((d: any) => { d.name = name; });
+              document.title = name + ' - Tasks';
+            }
+          }}
+          onKeyDown={(e: any) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+        />
+      </div>
+      <input
+        className="border-0 bg-transparent text-sm text-muted-foreground outline-none w-full"
+        placeholder="Add a description..."
+        value={listDesc}
+        onFocus={() => { descFocusedRef.current = true; }}
+        onInput={(e: any) => setListDesc(e.currentTarget.value)}
+        onBlur={(e: any) => {
+          descFocusedRef.current = false;
+          const desc = e.currentTarget.value.trim();
+          setListDesc(desc);
+          const handle = handleRef.current;
+          if (handle) {
+            handle.change((d: any) => { d.description = desc || undefined; });
+          }
+        }}
+        onKeyDown={(e: any) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+      />
+      <PresenceBar
+        peers={peerList}
+        peerTitle={(peer) => `Peer ${peer.peerId.slice(0, 8)}${peer.value.focusedField ? ' (editing)' : ''}`}
+      />
+      <ValidationPanel errors={validationErrors} docId={docId} />
+      {loadProgress !== null && (
+        <div className="load-progress-track">
+          <div className="load-progress-bar" style={{ width: `${loadProgress}%` }} />
+        </div>
+      )}
+      {status && <p className="text-sm text-muted-foreground my-1">{status}</p>}
+
+      <div className="flex items-center gap-2 mb-3">
+        <Input
+          placeholder="Add a task..."
+          value={quickAddText}
+          onInput={(e: any) => setQuickAddText(e.currentTarget.value)}
+          onKeyDown={(e: any) => { if (e.key === 'Enter') handleQuickAdd(); }}
+          className="flex-1"
+        />
+        <Button onClick={handleQuickAdd}>Add</Button>
+        <Button variant="outline" className="text-destructive" onClick={deleteCompleted}>Delete Completed</Button>
+      </div>
+
+      <div className="flex flex-col">
+        {sorted.map(({ uid, task }) => {
+          const isDone = task.progress === 'completed' || task.progress === 'cancelled';
+          const peerEdit = peerEditingTasks[uid];
+          return (
+            <div
+              key={uid}
+              className="flex items-center gap-2 py-1 px-1 flex-nowrap border-b border-border"
+              style={{ cursor: 'default', opacity: peerEdit ? 0.5 : undefined }}
+            >
+              <Checkbox
+                checked={isDone}
+                onCheckedChange={() => toggleComplete(uid, task)}
+              />
+              <span
+                className="text-sm flex-1 cursor-pointer"
+                style={{
+                  textDecoration: isDone ? 'line-through' : 'none',
+                  opacity: isDone ? 0.5 : 1,
+                }}
+                onClick={() => openEditor(uid, task)}
+              >
+                {task.title || 'Untitled'}
+              </span>
+              {task.due && <Badge variant="secondary">{task.due.substring(0, 10)}</Badge>}
+              {task.priority ? <Badge variant="default" className="bg-pink-500">P{task.priority}</Badge> : null}
+              {peerEdit && (
+                <div
+                  className="w-2 h-2 rounded-full shrink-0"
+                  style={{ backgroundColor: peerEdit.color }}
+                  title={`Peer ${peerEdit.peerId.slice(0, 8)} is editing`}
+                />
+              )}
+            </div>
+          );
+        })}
+        {sorted.length === 0 && !status && (
+          <p className="text-sm text-muted-foreground py-4">No tasks yet. Add one above.</p>
+        )}
+      </div>
+
+      <TaskEditor
+        uid={editorState?.uid || ''}
+        task={editorState?.task || { '@type': 'Task', title: '', progress: 'needs-action' }}
+        isNew={editorState?.isNew || false}
+        opened={!!editorState}
+        onSave={saveTask}
+        onDelete={deleteTask}
+        onClose={() => setEditorState(null)}
+        onFieldFocus={handleFieldFocus}
+        peerFocusedFields={peerFocusedFields}
+      />
+
+      <PresenceLogTable entries={presenceLog} onClear={clearLog} />
+    </>
+  );
+}

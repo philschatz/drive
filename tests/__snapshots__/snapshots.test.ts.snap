@@ -1,0 +1,323 @@
+// Jest Snapshot v1, https://jestjs.io/docs/snapshot-testing
+
+exports[`Parser snapshots all-day event 1`] = `
+[
+  {
+    "event": {
+      "@type": "Event",
+      "description": "Office closed for holiday",
+      "duration": "P1D",
+      "start": "2024-03-20",
+      "status": "confirmed",
+      "timeZone": null,
+      "title": "Company Holiday",
+    },
+    "uid": "allday-1",
+  },
+]
+`;
+
+exports[`Parser snapshots event with end time instead of duration 1`] = `
+[
+  {
+    "event": {
+      "@type": "Event",
+      "description": "All-day conference session",
+      "duration": "PT9H30M",
+      "location": "Convention Center",
+      "start": "2024-03-10T08:00:00",
+      "timeZone": "Etc/UTC",
+      "title": "Conference Day",
+    },
+    "uid": "endtime-1",
+  },
+]
+`;
+
+exports[`Parser snapshots event with no timezone 1`] = `
+[
+  {
+    "event": {
+      "@type": "Event",
+      "duration": "PT45M",
+      "start": "2024-02-15T12:00:00",
+      "timeZone": null,
+      "title": "Lunch Break",
+    },
+    "uid": "floating-1",
+  },
+]
+`;
+
+exports[`Parser snapshots recurring event 1`] = `
+[
+  {
+    "event": {
+      "@type": "Event",
+      "duration": "PT1H",
+      "recurrenceRule": {
+        "@type": "RecurrenceRule",
+        "byDay": [
+          {
+            "@type": "NDay",
+            "day": "mo",
+          },
+        ],
+        "count": 10,
+        "firstDayOfWeek": "mo",
+        "frequency": "weekly",
+      },
+      "start": "2024-01-15T09:00:00",
+      "timeZone": "America/New_York",
+      "title": "Weekly Standup",
+    },
+    "uid": "recurring-1",
+  },
+]
+`;
+
+exports[`Parser snapshots recurring event with deleted occurrences 1`] = `
+[
+  {
+    "event": {
+      "@type": "Event",
+      "duration": "PT2H",
+      "recurrenceOverrides": {
+        "2024-02-02T18:00:00": {
+          "excluded": true,
+        },
+        "2024-04-05T18:00:00": {
+          "excluded": true,
+        },
+      },
+      "recurrenceRule": {
+        "@type": "RecurrenceRule",
+        "byDay": [
+          {
+            "@type": "NDay",
+            "day": "fr",
+            "nthOfPeriod": 1,
+          },
+        ],
+        "firstDayOfWeek": "mo",
+        "frequency": "monthly",
+      },
+      "start": "2024-01-01T18:00:00",
+      "timeZone": "US/Eastern",
+      "title": "Book Club",
+    },
+    "uid": "recurring-deleted-1",
+  },
+]
+`;
+
+exports[`Parser snapshots recurring event with overridden entry 1`] = `
+[
+  {
+    "event": {
+      "@type": "Event",
+      "duration": "PT30M",
+      "recurrenceOverrides": {
+        "2024-01-17T10:00:00": {
+          "start": "2024-01-17T14:00:00",
+          "title": "Daily Check-in (moved)",
+        },
+      },
+      "recurrenceRule": {
+        "@type": "RecurrenceRule",
+        "count": 5,
+        "firstDayOfWeek": "mo",
+        "frequency": "daily",
+      },
+      "start": "2024-01-15T10:00:00",
+      "timeZone": "Europe/London",
+      "title": "Daily Check-in",
+    },
+    "uid": "recurring-override-1",
+  },
+]
+`;
+
+exports[`Round-trip snapshots calendarToIcs with mixed events 1`] = `
+"BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Automerge Calendar//EN
+X-WR-CALNAME:Test Calendar
+BEGIN:VEVENT
+UID:allday-1
+SUMMARY:Company Holiday
+DESCRIPTION:Office closed for holiday
+DTSTART;VALUE=DATE:20240320
+DURATION:P1D
+STATUS:CONFIRMED
+END:VEVENT
+BEGIN:VEVENT
+UID:recurring-1
+SUMMARY:Weekly Standup
+DTSTART;VALUE=DATE-TIME;TZID=America/New_York:20240115T090000
+DURATION:PT1H
+RRULE:FREQ=WEEKLY;COUNT=10;BYDAY=MO;WKST=MO
+END:VEVENT
+BEGIN:VEVENT
+UID:floating-1
+SUMMARY:Lunch Break
+DTSTART;VALUE=DATE-TIME:20240215T120000
+DURATION:PT45M
+END:VEVENT
+END:VCALENDAR
+"
+`;
+
+exports[`Round-trip snapshots recurring event round-trips 1`] = `
+"BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Automerge Calendar//EN
+BEGIN:VEVENT
+UID:recurring-1
+SUMMARY:Weekly Standup
+DTSTART;VALUE=DATE-TIME;TZID=America/New_York:20240115T090000
+DURATION:PT1H
+RRULE:FREQ=WEEKLY;COUNT=10;BYDAY=MO;WKST=MO
+END:VEVENT
+END:VCALENDAR
+"
+`;
+
+exports[`Round-trip snapshots recurring with deleted occurrences round-trips 1`] = `
+"BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Automerge Calendar//EN
+BEGIN:VEVENT
+UID:recurring-deleted-1
+SUMMARY:Book Club
+DTSTART;VALUE=DATE-TIME;TZID=US/Eastern:20240101T180000
+DURATION:PT2H
+RRULE:FREQ=MONTHLY;BYDAY=1FR;WKST=MO
+EXDATE;TZID=US/Eastern:20240202T180000
+EXDATE;TZID=US/Eastern:20240405T180000
+END:VEVENT
+END:VCALENDAR
+"
+`;
+
+exports[`Round-trip snapshots recurring with override round-trips 1`] = `
+"BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Automerge Calendar//EN
+BEGIN:VEVENT
+UID:recurring-override-1
+SUMMARY:Daily Check-in
+DTSTART;VALUE=DATE-TIME;TZID=Europe/London:20240115T100000
+DURATION:PT30M
+RRULE:FREQ=DAILY;COUNT=5;WKST=MO
+END:VEVENT
+BEGIN:VEVENT
+UID:recurring-override-1
+RECURRENCE-ID;TZID=Europe/London:20240117T100000
+SUMMARY:Daily Check-in (moved)
+DTSTART;VALUE=DATE-TIME;TZID=Europe/London:20240117T140000
+DURATION:PT30M
+END:VEVENT
+END:VCALENDAR
+"
+`;
+
+exports[`Serializer snapshots all-day event 1`] = `
+"BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Automerge Calendar//EN
+BEGIN:VEVENT
+UID:allday-1
+SUMMARY:Company Holiday
+DESCRIPTION:Office closed for holiday
+DTSTART;VALUE=DATE:20240320
+DURATION:P1D
+STATUS:CONFIRMED
+END:VEVENT
+END:VCALENDAR
+"
+`;
+
+exports[`Serializer snapshots event with end time (serialized as duration) 1`] = `
+"BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Automerge Calendar//EN
+BEGIN:VEVENT
+UID:endtime-1
+SUMMARY:Conference Day
+DESCRIPTION:All-day conference session
+DTSTART;VALUE=DATE-TIME:20240310T080000Z
+DURATION:PT9H30M
+LOCATION:Convention Center
+END:VEVENT
+END:VCALENDAR
+"
+`;
+
+exports[`Serializer snapshots event with no timezone 1`] = `
+"BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Automerge Calendar//EN
+BEGIN:VEVENT
+UID:floating-1
+SUMMARY:Lunch Break
+DTSTART;VALUE=DATE-TIME:20240215T120000
+DURATION:PT45M
+END:VEVENT
+END:VCALENDAR
+"
+`;
+
+exports[`Serializer snapshots recurring event 1`] = `
+"BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Automerge Calendar//EN
+BEGIN:VEVENT
+UID:recurring-1
+SUMMARY:Weekly Standup
+DTSTART;VALUE=DATE-TIME;TZID=America/New_York:20240115T090000
+DURATION:PT1H
+RRULE:FREQ=WEEKLY;COUNT=10;BYDAY=MO
+END:VEVENT
+END:VCALENDAR
+"
+`;
+
+exports[`Serializer snapshots recurring event with deleted occurrences 1`] = `
+"BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Automerge Calendar//EN
+BEGIN:VEVENT
+UID:recurring-deleted-1
+SUMMARY:Book Club
+DTSTART;VALUE=DATE-TIME;TZID=US/Eastern:20240101T180000
+DURATION:PT2H
+RRULE:FREQ=MONTHLY;BYDAY=1FR
+EXDATE;TZID=US/Eastern:20240202T180000
+EXDATE;TZID=US/Eastern:20240405T180000
+END:VEVENT
+END:VCALENDAR
+"
+`;
+
+exports[`Serializer snapshots recurring event with overridden entry 1`] = `
+"BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Automerge Calendar//EN
+BEGIN:VEVENT
+UID:recurring-override-1
+SUMMARY:Daily Check-in
+DTSTART;VALUE=DATE-TIME;TZID=Europe/London:20240115T100000
+DURATION:PT30M
+RRULE:FREQ=DAILY;COUNT=5
+END:VEVENT
+BEGIN:VEVENT
+UID:recurring-override-1
+RECURRENCE-ID;TZID=Europe/London:20240117T100000
+SUMMARY:Daily Check-in (moved)
+DTSTART;VALUE=DATE-TIME;TZID=Europe/London:20240117T140000
+DURATION:PT30M
+END:VEVENT
+END:VCALENDAR
+"
+`;

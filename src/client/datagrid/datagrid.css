@@ -1,0 +1,440 @@
+.datagrid-page {
+  max-width: 1200px;
+  margin: 2rem auto;
+  padding: 0 1rem;
+}
+
+.datagrid-container {
+  border: 1px solid #dee2e6;
+  border-radius: 6px;
+  overflow: auto;
+  outline: none;
+}
+
+/* Formula bar */
+.formula-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid #dee2e6;
+  border-radius: 4px;
+  padding: 4px 8px;
+  margin-bottom: 8px;
+  background: #fff;
+}
+
+.formula-cell-label {
+  font-weight: 600;
+  font-size: 0.85rem;
+  min-width: 3rem;
+  color: #495057;
+  font-family: monospace;
+}
+
+.formula-input {
+  flex: 1;
+  border: none;
+  outline: none;
+  font-size: 0.85rem;
+  font-family: monospace;
+  background: transparent;
+}
+
+/* Table */
+.datagrid-table {
+  border-collapse: collapse;
+  width: 100%;
+  table-layout: fixed;
+  font-size: 0.85rem;
+}
+
+.datagrid-table th,
+.datagrid-table td {
+  border: 1px solid #dee2e6;
+  padding: 0;
+}
+
+/* Column headers */
+.datagrid-col-header {
+  background: #f1f3f5;
+  color: #495057;
+  font-weight: 600;
+  text-align: center;
+  padding: 4px 8px;
+  font-size: 0.8rem;
+  user-select: none;
+  cursor: grab;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.col-resize-handle {
+  position: absolute;
+  right: -2px;
+  top: 0;
+  bottom: 0;
+  width: 5px;
+  cursor: col-resize;
+  z-index: 2;
+}
+
+.col-resize-handle:hover {
+  background: rgba(34, 139, 230, 0.3);
+}
+
+/* Row headers */
+.datagrid-row-header {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: #f1f3f5;
+  color: #868e96;
+  font-weight: 500;
+  text-align: center;
+  width: 3rem;
+  min-width: 3rem;
+  max-width: 3rem;
+  font-size: 0.75rem;
+  user-select: none;
+  cursor: grab;
+  padding: 2px 4px;
+}
+
+/* Selected headers */
+.datagrid-row-header.selected,
+.datagrid-col-header.selected {
+  background: #d0ebff;
+  color: #1971c2;
+}
+
+/* Drop indicators for drag reorder */
+.datagrid-row-header.drop-above {
+  box-shadow: inset 0 2px 0 0 #228be6;
+}
+.datagrid-row-header.drop-below {
+  box-shadow: inset 0 -2px 0 0 #228be6;
+}
+.datagrid-col-header.drop-left {
+  box-shadow: inset 2px 0 0 0 #228be6;
+}
+.datagrid-col-header.drop-right {
+  box-shadow: inset -2px 0 0 0 #228be6;
+}
+
+/* Cells */
+.datagrid-cell {
+  cursor: default;
+  height: 28px;
+  overflow: visible;
+  position: relative;
+}
+
+.datagrid-cell > span {
+  display: block;
+  padding: 2px 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 24px;
+}
+
+.datagrid-cell.selected {
+  outline: 2px solid #228be6;
+  outline-offset: -2px;
+  z-index: 1;
+}
+
+.datagrid-cell.in-range {
+  background: #d0ebff;
+}
+
+.datagrid-cell.header-selected {
+  background: #e7f5ff;
+}
+
+/* Formula reference panel */
+.formula-reference {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 8px;
+  margin-bottom: 8px;
+  border: 1px solid #dee2e6;
+  border-radius: 4px;
+  background: #f8f9fa;
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+.formula-tag {
+  font-size: 0.7rem;
+  font-family: monospace;
+  padding: 2px 6px;
+  background: #fff;
+  border: 1px solid #dee2e6;
+  border-radius: 3px;
+  color: #495057;
+}
+
+/* Autofill handle */
+.autofill-handle {
+  position: absolute;
+  right: -6px;
+  bottom: -6px;
+  width: 12px;
+  height: 12px;
+  background: #228be6;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  cursor: crosshair;
+  z-index: 4;
+}
+
+.autofill-handle:hover {
+  background: #1971c2;
+  transform: scale(1.2);
+}
+
+/* Autofill preview range */
+.datagrid-cell.autofill-target {
+  background: #e7f5ff;
+  border: 1px dashed #228be6;
+}
+
+/* Peer presence cursor */
+.datagrid-cell.peer-focused {
+  z-index: 1;
+}
+
+/* Formula cell styling */
+.datagrid-formula {
+  color: #495057;
+}
+
+/* Formula error display */
+.datagrid-cell-error {
+  color: #e03131;
+  font-size: 0.8em;
+}
+
+/* CodeMirror formula editor container */
+.formula-editor-cm {
+  flex: 1;
+  min-width: 0;
+}
+
+.formula-editor-cm .cm-editor {
+  background: transparent;
+}
+
+/* Formula bar CodeMirror — fills the bar and makes whitespace clickable */
+.formula-bar-cm {
+  flex: 1;
+  min-width: 0;
+  cursor: text;
+}
+
+.formula-bar-cm .cm-editor {
+  width: 100%;
+}
+
+/* In-cell CodeMirror editor */
+.cell-editor-cm {
+  position: absolute;
+  top: 0;
+  left: 0;
+  min-width: 100%;
+  height: 100%;
+  z-index: 3;
+  background: #fff;
+  cursor: text;
+  /* Inset shadow draws the border inside the element so it is never clipped
+     by the overflow:auto scroll container (unlike outline on the td). */
+  box-shadow: inset 0 0 0 2px #228be6;
+}
+
+/* Extra right padding so the user can click after the last character */
+.cell-editor-cm .cm-content {
+  padding-right: 1rem;
+}
+
+/* Evaluated value tooltip shown while editing */
+.cell-eval-tooltip {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 2px;
+  padding: 2px 8px;
+  background: #1e1e1e;
+  color: #fff;
+  font-size: 0.8rem;
+  border-radius: 4px;
+  white-space: nowrap;
+  z-index: 4;
+  pointer-events: none;
+}
+
+/* Cell reference highlights in the grid */
+.datagrid-cell.formula-ref-highlight {
+  z-index: 1;
+}
+
+/* Context menu */
+.datagrid-context-menu {
+  position: fixed;
+  z-index: 1000;
+  background: #fff;
+  border: 1px solid #dee2e6;
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  padding: 4px 0;
+  min-width: 220px;
+}
+
+.datagrid-context-menu-item {
+  display: flex;
+  align-items: center;
+  padding: 6px 12px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  gap: 8px;
+}
+
+.datagrid-context-menu-item:hover {
+  background: #f1f3f5;
+}
+
+.datagrid-context-menu-icon {
+  width: 16px;
+  text-align: center;
+  flex-shrink: 0;
+  font-size: 0.8rem;
+}
+
+.datagrid-context-menu-label {
+  flex: 1;
+}
+
+.datagrid-context-menu-shortcut {
+  font-size: 0.75rem;
+  margin-left: auto;
+  padding-left: 16px;
+}
+
+.datagrid-context-menu-danger {
+  color: #e03131;
+}
+
+.datagrid-context-menu-disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.datagrid-context-menu-disabled:hover {
+  background: transparent;
+}
+
+.datagrid-context-menu-separator {
+  height: 1px;
+  background: #dee2e6;
+  margin: 4px 0;
+}
+
+/* Sheet tabs */
+.sheet-tabs-bar {
+  display: flex;
+  align-items: center;
+  border: 1px solid #dee2e6;
+  border-top: none;
+  border-radius: 0 0 6px 6px;
+  background: #f8f9fa;
+  padding: 0 4px;
+  min-height: 32px;
+  overflow-x: auto;
+}
+
+.sheet-tab {
+  padding: 4px 12px;
+  font-size: 0.8rem;
+  cursor: pointer;
+  border: none;
+  background: transparent;
+  border-bottom: 2px solid transparent;
+  white-space: nowrap;
+  user-select: none;
+  position: relative;
+}
+
+.sheet-tab:hover {
+  background: #e9ecef;
+}
+
+.sheet-tab.active {
+  font-weight: 600;
+  border-bottom-color: #228be6;
+  background: #fff;
+}
+
+.sheet-tab.drop-left::before {
+  content: '';
+  position: absolute;
+  left: -1px;
+  top: 4px;
+  bottom: 4px;
+  width: 2px;
+  background: #228be6;
+}
+
+.sheet-tab.drop-right::after {
+  content: '';
+  position: absolute;
+  right: -1px;
+  top: 4px;
+  bottom: 4px;
+  width: 2px;
+  background: #228be6;
+}
+
+.sheet-tab-rename {
+  border: 1px solid #228be6;
+  border-radius: 2px;
+  padding: 0 4px;
+  font-size: 0.8rem;
+  width: 80px;
+  outline: none;
+}
+
+.sheet-tab-add {
+  padding: 4px 8px;
+  font-size: 0.75rem;
+  cursor: pointer;
+  border: none;
+  background: transparent;
+  color: #868e96;
+  display: flex;
+  align-items: center;
+}
+
+.sheet-tab-add:hover {
+  color: #228be6;
+}
+
+/* HyperFormula sync progress bar */
+.hf-sync-bar {
+  height: 2px;
+  background: #e9ecef;
+  overflow: hidden;
+}
+
+.hf-sync-bar-fill {
+  height: 100%;
+  width: 30%;
+  background: #228be6;
+  animation: hf-sync-slide 0.8s ease-in-out infinite;
+}
+
+@keyframes hf-sync-slide {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(430%); }
+}
