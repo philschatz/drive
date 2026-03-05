@@ -7,9 +7,7 @@ import { WebSocketServer } from 'ws';
 import { Repo } from '@automerge/automerge-repo';
 import { WebSocketServerAdapter } from '@automerge/automerge-repo-network-websocket';
 import { NodeFSStorageAdapter } from '@automerge/automerge-repo-storage-nodefs';
-import { scanStorage, listByType } from './doc-store';
 import { CalDAVHandler } from './caldav-handler';
-import { createApiRoutes } from './routes/api';
 import { createUiRoutes } from './routes/ui';
 import { createDavRoutes } from './routes/dav';
 
@@ -38,21 +36,8 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 app.use(express.text({ type: ['text/calendar', 'text/plain', 'application/xml'] }));
 
-// Initialize store and Vite, then mount routes
+// Initialize Vite, then mount routes
 export const ready = (async () => {
-  await scanStorage(repo, dataDir);
-
-  // Create a default calendar if none exist
-  if (listByType(repo, 'Calendar').length === 0) {
-    const handle = repo.create();
-    handle.change((d: any) => {
-      d['@type'] = 'Calendar';
-      d.name = 'Default Automerge Calendar';
-      d.description = 'Default Automerge Calendar for events';
-      d.events = {};
-    });
-  }
-
   // Create Vite dev server or serve production build
   let vite: any = null;
   const distDir = path.resolve(__dirname, '../../dist');
@@ -81,7 +66,6 @@ export const ready = (async () => {
   }
 
   // Mount routes
-  app.use(createApiRoutes(repo, dataDir));
   app.use(createUiRoutes(vite, isProd ? distDir : null));
   app.use(createDavRoutes(caldavHandler));
 
