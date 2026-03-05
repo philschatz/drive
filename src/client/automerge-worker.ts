@@ -20,9 +20,12 @@ const { MessageChannelNetworkAdapter } = await import('@automerge/automerge-repo
 
 let repo: InstanceType<typeof Repo> | null = null;
 let wsAdapter: InstanceType<typeof BrowserWebSocketClientAdapter> | null = null;
+let mcPeerId: string | null = null;
 
 function postStatus() {
-  const peerCount = repo ? repo.peers.length : 0;
+  // Count only non-MessageChannel peers (i.e. WebSocket server connections)
+  const peers = repo ? repo.peers.filter(id => id !== mcPeerId) : [];
+  const peerCount = peers.length;
   (self as any).postMessage({ type: peerCount > 0 ? 'peer-connected' : 'peer-disconnected', peerCount } satisfies WorkerToMain);
 }
 
@@ -58,15 +61,21 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
 
       if (msg.wsUrl) {
         setupWebSocket(msg.wsUrl);
+        // Wait for the WebSocket peer to actually connect (not just initialize).
+        // Without this, when the main thread requests a remote document, the
+        // worker's DocSynchronizer only has the main-thread peer (status "wants")
+        // and immediately marks the document unavailable.
+        await new Promise<void>(resolve => {
+          const onPeer = () => { resolve(); ns.off('peer', onPeer); };
+          ns.on('peer', onPeer);
+          setTimeout(() => { ns.off('peer', onPeer); resolve(); }, 5000);
+        });
       }
 
-      // Wait for storage to finish loading before connecting to main thread.
-      // NetworkSubsystem.whenReady() resolves once initial network setup is done;
-      // by that point IndexedDB has also had time to load stored documents.
-      await repo.networkSubsystem.whenReady();
-
-      // Now add the MessageChannel adapter — the peer handshake will happen
-      // after all stored documents are available.
+      // Track the MessageChannel peer so postStatus can exclude it
+      ns.on('peer', (p: any) => {
+        if (!mcPeerId) mcPeerId = p?.peerId ?? p;
+      });
       repo.networkSubsystem.addNetworkAdapter(mcAdapter);
 
       (self as any).postMessage({ type: 'ready' } satisfies WorkerToMain);

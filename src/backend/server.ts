@@ -25,7 +25,7 @@ const repo = new Repo({
   network: [new WebSocketServerAdapter(wss) as any],
   storage: new NodeFSStorageAdapter(dataDir),
   peerId: `calendar-server-${os.hostname()}` as any,
-  sharePolicy: async () => false,
+  sharePolicy: async () => true,
 });
 
 const caldavHandler = new CalDAVHandler(repo);
