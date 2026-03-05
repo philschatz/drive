@@ -36,15 +36,19 @@ function setupWebSocket(wsUrl: string) {
   repo.networkSubsystem.addNetworkAdapter(wsAdapter);
 }
 
-function handleMessage(e: MessageEvent<MainToWorker>) {
+async function handleMessage(e: MessageEvent<MainToWorker>) {
   const msg = e.data;
 
   if (msg.type === 'init') {
     try {
       const mcAdapter = new MessageChannelNetworkAdapter(msg.port);
 
+      // Create repo with storage but WITHOUT the MessageChannel adapter.
+      // This lets IndexedDB load all documents before the peer handshake,
+      // preventing the worker from responding "doc-unavailable" for documents
+      // that are still loading from storage.
       repo = new Repo({
-        network: [mcAdapter],
+        network: [],
         storage: new IndexedDBStorageAdapter(),
       });
 
@@ -55,6 +59,15 @@ function handleMessage(e: MessageEvent<MainToWorker>) {
       if (msg.wsUrl) {
         setupWebSocket(msg.wsUrl);
       }
+
+      // Wait for storage to finish loading before connecting to main thread.
+      // NetworkSubsystem.whenReady() resolves once initial network setup is done;
+      // by that point IndexedDB has also had time to load stored documents.
+      await repo.networkSubsystem.whenReady();
+
+      // Now add the MessageChannel adapter — the peer handshake will happen
+      // after all stored documents are available.
+      repo.networkSubsystem.addNetworkAdapter(mcAdapter);
 
       (self as any).postMessage({ type: 'ready' } satisfies WorkerToMain);
     } catch (err: any) {

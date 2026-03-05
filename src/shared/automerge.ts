@@ -48,7 +48,16 @@ export function setWsUrl(url: string) {
 
 let resolveRepoReady: () => void;
 export const workerReady = new Promise<void>(r => { resolveRepoReady = r; });
-repo.networkSubsystem.on('peer', () => { resolveRepoReady(); });
+const ns = repo.networkSubsystem;
+ns.on('peer', (p: any) => {
+  console.log('[repo] peer connected:', p?.peerId ?? p);
+  console.log('[repo] total peers:', repo.peers);
+  resolveRepoReady();
+});
+ns.on('peer-disconnected', (p: any) => {
+  console.log('[repo] peer disconnected:', p?.peerId ?? p);
+});
+console.log('[repo] main-thread repo created, peerId:', repo.peerId);
 
 /**
  * Load a document via findWithProgress, calling `onProgress(0-100)` as loading advances.
@@ -58,15 +67,24 @@ export async function findDocWithProgress<T>(
   docId: string,
   onProgress: (pct: number | null) => void,
 ): Promise<import('@automerge/automerge-repo').DocHandle<T>> {
+  const short = docId.slice(0, 8);
+  console.log(`[find] ${short} waiting for workerReady…`);
   await workerReady;
-  const handle = await repo.find<T>(docId as any);
-  if (handle.isReady()) {
+  console.log(`[find] ${short} workerReady resolved, calling repo.find()…`);
+  try {
+    const handle = await repo.find<T>(docId as any, { allowableStates: ['unavailable'] });
+    console.log(`[find] ${short} find() resolved, state:`, (handle as any).state);
+    if (!handle.isReady()) {
+      console.log(`[find] ${short} waiting for whenReady()…`);
+      await handle.whenReady();
+      console.log(`[find] ${short} whenReady() resolved, state:`, (handle as any).state);
+    }
     onProgress(null);
     return handle;
+  } catch (err: any) {
+    console.error(`[find] ${short} error:`, err?.message, err);
+    throw err;
   }
-  await handle.whenReady();
-  onProgress(null);
-  return handle;
 }
 
 // --- Connection status (listens to worker messages) ---
@@ -77,6 +95,7 @@ let workerPeerCount = 0;
 
 worker.onmessage = (e: MessageEvent<WorkerToMain>) => {
   const msg = e.data;
+  console.log('[worker→main]', msg);
   if (msg.type === 'ready') {
     // Worker initialized — peer event on repo.networkSubsystem resolves workerReady
   } else if (msg.type === 'error') {
