@@ -897,7 +897,13 @@ export function DataGrid({ docId, sheetId }: { docId?: string; sheetId?: string;
 
       setStatus('');
       setTick(t => t + 1);
-    })();
+    })().catch((err) => {
+      if (!mounted) return;
+      const msg = err?.message || 'Failed to load document';
+      setStatus(msg);
+      setLoadProgress(null);
+      alert(`Document unavailable: ${msg}`);
+    });
 
     return () => {
       mounted = false;

@@ -79,7 +79,7 @@ export default defineConfig(async () => {
       },
       workbox: {
         globPatterns: ['**/*.{js,css,html,svg,png,woff,woff2,wasm}'],
-        maximumFileSizeToCacheInBytes: 3 * 1024 * 1024, // 3 MB — WASM is now a separate asset
+        maximumFileSizeToCacheInBytes: 5 * 1024 * 1024, // 5 MB — WASM + worker bundle
         navigateFallback: 'index.html',
         navigateFallbackDenylist: [
           /^\/api\//,
@@ -96,6 +96,9 @@ export default defineConfig(async () => {
     outDir: resolve(__dirname, 'dist'),
     emptyOutDir: true,
     sourcemap: true,
+  },
+  worker: {
+    format: 'es' as const,
   },
   resolve: {
     alias: {

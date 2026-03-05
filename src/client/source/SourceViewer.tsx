@@ -312,7 +312,13 @@ export function SourceViewer({ docId, rest }: { docId?: string; rest?: string; p
           setVersion(prev => prev + 1);
         }
       });
-    })();
+    })().catch((err) => {
+      if (!mounted) return;
+      const msg = err?.message || 'Failed to load document';
+      setStatus(msg);
+      setLoadProgress(null);
+      alert(`Document unavailable: ${msg}`);
+    });
 
     return () => {
       mounted = false;

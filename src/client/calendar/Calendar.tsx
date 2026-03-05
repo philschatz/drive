@@ -303,7 +303,13 @@ export function Calendar({ docId }: { docId?: string; path?: string }) {
         },
         refreshCalendar
       );
-    })();
+    })().catch((err) => {
+      if (!mounted) return;
+      const msg = err?.message || 'Failed to load document';
+      setStatus(msg);
+      setLoadProgress(null);
+      alert(`Document unavailable: ${msg}`);
+    });
 
     return () => {
       mounted = false;
