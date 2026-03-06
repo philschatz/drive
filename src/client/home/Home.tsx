@@ -395,6 +395,24 @@ export function Home({ path }: { path?: string }) {
     }
   }, [loadAll]);
 
+  const [installPrompt, setInstallPrompt] = useState<any>(null);
+
+  useEffect(() => {
+    const handler = (e: Event) => {
+      e.preventDefault();
+      setInstallPrompt(e);
+    };
+    window.addEventListener('beforeinstallprompt', handler);
+    return () => window.removeEventListener('beforeinstallprompt', handler);
+  }, []);
+
+  const handleInstall = async () => {
+    if (!installPrompt) return;
+    installPrompt.prompt();
+    const { outcome } = await installPrompt.userChoice;
+    if (outcome === 'accepted') setInstallPrompt(null);
+  };
+
   const syncOn = isSyncEnabled();
 
 
@@ -533,6 +551,11 @@ export function Home({ path }: { path?: string }) {
         >
           {syncOn ? 'Disable & reload' : 'Enable & reload'}
         </Button>
+        {installPrompt && (
+          <Button variant="outline" size="sm" onClick={handleInstall}>
+            <span className="material-symbols-outlined">install_mobile</span> Add to Homescreen
+          </Button>
+        )}
       </div>
     </div>
   );

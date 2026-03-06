@@ -42,7 +42,7 @@
         "background": {
           "activeOnStart": true,
           "beginsPattern": "starting `ts-node",
-          "endsPattern": "Automerge Calendar API server running"
+          "endsPattern": "Automerge Docs API server running"
         }
       },
       "label": "npm: dev",

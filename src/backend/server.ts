@@ -88,7 +88,7 @@ if (!process.env.JEST_WORKER_ID) {
 
     const server = app.listen(PORT, '0.0.0.0', () => {
       const mode = isProd ? 'production' : 'development';
-      console.log(`Automerge Calendar (${mode}): http://localhost:${PORT}`);
+      console.log(`Automerge Docs (${mode}): http://localhost:${PORT}`);
       if (isProd) console.log('Serving production build');
     });
 

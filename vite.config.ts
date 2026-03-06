@@ -63,9 +63,9 @@ export default defineConfig(async () => {
       registerType: 'autoUpdate',
       includeAssets: ['favicon.svg', 'pwa-192x192.png', 'pwa-512x512.png'],
       manifest: {
-        name: 'Automerge Calendar',
-        short_name: 'Calendar',
-        description: 'Collaborative calendar with offline support',
+        name: 'Automerge Drive',
+        short_name: 'Drive',
+        description: 'Collaborative documents with offline support',
         theme_color: '#4A90D9',
         background_color: '#ffffff',
         display: 'standalone',
@@ -88,6 +88,9 @@ export default defineConfig(async () => {
           /^\/automerge\//,
           /^\/docs\//,
         ],
+      },
+      devOptions: {
+        enabled: true,
       },
     }),
   ],
