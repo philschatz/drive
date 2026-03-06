@@ -93,20 +93,23 @@ export async function queryDoc(docId: string, filter: string): Promise<any[]> {
   });
 }
 
-// --- Worker presence subscription ---
+// --- Home doc summary subscription ---
 
-type PresenceCallback = (peers: Record<string, { docId: string; peerId: string }[]>) => void;
-let presenceCallback: PresenceCallback | null = null;
+import type { DocSummary } from '../client/automerge-worker';
+export type { DocSummary };
 
-export function subscribePresence(
+type HomeSummaryCallback = (summary: DocSummary) => void;
+let homeSummaryCallback: HomeSummaryCallback | null = null;
+
+export function subscribeHome(
   docIds: string[],
-  callback: PresenceCallback,
+  callback: HomeSummaryCallback,
 ): () => void {
-  presenceCallback = callback;
-  worker.postMessage({ type: 'subscribe-presence', docIds });
+  homeSummaryCallback = callback;
+  worker.postMessage({ type: 'subscribe-home', docIds });
   return () => {
-    presenceCallback = null;
-    worker.postMessage({ type: 'unsubscribe-presence' });
+    homeSummaryCallback = null;
+    worker.postMessage({ type: 'unsubscribe-home' });
   };
 }
 
@@ -115,6 +118,10 @@ export function subscribePresence(
 type ConnectionListener = (connected: boolean) => void;
 const connectionListeners = new Set<ConnectionListener>();
 let workerPeerCount = 0;
+let workerPeers: string[] = [];
+
+type PeerListListener = (peers: string[]) => void;
+const peerListListeners = new Set<PeerListListener>();
 
 worker.onmessage = (e: MessageEvent<WorkerToMain>) => {
   const msg = e.data;
@@ -124,10 +131,12 @@ worker.onmessage = (e: MessageEvent<WorkerToMain>) => {
     console.error('Automerge worker error:', msg.message);
   } else if (msg.type === 'peer-connected' || msg.type === 'peer-disconnected') {
     workerPeerCount = msg.peerCount;
+    workerPeers = msg.peers;
     const connected = workerPeerCount > 0;
     for (const fn of connectionListeners) fn(connected);
-  } else if (msg.type === 'presence-update') {
-    if (presenceCallback) presenceCallback(msg.peers);
+    for (const fn of peerListListeners) fn(workerPeers);
+  } else if (msg.type === 'doc-summary') {
+    if (homeSummaryCallback) homeSummaryCallback(msg.summary);
   } else if (msg.type === 'query-result') {
     const pending = pendingQueries.get(msg.id);
     if (pending) {
@@ -178,4 +187,16 @@ export function useConnectionStatus(): boolean {
   }, []);
 
   return connected;
+}
+
+export function usePeerList(): string[] {
+  const [peers, setPeers] = useState(() => workerPeers);
+
+  useEffect(() => {
+    const listener: PeerListListener = (p) => setPeers(p);
+    peerListListeners.add(listener);
+    return () => { peerListListeners.delete(listener); };
+  }, []);
+
+  return peers;
 }

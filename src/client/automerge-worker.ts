@@ -1,17 +1,26 @@
+export type DocSummary = {
+  docId: string;
+  type: string;
+  name: string;
+  count: number;
+  lastModified: string | null;
+  peers: string[];
+};
+
 export type MainToWorker =
   | { type: 'init'; wsUrl: string; port: MessagePort }
   | { type: 'set-ws-url'; wsUrl: string }
   | { type: 'query'; id: number; docId: string; filter: string }
-  | { type: 'subscribe-presence'; docIds: string[] }
-  | { type: 'unsubscribe-presence' };
+  | { type: 'subscribe-home'; docIds: string[] }
+  | { type: 'unsubscribe-home' };
 
 export type WorkerToMain =
   | { type: 'ready' }
   | { type: 'error'; message: string }
-  | { type: 'peer-connected'; peerCount: number }
-  | { type: 'peer-disconnected'; peerCount: number }
+  | { type: 'peer-connected'; peerCount: number; peers: string[] }
+  | { type: 'peer-disconnected'; peerCount: number; peers: string[] }
   | { type: 'query-result'; id: number; result: any[]; error?: string }
-  | { type: 'presence-update'; peers: Record<string, { docId: string; peerId: string }[]> };
+  | { type: 'doc-summary'; summary: DocSummary };
 
 // Queue messages that arrive while WASM is initializing
 const pendingMessages: MessageEvent[] = [];
@@ -22,20 +31,17 @@ const { Repo } = await import('@automerge/automerge-repo');
 const { IndexedDBStorageAdapter } = await import('@automerge/automerge-repo-storage-indexeddb');
 const { BrowserWebSocketClientAdapter } = await import('@automerge/automerge-repo-network-websocket');
 const { MessageChannelNetworkAdapter } = await import('@automerge/automerge-repo-network-messagechannel');
+const Automerge = await import('@automerge/automerge');
 
 let repo: InstanceType<typeof Repo> | null = null;
 let wsAdapter: InstanceType<typeof BrowserWebSocketClientAdapter> | null = null;
 let mcPeerId: string | null = null;
 
-// Presence tracking
-let presenceInstances: { cleanup: () => void }[] = [];
-let presenceTimer: ReturnType<typeof setInterval> | null = null;
-
 function postStatus() {
   // Count only non-MessageChannel peers (i.e. WebSocket server connections)
   const peers = repo ? repo.peers.filter(id => id !== mcPeerId) : [];
   const peerCount = peers.length;
-  (self as any).postMessage({ type: peerCount > 0 ? 'peer-connected' : 'peer-disconnected', peerCount } satisfies WorkerToMain);
+  (self as any).postMessage({ type: peerCount > 0 ? 'peer-connected' : 'peer-disconnected', peerCount, peers } satisfies WorkerToMain);
 }
 
 function setupWebSocket(wsUrl: string) {
@@ -47,6 +53,107 @@ function setupWebSocket(wsUrl: string) {
   wsAdapter = new BrowserWebSocketClientAdapter(wsUrl);
   repo.networkSubsystem.addNetworkAdapter(wsAdapter);
 }
+
+// --- Home subscription: push doc summaries on change ---
+
+let homeCleanups: (() => void)[] = [];
+
+function docSummary(docId: string, doc: any, peerIds: string[]): DocSummary {
+  const type = doc?.['@type'] || 'unknown';
+  const name = doc?.name || '';
+  let count = 0;
+  if (type === 'Calendar') {
+    count = doc?.events ? Object.keys(doc.events).length : 0;
+  } else if (type === 'TaskList') {
+    count = doc?.tasks ? Object.keys(doc.tasks).length : 0;
+  } else if (type === 'DataGrid') {
+    if (doc?.sheets) {
+      for (const k of Object.keys(doc.sheets)) {
+        const sheet = doc.sheets[k];
+        if (sheet?.cells) count += Object.keys(sheet.cells).length;
+      }
+    } else if (doc?.cells) {
+      count = Object.keys(doc.cells).length;
+    }
+  }
+  let lastModified: string | null = null;
+  try {
+    const meta = Automerge.getChangesMetaSince(doc, []);
+    let maxTime = 0;
+    for (const m of meta) {
+      if (m.time > maxTime) maxTime = m.time;
+    }
+    if (maxTime > 0) {
+      lastModified = new Date(maxTime * 1000).toISOString();
+    }
+  } catch { /* fall back to null */ }
+  return { docId, type, name, count, lastModified, peers: peerIds };
+}
+
+function cleanupHome() {
+  for (const fn of homeCleanups) fn();
+  homeCleanups = [];
+}
+
+async function setupHomeSubscription(docIds: string[]) {
+  cleanupHome();
+  if (!repo) return;
+
+  const { Presence } = await import('@automerge/automerge-repo');
+
+  for (const docId of docIds) {
+    let handle = repo.handles[docId as any] as any;
+    if (!handle) {
+      // Document not loaded yet — try to find it with a timeout
+      try {
+        handle = await Promise.race([
+          repo.find(docId as any),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 3000)),
+        ]);
+      } catch {
+        continue;
+      }
+    }
+    if (!handle?.doc?.()) continue;
+
+    // Presence for this doc
+    const presence = new Presence({ handle });
+    presence.start({ initialState: { viewing: true }, heartbeatMs: 5000, peerTtlMs: 15000 });
+
+    const getPeerIds = (): string[] => {
+      const states = presence.getPeerStates().getStates();
+      return Object.entries(states)
+        .filter(([, s]: [string, any]) => s?.value?.viewing)
+        .map(([peerId]) => peerId);
+    };
+
+    const sendSummary = () => {
+      const doc = handle.doc();
+      if (!doc) return;
+      (self as any).postMessage({ type: 'doc-summary', summary: docSummary(docId, doc, getPeerIds()) } satisfies WorkerToMain);
+    };
+
+    // Send initial summary
+    sendSummary();
+
+    // Listen for doc changes
+    const onChange = () => sendSummary();
+    handle.on('change', onChange);
+
+    // Listen for presence changes
+    presence.on('update', sendSummary);
+    presence.on('goodbye', sendSummary);
+    presence.on('pruning', sendSummary);
+    presence.on('snapshot', sendSummary);
+
+    homeCleanups.push(() => {
+      handle.off('change', onChange);
+      presence.stop();
+    });
+  }
+}
+
+// ---
 
 async function handleMessage(e: MessageEvent<MainToWorker>) {
   const msg = e.data;
@@ -97,56 +204,12 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
     setupWebSocket(msg.wsUrl);
   }
 
-  if (msg.type === 'subscribe-presence') {
-    // Clean up any existing subscriptions
-    for (const inst of presenceInstances) inst.cleanup();
-    presenceInstances = [];
-    if (presenceTimer) { clearInterval(presenceTimer); presenceTimer = null; }
-
-    if (!repo) return;
-    const { Presence } = await import('@automerge/automerge-repo');
-    const docIds = msg.docIds;
-
-    const peersByDoc: Record<string, { docId: string; peerId: string }[]> = {};
-    for (const docId of docIds) peersByDoc[docId] = [];
-
-    const broadcastUpdate = () => {
-      (self as any).postMessage({ type: 'presence-update', peers: { ...peersByDoc } } satisfies WorkerToMain);
-    };
-
-    for (const docId of docIds) {
-      const handle = repo.handles[docId as any] as any;
-      if (!handle) continue;
-
-      const presence = new Presence({ handle });
-      presence.start({ initialState: { viewing: true }, heartbeatMs: 5000, peerTtlMs: 15000 });
-
-      const update = () => {
-        const states = presence.getPeerStates().getStates();
-        peersByDoc[docId] = Object.entries(states)
-          .filter(([, s]: [string, any]) => s?.state?.viewing)
-          .map(([peerId]) => ({ docId, peerId }));
-        broadcastUpdate();
-      };
-
-      presence.on('update', update);
-      presence.on('goodbye', update);
-      presence.on('pruning', update);
-      presence.on('snapshot', update);
-
-      presenceInstances.push({
-        cleanup() { presence.stop(); },
-      });
-    }
-
-    // Initial broadcast
-    broadcastUpdate();
+  if (msg.type === 'subscribe-home') {
+    await setupHomeSubscription(msg.docIds);
   }
 
-  if (msg.type === 'unsubscribe-presence') {
-    for (const inst of presenceInstances) inst.cleanup();
-    presenceInstances = [];
-    if (presenceTimer) { clearInterval(presenceTimer); presenceTimer = null; }
+  if (msg.type === 'unsubscribe-home') {
+    cleanupHome();
   }
 
   if (msg.type === 'query') {
@@ -155,7 +218,6 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
       const { compile } = await import('../shared/jq');
       const handle = repo.handles[msg.docId as any] as any;
       if (!handle) {
-        // Document not loaded in worker — try to find it with a short timeout
         const h = repo.find(msg.docId as any);
         const ready = await Promise.race([
           h.then((h: any) => h.doc() ? h : null),
@@ -179,6 +241,7 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
       const result = fn(doc);
       (self as any).postMessage({ type: 'query-result', id: msg.id, result } satisfies WorkerToMain);
     } catch (err: any) {
+      console.error('[worker] query failed for', msg.docId, err);
       (self as any).postMessage({ type: 'query-result', id: msg.id, result: [], error: err?.message || 'Query failed' } satisfies WorkerToMain);
     }
   }

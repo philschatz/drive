@@ -1,5 +1,6 @@
-import { useState, useEffect, useCallback, useRef } from 'preact/hooks';
-import { repo, queryDoc, useConnectionStatus, isSyncEnabled, setSyncEnabled, workerReady, subscribePresence } from '../../shared/automerge';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'preact/hooks';
+import { repo, useConnectionStatus, usePeerList, isSyncEnabled, setSyncEnabled, workerReady, subscribeHome } from '../../shared/automerge';
+import type { DocSummary } from '../../shared/automerge';
 import { peerColor } from '../../shared/presence';
 import { Button } from '@/components/ui/button';
 import { Alert } from '@/components/ui/alert';
@@ -19,25 +20,10 @@ interface DocEntry {
   count: number | null;
   lastUpdated: string | null;
   loading: boolean;
+  peers: string[];
 }
 
 dayjs.extend(relativeTimePlugin);
-
-const SUMMARY_QUERY = `{
-  type: (.["@type"] // "unknown"),
-  name: (.name // ""),
-  count: (
-    if .["@type"] == "Calendar" then (.events // {} | length)
-    elif .["@type"] == "TaskList" then (.tasks // {} | length)
-    elif .["@type"] == "DataGrid" then (
-      if .sheets then [.sheets[] | (.cells // {} | length)] | add // 0
-      else (.cells // {} | length)
-      end
-    )
-    else (. | length)
-    end
-  )
-}`;
 
 function relativeTime(ts: string | null): string {
   if (!ts) return '';
@@ -66,7 +52,25 @@ function initialEntries(): DocEntry[] {
     count: null,
     lastUpdated: null,
     loading: true,
+    peers: [],
   }));
+}
+
+function applyDocSummary(prev: DocEntry[], summary: DocSummary): DocEntry[] {
+  return prev.map(e => {
+    if (e.documentId !== summary.docId) return e;
+    const type = (summary.type === 'Calendar' || summary.type === 'TaskList' || summary.type === 'DataGrid')
+      ? summary.type as DocType : 'unknown';
+    return {
+      ...e,
+      type,
+      name: summary.name || e.name,
+      count: summary.count,
+      lastUpdated: summary.lastModified,
+      loading: false,
+      peers: summary.peers,
+    };
+  });
 }
 
 export function Home({ path }: { path?: string }) {
@@ -74,76 +78,39 @@ export function Home({ path }: { path?: string }) {
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const connected = useConnectionStatus();
-  const queriedIdsRef = useRef(new Set<string>());
-  const [presencePeers, setPresencePeers] = useState<Record<string, { docId: string; peerId: string }[]>>({});
+  const repoPeers = usePeerList();
 
-  const queryOne = useCallback(async (documentId: string) => {
-    if (queriedIdsRef.current.has(documentId)) return;
-    queriedIdsRef.current.add(documentId);
-    try {
-      const result = await queryDoc(documentId, SUMMARY_QUERY);
-      const [summary] = result;
-      if (!summary) return;
+  // Subscribe to doc summaries from the worker
+  useEffect(() => {
+    const docIds = entries.map(e => e.documentId);
+    if (docIds.length === 0) return;
+    return subscribeHome(docIds, (summary) => {
       const type = (summary.type === 'Calendar' || summary.type === 'TaskList' || summary.type === 'DataGrid')
         ? summary.type as DocType : 'unknown';
-      const name = summary.name || '';
-      updateDocCache(documentId, { type, name });
-      setEntries(prev => prev.map(e =>
-        e.documentId === documentId
-          ? { ...e, type, name: name || e.name, count: summary.count ?? 0, loading: false }
-          : e
-      ));
-    } catch {
-      setEntries(prev => prev.map(e =>
-        e.documentId === documentId ? { ...e, loading: false } : e
-      ));
-    }
-  }, []);
+      updateDocCache(summary.docId, { type, name: summary.name });
+      setEntries(prev => applyDocSummary(prev, summary));
+    });
+  }, [entries.map(e => e.documentId).join(',')]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const loadAll = useCallback(() => {
+  const reloadEntries = useCallback(() => {
     const docList = getDocList();
     if (docList.length === 0) return;
     setEntries(prev => {
       const existing = new Set(prev.map(e => e.documentId));
-      const newEntries = docList
+      const newEntries: DocEntry[] = docList
         .filter(e => !existing.has(e.id))
         .map(e => ({
           type: (e.type || 'unknown') as DocType,
           documentId: e.id,
           name: e.name || e.id.slice(0, 8),
-          count: null as number | null,
-          lastUpdated: null as string | null,
+          count: null,
+          lastUpdated: null,
           loading: true,
+          peers: [],
         }));
       return newEntries.length > 0 ? [...prev, ...newEntries] : prev;
     });
-    (async () => {
-      for (const e of docList) {
-        queriedIdsRef.current.delete(e.id);
-        await queryOne(e.id);
-      }
-    })();
-  }, [queryOne]);
-
-  // Subscribe to presence for all listed docs
-  useEffect(() => {
-    const docIds = entries.map(e => e.documentId);
-    if (docIds.length === 0) return;
-    return subscribePresence(docIds, setPresencePeers);
-  }, [entries.map(e => e.documentId).join(',')]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // On mount, query each doc via the worker
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      await workerReady;
-      for (const e of entries) {
-        if (cancelled) break;
-        await queryOne(e.documentId);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleCreateCalendar = async () => {
     await workerReady;
@@ -156,7 +123,7 @@ export function Home({ path }: { path?: string }) {
     addDocId(handle.documentId);
     setMessage('Calendar created');
     setError('');
-    loadAll();
+    reloadEntries();
   };
 
   const handleCreateTaskList = async () => {
@@ -170,7 +137,7 @@ export function Home({ path }: { path?: string }) {
     addDocId(handle.documentId);
     setMessage('Task list created');
     setError('');
-    loadAll();
+    reloadEntries();
   };
 
   const handleCreateDataGrid = async () => {
@@ -204,7 +171,7 @@ export function Home({ path }: { path?: string }) {
     addDocId(handle.documentId);
     setMessage('Spreadsheet created');
     setError('');
-    loadAll();
+    reloadEntries();
   };
 
   const xlsInputRef = useRef<HTMLInputElement>(null);
@@ -390,11 +357,11 @@ export function Home({ path }: { path?: string }) {
       addDocId(handle.documentId);
       setMessage(`Imported ${parsed.length} event${parsed.length !== 1 ? 's' : ''} into "${calName}"`);
       setError('');
-      loadAll();
+      reloadEntries();
     } catch (err: any) {
       setError('Import failed: ' + err.message);
     }
-  }, [loadAll]);
+  }, [reloadEntries]);
 
   const [installPrompt, setInstallPrompt] = useState<any>(null);
 
@@ -416,6 +383,18 @@ export function Home({ path }: { path?: string }) {
 
   const syncOn = isSyncEnabled();
 
+  const sortedEntries = useMemo(() => {
+    const indexById = new Map(entries.map((e, i) => [e.documentId, i]));
+    return [...entries].sort((a, b) => {
+      // Both have lastUpdated: sort newest first
+      if (a.lastUpdated && b.lastUpdated) return b.lastUpdated.localeCompare(a.lastUpdated);
+      // Only one has lastUpdated: it goes first
+      if (a.lastUpdated && !b.lastUpdated) return -1;
+      if (!a.lastUpdated && b.lastUpdated) return 1;
+      // Neither has lastUpdated: preserve localStorage order
+      return indexById.get(a.documentId)! - indexById.get(b.documentId)!;
+    });
+  }, [entries]);
 
   return (
     <div>
@@ -427,6 +406,14 @@ export function Home({ path }: { path?: string }) {
           title={connected ? 'Connected to server' : 'Disconnected from server'}
         />
         <span className="text-xs text-muted-foreground">{connected ? 'Connected' : 'Disconnected'}</span>
+        {repoPeers.map(peerId => (
+          <span
+            key={peerId}
+            className="w-2 h-2 rounded-full inline-block shrink-0"
+            style={{ backgroundColor: peerColor(peerId) }}
+            title={`Peer ${peerId.slice(0, 8)}`}
+          />
+        ))}
       </div>
 
       {message && (
@@ -486,7 +473,7 @@ export function Home({ path }: { path?: string }) {
       </div>
 
       <div className="flex flex-col">
-        {entries.map(entry => {
+        {sortedEntries.map(entry => {
           const viewPath = viewPathForType(entry.type, entry.documentId);
           const icon = iconForType(entry.type);
           return (
@@ -497,12 +484,12 @@ export function Home({ path }: { path?: string }) {
               <span className="material-symbols-outlined" style={{ width: '1.2rem', textAlign: 'center', color: '#666' }}>{icon}</span>
               <a href={viewPath} className="text-sm flex-1 hover:underline flex items-center gap-1">
                 {entry.name || 'Untitled'}
-                {(presencePeers[entry.documentId] || []).map(p => (
+                {entry.peers.map(peerId => (
                   <span
-                    key={p.peerId}
+                    key={peerId}
                     className="w-2 h-2 rounded-full inline-block shrink-0"
-                    style={{ backgroundColor: peerColor(p.peerId) }}
-                    title={`Peer ${p.peerId.slice(0, 8)} is viewing`}
+                    style={{ backgroundColor: peerColor(peerId) }}
+                    title={`Peer ${peerId.slice(0, 8)} is viewing`}
                   />
                 ))}
               </a>
@@ -510,7 +497,7 @@ export function Home({ path }: { path?: string }) {
                 <Progress className="w-16" value={0} title="Loading..." />
               ) : (
                 <>
-                  <a href={viewPath} className="text-xs text-muted-foreground no-underline" style={{ minWidth: '4rem', textAlign: 'right' }}>
+                  <a href={viewPath} className="text-xs text-muted-foreground no-underline" style={{ minWidth: '4rem', textAlign: 'right' }} title={entry.lastUpdated || undefined}>
                     {relativeTime(entry.lastUpdated)}
                   </a>
                   <a href={viewPath} className="text-xs text-muted-foreground no-underline">

@@ -51,13 +51,3 @@ export function updateDocCache(id: string, cache: Omit<DocEntry, 'id'>) {
   Object.assign(entry, cache);
   saveDocList(list);
 }
-
-/** Move a document to the front of the list (most recently changed). */
-export function touchDoc(id: string) {
-  const list = getDocList();
-  const idx = list.findIndex(e => e.id === id);
-  if (idx > 0) {
-    list.unshift(list.splice(idx, 1)[0]);
-    saveDocList(list);
-  }
-}
