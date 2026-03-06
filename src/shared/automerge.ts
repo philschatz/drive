@@ -76,6 +76,40 @@ export async function findDocWithProgress<T>(
   return handle;
 }
 
+// --- Worker query API ---
+
+let queryIdCounter = 0;
+const pendingQueries = new Map<number, { resolve: (result: any[]) => void; reject: (err: Error) => void }>();
+
+/**
+ * Run a jq filter against a document in the worker without loading it into main-thread memory.
+ */
+export async function queryDoc(docId: string, filter: string): Promise<any[]> {
+  await workerReady;
+  const id = ++queryIdCounter;
+  return new Promise((resolve, reject) => {
+    pendingQueries.set(id, { resolve, reject });
+    worker.postMessage({ type: 'query', id, docId, filter });
+  });
+}
+
+// --- Worker presence subscription ---
+
+type PresenceCallback = (peers: Record<string, { docId: string; peerId: string }[]>) => void;
+let presenceCallback: PresenceCallback | null = null;
+
+export function subscribePresence(
+  docIds: string[],
+  callback: PresenceCallback,
+): () => void {
+  presenceCallback = callback;
+  worker.postMessage({ type: 'subscribe-presence', docIds });
+  return () => {
+    presenceCallback = null;
+    worker.postMessage({ type: 'unsubscribe-presence' });
+  };
+}
+
 // --- Connection status (listens to worker messages) ---
 
 type ConnectionListener = (connected: boolean) => void;
@@ -92,6 +126,15 @@ worker.onmessage = (e: MessageEvent<WorkerToMain>) => {
     workerPeerCount = msg.peerCount;
     const connected = workerPeerCount > 0;
     for (const fn of connectionListeners) fn(connected);
+  } else if (msg.type === 'presence-update') {
+    if (presenceCallback) presenceCallback(msg.peers);
+  } else if (msg.type === 'query-result') {
+    const pending = pendingQueries.get(msg.id);
+    if (pending) {
+      pendingQueries.delete(msg.id);
+      if (msg.error) pending.reject(new Error(msg.error));
+      else pending.resolve(msg.result);
+    }
   }
 };
 

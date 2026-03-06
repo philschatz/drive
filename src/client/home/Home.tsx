@@ -1,8 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'preact/hooks';
-import { repo, Automerge, Presence, useConnectionStatus, isSyncEnabled, setSyncEnabled, workerReady } from '../../shared/automerge';
-import type { DocHandle } from '../../shared/automerge';
+import { repo, queryDoc, useConnectionStatus, isSyncEnabled, setSyncEnabled, workerReady, subscribePresence } from '../../shared/automerge';
 import { peerColor } from '../../shared/presence';
-import { usePresenceLog, PresenceLogTable } from '../../shared/PresenceLog';
 import { Button } from '@/components/ui/button';
 import { Alert } from '@/components/ui/alert';
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem } from '@/components/ui/dropdown-menu';
@@ -10,62 +8,47 @@ import { Progress } from '@/components/ui/progress';
 import dayjs from 'dayjs';
 import relativeTimePlugin from 'dayjs/plugin/relativeTime';
 import { a1ToInternal } from '@/datagrid/helpers';
-import { getDocList, addDocId, removeDocId, updateDocCache, touchDoc } from '@/doc-storage';
+import { getDocList, addDocId, removeDocId, updateDocCache } from '@/doc-storage';
 
 type DocType = 'Calendar' | 'TaskList' | 'DataGrid' | 'unknown';
 
 interface DocEntry {
   type: DocType;
   documentId: string;
-  handle: DocHandle<any> | null;
   name: string;
   count: number | null;
-  lastUpdated: number | null;
-  progress: number | null;
+  lastUpdated: string | null;
+  loading: boolean;
 }
 
 dayjs.extend(relativeTimePlugin);
 
-function getLastChangeTime(doc: any): number | null {
-  try {
-    const changes = Automerge.getAllChanges(doc);
-    if (changes.length === 0) return null;
-    const decoded = Automerge.decodeChange(changes[changes.length - 1]);
-    const t = decoded.time;
-    if (!t || t <= 0) return null;
-    return t < 1e12 ? t * 1000 : t;
-  } catch {
-    return null;
-  }
-}
+const SUMMARY_QUERY = `{
+  type: (."@type" // "unknown"),
+  name: (.name // ""),
+  count: (
+    if ."@type" == "Calendar" then (.events // {} | length)
+    elif ."@type" == "TaskList" then (.tasks // {} | length)
+    elif ."@type" == "DataGrid" then (
+      if .sheets then [.sheets[] | (.cells // {} | length)] | add // 0
+      else (.cells // {} | length)
+      end
+    )
+    else (. | length)
+    end
+  )
+}`;
 
-function relativeTime(ts: number | null): string {
+function relativeTime(ts: string | null): string {
   if (!ts) return '';
   return dayjs(ts).fromNow();
 }
 
-function docTypeFromDoc(doc: any): DocType {
-  const t = doc?.['@type'];
-  if (t === 'Calendar' || t === 'TaskList' || t === 'DataGrid') return t;
-  return 'unknown';
-}
-
-function docItemCount(doc: any, type: DocType): number {
-  if (type === 'Calendar') return Object.keys(doc?.events || {}).length;
-  if (type === 'TaskList') return Object.keys(doc?.tasks || {}).length;
-  if (type === 'DataGrid') {
-    if (doc?.sheets) return Object.values(doc.sheets).reduce((sum: number, s: any) => sum + Object.keys(s.cells || {}).length, 0);
-    return Object.keys(doc?.cells || {}).length;
-  }
-  return Object.keys(doc || {}).length;
-}
-
-
-function viewPathForEntry(entry: DocEntry): string {
-  if (entry.type === 'Calendar') return `#/calendars/${entry.documentId}`;
-  if (entry.type === 'TaskList') return `#/tasks/${entry.documentId}`;
-  if (entry.type === 'DataGrid') return `#/datagrids/${entry.documentId}`;
-  return `#/source/${entry.documentId}`;
+function viewPathForType(type: DocType, documentId: string): string {
+  if (type === 'Calendar') return `#/calendars/${documentId}`;
+  if (type === 'TaskList') return `#/tasks/${documentId}`;
+  if (type === 'DataGrid') return `#/datagrids/${documentId}`;
+  return `#/source/${documentId}`;
 }
 
 function iconForType(type: DocType): string {
@@ -79,11 +62,10 @@ function initialEntries(): DocEntry[] {
   return getDocList().map(e => ({
     type: (e.type || 'unknown') as DocType,
     documentId: e.id,
-    handle: null as DocHandle<any> | null,
     name: e.name || e.id.slice(0, 8),
-    count: null as number | null,
-    lastUpdated: null as number | null,
-    progress: 0 as number | null,
+    count: null,
+    lastUpdated: null,
+    loading: true,
   }));
 }
 
@@ -91,32 +73,28 @@ export function Home({ path }: { path?: string }) {
   const [entries, setEntries] = useState<DocEntry[]>(initialEntries);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
-  const [docPeers, setDocPeers] = useState<Record<string, { peerId: string; color: string }[]>>({});
-  const presenceMapRef = useRef<Map<string, { presence: Presence<{ viewing: boolean }, any>; cleanup: () => void }>>(new Map());
-  const { entries: presenceLog, clear: clearLog, attachToPresence } = usePresenceLog();
   const connected = useConnectionStatus();
-  const resolvedIdsRef = useRef(new Set<string>());
+  const queriedIdsRef = useRef(new Set<string>());
+  const [presencePeers, setPresencePeers] = useState<Record<string, { docId: string; peerId: string }[]>>({});
 
-  const resolveOne = useCallback(async (documentId: string) => {
-    if (resolvedIdsRef.current.has(documentId)) return;
-    resolvedIdsRef.current.add(documentId);
+  const queryOne = useCallback(async (documentId: string) => {
+    if (queriedIdsRef.current.has(documentId)) return;
+    queriedIdsRef.current.add(documentId);
     try {
-      await workerReady;
-      const handle = await repo.find<any>(documentId as any);
-      if (!handle.isReady()) await handle.whenReady();
-      const doc = handle.doc() as any;
-      if (!doc) return;
-      const type = docTypeFromDoc(doc);
-      const name = doc.name || '';
+      const [summary] = await queryDoc(documentId, SUMMARY_QUERY);
+      if (!summary) return;
+      const type = (summary.type === 'Calendar' || summary.type === 'TaskList' || summary.type === 'DataGrid')
+        ? summary.type as DocType : 'unknown';
+      const name = summary.name || '';
       updateDocCache(documentId, { type, name });
       setEntries(prev => prev.map(e =>
         e.documentId === documentId
-          ? { ...e, type, name, handle, count: docItemCount(doc, type), lastUpdated: getLastChangeTime(doc), progress: null }
+          ? { ...e, type, name: name || e.name, count: summary.count ?? 0, loading: false }
           : e
       ));
     } catch {
       setEntries(prev => prev.map(e =>
-        e.documentId === documentId ? { ...e, progress: null } : e
+        e.documentId === documentId ? { ...e, loading: false } : e
       ));
     }
   }, []);
@@ -124,7 +102,6 @@ export function Home({ path }: { path?: string }) {
   const loadAll = useCallback(() => {
     const docList = getDocList();
     if (docList.length === 0) return;
-    // Add entries from cache for any IDs not already in the list
     setEntries(prev => {
       const existing = new Set(prev.map(e => e.documentId));
       const newEntries = docList
@@ -132,118 +109,43 @@ export function Home({ path }: { path?: string }) {
         .map(e => ({
           type: (e.type || 'unknown') as DocType,
           documentId: e.id,
-          handle: null as DocHandle<any> | null,
           name: e.name || e.id.slice(0, 8),
           count: null as number | null,
-          lastUpdated: null as number | null,
-          progress: 0 as number | null,
+          lastUpdated: null as string | null,
+          loading: true,
         }));
       return newEntries.length > 0 ? [...prev, ...newEntries] : prev;
     });
-    // Resolve each sequentially, yielding between loads
     (async () => {
-      for (const e of docList) await resolveOne(e.id);
+      for (const e of docList) {
+        queriedIdsRef.current.delete(e.id);
+        await queryOne(e.id);
+      }
     })();
-  }, [resolveOne]);
+  }, [queryOne]);
 
-  // On mount, resolve entries one at a time, yielding between each so the browser stays responsive
+  // Subscribe to presence for all listed docs
+  useEffect(() => {
+    const docIds = entries.map(e => e.documentId);
+    if (docIds.length === 0) return;
+    return subscribePresence(docIds, setPresencePeers);
+  }, [entries.map(e => e.documentId).join(',')]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // On mount, query each doc via the worker
   useEffect(() => {
     let cancelled = false;
     (async () => {
+      await workerReady;
       for (const e of entries) {
         if (cancelled) break;
-        await resolveOne(e.documentId);
+        await queryOne(e.documentId);
       }
     })();
     return () => { cancelled = true; };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => {
-    const unsubs: (() => void)[] = [];
-    for (const entry of entries) {
-      if (!entry.handle) continue;
-      const onChange = () => {
-        const doc = entry.handle!.doc();
-        if (!doc) return;
-        const name = doc.name || '';
-        const type = docTypeFromDoc(doc);
-        updateDocCache(entry.documentId, { type, name });
-        touchDoc(entry.documentId);
-        setEntries(prev => {
-          const updated = prev.map(e =>
-            e.documentId === entry.documentId
-              ? { ...e, type, name, count: docItemCount(doc, type), lastUpdated: Date.now() }
-              : e
-          );
-          // Move changed doc to top
-          const idx = updated.findIndex(e => e.documentId === entry.documentId);
-          if (idx > 0) updated.unshift(updated.splice(idx, 1)[0]);
-          return updated;
-        });
-      };
-      entry.handle!.on('change', onChange);
-      unsubs.push(() => entry.handle!.off('change', onChange));
-    }
-    return () => unsubs.forEach(fn => fn());
-  }, [entries.map(e => e.documentId).join(',')]);
-
-  // Presence: observe who is viewing each document (broadcast viewing: false so we don't count as a viewer)
-  useEffect(() => {
-    const map = presenceMapRef.current;
-    const currentIds = new Set(entries.map(e => e.documentId));
-
-    for (const [docId, { cleanup }] of map) {
-      if (!currentIds.has(docId)) {
-        cleanup();
-        map.delete(docId);
-      }
-    }
-
-    for (const entry of entries) {
-      if (!entry.handle) continue;
-      if (map.has(entry.documentId)) continue;
-      const presence = new Presence<{ viewing: boolean }, any>({ handle: entry.handle });
-      presence.start({ initialState: { viewing: false }, heartbeatMs: 5000, peerTtlMs: 15000 });
-
-      const update = () => {
-        const states = presence.getPeerStates().getStates();
-        const peers = Object.values(states)
-          .filter((s: any) => s.value.viewing)
-          .map((s: any) => ({ peerId: s.peerId, color: peerColor(s.peerId) }));
-        setDocPeers(prev => {
-          if (peers.length === 0 && !prev[entry.documentId]) return prev;
-          return { ...prev, [entry.documentId]: peers };
-        });
-      };
-      presence.on('update', update);
-      presence.on('goodbye', update);
-      presence.on('pruning', update);
-      presence.on('snapshot', update);
-
-      attachToPresence(presence, undefined, entry.documentId);
-
-      const onVisibility = () => {
-        if (document.hidden) presence.stop();
-        else presence.start({ initialState: { viewing: false } });
-      };
-      document.addEventListener('visibilitychange', onVisibility);
-
-      map.set(entry.documentId, {
-        presence,
-        cleanup: () => {
-          presence.stop();
-          document.removeEventListener('visibilitychange', onVisibility);
-        },
-      });
-    }
-
-    return () => {
-      for (const { cleanup } of map.values()) cleanup();
-      map.clear();
-    };
-  }, [entries.map(e => e.documentId).join(',')]);
-
   const handleCreateCalendar = async () => {
+    await workerReady;
     const handle = repo.create();
     handle.change((d: any) => {
       d['@type'] = 'Calendar';
@@ -253,10 +155,11 @@ export function Home({ path }: { path?: string }) {
     addDocId(handle.documentId);
     setMessage('Calendar created');
     setError('');
-    await loadAll();
+    loadAll();
   };
 
   const handleCreateTaskList = async () => {
+    await workerReady;
     const handle = repo.create();
     handle.change((d: any) => {
       d['@type'] = 'TaskList';
@@ -266,10 +169,11 @@ export function Home({ path }: { path?: string }) {
     addDocId(handle.documentId);
     setMessage('Task list created');
     setError('');
-    await loadAll();
+    loadAll();
   };
 
   const handleCreateDataGrid = async () => {
+    await workerReady;
     const handle = repo.create();
     const sid = () => Math.random().toString(36).slice(2, 10);
     const sheetId = sid();
@@ -299,7 +203,7 @@ export function Home({ path }: { path?: string }) {
     addDocId(handle.documentId);
     setMessage('Spreadsheet created');
     setError('');
-    await loadAll();
+    loadAll();
   };
 
   const xlsInputRef = useRef<HTMLInputElement>(null);
@@ -310,14 +214,12 @@ export function Home({ path }: { path?: string }) {
   const unwrapDummyFunction = (f: string): string => {
     const prefix = 'IFERROR(__xludf.DUMMYFUNCTION("';
     if (!f.toUpperCase().startsWith(prefix.toUpperCase())) return f;
-    // Find the closing `")` of the DUMMYFUNCTION string argument.
-    // Inside the string, `""` is an escaped quote.
     let i = prefix.length;
     let inner = '';
     while (i < f.length) {
       if (f[i] === '"') {
         if (f[i + 1] === '"') { inner += '"'; i += 2; }
-        else break; // closing quote
+        else break;
       } else { inner += f[i]; i++; }
     }
     return inner || f;
@@ -326,17 +228,16 @@ export function Home({ path }: { path?: string }) {
   const handleImportXlsx = useCallback(async (e: Event) => {
     const file = (e.target as HTMLInputElement).files?.[0];
     if (!file) return;
-    // Reset input so the same file can be re-imported
     if (xlsInputRef.current) xlsInputRef.current.value = '';
 
     try {
+      await workerReady;
       const XLSX = await import('xlsx');
       const buffer = await file.arrayBuffer();
       const wb = XLSX.read(buffer, { type: 'array' });
       const sid = () => Math.random().toString(36).slice(2, 10);
       const name = file.name.replace(/\.(xlsx?|csv)$/i, '') || 'Imported';
 
-      // First pass: generate IDs and parse sheet structure
       const sheetNameToId = new Map<string, string>();
       const sheetIdToRowColIds = new Map<string, { rowIds: string[]; colIds: string[] }>();
       const sheetDefs: {
@@ -386,7 +287,6 @@ export function Home({ path }: { path?: string }) {
       const lookupSheetId = (n: string) => sheetNameToId.get(n);
       const lookupSheetRowColIds = (id: string) => sheetIdToRowColIds.get(id);
 
-      // Second pass: convert all cells and formulas (before creating the document)
       const builtSheets: {
         sheetId: string; sheetName: string; index: number; hidden: boolean;
         columns: Record<string, { index: number; hidden?: boolean }>;
@@ -409,13 +309,10 @@ export function Home({ path }: { path?: string }) {
             let stored: string;
             if (wsCell?.f) {
               const formula = unwrapDummyFunction(wsCell.f);
-              // Skip cells whose formula is just a quoted string literal (e.g. ="hello") —
-              // these are spill/computed values from a dynamic array formula in another cell.
               if (/^"[^"]*"$/.test(formula)) continue;
               try {
                 stored = a1ToInternal('=' + formula, r, c, rowIds, colIds, lookupSheetId, lookupSheetRowColIds);
               } catch {
-                // Formula can't be parsed (unsupported syntax, missing sheet, etc.) — use computed value
                 stored = String(val);
               }
             } else {
@@ -429,7 +326,6 @@ export function Home({ path }: { path?: string }) {
         builtSheets.push({ sheetId, sheetName, index: si + 1, hidden, columns, rows: rowsMap, cells });
       }
 
-      // All parsing succeeded — now create the document
       const handle = repo.create();
       handle.change((d: any) => {
         d['@type'] = 'DataGrid';
@@ -448,7 +344,6 @@ export function Home({ path }: { path?: string }) {
       }
 
       addDocId(handle.documentId);
-      // location.href = `/datagrids/${handle.documentId}`;
       console.log(`/datagrids/${handle.documentId}`, handle.doc())
       alert(`/datagrids/${handle.documentId}`)
     } catch (err: any) {
@@ -456,10 +351,14 @@ export function Home({ path }: { path?: string }) {
     }
   }, []);
 
-  const handleDelete = (entry: DocEntry) => {
+  const handleDelete = async (entry: DocEntry) => {
     const label = entry.type === 'Calendar' ? 'calendar' : entry.type === 'TaskList' ? 'task list' : entry.type === 'DataGrid' ? 'spreadsheet' : 'document';
     if (!confirm(`Delete "${entry.name || 'Untitled'}" ${label}?`)) return;
-    if (entry.handle) repo.delete(entry.documentId as any);
+    try {
+      await workerReady;
+      const handle = repo.handles[entry.documentId as any];
+      if (handle) repo.delete(entry.documentId as any);
+    } catch { /* ignore — doc may not be loaded in main thread */ }
     removeDocId(entry.documentId);
     setMessage(`${label.charAt(0).toUpperCase() + label.slice(1)} deleted`);
     setError('');
@@ -473,6 +372,7 @@ export function Home({ path }: { path?: string }) {
     if (!file) return;
     if (icsInputRef.current) icsInputRef.current.value = '';
     try {
+      await workerReady;
       const text = await file.text();
       const { icsToEvent } = await import('../../shared/ics-parser');
       const parsed = icsToEvent(text);
@@ -489,7 +389,7 @@ export function Home({ path }: { path?: string }) {
       addDocId(handle.documentId);
       setMessage(`Imported ${parsed.length} event${parsed.length !== 1 ? 's' : ''} into "${calName}"`);
       setError('');
-      await loadAll();
+      loadAll();
     } catch (err: any) {
       setError('Import failed: ' + err.message);
     }
@@ -568,7 +468,7 @@ export function Home({ path }: { path?: string }) {
 
       <div className="flex flex-col">
         {entries.map(entry => {
-          const viewPath = viewPathForEntry(entry);
+          const viewPath = viewPathForType(entry.type, entry.documentId);
           const icon = iconForType(entry.type);
           return (
             <div
@@ -576,19 +476,19 @@ export function Home({ path }: { path?: string }) {
               className="flex items-center gap-2 py-1 px-1 flex-nowrap border-b border-border"
             >
               <span className="material-symbols-outlined" style={{ width: '1.2rem', textAlign: 'center', color: '#666' }}>{icon}</span>
-              <a href={viewPath} className={`text-sm flex-1 hover:underline${!entry.handle && entry.progress == null ? ' text-muted-foreground' : ''}`}>
-                {entry.name || 'Untitled'}{!entry.handle && entry.progress == null ? ' (stale)' : ''}
+              <a href={viewPath} className="text-sm flex-1 hover:underline flex items-center gap-1">
+                {entry.name || 'Untitled'}
+                {(presencePeers[entry.documentId] || []).map(p => (
+                  <span
+                    key={p.peerId}
+                    className="w-2 h-2 rounded-full inline-block shrink-0"
+                    style={{ backgroundColor: peerColor(p.peerId) }}
+                    title={`Peer ${p.peerId.slice(0, 8)} is viewing`}
+                  />
+                ))}
               </a>
-              {(docPeers[entry.documentId] || []).map(p => (
-                <div
-                  key={p.peerId}
-                  className="w-2 h-2 rounded-full shrink-0"
-                  style={{ backgroundColor: p.color }}
-                  title={`Peer ${p.peerId.slice(0, 8)} is viewing`}
-                />
-              ))}
-              {entry.progress != null ? (
-                <Progress className="w-16" value={entry.progress} title={`Loading ${entry.progress}%`} />
+              {entry.loading ? (
+                <Progress className="w-16" value={0} title="Loading..." />
               ) : (
                 <>
                   <a href={viewPath} className="text-xs text-muted-foreground no-underline" style={{ minWidth: '4rem', textAlign: 'right' }}>
@@ -599,15 +499,13 @@ export function Home({ path }: { path?: string }) {
                   </a>
                 </>
               )}
-              {entry.handle && (
-                <a
-                  href={`#/source/${entry.documentId}`}
-                  className="inline-flex items-center justify-center h-8 w-8 rounded-md text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-                  title="View Source"
-                >
-                  <span className="material-symbols-outlined">code</span>
-                </a>
-              )}
+              <a
+                href={`#/source/${entry.documentId}`}
+                className="inline-flex items-center justify-center h-8 w-8 rounded-md text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                title="View Source"
+              >
+                <span className="material-symbols-outlined">code</span>
+              </a>
               <button
                 className="inline-flex items-center justify-center h-8 w-8 rounded-md text-destructive hover:bg-destructive/10"
                 title="Delete"
@@ -636,8 +534,6 @@ export function Home({ path }: { path?: string }) {
           {syncOn ? 'Disable & reload' : 'Enable & reload'}
         </Button>
       </div>
-
-      <PresenceLogTable entries={presenceLog} onClear={clearLog} showDocId />
     </div>
   );
 }

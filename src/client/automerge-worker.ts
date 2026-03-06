@@ -1,12 +1,17 @@
 export type MainToWorker =
   | { type: 'init'; wsUrl: string; port: MessagePort }
-  | { type: 'set-ws-url'; wsUrl: string };
+  | { type: 'set-ws-url'; wsUrl: string }
+  | { type: 'query'; id: number; docId: string; filter: string }
+  | { type: 'subscribe-presence'; docIds: string[] }
+  | { type: 'unsubscribe-presence' };
 
 export type WorkerToMain =
   | { type: 'ready' }
   | { type: 'error'; message: string }
   | { type: 'peer-connected'; peerCount: number }
-  | { type: 'peer-disconnected'; peerCount: number };
+  | { type: 'peer-disconnected'; peerCount: number }
+  | { type: 'query-result'; id: number; result: any[]; error?: string }
+  | { type: 'presence-update'; peers: Record<string, { docId: string; peerId: string }[]> };
 
 // Queue messages that arrive while WASM is initializing
 const pendingMessages: MessageEvent[] = [];
@@ -21,6 +26,10 @@ const { MessageChannelNetworkAdapter } = await import('@automerge/automerge-repo
 let repo: InstanceType<typeof Repo> | null = null;
 let wsAdapter: InstanceType<typeof BrowserWebSocketClientAdapter> | null = null;
 let mcPeerId: string | null = null;
+
+// Presence tracking
+let presenceInstances: { cleanup: () => void }[] = [];
+let presenceTimer: ReturnType<typeof setInterval> | null = null;
 
 function postStatus() {
   // Count only non-MessageChannel peers (i.e. WebSocket server connections)
@@ -86,6 +95,76 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
 
   if (msg.type === 'set-ws-url') {
     setupWebSocket(msg.wsUrl);
+  }
+
+  if (msg.type === 'subscribe-presence') {
+    // Clean up any existing subscriptions
+    for (const inst of presenceInstances) inst.cleanup();
+    presenceInstances = [];
+    if (presenceTimer) { clearInterval(presenceTimer); presenceTimer = null; }
+
+    if (!repo) return;
+    const { Presence } = await import('@automerge/automerge-repo');
+    const docIds = msg.docIds;
+
+    const peersByDoc: Record<string, { docId: string; peerId: string }[]> = {};
+    for (const docId of docIds) peersByDoc[docId] = [];
+
+    const broadcastUpdate = () => {
+      (self as any).postMessage({ type: 'presence-update', peers: { ...peersByDoc } } satisfies WorkerToMain);
+    };
+
+    for (const docId of docIds) {
+      const handle = repo.handles[docId as any] as any;
+      if (!handle) continue;
+
+      const presence = new Presence({ handle });
+      presence.start({ initialState: { viewing: true }, heartbeatMs: 5000, peerTtlMs: 15000 });
+
+      const update = () => {
+        const states = presence.getPeerStates().getStates();
+        peersByDoc[docId] = Object.entries(states)
+          .filter(([, s]: [string, any]) => s?.state?.viewing)
+          .map(([peerId]) => ({ docId, peerId }));
+        broadcastUpdate();
+      };
+
+      presence.on('update', update);
+      presence.on('goodbye', update);
+      presence.on('pruning', update);
+      presence.on('snapshot', update);
+
+      presenceInstances.push({
+        cleanup() { presence.stop(); },
+      });
+    }
+
+    // Initial broadcast
+    broadcastUpdate();
+  }
+
+  if (msg.type === 'unsubscribe-presence') {
+    for (const inst of presenceInstances) inst.cleanup();
+    presenceInstances = [];
+    if (presenceTimer) { clearInterval(presenceTimer); presenceTimer = null; }
+  }
+
+  if (msg.type === 'query') {
+    try {
+      if (!repo) throw new Error('Repo not initialized');
+      const { compile } = await import('../shared/jq');
+      const handle = repo.handles[msg.docId as any] as any;
+      if (!handle?.isReady?.()) {
+        (self as any).postMessage({ type: 'query-result', id: msg.id, result: [], error: 'Document not found or not ready' } satisfies WorkerToMain);
+        return;
+      }
+      const doc = handle.doc();
+      const fn = compile(msg.filter);
+      const result = fn(doc);
+      (self as any).postMessage({ type: 'query-result', id: msg.id, result } satisfies WorkerToMain);
+    } catch (err: any) {
+      (self as any).postMessage({ type: 'query-result', id: msg.id, result: [], error: err?.message || 'Query failed' } satisfies WorkerToMain);
+    }
   }
 }
 
