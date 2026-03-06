@@ -51,8 +51,10 @@ export default defineConfig(async () => {
       })]
     : [];
 
+  const base = process.env.VITE_BASE_PATH || '/';
+
   return {
-  base: process.env.VITE_BASE_PATH || '/',
+  base,
   plugins: [
     preact(),
     tailwindcss(),
@@ -69,12 +71,12 @@ export default defineConfig(async () => {
         theme_color: '#4A90D9',
         background_color: '#ffffff',
         display: 'standalone',
-        start_url: '/',
-        scope: '/',
+        start_url: base,
+        scope: base,
         icons: [
-          { src: 'pwa-192x192.png', sizes: '192x192', type: 'image/png' },
-          { src: 'pwa-512x512.png', sizes: '512x512', type: 'image/png' },
-          { src: 'pwa-512x512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
+          { src: `${base}pwa-192x192.png`, sizes: '192x192', type: 'image/png' },
+          { src: `${base}pwa-512x512.png`, sizes: '512x512', type: 'image/png' },
+          { src: `${base}pwa-512x512.png`, sizes: '512x512', type: 'image/png', purpose: 'maskable' },
         ],
       },
       workbox: {
