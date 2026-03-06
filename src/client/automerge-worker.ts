@@ -154,11 +154,27 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
       if (!repo) throw new Error('Repo not initialized');
       const { compile } = await import('../shared/jq');
       const handle = repo.handles[msg.docId as any] as any;
-      if (!handle?.isReady?.()) {
-        (self as any).postMessage({ type: 'query-result', id: msg.id, result: [], error: 'Document not found or not ready' } satisfies WorkerToMain);
+      if (!handle) {
+        // Document not loaded in worker — try to find it with a short timeout
+        const h = repo.find(msg.docId as any);
+        const ready = await Promise.race([
+          h.then((h: any) => h.doc() ? h : null),
+          new Promise(r => setTimeout(() => r(null), 3000)),
+        ]) as any;
+        if (!ready?.doc()) {
+          (self as any).postMessage({ type: 'query-result', id: msg.id, result: [], error: 'Document not found' } satisfies WorkerToMain);
+          return;
+        }
+        const fn = compile(msg.filter);
+        const result = fn(ready.doc());
+        (self as any).postMessage({ type: 'query-result', id: msg.id, result } satisfies WorkerToMain);
         return;
       }
       const doc = handle.doc();
+      if (!doc) {
+        (self as any).postMessage({ type: 'query-result', id: msg.id, result: [], error: 'Document not ready' } satisfies WorkerToMain);
+        return;
+      }
       const fn = compile(msg.filter);
       const result = fn(doc);
       (self as any).postMessage({ type: 'query-result', id: msg.id, result } satisfies WorkerToMain);

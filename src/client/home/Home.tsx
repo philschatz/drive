@@ -24,12 +24,12 @@ interface DocEntry {
 dayjs.extend(relativeTimePlugin);
 
 const SUMMARY_QUERY = `{
-  type: (."@type" // "unknown"),
+  type: (.["@type"] // "unknown"),
   name: (.name // ""),
   count: (
-    if ."@type" == "Calendar" then (.events // {} | length)
-    elif ."@type" == "TaskList" then (.tasks // {} | length)
-    elif ."@type" == "DataGrid" then (
+    if .["@type"] == "Calendar" then (.events // {} | length)
+    elif .["@type"] == "TaskList" then (.tasks // {} | length)
+    elif .["@type"] == "DataGrid" then (
       if .sheets then [.sheets[] | (.cells // {} | length)] | add // 0
       else (.cells // {} | length)
       end
@@ -81,7 +81,8 @@ export function Home({ path }: { path?: string }) {
     if (queriedIdsRef.current.has(documentId)) return;
     queriedIdsRef.current.add(documentId);
     try {
-      const [summary] = await queryDoc(documentId, SUMMARY_QUERY);
+      const result = await queryDoc(documentId, SUMMARY_QUERY);
+      const [summary] = result;
       if (!summary) return;
       const type = (summary.type === 'Calendar' || summary.type === 'TaskList' || summary.type === 'DataGrid')
         ? summary.type as DocType : 'unknown';
