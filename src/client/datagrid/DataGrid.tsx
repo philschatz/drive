@@ -3,7 +3,7 @@ import { findDocWithProgress } from '../../shared/automerge';
 import type { DocHandle, PeerState, Presence } from '../../shared/automerge';
 import { peerColor, initPresence, PresenceBar, type PresenceState } from '../../shared/presence';
 import type { PeerFieldInfo } from '../../shared/presence';
-import { usePresenceLog, PresenceLogTable } from '../../shared/PresenceLog';
+import { usePresenceLog } from '../../shared/PresenceLog';
 import type { DataGridDocument } from './schema';
 import { migrateDataGridDocument } from './schema';
 import { useGridCommands, commitReorder, commitAutofill, setCell, type GridCommandState, type GridCommandContext } from './commands';
@@ -89,7 +89,7 @@ export function DataGrid({ docId, sheetId }: { docId?: string; sheetId?: string;
     range: { minRow: number; maxRow: number; minCol: number; maxCol: number };
   } | null>(null);
 
-  const { entries: presenceLog, clear: clearLog, attachToPresence } = usePresenceLog();
+  const { attachToPresence } = usePresenceLog();
 
   const [currentSheetId, setCurrentSheetId] = useState<string | null>(null);
 
@@ -446,7 +446,7 @@ export function DataGrid({ docId, sheetId }: { docId?: string; sheetId?: string;
     e.preventDefault();
     e.stopPropagation();
     const startX = e.clientX;
-    const startWidth = (columnDefs[ci]?.width as number) || 120;
+    const startWidth = (columnDefs[ci]?.width as number) || 100;
 
     const onMouseMove = (me: MouseEvent) => {
       const newWidth = Math.max(40, startWidth + me.clientX - startX);
@@ -687,23 +687,26 @@ export function DataGrid({ docId, sheetId }: { docId?: string; sheetId?: string;
   }, [handleKeyDown]);
 
   // Track scroll position and viewport height for row virtualization.
-  // The page scrolls (not the container), so we listen on window and use
-  // getBoundingClientRect() to compute how far into the container we've scrolled.
+  // The container scrolls (not the page), so we listen on the container element.
+  // Re-run when status clears (container becomes visible).
   useEffect(() => {
+    const el = tableRef.current;
+    if (!el) return;
     const handleScroll = () => {
-      const el = tableRef.current;
-      if (!el) return;
-      setScrollTop(Math.max(0, -el.getBoundingClientRect().top));
+      setScrollTop(el.scrollTop);
     };
-    const handleResize = () => setViewportHeight(window.innerHeight);
-    setViewportHeight(window.innerHeight);
-    window.addEventListener('scroll', handleScroll, { passive: true });
-    window.addEventListener('resize', handleResize);
+    const updateHeight = () => {
+      setViewportHeight(el.clientHeight);
+    };
+    updateHeight();
+    el.addEventListener('scroll', handleScroll, { passive: true });
+    const ro = new ResizeObserver(updateHeight);
+    ro.observe(el);
     return () => {
-      window.removeEventListener('scroll', handleScroll);
-      window.removeEventListener('resize', handleResize);
+      el.removeEventListener('scroll', handleScroll);
+      ro.disconnect();
     };
-  }, []);
+  }, [status]);
 
   // Mouse drag for cell range selection
   useEffect(() => {
@@ -1034,7 +1037,7 @@ export function DataGrid({ docId, sheetId }: { docId?: string; sheetId?: string;
 
   return (
     <div className="datagrid-page">
-      <div className="flex items-center gap-1 mb-1">
+      <div className="flex items-center gap-1 mb-1 px-1">
         <a href="#/" className="inline-flex items-center justify-center h-10 w-10 rounded-md hover:bg-accent hover:text-accent-foreground">
           <span className="material-symbols-outlined">arrow_back</span>
         </a>
@@ -1132,13 +1135,14 @@ export function DataGrid({ docId, sheetId }: { docId?: string; sheetId?: string;
           )}
 
           {/* Grid table + sheet tabs wrapper */}
+          <div className="datagrid-wrapper">
           <ContextMenu modal={false} onOpenChange={(open: boolean) => { if (!open) setContextMenu(null); }}>
           <ContextMenuTrigger asChild>
           <div className="datagrid-container" ref={tableRef} tabIndex={0}>
             <table className="datagrid-table">
               <thead>
                 <tr>
-                  <th className="datagrid-row-header" />
+                  <th className="datagrid-row-header datagrid-corner-header" />
                   {columnDefs.map((col, ci) => {
                     const isColSelected = selectedCols.has(ci);
                     let dropClass = '';
@@ -1150,7 +1154,7 @@ export function DataGrid({ docId, sheetId }: { docId?: string; sheetId?: string;
                       <th
                         key={col.id}
                         className={'datagrid-col-header' + (isColSelected ? ' selected' : '') + dropClass}
-                        style={{ width: (resizingCol?.index === ci ? resizingCol.width : col.width) || 120 }}
+                        style={{ width: (resizingCol?.index === ci ? resizingCol.width : col.width) || 100 }}
                         data-col-index={ci}
                         onClick={(e: any) => handleColHeaderClick(ci, e)}
                         onContextMenu={(e: any) => handleColContextMenu(ci, e)}
@@ -1363,12 +1367,12 @@ export function DataGrid({ docId, sheetId }: { docId?: string; sheetId?: string;
             </ContextMenuTrigger>
             <CommandContextMenuContent entries={commands.sheetCtx} />
           </ContextMenu>
+          </div>
         </>
       )}
 
 
 
-      <PresenceLogTable entries={presenceLog} onClear={clearLog} />
     </div>
   );
 }

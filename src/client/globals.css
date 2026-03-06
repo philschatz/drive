@@ -31,6 +31,8 @@
   }
   body {
     @apply bg-background text-foreground;
+    margin: 0;
+    padding: 0 !important;
   }
   .material-symbols-outlined {
     font-size: 18px;
