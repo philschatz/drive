@@ -114,12 +114,7 @@ export function Home({ path }: { path?: string }) {
 
   const handleCreateCalendar = async () => {
     await workerReady;
-    const handle = repo.create();
-    handle.change((d: any) => {
-      d['@type'] = 'Calendar';
-      d.name = 'Untitled';
-      d.events = {};
-    });
+    const handle = repo.create({ '@type': 'Calendar', name: 'Untitled', events: {} });
     addDocId(handle.documentId);
     setMessage('Calendar created');
     setError('');
@@ -128,12 +123,7 @@ export function Home({ path }: { path?: string }) {
 
   const handleCreateTaskList = async () => {
     await workerReady;
-    const handle = repo.create();
-    handle.change((d: any) => {
-      d['@type'] = 'TaskList';
-      d.name = 'Untitled';
-      d.tasks = {};
-    });
+    const handle = repo.create({ '@type': 'TaskList', name: 'Untitled', tasks: {} });
     addDocId(handle.documentId);
     setMessage('Task list created');
     setError('');
@@ -142,31 +132,23 @@ export function Home({ path }: { path?: string }) {
 
   const handleCreateDataGrid = async () => {
     await workerReady;
-    const handle = repo.create();
     const sid = () => Math.random().toString(36).slice(2, 10);
     const sheetId = sid();
-    const colA = sid();
-    const colB = sid();
-    const colC = sid();
-    handle.change((d: any) => {
-      d['@type'] = 'DataGrid';
-      d.name = 'Untitled';
-      const sheet: any = {
-        '@type': 'Sheet',
-        name: 'Sheet 1',
-        index: 1,
-        columns: {
-          [colA]: { index: 1 },
-          [colB]: { index: 2 },
-          [colC]: { index: 3 },
+    const rows: Record<string, { index: number }> = {};
+    for (let i = 1; i <= 10; i++) rows[sid()] = { index: i };
+    const handle = repo.create({
+      '@type': 'DataGrid',
+      name: 'Untitled',
+      sheets: {
+        [sheetId]: {
+          '@type': 'Sheet',
+          name: 'Sheet 1',
+          index: 1,
+          columns: { [sid()]: { index: 1 }, [sid()]: { index: 2 }, [sid()]: { index: 3 } },
+          rows,
+          cells: {},
         },
-        rows: {} as any,
-        cells: {},
-      };
-      for (let i = 1; i <= 10; i++) {
-        sheet.rows[sid()] = { index: i };
-      }
-      d.sheets = { [sheetId]: sheet };
+      },
     });
     addDocId(handle.documentId);
     setMessage('Spreadsheet created');
@@ -294,22 +276,15 @@ export function Home({ path }: { path?: string }) {
         builtSheets.push({ sheetId, sheetName, index: si + 1, hidden, columns, rows: rowsMap, cells });
       }
 
-      const handle = repo.create();
-      handle.change((d: any) => {
-        d['@type'] = 'DataGrid';
-        d.name = name;
-        d.sheets = {};
-      });
+      const sheets: Record<string, any> = {};
       for (const s of builtSheets) {
-        const sheetJson = JSON.stringify({
+        sheets[s.sheetId] = {
           '@type': 'Sheet', name: s.sheetName, index: s.index,
           ...(s.hidden ? { hidden: true } : {}),
           columns: s.columns, rows: s.rows, cells: s.cells,
-        });
-        handle.change((d: any) => {
-          d.sheets[s.sheetId] = JSON.parse(sheetJson);
-        });
+        };
       }
+      const handle = repo.create({ '@type': 'DataGrid', name, sheets });
 
       addDocId(handle.documentId);
       console.log(`/datagrids/${handle.documentId}`, handle.doc())
@@ -344,16 +319,10 @@ export function Home({ path }: { path?: string }) {
       const text = await file.text();
       const { icsToEvent } = await import('../../shared/ics-parser');
       const parsed = icsToEvent(text);
-      const handle = repo.create();
       const calName = file.name.replace(/\.ics$/i, '') || 'Imported';
-      handle.change((d: any) => {
-        d['@type'] = 'Calendar';
-        d.name = calName;
-        d.events = {};
-        for (const { uid, event } of parsed) {
-          d.events[uid] = event;
-        }
-      });
+      const events: Record<string, any> = {};
+      for (const { uid, event } of parsed) events[uid] = event;
+      const handle = repo.create({ '@type': 'Calendar', name: calName, events });
       addDocId(handle.documentId);
       setMessage(`Imported ${parsed.length} event${parsed.length !== 1 ? 's' : ''} into "${calName}"`);
       setError('');
