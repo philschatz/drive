@@ -20,8 +20,17 @@ const JQ_BUILTINS = [
   'with_entries', 'with_entries', 'reduce', 'foreach', 'label', 'break',
 ];
 
-export function JqPanel({ data }: { data: any }) {
-  const [query, setQuery] = useState('.');
+function defaultQuery(docType?: string): string {
+  switch (docType) {
+    case 'Calendar': return '.events | length';
+    case 'DataGrid': return '[.sheets[].cells | length] | add';
+    case 'TaskList': return '[.tasks[] | select(.progress != "completed")] | length';
+    default: return '.';
+  }
+}
+
+export function JqPanel({ data, docType }: { data: any; docType?: string }) {
+  const [query, setQuery] = useState(() => defaultQuery(docType));
   const [result, setResult] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState(true);
@@ -153,6 +162,7 @@ export function JqPanel({ data }: { data: any }) {
                 const q = view.state.doc.toString();
                 setQuery(q);
                 executeQuery(q);
+                setCollapsed(false);
                 return true;
               },
             },
@@ -162,6 +172,7 @@ export function JqPanel({ data }: { data: any }) {
                 const q = view.state.doc.toString();
                 setQuery(q);
                 executeQuery(q);
+                setCollapsed(false);
                 return true;
               },
             },
