@@ -195,6 +195,27 @@ export function checkDataGridDependencies(doc: any, errors: ValidationError[]): 
   }
 }
 
+/** Wrap a legacy flat-structure doc into the multi-sheet shape (read-only view).
+ *  Used when displaying historical snapshots that predate the multi-sheet migration. */
+export function asMultiSheet(doc: any): DataGridDocument {
+  if (doc.sheets) return doc;
+  return {
+    '@type': 'DataGrid',
+    name: doc.name ?? 'Spreadsheet',
+    description: doc.description,
+    sheets: {
+      _legacy: {
+        '@type': 'Sheet',
+        name: 'Sheet 1',
+        index: 1,
+        columns: doc.columns ?? {},
+        rows: doc.rows ?? {},
+        cells: doc.cells ?? {},
+      },
+    },
+  };
+}
+
 /** Migrate a legacy flat-structure DataGrid doc to the multi-sheet format.
  *  Must run inside handle.change(). We cannot assign existing Automerge objects
  *  to a new location (they already have CRDT identities), so we create the sheet

@@ -6,7 +6,7 @@ import { EditorTitleBar } from '../../shared/EditorTitleBar';
 import type { PeerFieldInfo } from '../../shared/presence';
 import { usePresenceLog } from '../../shared/PresenceLog';
 import type { DataGridDocument } from './schema';
-import { migrateDataGridDocument } from './schema';
+import { migrateDataGridDocument, asMultiSheet } from './schema';
 import { useGridCommands, commitReorder, commitAutofill, setCell, type GridCommandState, type GridCommandContext } from './commands';
 import { CommandMenuBar, CommandToolbar, CommandContextMenuContent } from './CommandBar';
 import { ContextMenu, ContextMenuTrigger } from '@/components/ui/context-menu';
@@ -99,8 +99,12 @@ export function DataGrid({ docId, sheetId }: { docId?: string; sheetId?: string;
   const [currentSheetId, setCurrentSheetId] = useState<string | null>(null);
 
   // Memoize sorted IDs from the current sheet
-  const docState = history.snapshot || handleRef.current?.doc();
-  const currentSheet = docState && currentSheetId ? docState.sheets?.[currentSheetId] ?? null : null;
+  const docState = history.snapshot ? asMultiSheet(history.snapshot) : handleRef.current?.doc();
+  // Fall back to first sheet if currentSheetId doesn't exist in this doc version
+  const effectiveSheetId = docState?.sheets && currentSheetId && !docState.sheets[currentSheetId]
+    ? Object.keys(docState.sheets)[0] ?? currentSheetId
+    : currentSheetId;
+  const currentSheet = docState && effectiveSheetId ? docState.sheets?.[effectiveSheetId] ?? null : null;
 
   const sortedColIds = useMemo(() => {
     if (!currentSheet?.columns) return [];
@@ -124,10 +128,10 @@ export function DataGrid({ docId, sheetId }: { docId?: string; sheetId?: string;
   }, [docState?.sheets]);
 
   const hfSheetIndex = useMemo(() => {
-    if (!currentSheetId) return 0;
-    const idx = sheetOrder.findIndex(s => s.id === currentSheetId);
+    if (!effectiveSheetId) return 0;
+    const idx = sheetOrder.findIndex(s => s.id === effectiveSheetId);
     return idx >= 0 ? idx : 0;
-  }, [currentSheetId, sheetOrder]);
+  }, [effectiveSheetId, sheetOrder]);
 
   const sheetNameLookup = useCallback((sheetId: string) => {
     return docState?.sheets?.[sheetId]?.name;
@@ -230,7 +234,7 @@ export function DataGrid({ docId, sheetId }: { docId?: string; sheetId?: string;
 
   // Rebuild HyperFormula when viewing a historical snapshot (or exiting history)
   useEffect(() => {
-    const doc = history.snapshot || handleRef.current?.doc();
+    const doc = (history.snapshot ? asMultiSheet(history.snapshot) : handleRef.current?.doc());
     if (!doc?.sheets) return;
     hfRef.current?.destroy();
     const order = sortedEntries(doc.sheets);
@@ -1017,7 +1021,7 @@ export function DataGrid({ docId, sheetId }: { docId?: string; sheetId?: string;
   }, [formulaRefHighlights, editingCell]);
 
   const peerList = Object.values(peerStates).filter(p => p.value.viewing);
-  const doc = history.snapshot || handleRef.current?.doc();
+  const doc = (history.snapshot ? asMultiSheet(history.snapshot) : handleRef.current?.doc());
   const hf = hfRef.current;
 
   const currentRowIndices = useMemo(() => {

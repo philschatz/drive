@@ -480,8 +480,8 @@ export function SourceViewer({ docId, rest }: { docId?: string; rest?: string; p
         </>
       )}
 
-      {snapshot && <JqPanel data={snapshot} />}
       <PatchTable patches={versionPatches} />
+      {snapshot && <JqPanel data={snapshot} />}
       <ClipboardInspector />
       <PresenceLogTable entries={presenceLog} onClear={clearLog} />
     </div>
