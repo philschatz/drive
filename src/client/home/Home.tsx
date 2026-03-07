@@ -376,7 +376,7 @@ export function Home({ path }: { path?: string }) {
           style={{ backgroundColor: connected ? '#4caf50' : '#f44336' }}
           title={connected ? 'Connected to server' : 'Disconnected from server'}
         />
-        <span className="text-xs text-muted-foreground">{connected ? 'Connected' : 'Disconnected'}</span>
+        <span className="text-xs text-muted-foreground" title={connected ? `Me: ${repo.peerId}` : 'Disconnected from server'}>{connected ? 'Connected' : 'Disconnected'}</span>
         {repoPeers.map(peerId => (
           <span
             key={peerId}
