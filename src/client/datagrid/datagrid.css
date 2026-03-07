@@ -12,10 +12,28 @@
   flex-direction: column;
 }
 
-/* Radix ContextMenuTrigger renders a <span> — make it a proper flex item */
+/* Radix ContextMenu renders wrapper <span> elements — make them flex participants */
 .datagrid-wrapper > span {
   display: flex;
   flex-direction: column;
+  min-height: 0;
+}
+
+/* First ContextMenu wrapper (grid) fills remaining space */
+.datagrid-wrapper > span:first-child {
+  flex: 1;
+}
+
+/* Nested span from ContextMenuTrigger inside each ContextMenu */
+.datagrid-wrapper > span > span {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+
+/* Last ContextMenu wrapper (sheet tabs) stays at its natural size */
+.datagrid-wrapper > span:last-child {
   flex-shrink: 0;
 }
 

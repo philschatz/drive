@@ -427,6 +427,22 @@ export function SourceViewer({ docId, rest }: { docId?: string; rest?: string; p
       setVersion(v);
     },
     jumpToLatest,
+    undoToVersion: () => {
+      const handle = handleRef.current;
+      if (!handle || isLatest || !entry) return;
+      const snap = entry.snapshot;
+      if (!snap) return;
+      const plain = JSON.parse(JSON.stringify(snap));
+      handle.change((d: any) => {
+        for (const key of Object.keys(d)) {
+          if (!(key in plain)) delete d[key];
+        }
+        for (const [key, val] of Object.entries(plain)) {
+          (d as any)[key] = val;
+        }
+      });
+      jumpToLatest();
+    },
   };
 
   return (

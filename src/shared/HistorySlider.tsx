@@ -44,10 +44,18 @@ export function HistorySlider<T>({ history, dismissable = true }: { history: Doc
         <>
           <span className="text-[0.7rem] px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 font-medium">View only</span>
           <button
-            className="text-[0.7rem] px-1.5 py-0.5 rounded border border-primary text-primary hover:bg-primary hover:text-primary-foreground"
+            className="inline-flex items-center justify-center h-6 w-6 rounded-md hover:bg-accent hover:text-accent-foreground text-muted-foreground"
             onClick={history.jumpToLatest}
+            title="Jump to latest"
           >
-            Jump to latest
+            <span className="material-symbols-outlined" style={{ fontSize: 16 }}>fast_forward</span>
+          </button>
+          <button
+            className="inline-flex items-center justify-center h-6 w-6 rounded-md hover:bg-accent hover:text-accent-foreground text-muted-foreground"
+            onClick={() => { if (confirm('Revert the document to this version? This cannot be undone.')) history.undoToVersion(); }}
+            title="Undo to this version"
+          >
+            <span className="material-symbols-outlined" style={{ fontSize: 16 }}>undo</span>
           </button>
         </>
       )}

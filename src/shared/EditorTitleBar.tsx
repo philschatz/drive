@@ -38,7 +38,7 @@ export function EditorTitleBar<P extends PeerLike>({
   const connected = useConnectionStatus();
 
   return (
-    <div className="flex items-center gap-1.5 px-1 min-h-10">
+    <div className="flex items-center gap-1.5 px-1 min-h-10 max-w-screen-xl mx-auto w-full">
       {/* Left side */}
       <a
         href="#/"

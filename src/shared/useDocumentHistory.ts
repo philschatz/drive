@@ -24,6 +24,8 @@ export interface DocumentHistory<T> {
   onSliderChange: (version: number) => void;
   /** Jump to the latest version */
   jumpToLatest: () => void;
+  /** Undo all changes after the current version */
+  undoToVersion: () => void;
 }
 
 export function useDocumentHistory<T>(handleRef: { current: DocHandle<T> | null }): DocumentHistory<T> {
@@ -100,6 +102,30 @@ export function useDocumentHistory<T>(handleRef: { current: DocHandle<T> | null 
     setVersion(h ? h.length - 1 : changeCount - 1);
   }, [changeCount, loadHistory]);
 
+  const undoToVersion = useCallback(() => {
+    const handle = handleRef.current;
+    if (!handle || !active || isLatest) return;
+    const snap = entries[version]?.snapshot;
+    if (!snap) return;
+    const plain = JSON.parse(JSON.stringify(snap));
+    handle.change((d: any) => {
+      // Remove keys not in snapshot
+      for (const key of Object.keys(d)) {
+        if (!(key in plain)) delete d[key];
+      }
+      // Copy snapshot keys (deep-assign handles nested merge)
+      for (const [key, val] of Object.entries(plain)) {
+        (d as any)[key] = val;
+      }
+    });
+    // Jump to latest after undo
+    const h = loadHistory();
+    if (h) {
+      atLatestRef.current = true;
+      setVersion(h.length - 1);
+    }
+  }, [active, isLatest, version, entries, loadHistory]);
+
   const snapshot = useMemo<T | null>(() => {
     if (!active || isLatest) return null;
     return entries[version]?.snapshot ?? null;
@@ -118,5 +144,6 @@ export function useDocumentHistory<T>(handleRef: { current: DocHandle<T> | null 
     toggleHistory,
     onSliderChange,
     jumpToLatest,
+    undoToVersion,
   };
 }
