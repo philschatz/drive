@@ -1,0 +1,38 @@
+name: Tests
+
+on:
+  push:
+    branches-ignore: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Type check (backend)
+        run: npx tsc --noEmit
+
+      - name: Type check (frontend)
+        run: npx tsc -p tsconfig.client.json --noEmit
+
+      - name: Unit tests
+        run: npm run test:unit
+
+      - name: Build frontend
+        run: npm run build
+
+      - name: Cypress e2e tests
+        run: |
+          rm -rf .data-cypress
+          PORT=4444 NODE_ENV=production AUTOMERGE_DATA_DIR=.data-cypress \
+            npx start-server-and-test 'npx ts-node src/backend/server.ts' http://localhost:4444/health \
+            './run-cypress.sh run --config baseUrl=http://localhost:4444'
