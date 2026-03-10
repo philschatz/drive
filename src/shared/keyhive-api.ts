@@ -115,16 +115,16 @@ export function generateInvite(docId: string, groupId: string, role: string): Pr
 }
 
 /** Claim an invite using the seed bytes and inviter archive from the invite URL. */
-export function claimInvite(inviteSeed: number[], archiveBytes: number[]): Promise<{ khDocId: string }> {
-  return request('kh-claim-invite', { inviteSeed, archiveBytes });
+export function claimInvite(inviteSeed: number[], archiveBytes: number[], authDocId?: string): Promise<{ khDocId: string }> {
+  return request('kh-claim-invite', { inviteSeed, archiveBytes, authDocId });
 }
 
-/** Enable sharing on a document by creating a keyhive Document. Returns the keyhive doc ID and sharing group ID. */
-export function enableSharing(): Promise<{ khDocId: string; groupId: string }> {
+/** Enable sharing on a document by creating a keyhive Document + auth companion doc. */
+export function enableSharing(): Promise<{ khDocId: string; authDocId: string; groupId: string }> {
   return request('kh-enable-sharing');
 }
 
 /** Register a previously-created sharing group so the worker can find it after reload. */
-export function registerSharingGroup(khDocId: string, groupId: string): Promise<void> {
-  return request('kh-register-sharing-group', { khDocId, groupId });
+export function registerSharingGroup(khDocId: string, groupId: string, authDocId?: string): Promise<void> {
+  return request('kh-register-sharing-group', { khDocId, groupId, authDocId });
 }

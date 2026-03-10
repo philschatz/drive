@@ -1103,8 +1103,9 @@ export function DataGrid({ docId, sheetId }: { docId?: string; sheetId?: string;
         onToggleHistory={history.toggleHistory}
         historyActive={history.active}
         khDocId={getDocEntry(docId!)?.khDocId}
+        authDocId={getDocEntry(docId!)?.authDocId}
         sharingGroupId={getDocEntry(docId!)?.sharingGroupId}
-        onSharingEnabled={(khDocId, groupId) => updateDocCache(docId!, { khDocId, sharingGroupId: groupId })}
+        onSharingEnabled={(khDocId, groupId, authDocId) => updateDocCache(docId!, { khDocId, sharingGroupId: groupId, authDocId })}
       />
       <HistorySlider history={history} />
       <ValidationPanel errors={validationErrors} docId={docId} />

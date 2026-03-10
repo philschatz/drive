@@ -44,8 +44,8 @@ export function EditorTitleBar<P extends PeerLike>({
   khDocId?: string;
   /** Auth companion doc ID for invite URL construction. */
   authDocId?: string;
-  /** Called when sharing is first enabled, with the new khDocId and groupId. */
-  onSharingEnabled?: (khDocId: string, groupId: string) => void;
+  /** Called when sharing is first enabled, with the new khDocId, groupId, and authDocId. */
+  onSharingEnabled?: (khDocId: string, groupId: string, authDocId: string) => void;
   /** Persisted sharing group ID (needed to restore after reload). */
   sharingGroupId?: string;
   children?: ComponentChildren;
@@ -56,17 +56,17 @@ export function EditorTitleBar<P extends PeerLike>({
 
   // Re-register persisted sharing group with the worker on mount
   useEffect(() => {
-    if (initialKhDocId && sharingGroupId) {
-      registerSharingGroup(initialKhDocId, sharingGroupId).catch(() => {});
+    if (initialKhDocId) {
+      registerSharingGroup(initialKhDocId, sharingGroupId || '', authDocId).catch(() => {});
     }
-  }, [initialKhDocId, sharingGroupId]);
+  }, [initialKhDocId, sharingGroupId, authDocId]);
 
   const handleEnableSharing = async () => {
     setEnabling(true);
     try {
-      const { khDocId: newId, groupId } = await enableSharing();
+      const { khDocId: newId, groupId, authDocId: newAuthDocId } = await enableSharing();
       setKhDocId(newId);
-      onSharingEnabled?.(newId, groupId);
+      onSharingEnabled?.(newId, groupId, newAuthDocId);
     } catch (err: any) {
       console.error('Failed to enable sharing:', err);
     } finally {
@@ -126,7 +126,7 @@ export function EditorTitleBar<P extends PeerLike>({
             docId={docId}
             authDocId={authDocId}
             sharingGroupId={sharingGroupId}
-            onGroupIdChange={(gid) => onSharingEnabled?.(khDocId!, gid)}
+            onGroupIdChange={(gid) => onSharingEnabled?.(khDocId!, gid, authDocId || '')}
           />
         ) : docId && (
           <button

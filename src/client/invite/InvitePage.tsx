@@ -65,7 +65,8 @@ export function InvitePage({ docId, authDocId, inviteKey }: InvitePageProps) {
         const { seed, archive } = decodePayload(inviteKey);
 
         setStatus('Claiming access...');
-        const result = await claimInvite(Array.from(seed), Array.from(archive));
+        const realAuthDocId = (authDocId && authDocId !== '_') ? authDocId : undefined;
+        const result = await claimInvite(Array.from(seed), Array.from(archive), realAuthDocId);
 
         if (cancelled) return;
 
@@ -74,7 +75,7 @@ export function InvitePage({ docId, authDocId, inviteKey }: InvitePageProps) {
         addDocId(docId, {
           ...entry,
           encrypted: true,
-          authDocId: (authDocId && authDocId !== '_') ? authDocId : undefined,
+          authDocId: realAuthDocId,
           khDocId: result.khDocId,
         });
 
