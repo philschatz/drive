@@ -44,6 +44,14 @@ export function removeDocId(id: string) {
   saveDocList(list);
 }
 
+export function touchDoc(id: string) {
+  const list = getDocList();
+  const idx = list.findIndex(e => e.id === id);
+  if (idx <= 0) return; // not found or already first
+  list.unshift(list.splice(idx, 1)[0]);
+  saveDocList(list);
+}
+
 export function updateDocCache(id: string, cache: Omit<DocEntry, 'id'>) {
   const list = getDocList();
   const entry = list.find(e => e.id === id);

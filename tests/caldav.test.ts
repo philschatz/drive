@@ -223,11 +223,13 @@ describe('CalDAV event operations', () => {
   });
 
   it('PUT should return 400 for invalid ICS', async () => {
+    const spy = jest.spyOn(console, 'error').mockImplementation(() => {});
     const res = await request(app)
       .put(`/dav/cal/${calId}/bad.ics`)
       .set('Content-Type', 'text/calendar')
       .send('not valid ics data');
     expect(res.status).toBe(400);
+    spy.mockRestore();
   });
 
   it('PUT should handle recurring events', async () => {
