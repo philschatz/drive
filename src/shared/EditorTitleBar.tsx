@@ -1,6 +1,7 @@
 import type { ComponentChildren } from 'preact';
 import { useConnectionStatus, repo } from './automerge';
 import { peerColor } from './presence';
+import { AccessControl } from '../client/components/AccessControl';
 
 interface PeerLike {
   peerId: string;
@@ -19,6 +20,8 @@ export function EditorTitleBar<P extends PeerLike>({
   showSourceLink = true,
   onToggleHistory,
   historyActive = false,
+  khDocId,
+  authDocId,
   children,
 }: {
   icon: string;
@@ -33,6 +36,10 @@ export function EditorTitleBar<P extends PeerLike>({
   showSourceLink?: boolean;
   onToggleHistory?: () => void;
   historyActive?: boolean;
+  /** Keyhive document ID (base64). When set, shows the share/permissions button. */
+  khDocId?: string;
+  /** Auth companion doc ID for invite URL construction. */
+  authDocId?: string;
   children?: ComponentChildren;
 }) {
   const connected = useConnectionStatus();
@@ -82,6 +89,10 @@ export function EditorTitleBar<P extends PeerLike>({
         >
           {connected ? 'Connected' : 'Disconnected'}
         </span>
+
+        {khDocId && docId && (
+          <AccessControl khDocId={khDocId} docId={docId} authDocId={authDocId} />
+        )}
 
         {onToggleHistory && (
           <button

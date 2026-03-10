@@ -4,6 +4,14 @@ interface DocEntry {
   id: string;
   type?: DocType;
   name?: string;
+  /** If true, document content is encrypted via keyhive. */
+  encrypted?: boolean;
+  /** Automerge doc ID of the companion auth document (keyhive membership graph). */
+  authDocId?: string;
+  /** Keyhive document ID (base64-encoded bytes) for encryption/decryption. */
+  khDocId?: string;
+  /** For migration: the original unencrypted doc ID that was migrated. */
+  legacyDocId?: string;
 }
 
 const DOC_STORAGE_KEY = 'automerge-doc-ids';

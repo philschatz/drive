@@ -116,6 +116,11 @@ export default defineConfig(async () => {
     },
     dedupe: ['preact', '@preact/signals', '@preact/signals-core'],
   },
+  server: {
+    fs: {
+      allow: [resolve(__dirname)],
+    },
+  },
   optimizeDeps: {
     include: ['@preact/signals', '@preact/signals-core', 'preact/hooks', 'preact/compat'],
     // Exclude automerge so the Vite automergeWasmPlugin load() hook can intercept
@@ -123,7 +128,7 @@ export default defineConfig(async () => {
     // Pre-bundling bypasses load() hooks (esbuild doesn't use Vite plugins),
     // so without this exclusion the full 2.4 MB base64 string ends up in the
     // pre-bundled chunk and OOMs the Chromium renderer during dev-mode testing.
-    exclude: ['@automerge/automerge', '@automerge/automerge-subduction'],
+    exclude: ['@automerge/automerge', '@automerge/automerge-subduction', '@keyhive/keyhive'],
   },
   };
 });

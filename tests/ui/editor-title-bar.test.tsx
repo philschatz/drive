@@ -10,6 +10,20 @@ jest.mock('../../src/shared/presence', () => ({
   peerColor: (id: string) => `#${id.slice(0, 6)}`,
 }));
 
+jest.mock('../../src/shared/keyhive-api', () => ({
+  initKeyhiveApi: jest.fn(),
+  handleKeyhiveResponse: jest.fn(),
+  getDocMembers: jest.fn(() => Promise.resolve([])),
+  getMyAccess: jest.fn(() => Promise.resolve(null)),
+  changeRole: jest.fn(),
+  revokeMember: jest.fn(),
+  generateInvite: jest.fn(),
+}));
+
+jest.mock('../../src/client/components/AccessControl', () => ({
+  AccessControl: () => null,
+}));
+
 import { EditorTitleBar } from '../../src/shared/EditorTitleBar';
 import { useConnectionStatus } from '../../src/shared/automerge';
 

@@ -504,6 +504,14 @@ export function Home({ path }: { path?: string }) {
         )}
       </div>
 
+      <div className="flex items-center gap-2 mb-2">
+        <a href="#/settings">
+          <Button variant="outline" size="sm">
+            <span className="material-symbols-outlined">settings</span> Settings & Devices
+          </Button>
+        </a>
+      </div>
+
       <div className="flex items-center gap-2 mb-6">
         <span className="text-xs text-muted-foreground">Sync server</span>
         <Button

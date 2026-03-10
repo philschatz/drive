@@ -6,6 +6,7 @@ export { Presence } from '@automerge/automerge-repo';
 export type { DocHandle, DocumentId, PeerId } from '@automerge/automerge-repo';
 export type { PeerState, PresenceState } from '@automerge/automerge-repo';
 import type { WorkerToMain } from '../client/automerge-worker';
+import { initKeyhiveApi, handleKeyhiveResponse } from './keyhive-api';
 
 const SYNC_DISABLED_KEY = 'automerge-sync-disabled';
 
@@ -53,6 +54,9 @@ export const repo = new Repo({
   isEphemeral: true,
   subduction: noopSubduction,
 } as any);
+
+// Initialize keyhive API with worker reference
+initKeyhiveApi(worker);
 
 // Send the other port to the worker along with the websocket URL
 worker.postMessage(
@@ -149,6 +153,8 @@ worker.onmessage = (e: MessageEvent<WorkerToMain>) => {
     const connected = workerPeerCount > 0;
     for (const fn of connectionListeners) fn(connected);
     for (const fn of peerListListeners) fn(workerPeers);
+  } else if (msg.type === 'kh-result') {
+    handleKeyhiveResponse(msg);
   } else if (msg.type === 'doc-summary') {
     if (homeSummaryCallback) homeSummaryCallback(msg.summary);
   } else if (msg.type === 'query-result') {

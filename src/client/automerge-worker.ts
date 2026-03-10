@@ -12,7 +12,18 @@ export type MainToWorker =
   | { type: 'set-ws-url'; wsUrl: string }
   | { type: 'query'; id: number; docId: string; filter: string }
   | { type: 'subscribe-home'; docIds: string[] }
-  | { type: 'unsubscribe-home' };
+  | { type: 'unsubscribe-home' }
+  // Keyhive operations
+  | { type: 'kh-get-identity'; id: number }
+  | { type: 'kh-get-contact-card'; id: number }
+  | { type: 'kh-receive-contact-card'; id: number; cardJson: string }
+  | { type: 'kh-get-doc-members'; id: number; khDocId: string }
+  | { type: 'kh-get-my-access'; id: number; khDocId: string }
+  | { type: 'kh-add-member'; id: number; agentId: string; docId: string; role: string }
+  | { type: 'kh-revoke-member'; id: number; agentId: string; docId: string }
+  | { type: 'kh-change-role'; id: number; agentId: string; docId: string; newRole: string }
+  | { type: 'kh-generate-invite'; id: number; docId: string; role: string }
+  | { type: 'kh-list-devices'; id: number };
 
 export type WorkerToMain =
   | { type: 'ready' }
@@ -20,7 +31,9 @@ export type WorkerToMain =
   | { type: 'peer-connected'; peerCount: number; peers: string[] }
   | { type: 'peer-disconnected'; peerCount: number; peers: string[] }
   | { type: 'query-result'; id: number; result: any[]; error?: string }
-  | { type: 'doc-summary'; summary: DocSummary };
+  | { type: 'doc-summary'; summary: DocSummary }
+  // Keyhive responses
+  | { type: 'kh-result'; id: number; result?: any; error?: string };
 
 // Queue messages that arrive while WASM is initializing
 const pendingMessages: MessageEvent[] = [];
@@ -30,6 +43,8 @@ self.onmessage = (e: MessageEvent) => { pendingMessages.push(e); };
 let Repo: any, IndexedDBStorageAdapter: any, MessageChannelNetworkAdapter: any, Automerge: any;
 let BrowserWebSocketClientAdapter: any;
 let subductionModule: any, WebCryptoSigner: any, setupSubduction: any;
+let keyhiveModule: typeof import('@keyhive/keyhive') | null = null;
+let keyhiveApi: typeof import('./keyhive') | null = null;
 try {
   ({ Repo } = await import('@automerge/automerge-repo'));
   ({ IndexedDBStorageAdapter } = await import('@automerge/automerge-repo-storage-indexeddb'));
@@ -39,10 +54,26 @@ try {
   subductionModule = await import('@automerge/automerge-subduction');
   WebCryptoSigner = subductionModule.WebCryptoSigner;
   ({ setupSubduction } = await import('@automerge/automerge-repo-subduction-bridge'));
+  // Load keyhive WASM + integration module
+  keyhiveModule = await import('@keyhive/keyhive');
+  keyhiveApi = await import('./keyhive');
 } catch (err: any) {
   console.error('[worker] Failed to load modules:', err);
-  (self as any).postMessage({ type: 'error', message: `Module load failed: ${err?.message || err}` });
+  (self as any).postMessage({ type: 'error', message: `Module load failed: ${errMsg(err)}` });
   throw err;
+}
+
+function errMsg(err: any): string {
+  if (!err) return 'Unknown error';
+  if (typeof err.message === 'function') return err.message();
+  return err.message || String(err);
+}
+
+function base64ToBytes(b64: string): Uint8Array {
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
 }
 
 let repo: InstanceType<typeof Repo> | null = null;
@@ -52,7 +83,7 @@ let wsAdapter: any = null;
 
 function postStatus() {
   // Count only non-MessageChannel peers (i.e. WebSocket server connections)
-  const peers = repo ? repo.peers.filter(id => id !== mcPeerId) : [];
+  const peers = repo ? repo.peers.filter((id: string) => id !== mcPeerId) : [];
   const peerCount = peers.length;
   (self as any).postMessage({ type: peerCount > 0 ? 'peer-connected' : 'peer-disconnected', peerCount, peers } satisfies WorkerToMain);
 }
@@ -199,6 +230,20 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
       });
       repo.networkSubsystem.addNetworkAdapter(mcAdapter);
 
+      // Initialize keyhive (identity, encryption, access control)
+      if (keyhiveModule && keyhiveApi) {
+        try {
+          await keyhiveApi.init(keyhiveModule);
+          keyhiveApi.setEventHandler((event) => {
+            // TODO: broadcast membership changes via auth companion docs
+            console.log('[keyhive] event:', event.variant);
+          });
+          console.log('[keyhive] initialized, device:', keyhiveApi.deviceId());
+        } catch (err: any) {
+          console.warn('[keyhive] init failed (non-fatal):', errMsg(err));
+        }
+      }
+
       (self as any).postMessage({ type: 'ready' } satisfies WorkerToMain);
 
       // Connect to server via WebSocket
@@ -206,7 +251,7 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
         setupWebSocket(msg.wsUrl);
       }
     } catch (err: any) {
-      (self as any).postMessage({ type: 'error', message: err?.message || 'Worker init failed' } satisfies WorkerToMain);
+      (self as any).postMessage({ type: 'error', message: errMsg(err) } satisfies WorkerToMain);
     }
   }
 
@@ -220,6 +265,90 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
 
   if (msg.type === 'unsubscribe-home') {
     cleanupHome();
+  }
+
+  // --- Keyhive operations ---
+
+  if (msg.type === 'kh-get-identity') {
+    try {
+      if (!keyhiveApi) throw new Error('Keyhive not available');
+      const id = keyhiveApi.deviceId();
+      const group = keyhiveApi.getUserGroup();
+      const members = group.members;
+      const devices = members.map(m => ({
+        id: m.who.id.toBytes(),
+        role: m.can.toString(),
+        isMe: m.who.toString() === keyhiveApi!.getKeyhive().idString,
+      }));
+      (self as any).postMessage({ type: 'kh-result', id: msg.id, result: { deviceId: id, devices } } satisfies WorkerToMain);
+    } catch (err: any) {
+      (self as any).postMessage({ type: 'kh-result', id: msg.id, error: errMsg(err) } satisfies WorkerToMain);
+    }
+  }
+
+  if (msg.type === 'kh-get-contact-card') {
+    try {
+      if (!keyhiveApi) throw new Error('Keyhive not available');
+      const card = await keyhiveApi.generateContactCard();
+      (self as any).postMessage({ type: 'kh-result', id: msg.id, result: card } satisfies WorkerToMain);
+    } catch (err: any) {
+      (self as any).postMessage({ type: 'kh-result', id: msg.id, error: errMsg(err) } satisfies WorkerToMain);
+    }
+  }
+
+  if (msg.type === 'kh-receive-contact-card') {
+    try {
+      if (!keyhiveApi) throw new Error('Keyhive not available');
+      const agent = keyhiveApi.receiveContactCard(msg.cardJson);
+      (self as any).postMessage({ type: 'kh-result', id: msg.id, result: { agentId: agent.toString() } } satisfies WorkerToMain);
+    } catch (err: any) {
+      (self as any).postMessage({ type: 'kh-result', id: msg.id, error: errMsg(err) } satisfies WorkerToMain);
+    }
+  }
+
+  if (msg.type === 'kh-get-doc-members') {
+    try {
+      if (!keyhiveApi) throw new Error('Keyhive not available');
+      const mod = keyhiveApi.getModule();
+      const docId = new mod.DocumentId(base64ToBytes(msg.khDocId));
+      const members = keyhiveApi.getDocMembers(docId);
+      const result = members.map(m => ({
+        agentId: m.who.toString(),
+        role: m.can.toString(),
+        isIndividual: m.who.isIndividual(),
+        isGroup: m.who.isGroup(),
+      }));
+      (self as any).postMessage({ type: 'kh-result', id: msg.id, result } satisfies WorkerToMain);
+    } catch (err: any) {
+      (self as any).postMessage({ type: 'kh-result', id: msg.id, error: errMsg(err) } satisfies WorkerToMain);
+    }
+  }
+
+  if (msg.type === 'kh-get-my-access') {
+    try {
+      if (!keyhiveApi) throw new Error('Keyhive not available');
+      const mod = keyhiveApi.getModule();
+      const docId = new mod.DocumentId(base64ToBytes(msg.khDocId));
+      const access = keyhiveApi.getMyAccess(docId);
+      (self as any).postMessage({ type: 'kh-result', id: msg.id, result: access } satisfies WorkerToMain);
+    } catch (err: any) {
+      (self as any).postMessage({ type: 'kh-result', id: msg.id, error: errMsg(err) } satisfies WorkerToMain);
+    }
+  }
+
+  if (msg.type === 'kh-list-devices') {
+    try {
+      if (!keyhiveApi) throw new Error('Keyhive not available');
+      const group = keyhiveApi.getUserGroup();
+      const members = group.members;
+      const devices = members.map(m => ({
+        agentId: m.who.toString(),
+        role: m.can.toString(),
+      }));
+      (self as any).postMessage({ type: 'kh-result', id: msg.id, result: devices } satisfies WorkerToMain);
+    } catch (err: any) {
+      (self as any).postMessage({ type: 'kh-result', id: msg.id, error: errMsg(err) } satisfies WorkerToMain);
+    }
   }
 
   if (msg.type === 'query') {
@@ -252,7 +381,7 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
       (self as any).postMessage({ type: 'query-result', id: msg.id, result } satisfies WorkerToMain);
     } catch (err: any) {
       console.error('[worker] query failed for', msg.docId, err);
-      (self as any).postMessage({ type: 'query-result', id: msg.id, result: [], error: err?.message || 'Query failed' } satisfies WorkerToMain);
+      (self as any).postMessage({ type: 'query-result', id: msg.id, result: [], error: errMsg(err) } satisfies WorkerToMain);
     }
   }
 }
