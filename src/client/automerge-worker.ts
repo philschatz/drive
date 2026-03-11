@@ -350,11 +350,14 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
       if (!khIntegration || !khBridge) throw new Error('Keyhive not available');
       const docId = new khBridge.DocumentId(base64ToBytes(msg.khDocId));
       const members = await khIntegration.keyhive.docMemberCapabilities(docId);
+      const me = await khIntegration.keyhive.individual;
+      const myAgentStr = me.toAgent().toString();
       const result = members.map((m: any) => ({
         agentId: m.who.toString(),
         role: m.can.toString(),
         isIndividual: m.who.isIndividual(),
         isGroup: m.who.isGroup(),
+        isMe: m.who.toString() === myAgentStr,
       }));
       (self as any).postMessage({ type: 'kh-result', id: msg.id, result } satisfies WorkerToMain);
     } catch (err: any) {

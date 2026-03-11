@@ -62,6 +62,7 @@ export interface MemberInfo {
   role: string;
   isIndividual: boolean;
   isGroup: boolean;
+  isMe: boolean;
 }
 
 /** Get this device's identity and linked devices. */
@@ -79,7 +80,7 @@ export function receiveContactCard(cardJson: string): Promise<{ agentId: string 
   return request('kh-receive-contact-card', { cardJson });
 }
 
-/** Get all members and roles for a document. */
+/** Get all members and roles for a document. Each member has an `isMe` flag. */
 export function getDocMembers(khDocId: string): Promise<MemberInfo[]> {
   return request('kh-get-doc-members', { khDocId });
 }

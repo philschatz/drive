@@ -46,7 +46,8 @@ export function AccessControl({ khDocId, docId, sharingGroupId, onGroupIdChange 
         getDocMembers(khDocId),
         getMyAccess(khDocId),
       ]);
-      setMembers(m);
+      // Normalize roles to lowercase to match SelectItem values
+      setMembers(m.map((member: MemberInfo) => ({ ...member, role: member.role.toLowerCase() })));
       setMyAccess(a);
     } catch (err: any) {
       setError(err.message);
@@ -162,6 +163,9 @@ export function AccessControl({ khDocId, docId, sharingGroupId, onGroupIdChange 
                 </span>
                 <span className="text-sm flex-1 truncate" title={member.agentId}>
                   {member.agentId.slice(0, 12)}...
+                  {member.isMe && (
+                    <span className="text-xs text-muted-foreground ml-1">(you)</span>
+                  )}
                 </span>
                 {isAdmin ? (
                   <div className="flex items-center gap-1">
