@@ -228,10 +228,23 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
         syncRequestInterval: 2000,
       });
 
-      // Create repo with keyhive-signed network + plain storage
+      // Create repo with keyhive-signed network + plain storage.
+      // The subduction-tagged automerge-repo requires a subduction instance — provide a no-op stub.
+      const noopSubduction = {
+        storage: {},
+        removeSedimentree() {},
+        connectDiscover() {},
+        disconnectAll() {},
+        disconnectFromPeer() {},
+        syncAll() { return Promise.resolve({ entries() { return []; } }); },
+        getBlobs() { return Promise.resolve([]); },
+        addCommit() { return Promise.resolve(undefined); },
+        addFragment() { return Promise.resolve(undefined); },
+      };
       repo = new Repo({
         network: [khIntegration.networkAdapter],
         storage: storageAdapter,
+        subduction: noopSubduction,
         peerId: khIntegration.peerId,
       } as any);
 

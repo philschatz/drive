@@ -2,7 +2,6 @@ import express, { Request, Response } from 'express';
 import cors from 'cors';
 import fs from 'fs';
 import path from 'path';
-import os from 'os';
 import { WebSocketServer } from 'ws';
 import { Repo } from '@automerge/automerge-repo';
 import { WebSocketServerAdapter } from '@automerge/automerge-repo-network-websocket';
@@ -21,8 +20,6 @@ fs.mkdirSync(dataDir, { recursive: true });
 const wss = new WebSocketServer({ noServer: true });
 const wsAdapter = new WebSocketServerAdapter(wss);
 
-// Plain automerge-repo: stores documents and relays sync messages between peers.
-// Keyhive signing/auth is handled client-side by the KeyhiveNetworkAdapter.
 // The subduction-tagged automerge-repo requires a subduction instance — provide a no-op stub.
 const noopSubduction = {
   storage: {},
@@ -35,15 +32,51 @@ const noopSubduction = {
   addCommit() { return Promise.resolve(undefined); },
   addFragment() { return Promise.resolve(undefined); },
 };
+
+// Initialize keyhive-aware automerge-repo.
+// The KeyhiveNetworkAdapter signs all messages, so the server must also use it
+// to unwrap signed messages from clients and sign its own outgoing messages.
 const repoPromise = (async () => {
   const storageAdapter = new NodeFSStorageAdapter(dataDir);
-  return new Repo({
-    network: [wsAdapter],
+
+  // In test environment, skip keyhive (ESM dynamic import not available in Jest)
+  if (process.env.JEST_WORKER_ID) {
+    return new Repo({
+      network: [wsAdapter],
+      storage: storageAdapter,
+      subduction: noopSubduction,
+      peerId: 'test-server' as any,
+      sharePolicy: async () => true,
+    } as any);
+  }
+
+  // Dynamic import: @automerge/automerge-repo-keyhive is ESM-only
+  const khBridge = await (Function('return import("@automerge/automerge-repo-keyhive")')() as Promise<typeof import('@automerge/automerge-repo-keyhive')>);
+  khBridge.initKeyhiveWasm();
+
+  const khIntegration = await khBridge.initializeAutomergeRepoKeyhive({
+    storage: storageAdapter,
+    peerIdSuffix: 'server',
+    networkAdapter: wsAdapter,
+    onlyShareWithHardcodedServerPeerId: false,
+    periodicallyRequestSync: true,
+    automaticArchiveIngestion: true,
+    cacheHashes: false,
+    syncRequestInterval: 5000,
+  });
+
+  const repo = new Repo({
+    network: [khIntegration.networkAdapter],
     storage: storageAdapter,
     subduction: noopSubduction,
-    peerId: `drive-server-${os.hostname()}` as any,
+    peerId: khIntegration.peerId,
     sharePolicy: async () => true,
   } as any);
+
+  khIntegration.linkRepo(repo);
+  console.log(`[keyhive] Server initialized, peerId: ${khIntegration.peerId}`);
+
+  return repo;
 })();
 
 // Body parsers

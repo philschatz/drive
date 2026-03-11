@@ -21,6 +21,7 @@ import { FormulaEditor, type FormulaHighlight, isRange } from './FormulaEditor';
 import { SheetTabs } from './SheetTabs';
 import { useUndoRedo } from '../../shared/useUndoRedo';
 import { useDocumentHistory } from '../../shared/useDocumentHistory';
+import { useAccess } from '../../shared/useAccess';
 import { HistorySlider } from '../../shared/HistorySlider';
 import { useDocumentValidation } from '../../shared/useDocumentValidation';
 import { ValidationPanel } from '../../shared/ValidationPanel';
@@ -66,6 +67,10 @@ export function DataGrid({ docId, sheetId }: { docId?: string; sheetId?: string;
   const handleRef = useRef<DocHandle<DataGridDocument> | null>(null);
   const { undo, redo, canUndo, canRedo } = useUndoRedo(handleRef);
   const history = useDocumentHistory(handleRef);
+  const { canEdit: accessCanEdit } = useAccess(getDocEntry(docId!)?.khDocId);
+  const canEdit = history.editable && accessCanEdit;
+  const canEditRef = useRef(canEdit);
+  canEditRef.current = canEdit;
   const presenceRef = useRef<Presence<PresenceState, DataGridDocument> | null>(null);
   const presenceCleanupRef = useRef<(() => void) | null>(null);
   const hfRef = useRef<HyperFormula | null>(null);
@@ -257,7 +262,7 @@ export function DataGrid({ docId, sheetId }: { docId?: string; sheetId?: string;
   // Single gateway for all document mutations.
   // Callback may return false to skip HyperFormula recomputation (cosmetic-only changes).
   const mutate = useCallback((fn: (doc: DataGridDocument) => boolean | void) => {
-    if (!history.editable) return;
+    if (!canEditRef.current) return;
     let needsSync = true;
     handleRef.current?.change((d: any) => {
       const result = fn(d);
@@ -270,6 +275,7 @@ export function DataGrid({ docId, sheetId }: { docId?: string; sheetId?: string;
   // Write a cell value to the Automerge doc and update HyperFormula incrementally.
   // Bypasses scheduleSyncHyperFormula() to avoid a full sheet rebuild on every keystroke.
   const commitCellValue = useCallback((col: number, row: number, value: string) => {
+    if (!canEditRef.current) return;
     if (col >= sortedColIds.length || row >= sortedRowIds.length || !currentSheetId) return;
     const rowId = sortedRowIds[row];
     const colId = sortedColIds[col];
@@ -291,7 +297,7 @@ export function DataGrid({ docId, sheetId }: { docId?: string; sheetId?: string;
 
   // Start editing a cell
   const startEditing = useCallback((col: number, row: number) => {
-    if (!history.editable) return;
+    if (!canEditRef.current) return;
     const doc = handleRef.current?.doc();
     if (!doc || !currentSheetId) return;
     const sh = doc.sheets[currentSheetId];
@@ -397,6 +403,7 @@ export function DataGrid({ docId, sheetId }: { docId?: string; sheetId?: string;
   // -- Drag-to-reorder --
 
   const doReorder = useCallback((type: 'row' | 'col', draggedIndices: number[], dropIndex: number) => {
+    if (!canEditRef.current) return;
     if (commandCtxRef.current) commitReorder(commandCtxRef.current, type, draggedIndices, dropIndex);
   }, []);
 
@@ -818,7 +825,7 @@ export function DataGrid({ docId, sheetId }: { docId?: string; sheetId?: string;
 
       // Use functional update to read current autofillTarget without stale closure
       setAutofillTarget(prev => {
-        if (prev && commandCtxRef.current) {
+        if (prev && commandCtxRef.current && canEditRef.current) {
           commitAutofill(commandCtxRef.current, src, prev);
         }
         return null;
@@ -1088,7 +1095,7 @@ export function DataGrid({ docId, sheetId }: { docId?: string; sheetId?: string;
       <EditorTitleBar
         icon="grid_on"
         title={gridName}
-        titleEditable={history.editable}
+        titleEditable={canEdit}
         onTitleFocus={() => { titleFocusedRef.current = true; }}
         onTitleChange={setGridName}
         onTitleBlur={(value) => {

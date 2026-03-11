@@ -5,6 +5,7 @@ import type { DocHandle, PeerState, Presence } from '../../shared/automerge';
 import { peerColor, initPresence, type PresenceState } from '../../shared/presence';
 import { EditorTitleBar } from '../../shared/EditorTitleBar';
 import { useDocumentHistory } from '../../shared/useDocumentHistory';
+import { useAccess } from '../../shared/useAccess';
 import { HistorySlider } from '../../shared/HistorySlider';
 import { usePresenceLog, PresenceLogTable } from '../../shared/PresenceLog';
 import { deepAssign } from '../../shared/deep-assign';
@@ -72,6 +73,10 @@ export function Tasks({ docId }: { docId?: string; path?: string }) {
   const validationErrors = useDocumentValidation(validationHandle);
   const handleRef = useRef<DocHandle<TaskDocument> | null>(null);
   const history = useDocumentHistory(handleRef);
+  const { canEdit: accessCanEdit } = useAccess(getDocEntry(docId!)?.khDocId);
+  const canEdit = history.editable && accessCanEdit;
+  const canEditRef = useRef(canEdit);
+  canEditRef.current = canEdit;
   const presenceRef = useRef<Presence<PresenceState, TaskDocument> | null>(null);
   const presenceCleanupRef = useRef<(() => void) | null>(null);
   const { entries: presenceLog, clear: clearLog, attachToPresence } = usePresenceLog();
@@ -81,7 +86,7 @@ export function Tasks({ docId }: { docId?: string; path?: string }) {
   const descFocusedRef = useRef(false);
 
   const saveTask = useCallback((uid: string, taskData: Task) => {
-    if (!history.editable) return;
+    if (!canEditRef.current) return;
     const handle = handleRef.current;
     if (!handle) return;
     handle.change((d: any) => {
@@ -100,7 +105,7 @@ export function Tasks({ docId }: { docId?: string; path?: string }) {
   }, []);
 
   const deleteTask = useCallback((uid: string) => {
-    if (!history.editable) return;
+    if (!canEditRef.current) return;
     const handle = handleRef.current;
     if (!handle) return;
     handle.change((d: any) => { delete d.tasks[uid]; });
@@ -127,7 +132,7 @@ export function Tasks({ docId }: { docId?: string; path?: string }) {
   }, [quickAddText, saveTask]);
 
   const deleteCompleted = useCallback(() => {
-    if (!history.editable) return;
+    if (!canEditRef.current) return;
     const handle = handleRef.current;
     if (!handle) return;
     const doc = handle.doc();
@@ -146,7 +151,7 @@ export function Tasks({ docId }: { docId?: string; path?: string }) {
   }, []);
 
   const toggleComplete = useCallback((uid: string, task: Task) => {
-    if (!history.editable) return;
+    if (!canEditRef.current) return;
     const newProgress = task.progress === 'completed' ? 'needs-action' : 'completed';
     const handle = handleRef.current;
     if (!handle) return;
@@ -263,8 +268,8 @@ export function Tasks({ docId }: { docId?: string; path?: string }) {
     } else {
       setTasks({ ...(handleRef.current?.doc()?.tasks || {}) });
     }
-    if (!history.editable) setEditorState(null);
-  }, [history.snapshot, history.active, history.editable]);
+    if (!canEdit) setEditorState(null);
+  }, [history.snapshot, history.active, canEdit]);
 
   // Restore live tasks when exiting history mode
   useEffect(() => {
@@ -291,7 +296,7 @@ export function Tasks({ docId }: { docId?: string; path?: string }) {
       <EditorTitleBar
         icon="checklist"
         title={listName}
-        titleEditable={history.editable}
+        titleEditable={canEdit}
         onTitleFocus={() => { titleFocusedRef.current = true; }}
         onTitleChange={setListName}
         onTitleBlur={(value) => {
