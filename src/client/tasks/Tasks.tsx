@@ -284,9 +284,10 @@ export function Tasks({ docId, readOnly }: { docId?: string; readOnly?: boolean;
           onInput={(e: any) => setQuickAddText(e.currentTarget.value)}
           onKeyDown={(e: any) => { if (e.key === 'Enter') handleQuickAdd(); }}
           className="flex-1"
+          disabled={!!status}
         />
-        <Button onClick={handleQuickAdd}>Add</Button>
-        <Button variant="outline" className="text-destructive" onClick={deleteCompleted}>Delete Completed</Button>
+        <Button onClick={handleQuickAdd} disabled={!!status}>Add</Button>
+        <Button variant="outline" className="text-destructive" onClick={deleteCompleted} disabled={!!status}>Delete Completed</Button>
       </div>
 
       <div className="flex flex-col">

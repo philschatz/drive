@@ -24,7 +24,6 @@ interface EventBytesResult {
 import {
   decodeKeyhiveMessageData,
   ENC_ENCRYPTED,
-  ENC_PLAINTEXT,
   KeyhiveMessageData,
   signData,
   verifyData,
@@ -515,8 +514,10 @@ export class KeyhiveNetworkAdapter extends NetworkAdapter {
       const hashBuf = await crypto.subtle.digest('SHA-256', data as unknown as BufferSource);
       const contentRef = new ChangeId(new Uint8Array(hashBuf));
       const predRef = this.lastChangeIdByDoc.get(automergeDocId);
+      // Delete before tryEncrypt: see inline encrypt block comment for rationale.
+      this.docObjects.delete(automergeDocId);
+      this.lastChangeIdByDoc.set(automergeDocId, new ChangeId(new Uint8Array(hashBuf)));
       const result = await this.keyhive.tryEncrypt(doc, contentRef, predRef ? [predRef] : [], data);
-      this.lastChangeIdByDoc.set(automergeDocId, contentRef);
       if (result.update_op()) {
         // CGKA key rotation — propagate the new op via keyhive sync
         setTimeout(() => this.syncKeyhive(), 0);
@@ -535,8 +536,7 @@ export class KeyhiveNetworkAdapter extends NetworkAdapter {
   /** Decrypt a flagged payload. Returns plaintext bytes or null on failure. */
   private async decryptPayload(automergeDocId: string, flaggedData: Uint8Array): Promise<Uint8Array | null> {
     if (flaggedData.length === 0) return flaggedData;
-    if (flaggedData[0] === ENC_PLAINTEXT) return flaggedData.slice(1);
-    if (flaggedData[0] !== ENC_ENCRYPTED) return flaggedData; // legacy untagged — pass through
+    if (flaggedData[0] !== ENC_ENCRYPTED) return null;
     const doc = await this.getOrFetchDocument(automergeDocId);
     if (!doc) {
       console.error(`[AMRepoKeyhive] decryptPayload: no keyhive doc for ${automergeDocId}`);
@@ -598,8 +598,12 @@ export class KeyhiveNetworkAdapter extends NetworkAdapter {
             try {
               const contentRef = new ChangeId(new Uint8Array(hashBuf));
               const predRef = this.lastChangeIdByDoc.get(automergeDocId);
+              // Delete before tryEncrypt: tryEncrypt synchronously calls __destroy_into_raw()
+              // on doc, zeroing its ptr. If tryEncrypt then rejects, the ptr=0 wrapper must
+              // not remain in docObjects (it would panic on the next call).
+              this.docObjects.delete(automergeDocId);
+              this.lastChangeIdByDoc.set(automergeDocId, new ChangeId(new Uint8Array(hashBuf)));
               const result = await this.keyhive.tryEncrypt(doc, contentRef, predRef ? [predRef] : [], data);
-              this.lastChangeIdByDoc.set(automergeDocId, contentRef);
               if (result.update_op()) {
                 setTimeout(() => this.syncKeyhive(), 0);
               }
@@ -610,18 +614,9 @@ export class KeyhiveNetworkAdapter extends NetworkAdapter {
               debug(`Encrypted ${message.type} for doc ${automergeDocId}`);
             } catch (e) {
               console.error(`[AMRepoKeyhive] encryptPayload failed for doc ${automergeDocId}:`, e);
-              // Flag as plaintext so receiver knows to strip the byte
-              const flagged = new Uint8Array(1 + data.length);
-              flagged[0] = ENC_PLAINTEXT;
-              flagged.set(data, 1);
-              payload = flagged;
             }
           } else {
-            // Doc not yet cached — flag as plaintext
-            const flagged = new Uint8Array(1 + data.length);
-            flagged[0] = ENC_PLAINTEXT;
-            flagged.set(data, 1);
-            payload = flagged;
+            console.error(`[AMRepoKeyhive] could not fetch keyhive doc for ${automergeDocId}, sending unencrypted`);
           }
         }
         return signData(this.keyhive, payload, contactCard);
@@ -719,7 +714,8 @@ export class KeyhiveNetworkAdapter extends NetworkAdapter {
             const automergeDocId = (message as any).documentId as string | undefined;
             if (automergeDocId && this.docMap.has(automergeDocId) &&
                 (message.type === "sync" || message.type === "change") &&
-                rawPayload && rawPayload.length > 0 && rawPayload[0] === ENC_ENCRYPTED) {
+                rawPayload && rawPayload.length > 0 &&
+                rawPayload[0] === ENC_ENCRYPTED) {
               // Decrypt inside the queue to prevent concurrent WASM access
               void this.keyhiveQueue.run(async () => {
                 let doc = this.docObjects.get(automergeDocId);
@@ -753,21 +749,25 @@ export class KeyhiveNetworkAdapter extends NetworkAdapter {
                     this.emit("message", message);
                   }
                 } catch (e) {
-                  console.error(`[AMRepoKeyhive] decryptPayload failed for doc ${automergeDocId}:`, e);
+                  // fromBytes failed — bytes after the flag are not valid EncryptedContent.
+                  // Most likely a legacy message sent without encryption where byte[0] of the
+                  // raw automerge sync data happens to equal ENC_ENCRYPTED (0x01).
+                  // Fall back to passing rawPayload as-is so automerge sees the original bytes.
+                  console.warn(`[AMRepoKeyhive] decryptPayload failed (likely legacy unencrypted message), falling back for doc ${automergeDocId}:`, e);
+                  message.data = rawPayload;
+                  if (message.type === "sync" || message.type === "request") {
+                    void this.checkAccessAndEmit(message);
+                  } else {
+                    this.emit("message", message);
+                  }
                 }
               });
             } else {
-              // Strip ENC_PLAINTEXT flag byte if present, otherwise use as-is
-              if (rawPayload && rawPayload.length > 0 && rawPayload[0] === ENC_PLAINTEXT) {
-                message.data = rawPayload.slice(1);
-              } else {
-                message.data = rawPayload;
-              }
-              if ((message.type === "sync" || message.type === "request") && automergeDocId) {
-                void this.checkAccessAndEmit(message);
-              } else {
-                this.emit("message", message);
-              }
+              // Unencrypted payload — from server relay or non-registered doc.
+              // Server doesn't have a keyhive identity so we skip the write-access
+              // check and emit directly.
+              message.data = rawPayload;
+              this.emit("message", message);
             }
           } else if (this.isBatching()) {
             this.keyhiveMsgBatch.add(message, maybeKeyhiveMessageData);
@@ -789,7 +789,11 @@ export class KeyhiveNetworkAdapter extends NetworkAdapter {
           );
         }
       } else {
-        throw new Error(`[AMRepoKeyhive] Received non-keyhive-signed message type=${message.type} from=${message.senderId} doc=${(message as any).documentId}`);
+        // Peer has a keyhive-looking ID but its message isn't keyhive-signed
+        // (e.g. relay server whose peerId prefix happens to decode as 32 bytes).
+        // Treat the same as a non-keyhive peer — pass through as-is.
+        debug(`[AMRepoKeyhive] Non-keyhive-signed message from ${message.senderId} type=${message.type}, passing through`);
+        this.emit("message", message);
       }
     } catch (e) {
       console.error("[AMRepoKeyhive] Could not decode signed message:", e);

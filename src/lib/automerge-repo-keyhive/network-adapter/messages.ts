@@ -6,8 +6,6 @@ import { verifyingKeyPeerIdWithoutSuffix } from "../utilities";
 
 /** Prefix byte indicating the signed payload contains a full-struct encrypted `Encrypted.toBytes()` blob. */
 export const ENC_ENCRYPTED = 0x01;
-/** Prefix byte indicating the signed payload is a raw (unencrypted) Automerge bytes, prefixed for backward compat. */
-export const ENC_PLAINTEXT = 0x00;
 
 let KH_DEBUG = false;
 function debug(...args: any[]) { if (KH_DEBUG) console.log('[AMRepoKeyhive]', ...args); }
