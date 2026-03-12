@@ -112,7 +112,7 @@ export function changeRole(agentId: string, docId: string, newRole: string): Pro
 }
 
 /** Generate an invite link for a document. Returns seed bytes + inviter archive for URL encoding. */
-export function generateInvite(docId: string, groupId: string, role: string): Promise<{ inviteKeyBytes: number[]; archiveBytes: number[]; groupId: string }> {
+export function generateInvite(docId: string, groupId: string, role: string): Promise<{ inviteKeyBytes: number[]; archiveBytes: number[]; groupId: string; inviteSignerAgentId: string }> {
   return request('kh-generate-invite', { docId, groupId, role });
 }
 

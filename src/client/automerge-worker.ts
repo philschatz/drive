@@ -607,6 +607,7 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
       const tempKh = await khBridge.Keyhive.init(inviteSigner, store, () => {});
       const inviteCard = await tempKh.contactCard();
       const inviteIndividual = await kh.receiveContactCard(inviteCard);
+      const inviteSignerAgentId = bytesToBase64(inviteIndividual.id.toBytes());
       const inviteAgent = inviteIndividual.toAgent();
       const access = khBridge.Access.tryFromString(msg.role);
       if (!access) throw new Error(`Invalid role: ${msg.role}`);
@@ -615,7 +616,7 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
       const archiveBytes = Array.from(archive.toBytes());
       await persistKeyhive();
       triggerKeyhiveSync();
-      (self as any).postMessage({ type: 'kh-result', id: msg.id, result: { inviteKeyBytes: Array.from(seed), archiveBytes, groupId: '' } } satisfies WorkerToMain);
+      (self as any).postMessage({ type: 'kh-result', id: msg.id, result: { inviteKeyBytes: Array.from(seed), archiveBytes, groupId: '', inviteSignerAgentId } } satisfies WorkerToMain);
     } catch (err: any) {
       (self as any).postMessage({ type: 'kh-result', id: msg.id, error: errMsg(err) } satisfies WorkerToMain);
     }

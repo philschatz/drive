@@ -16,6 +16,12 @@ import {
   generateInvite,
   type MemberInfo,
 } from '../../shared/keyhive-api';
+import {
+  getInviteRecords,
+  addInviteRecord,
+  removeInviteRecord,
+  type InviteRecord,
+} from '../invite-storage';
 
 interface AccessControlProps {
   /** Keyhive document ID (base64-encoded). */
@@ -30,16 +36,37 @@ interface AccessControlProps {
   onGroupIdChange?: (groupId: string) => void;
 }
 
+interface InviteStatus {
+  record: InviteRecord;
+  accepted: boolean;
+  acceptedBy?: MemberInfo;
+}
+
 export function AccessControl({ khDocId, docId, docType, sharingGroupId, onGroupIdChange }: AccessControlProps) {
   const [open, setOpen] = useState(false);
   const [members, setMembers] = useState<MemberInfo[]>([]);
   const [myAccess, setMyAccess] = useState<string | null>(null);
-  const [inviteUrl, setInviteUrl] = useState<string | null>(null);
   const [inviteRole, setInviteRole] = useState<string>('write');
+  const [inviteStatuses, setInviteStatuses] = useState<InviteStatus[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const isAdmin = myAccess?.toLowerCase() === 'admin';
+
+  const checkInvites = useCallback(async (currentMembers?: MemberInfo[]) => {
+    if (!khDocId) return;
+    const records = getInviteRecords(khDocId);
+    if (records.length === 0) { setInviteStatuses([]); return; }
+    const current = currentMembers ?? await getDocMembers(khDocId);
+    const statuses = records.map(r => {
+      const baseline = new Set(r.baselineAgentIds);
+      const newMembers = current.filter(
+        m => !baseline.has(m.agentId) && m.agentId !== r.inviteSignerAgentId
+      );
+      return { record: r, accepted: newMembers.length > 0, acceptedBy: newMembers[0] };
+    });
+    setInviteStatuses(statuses);
+  }, [khDocId]);
 
   const refresh = useCallback(async () => {
     if (!khDocId) return;
@@ -49,12 +76,14 @@ export function AccessControl({ khDocId, docId, docType, sharingGroupId, onGroup
         getMyAccess(khDocId),
       ]);
       // Normalize roles to lowercase to match SelectItem values
-      setMembers(m.map((member: MemberInfo) => ({ ...member, role: member.role.toLowerCase() })));
+      const normalized = m.map((member: MemberInfo) => ({ ...member, role: member.role.toLowerCase() }));
+      setMembers(normalized);
       setMyAccess(a);
+      await checkInvites(normalized);
     } catch (err: any) {
       setError(err.message);
     }
-  }, [khDocId]);
+  }, [khDocId, checkInvites]);
 
   useEffect(() => {
     if (open && khDocId) refresh();
@@ -90,7 +119,6 @@ export function AccessControl({ khDocId, docId, docType, sharingGroupId, onGroup
   const handleGenerateInvite = async () => {
     if (!khDocId) return;
     setLoading(true);
-    setInviteUrl(null);
     try {
       const result = await generateInvite(khDocId, sharingGroupId || '', inviteRole);
       // Persist updated groupId if it was recreated
@@ -111,8 +139,18 @@ export function AccessControl({ khDocId, docId, docType, sharingGroupId, onGroup
       const payloadB64 = btoa(binary)
         .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
       const base = window.location.origin + window.location.pathname;
-      const url = `${base}#/invite/${docId}/${docType ?? 'unknown'}/${payloadB64}`;
-      setInviteUrl(url);
+      const inviteUrl = `${base}#/invite/${docId}/${docType ?? 'unknown'}/${payloadB64}`;
+
+      addInviteRecord({
+        id: Date.now().toString(),
+        khDocId,
+        inviteUrl,
+        role: inviteRole,
+        createdAt: Date.now(),
+        inviteSignerAgentId: result.inviteSignerAgentId,
+        baselineAgentIds: members.map(m => m.agentId),
+      });
+      await checkInvites();
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -120,10 +158,9 @@ export function AccessControl({ khDocId, docId, docType, sharingGroupId, onGroup
     }
   };
 
-  const copyInvite = () => {
-    if (inviteUrl) {
-      navigator.clipboard.writeText(inviteUrl);
-    }
+  const handleDismissInvite = (id: string) => {
+    removeInviteRecord(id);
+    checkInvites();
   };
 
   if (!khDocId) {
@@ -205,7 +242,7 @@ export function AccessControl({ khDocId, docId, docType, sharingGroupId, onGroup
                 Generate a one-time invite link. The key is rotated after the recipient claims it,
                 so sharing the URL only works once.
               </p>
-              <div className="flex items-center gap-2 mb-2">
+              <div className="flex items-center gap-2 mb-3">
                 <Select value={inviteRole} onValueChange={setInviteRole}>
                   <SelectTrigger className="h-8 text-xs w-24">
                     <SelectValue />
@@ -219,17 +256,52 @@ export function AccessControl({ khDocId, docId, docType, sharingGroupId, onGroup
                   Generate link
                 </Button>
               </div>
-              {inviteUrl && (
-                <div className="flex items-center gap-2">
-                  <input
-                    className="flex-1 text-xs bg-muted p-1.5 rounded border border-border font-mono truncate"
-                    value={inviteUrl}
-                    readOnly
-                    onClick={(e: any) => e.currentTarget.select()}
-                  />
-                  <Button size="sm" variant="outline" onClick={copyInvite}>
-                    Copy
-                  </Button>
+
+              {/* Per-invite status list */}
+              {inviteStatuses.length > 0 && (
+                <div className="flex flex-col gap-1.5">
+                  {inviteStatuses.map(({ record, accepted, acceptedBy }) => (
+                    <div key={record.id} className="text-xs rounded border border-border p-2">
+                      <div className="flex items-center justify-between gap-2 mb-1">
+                        <span className="text-muted-foreground capitalize">{record.role} invite</span>
+                        <span className="text-muted-foreground">{new Date(record.createdAt).toLocaleDateString()}</span>
+                        <button
+                          className="text-muted-foreground hover:text-foreground leading-none"
+                          onClick={() => handleDismissInvite(record.id)}
+                        >
+                          &times;
+                        </button>
+                      </div>
+                      {accepted ? (
+                        <div className="flex items-center gap-1 text-green-700 dark:text-green-400">
+                          <span className="material-symbols-outlined" style={{ fontSize: 14 }}>check_circle</span>
+                          Accepted — key rotated
+                          {acceptedBy && (
+                            <span className="text-muted-foreground ml-1">({acceptedBy.displayId.slice(0, 8)}…)</span>
+                          )}
+                        </div>
+                      ) : (
+                        <>
+                          <div className="flex items-center gap-1 text-muted-foreground mb-1">
+                            <span className="material-symbols-outlined" style={{ fontSize: 14 }}>schedule</span>
+                            Pending
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <input
+                              className="flex-1 text-xs bg-muted p-1 rounded font-mono truncate"
+                              value={record.inviteUrl}
+                              readOnly
+                              onClick={(e: any) => e.currentTarget.select()}
+                            />
+                            <Button size="sm" variant="outline"
+                              onClick={() => navigator.clipboard.writeText(record.inviteUrl)}>
+                              Copy
+                            </Button>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  ))}
                 </div>
               )}
             </div>
