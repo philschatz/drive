@@ -123,6 +123,10 @@ let repo: InstanceType<typeof Repo> | null = null;
 let khIntegration: InstanceType<typeof khBridge.AutomergeRepoKeyhive> | null = null;
 // Maps khDocId (base64) → keyhive Document object (needed for addMember's other_relevant_docs).
 const khDocuments = new Map<string, any>();
+// Access overrides for invite-claimed docs (khDocId → access string).
+// tryToKeyhive gives the wrong access (Admin instead of the invite's actual access),
+// so we store the correct access and return it from kh-get-my-access.
+const inviteAccessOverrides = new Map<string, string>();
 
 // --- Doc registry for worker-owned subscriptions ---
 
@@ -576,6 +580,12 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
   if (msg.type === 'kh-get-my-access') {
     try {
       if (!khIntegration || !khBridge) throw new Error('Keyhive not available');
+      // Check invite access override first (tryToKeyhive gives wrong access for claimed invites)
+      const override = inviteAccessOverrides.get(msg.khDocId);
+      if (override) {
+        (self as any).postMessage({ type: 'kh-result', id: msg.id, result: override } satisfies WorkerToMain);
+        return;
+      }
       const docId = new khBridge.DocumentId(base64ToBytes(msg.khDocId));
       const id = new khBridge.Identifier(khIntegration.keyhive.id.bytes);
       const access = await khIntegration.keyhive.accessForDoc(id, docId);
@@ -732,21 +742,53 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
       const inviteSigner = khBridge.Signer.memorySignerFromBytes(inviteSeed);
       const tempStore = khBridge.CiphertextStore.newInMemory();
       // Use tryToKeyhive (not init + ingestArchive) to preserve CGKA state
+      console.log(`[kh-claim-invite] creating Archive from ${msg.archiveBytes.length} bytes`);
       const inviterArchive = new khBridge.Archive(new Uint8Array(msg.archiveBytes));
+      console.log(`[kh-claim-invite] calling tryToKeyhive...`);
       const inviteKh = await inviterArchive.tryToKeyhive(tempStore, inviteSigner, () => {});
+      console.log(`[kh-claim-invite] tryToKeyhive done, getting contactCard...`);
       const ourCard = await kh.contactCard();
+      console.log(`[kh-claim-invite] receiveContactCard...`);
       const ourIndividualInInviteKh = await inviteKh.receiveContactCard(ourCard);
       const ourAgentInInviteKh = ourIndividualInInviteKh.toAgent();
+      console.log(`[kh-claim-invite] reachableDocs...`);
       const reachable = await inviteKh.reachableDocs();
       if (reachable.length === 0) throw new Error('Invite has no document access');
       const docSummaryItem = reachable[0];
       const inviteDoc = docSummaryItem.doc;
       const inviteAccess = docSummaryItem.access;
+      // Save as string before addMember consumes the WASM Access object
+      const inviteAccessStr = inviteAccess.toString();
+      console.log(`[kh-claim-invite] inviteAccess=${inviteAccessStr}, inviteDoc.doc_id=${inviteDoc.doc_id}`);
+      console.log(`[kh-claim-invite] addMember...`);
       await inviteKh.addMember(ourAgentInInviteKh, inviteDoc.toMembered(), inviteAccess, []);
+      console.log(`[kh-claim-invite] toArchive...`);
       const inviteArchiveOut = await inviteKh.toArchive();
-      await kh.ingestArchive(inviteArchiveOut);
+
+      // Rebuild B's keyhive from the invite archive using tryToKeyhive with B's signer.
+      // This is necessary because ingestArchive does NOT initialize CGKA state.
+      // tryToKeyhive replays all events including CGKA setup, so B gets a working CGKA tree.
+      // NOTE: We do NOT ingest B's old archive — the extra events confuse A's CGKA tree
+      // and prevent A from decrypting B's messages.
+      const newStore = khBridge.CiphertextStore.newInMemory();
+      console.log(`[kh-claim-invite] second tryToKeyhive with B's signer...`);
+      const newKh = await inviteArchiveOut.tryToKeyhive(
+        newStore,
+        khIntegration.active.signer,
+        khIntegration.emitter.handleKeyhiveEvent
+      );
+      console.log(`[kh-claim-invite] second tryToKeyhive done, replacing keyhive...`);
+      // Replace the keyhive in khIntegration
+      (khIntegration as any).keyhive = newKh;
+      // Replace the keyhive in the network adapter (private field)
+      (khIntegration.networkAdapter as any).keyhive = newKh;
+      console.log(`[kh-claim-invite] rebuilt keyhive via tryToKeyhive with B's signer`);
+
       const khDocId = bytesToBase64(inviteDoc.id.toBytes());
-      const docFromOurKh = await kh.getDocument(inviteDoc.doc_id);
+      // Store the correct access level from the invite. tryToKeyhive incorrectly
+      // gives Admin (it treats the signer as owner), so we override access checks.
+      inviteAccessOverrides.set(khDocId, inviteAccessStr);
+      const docFromOurKh = await newKh.getDocument(inviteDoc.doc_id);
       if (docFromOurKh) {
         khDocuments.set(khDocId, docFromOurKh);
       }
@@ -755,11 +797,18 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
         khIntegration.networkAdapter.registerDoc(msg.automergeDocId, inviteDoc.doc_id);
       }
       await persistKeyhive();
-      // Send keyhive sync request so the server learns about our access
+
+      // Sync keyhive FIRST so peers learn about B's membership and CGKA ops
+      // before automerge sync triggers encrypted message exchange.
       khIntegration.networkAdapter.syncKeyhive();
-      // Pre-request the automerge document so it starts syncing alongside keyhive
+      // Force automerge-repo to re-sync with all peers. This is necessary because
+      // A may have already exchanged sync messages with B before the invite claim,
+      // creating a stale DocHandle. Re-emitting peer-candidate triggers fresh sync.
+      (khIntegration.networkAdapter as any).forceResyncAllPeers();
       if (msg.automergeDocId && repo) {
-        repo.find(msg.automergeDocId as any);
+        const docId = msg.automergeDocId;
+        console.log(`[kh-claim-invite] starting repo.find for ${docId}`);
+        repo.find(docId as any);
       }
       (self as any).postMessage({ type: 'kh-result', id: msg.id, result: { khDocId } } satisfies WorkerToMain);
     } catch (err: any) {

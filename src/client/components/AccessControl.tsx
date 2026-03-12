@@ -153,6 +153,9 @@ export function AccessControl({ khDocId, docId, docType, sharingGroupId, onGroup
         baselineAgentIds: members.map(m => m.agentId),
       });
       await checkInvites();
+      navigator.clipboard.writeText(inviteUrl).catch(() => {});
+      setCopiedUrl(inviteUrl);
+      setTimeout(() => setCopiedUrl(null), 1500);
     } catch (err: any) {
       setError(err.message);
     } finally {
