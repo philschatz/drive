@@ -254,6 +254,7 @@ export function Tasks({ docId, readOnly }: { docId?: string; readOnly?: boolean;
         onToggleHistory={history.toggleHistory}
         historyActive={history.active}
         khDocId={getDocEntry(docId!)?.khDocId}
+        docType="TaskList"
         sharingGroupId={getDocEntry(docId!)?.sharingGroupId}
         onSharingEnabled={(khDocId, groupId) => updateDocCache(docId!, { khDocId, sharingGroupId: groupId })}
       />

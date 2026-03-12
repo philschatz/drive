@@ -24,6 +24,7 @@ export function EditorTitleBar<P extends PeerLike>({
   onToggleHistory,
   historyActive = false,
   khDocId: initialKhDocId,
+  docType,
   onSharingEnabled,
   sharingGroupId,
   children,
@@ -42,6 +43,8 @@ export function EditorTitleBar<P extends PeerLike>({
   historyActive?: boolean;
   /** Keyhive document ID (base64). When set, shows the share/permissions button. */
   khDocId?: string;
+  /** Document type (Calendar/TaskList/DataGrid) — embedded in invite URL for correct redirect. */
+  docType?: string;
   /** Called when sharing is first enabled, with the new khDocId and groupId. */
   onSharingEnabled?: (khDocId: string, groupId: string) => void;
   /** Persisted sharing group ID (needed to restore after reload). */
@@ -135,6 +138,7 @@ export function EditorTitleBar<P extends PeerLike>({
           <AccessControl
             khDocId={khDocId}
             docId={docId}
+            docType={docType}
             sharingGroupId={sharingGroupId}
             onGroupIdChange={(gid) => onSharingEnabled?.(khDocId!, gid)}
           />

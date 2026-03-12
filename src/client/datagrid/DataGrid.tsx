@@ -1026,6 +1026,7 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
         onToggleHistory={history.toggleHistory}
         historyActive={history.active}
         khDocId={getDocEntry(docId!)?.khDocId}
+        docType="DataGrid"
         sharingGroupId={getDocEntry(docId!)?.sharingGroupId}
         onSharingEnabled={(khDocId, groupId) => updateDocCache(docId!, { khDocId, sharingGroupId: groupId })}
       />

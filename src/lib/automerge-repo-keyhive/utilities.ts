@@ -62,16 +62,16 @@ export async function getEventHashesForAgent(
 ): Promise<Map<string, Uint8Array>> {
   const hashMap = new Map<string, Uint8Array>();
 
-  // Get relevant membership + prekey hashes for the agent
-  const eventHashes: Uint8Array[] = await keyhive.eventHashesForAgent(agent);
-  for (const hash of eventHashes) {
-    hashMap.set(hash.toString(), hash);
+  // eventsForAgent returns Map<hashBytes, eventBytes> — we only need the keys
+  const events: Map<Uint8Array, any> = await keyhive.eventsForAgent(agent);
+  for (const hashBytes of events.keys()) {
+    hashMap.set(hashBytes.toString(), hashBytes);
   }
 
-  // Get the agent's own prekey hashes
-  const keyOpHashes: Uint8Array[] = await agent.keyOpHashes();
-  for (const hash of keyOpHashes) {
-    hashMap.set(hash.toString(), hash);
+  // keyOps returns Map<hashBytes, eventBytes> — prekey operation hashes
+  const keyOps: Map<Uint8Array, any> = await agent.keyOps();
+  for (const hashBytes of keyOps.keys()) {
+    hashMap.set(hashBytes.toString(), hashBytes);
   }
 
   return hashMap;

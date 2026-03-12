@@ -22,13 +22,15 @@ interface AccessControlProps {
   khDocId: string | undefined;
   /** Automerge document ID (for invite URL construction). */
   docId: string;
+  /** Document type (Calendar/TaskList/DataGrid) — embedded in invite URL so invitee can redirect correctly. */
+  docType?: string;
   /** Sharing group ID (base64-encoded). */
   sharingGroupId?: string;
   /** Called when group ID changes (e.g. recreated after reload). */
   onGroupIdChange?: (groupId: string) => void;
 }
 
-export function AccessControl({ khDocId, docId, sharingGroupId, onGroupIdChange }: AccessControlProps) {
+export function AccessControl({ khDocId, docId, docType, sharingGroupId, onGroupIdChange }: AccessControlProps) {
   const [open, setOpen] = useState(false);
   const [members, setMembers] = useState<MemberInfo[]>([]);
   const [myAccess, setMyAccess] = useState<string | null>(null);
@@ -109,7 +111,7 @@ export function AccessControl({ khDocId, docId, sharingGroupId, onGroupIdChange 
       const payloadB64 = btoa(binary)
         .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
       const base = window.location.origin + window.location.pathname;
-      const url = `${base}#/invite/${docId}/${payloadB64}`;
+      const url = `${base}#/invite/${docId}/${docType ?? 'unknown'}/${payloadB64}`;
       setInviteUrl(url);
     } catch (err: any) {
       setError(err.message);

@@ -20,6 +20,7 @@ import { claimInvite } from '../../shared/keyhive-api';
 
 interface InvitePageProps {
   docId?: string;
+  docType?: string;
   inviteKey?: string;
   path?: string;
 }
@@ -45,7 +46,7 @@ function docRoute(docId: string, type?: string): string {
   }
 }
 
-export function InvitePage({ docId, inviteKey }: InvitePageProps) {
+export function InvitePage({ docId, docType, inviteKey }: InvitePageProps) {
   const [status, setStatus] = useState('Preparing...');
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
@@ -79,7 +80,7 @@ export function InvitePage({ docId, inviteKey }: InvitePageProps) {
         setDone(true);
         setStatus('Invite claimed! Redirecting...');
 
-        const type = entry?.type;
+        const type = docType ?? entry?.type;
         setTimeout(() => {
           window.location.hash = docRoute(docId, type);
         }, 800);

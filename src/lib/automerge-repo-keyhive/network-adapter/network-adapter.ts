@@ -571,29 +571,61 @@ export class KeyhiveNetworkAdapter extends NetworkAdapter {
         : new Uint8Array();
     const seqNumber = this.pending.register();
     try {
-      // Encrypt sync/change payloads for keyhive-registered documents
+      // Pre-compute SHA-256 hash outside WASM (native crypto API, safe to call concurrently)
       const automergeDocId = (message as any).documentId as string | undefined;
-      if (
-        automergeDocId &&
+      const shouldEncrypt =
+        automergeDocId !== undefined &&
         this.docMap.has(automergeDocId) &&
         (message.type === "sync" || message.type === "change") &&
-        data.length > 0
-      ) {
-        const encryptedData = await this.encryptPayload(automergeDocId, data);
-        if (encryptedData) {
-          data = encryptedData;
-          debug(`Encrypted ${message.type} for doc ${automergeDocId}`);
-        } else {
-          // Encryption unavailable (doc not yet loaded) — flag as plaintext
-          const flagged = new Uint8Array(1 + data.length);
-          flagged[0] = ENC_PLAINTEXT;
-          flagged.set(data, 1);
-          data = flagged;
-        }
+        data.length > 0;
+      let hashBuf: ArrayBuffer | undefined;
+      if (shouldEncrypt) {
+        hashBuf = await crypto.subtle.digest('SHA-256', data as unknown as BufferSource);
       }
-      const signedData = await this.keyhiveQueue.run(() =>
-        signData(this.keyhive, data, contactCard)
-      );
+      // Encrypt (if applicable) and sign in a single queue slot to prevent concurrent WASM access
+      const signedData = await this.keyhiveQueue.run(async () => {
+        let payload = data;
+        if (shouldEncrypt && hashBuf && automergeDocId) {
+          let doc = this.docObjects.get(automergeDocId);
+          if (!doc) {
+            const khDocId = this.docMap.get(automergeDocId);
+            if (khDocId) {
+              const fetched = await this.keyhive.getDocument(khDocId);
+              if (fetched) { this.docObjects.set(automergeDocId, fetched); doc = fetched; }
+            }
+          }
+          if (doc) {
+            try {
+              const contentRef = new ChangeId(new Uint8Array(hashBuf));
+              const predRef = this.lastChangeIdByDoc.get(automergeDocId);
+              const result = await this.keyhive.tryEncrypt(doc, contentRef, predRef ? [predRef] : [], data);
+              this.lastChangeIdByDoc.set(automergeDocId, contentRef);
+              if (result.update_op()) {
+                setTimeout(() => this.syncKeyhive(), 0);
+              }
+              const encBytes = result.encrypted_content().toBytes();
+              payload = new Uint8Array(1 + encBytes.length);
+              payload[0] = ENC_ENCRYPTED;
+              payload.set(encBytes, 1);
+              debug(`Encrypted ${message.type} for doc ${automergeDocId}`);
+            } catch (e) {
+              console.error(`[AMRepoKeyhive] encryptPayload failed for doc ${automergeDocId}:`, e);
+              // Flag as plaintext so receiver knows to strip the byte
+              const flagged = new Uint8Array(1 + data.length);
+              flagged[0] = ENC_PLAINTEXT;
+              flagged.set(data, 1);
+              payload = flagged;
+            }
+          } else {
+            // Doc not yet cached — flag as plaintext
+            const flagged = new Uint8Array(1 + data.length);
+            flagged[0] = ENC_PLAINTEXT;
+            flagged.set(data, 1);
+            payload = flagged;
+          }
+        }
+        return signData(this.keyhive, payload, contactCard);
+      });
       await this.networkAdapter.whenReady();
       this.pending.fire(seqNumber, () => {
         message.data = signedData;
@@ -688,21 +720,42 @@ export class KeyhiveNetworkAdapter extends NetworkAdapter {
             if (automergeDocId && this.docMap.has(automergeDocId) &&
                 (message.type === "sync" || message.type === "change") &&
                 rawPayload && rawPayload.length > 0 && rawPayload[0] === ENC_ENCRYPTED) {
-              // Async decrypt path — fire-and-forget to avoid blocking batch processor
-              void (async () => {
-                const decrypted = await this.decryptPayload(automergeDocId, rawPayload);
-                if (!decrypted) {
-                  console.error(`[AMRepoKeyhive] decryptPayload returned null for doc ${automergeDocId}, dropping message`);
+              // Decrypt inside the queue to prevent concurrent WASM access
+              void this.keyhiveQueue.run(async () => {
+                let doc = this.docObjects.get(automergeDocId);
+                if (!doc) {
+                  // Cache miss — fetch now (inside queue to avoid concurrent WASM access)
+                  const khDocId = this.docMap.get(automergeDocId);
+                  if (khDocId) {
+                    const fetched = await this.keyhive.getDocument(khDocId);
+                    if (fetched) {
+                      this.docObjects.set(automergeDocId, fetched);
+                      doc = fetched;
+                    }
+                  }
+                }
+                if (!doc) {
+                  console.error(`[AMRepoKeyhive] decryptPayload: no keyhive doc for ${automergeDocId}, dropping message`);
                   return;
                 }
-                message.data = decrypted;
-                debug(`Decrypted ${message.type} for doc ${automergeDocId}`);
-                if (message.type === "sync" || message.type === "request") {
-                  void this.checkAccessAndEmit(message);
-                } else {
-                  this.emit("message", message);
+                try {
+                  const encrypted = (Encrypted as any).fromBytes(rawPayload.slice(1));
+                  const decrypted = await this.keyhive.tryDecrypt(doc, encrypted);
+                  if (!decrypted) {
+                    console.error(`[AMRepoKeyhive] tryDecrypt returned null for doc ${automergeDocId}, dropping message`);
+                    return;
+                  }
+                  message.data = decrypted;
+                  debug(`Decrypted ${message.type} for doc ${automergeDocId}`);
+                  if (message.type === "sync" || message.type === "request") {
+                    void this.checkAccessAndEmit(message);
+                  } else {
+                    this.emit("message", message);
+                  }
+                } catch (e) {
+                  console.error(`[AMRepoKeyhive] decryptPayload failed for doc ${automergeDocId}:`, e);
                 }
-              })();
+              });
             } else {
               // Strip ENC_PLAINTEXT flag byte if present, otherwise use as-is
               if (rawPayload && rawPayload.length > 0 && rawPayload[0] === ENC_PLAINTEXT) {

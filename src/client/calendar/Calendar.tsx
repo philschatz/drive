@@ -301,6 +301,7 @@ export function Calendar({ docId, readOnly }: { docId?: string; readOnly?: boole
         onToggleHistory={history.toggleHistory}
         historyActive={history.active}
         khDocId={getDocEntry(docId!)?.khDocId}
+        docType="Calendar"
         sharingGroupId={getDocEntry(docId!)?.sharingGroupId}
         onSharingEnabled={(khDocId, groupId) => updateDocCache(docId!, { khDocId, sharingGroupId: groupId })}
       >
