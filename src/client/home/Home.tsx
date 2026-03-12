@@ -114,8 +114,8 @@ export function Home({ path }: { path?: string }) {
     const name = prompt('Calendar name:', 'Untitled');
     if (name === null) return;
     const resolvedName = name || 'Untitled';
-    const docId = await createDoc({ '@type': 'Calendar', name: resolvedName, events: {} });
-    addDocId(docId, { type: 'Calendar', name: resolvedName });
+    const { docId, khDocId } = await createDoc({ '@type': 'Calendar', name: resolvedName, events: {} });
+    addDocId(docId, { type: 'Calendar', name: resolvedName, khDocId });
     setMessage('Calendar created');
     setError('');
     reloadEntries();
@@ -125,8 +125,8 @@ export function Home({ path }: { path?: string }) {
     const name = prompt('Task list name:', 'Untitled');
     if (name === null) return;
     const resolvedName = name || 'Untitled';
-    const docId = await createDoc({ '@type': 'TaskList', name: resolvedName, tasks: {} });
-    addDocId(docId, { type: 'TaskList', name: resolvedName });
+    const { docId, khDocId } = await createDoc({ '@type': 'TaskList', name: resolvedName, tasks: {} });
+    addDocId(docId, { type: 'TaskList', name: resolvedName, khDocId });
     setMessage('Task list created');
     setError('');
     reloadEntries();
@@ -140,7 +140,7 @@ export function Home({ path }: { path?: string }) {
     const sheetId = sid();
     const rows: Record<string, { index: number }> = {};
     for (let i = 1; i <= 10; i++) rows[sid()] = { index: i };
-    const docId = await createDoc({
+    const { docId, khDocId } = await createDoc({
       '@type': 'DataGrid',
       name: resolvedName,
       sheets: {
@@ -154,7 +154,7 @@ export function Home({ path }: { path?: string }) {
         },
       },
     });
-    addDocId(docId, { type: 'DataGrid', name: resolvedName });
+    addDocId(docId, { type: 'DataGrid', name: resolvedName, khDocId });
     setMessage('Spreadsheet created');
     setError('');
     reloadEntries();
@@ -287,8 +287,8 @@ export function Home({ path }: { path?: string }) {
           columns: s.columns, rows: s.rows, cells: s.cells,
         };
       }
-      const docId = await createDoc({ '@type': 'DataGrid', name, sheets });
-      addDocId(docId, { type: 'DataGrid', name });
+      const { docId, khDocId } = await createDoc({ '@type': 'DataGrid', name, sheets });
+      addDocId(docId, { type: 'DataGrid', name, khDocId });
       alert(`/datagrids/${docId}`)
     } catch (err: any) {
       setError('Failed to import: ' + err.message);
@@ -317,8 +317,8 @@ export function Home({ path }: { path?: string }) {
       const calName = file.name.replace(/\.ics$/i, '') || 'Imported';
       const events: Record<string, any> = {};
       for (const { uid, event } of parsed) events[uid] = event;
-      const docId = await createDoc({ '@type': 'Calendar', name: calName, events });
-      addDocId(docId, { type: 'Calendar', name: calName });
+      const { docId, khDocId } = await createDoc({ '@type': 'Calendar', name: calName, events });
+      addDocId(docId, { type: 'Calendar', name: calName, khDocId });
       setMessage(`Imported ${parsed.length} event${parsed.length !== 1 ? 's' : ''} into "${calName}"`);
       setError('');
       reloadEntries();

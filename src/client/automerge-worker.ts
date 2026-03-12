@@ -308,8 +308,19 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
   if (msg.type === 'create-doc') {
     try {
       if (!repo) throw new Error('Repo not initialized');
+      if (!khIntegration || !khBridge) throw new Error('Keyhive not available — cannot create encrypted document');
       const handle = repo.create(msg.initialJson);
-      (self as any).postMessage({ type: 'result', id: msg.id, result: { docId: handle.documentId } } satisfies WorkerToMain);
+      const docId = handle.documentId;
+      // Auto-create a keyhive group so the document is encrypted from birth
+      const kh = khIntegration.keyhive;
+      const ref = new khBridge.ChangeId(new Uint8Array(32));
+      const khDoc = await kh.generateDocument([], ref, []);
+      const khDocId = bytesToBase64(khDoc.id.toBytes());
+      khDocuments.set(khDocId, khDoc);
+      khIntegration.networkAdapter.registerDoc(docId, khDoc.doc_id);
+      await persistKeyhive();
+      triggerKeyhiveSync();
+      (self as any).postMessage({ type: 'result', id: msg.id, result: { docId, khDocId } } satisfies WorkerToMain);
     } catch (err: any) {
       (self as any).postMessage({ type: 'result', id: msg.id, error: errMsg(err) } satisfies WorkerToMain);
     }

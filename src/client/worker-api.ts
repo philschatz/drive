@@ -81,8 +81,8 @@ function fire(type: string, payload: Record<string, any> = {}): void {
 
 // ── Document mutations ──────────────────────────────────────────────────────
 
-export function createDoc(initialJson: any): Promise<string> {
-  return request<{ docId: string }>('create-doc', { initialJson }).then(r => r.docId);
+export function createDoc(initialJson: any): Promise<{ docId: string; khDocId: string }> {
+  return request<{ docId: string; khDocId: string }>('create-doc', { initialJson });
 }
 
 /**
