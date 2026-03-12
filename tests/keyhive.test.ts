@@ -948,44 +948,67 @@ describe('automerge-worker patterns', () => {
     expect(cReachable[0].doc.doc_id.toString()).toBe(docIdStr);
   });
 
-  it('ingestArchive identity contamination: B identity differs from contactCard flow', async () => {
-    // Reproduces the production pattern from keyhive-ops.ts:214.
-    // ingestArchive merges archive.active.individual into B's active individual
-    // (keyhive_core/src/keyhive.rs:2598-2599), contaminating B's identity.
+  it('ingestArchive flow: full bidirectional encrypt/decrypt', async () => {
+    // Reproduces the production pattern from keyhive-ops.ts:213-223.
+    // Tests the exact same bidirectional flow as the "fixed flow" test above,
+    // but using setupInvitePairIngestArchive (ingestArchive + ingestEventsBytes)
+    // instead of setupInvitePair (receiveContactCard + ingestEventsBytes).
     //
-    // In production, this causes browser B to fail decrypting A's sync messages
-    // because B's identity no longer matches what A expects.
-    const { khA: khA_good, khB: khB_good } = await setupInvitePair();
-    const { khA: khA_bad, khB: khB_bad } = await setupInvitePairIngestArchive();
+    // In production, browser B fails to decrypt A's sync messages after claiming
+    // an invite via this flow. This test attempts to reproduce that failure.
+    const { khA, khB, docIdA } = await setupInvitePairIngestArchive();
 
-    // Compare B's identity bytes between the two flows
-    const goodId = khB_good.id.bytes;
-    const badId = khB_bad.id.bytes;
-    console.log('[test] good B id length:', goodId.length, 'bad B id length:', badId.length);
+    const bReachable = await khB.reachableDocs();
+    console.log('[test] ingestArchive: B reachable docs:', bReachable.length);
+    expect(bReachable.length).toBeGreaterThan(0);
 
-    // Both B keyhives should have the same structure but ingestArchive
-    // may contaminate the active individual
-    const goodReachable = await khB_good.reachableDocs();
-    const badReachable = await khB_bad.reachableDocs();
-    console.log('[test] good B reachable:', goodReachable.length, 'bad B reachable:', badReachable.length);
+    // Step 1: Sync B→A so A learns about B's membership
+    const cardA = await khA.contactCard();
+    const indA_inB = await khB.receiveContactCard(cardA);
+    const bEventsForA: Map<Uint8Array, Uint8Array> = await khB.eventsForAgent(indA_inB.toAgent());
+    const bArr: Uint8Array[] = [];
+    bEventsForA.forEach((v: Uint8Array) => bArr.push(v));
+    console.log('[test] ingestArchive: B→A sync events:', bArr.length);
+    await khA.ingestEventsBytes(bArr);
 
-    // Check B self-encrypt works in both flows
-    const plaintext = new TextEncoder().encode('self-encrypt test');
-    const ref = new ChangeId(crypto.getRandomValues(new Uint8Array(32)));
+    // Step 2: A encrypts (generates CGKA Update op)
+    const docA = await khA.getDocument(docIdA);
+    const plainA = new TextEncoder().encode('from A (ingestArchive flow)');
+    const refA = new ChangeId(crypto.getRandomValues(new Uint8Array(32)));
+    const resultA = await khA.tryEncryptArchive(docA!, refA, [], plainA);
+    const encryptedA = resultA.encrypted_content();
+    console.log('[test] ingestArchive: A encrypt update_op?', !!resultA.update_op());
 
-    const goodDoc = await khB_good.getDocument(goodReachable[0].doc.doc_id);
-    const goodResult = await khB_good.tryEncryptArchive(goodDoc!, ref, [], plaintext);
-    expect(goodResult.encrypted_content()).toBeDefined();
+    // Step 3: Sync A→B so B gets A's CGKA ops
+    const cardB = await khB.contactCard();
+    const indB_inA = await khA.receiveContactCard(cardB);
+    const eventsForB: Map<Uint8Array, Uint8Array> = await khA.eventsForAgent(indB_inA.toAgent());
+    const arr: Uint8Array[] = [];
+    eventsForB.forEach((v: Uint8Array) => arr.push(v));
+    console.log('[test] ingestArchive: A→B sync events:', arr.length);
+    await khB.ingestEventsBytes(arr);
 
-    const ref2 = new ChangeId(crypto.getRandomValues(new Uint8Array(32)));
-    const badDoc = await khB_bad.getDocument(badReachable[0].doc.doc_id);
-    const badResult = await khB_bad.tryEncryptArchive(badDoc!, ref2, [], plaintext);
-    expect(badResult.encrypted_content()).toBeDefined();
+    // Step 4: B decrypts A's message
+    const docB = await khB.getDocument(bReachable[0].doc.doc_id);
+    const decrypted = await khB.tryDecrypt(docB!, encryptedA);
+    expect(new Uint8Array(decrypted)).toEqual(plainA);
 
-    // Check access — ingestArchive may report wrong access level
-    const goodAccess = await khB_good.accessForDoc(new Identifier(goodId), goodReachable[0].doc.doc_id);
-    const badAccess = await khB_bad.accessForDoc(new Identifier(badId), badReachable[0].doc.doc_id);
-    console.log('[test] good B access:', goodAccess?.toString(), 'bad B access:', badAccess?.toString());
+    // Step 5: B encrypts, A decrypts (reverse direction)
+    const plainB = new TextEncoder().encode('from B (ingestArchive flow)');
+    const refB = new ChangeId(crypto.getRandomValues(new Uint8Array(32)));
+    const docB2 = await khB.getDocument(bReachable[0].doc.doc_id);
+    const resultB = await khB.tryEncryptArchive(docB2!, refB, [], plainB);
+    const encryptedB = resultB.encrypted_content();
+
+    // Sync B→A again
+    const bEventsForA2: Map<Uint8Array, Uint8Array> = await khB.eventsForAgent(indA_inB.toAgent());
+    const bArr2: Uint8Array[] = [];
+    bEventsForA2.forEach((v: Uint8Array) => bArr2.push(v));
+    await khA.ingestEventsBytes(bArr2);
+
+    const docA2 = await khA.getDocument(docIdA);
+    const decryptedB = await khA.tryDecrypt(docA2!, encryptedB);
+    expect(new Uint8Array(decryptedB)).toEqual(plainB);
   });
 });
 
