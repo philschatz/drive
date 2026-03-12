@@ -1,6 +1,7 @@
 import { deepAssign } from '../shared/deep-assign';
 import { syncToTarget } from '../shared/sync-to-target';
 import { validateDocument } from '../shared/schemas';
+import { KeyhiveOps, errMsg } from './keyhive-ops';
 
 export type MainToWorker =
   | { type: 'init'; wsUrl: string; port?: MessagePort }
@@ -87,46 +88,9 @@ try {
   throw err;
 }
 
-function errMsg(err: any): string {
-  if (!err) return 'Unknown error';
-  if (typeof err.message === 'function') return err.message();
-  return err.message || String(err);
-}
-
-function bytesToBase64(bytes: Uint8Array): string {
-  let binary = '';
-  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-  return btoa(binary);
-}
-
-function base64ToBytes(b64: string): Uint8Array {
-  const binary = atob(b64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return bytes;
-}
-
-/** Look up an Agent from docMemberCapabilities by matching Identifier bytes (base64). */
-async function findAgentByIdBytes(kh: any, doc: any, agentIdB64: string): Promise<any> {
-  const targetBytes = base64ToBytes(agentIdB64);
-  const members = await kh.docMemberCapabilities(doc.doc_id);
-  for (const m of members) {
-    const memberBytes: Uint8Array = m.who.id.toBytes();
-    if (memberBytes.length === targetBytes.length && memberBytes.every((b: number, i: number) => b === targetBytes[i])) {
-      return m.who;
-    }
-  }
-  throw new Error('Member not found in document');
-}
-
 let repo: InstanceType<typeof Repo> | null = null;
 let khIntegration: InstanceType<typeof khBridge.AutomergeRepoKeyhive> | null = null;
-// Maps khDocId (base64) → keyhive Document object (needed for addMember's other_relevant_docs).
-const khDocuments = new Map<string, any>();
-// Access overrides for invite-claimed docs (khDocId → access string).
-// tryToKeyhive gives the wrong access (Admin instead of the invite's actual access),
-// so we store the correct access and return it from kh-get-my-access.
-const inviteAccessOverrides = new Map<string, string>();
+let khOps: KeyhiveOps | null = null;
 
 // --- Doc registry for worker-owned subscriptions ---
 
@@ -208,22 +172,6 @@ function postStatus() {
   (self as any).postMessage({ type: peerCount > 0 ? 'peer-connected' : 'peer-disconnected', peerCount, peers } satisfies WorkerToMain);
 }
 
-// --- Helper: save keyhive state after mutations ---
-
-async function persistKeyhive() {
-  if (khIntegration) {
-    await khIntegration.keyhiveStorage.saveKeyhiveWithHash(khIntegration.keyhive);
-  }
-}
-
-// Trigger keyhive event sync after mutations (delegations, revocations, etc.)
-function triggerKeyhiveSync() {
-  if (khIntegration) {
-    khIntegration.networkAdapter.syncKeyhive();
-  }
-}
-
-// ---
 
 async function handleMessage(e: MessageEvent<MainToWorker>) {
   const msg = e.data;
@@ -282,6 +230,14 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
 
       khIntegration.linkRepo(repo);
 
+      khOps = new KeyhiveOps(khIntegration.keyhive, khBridge as any, {
+        persist: () => khIntegration!.keyhiveStorage.saveKeyhiveWithHash(khIntegration!.keyhive),
+        syncKeyhive: () => khIntegration!.networkAdapter.syncKeyhive(),
+        registerDoc: (amDocId, khDocId) => khIntegration!.networkAdapter.registerDoc(amDocId, khDocId),
+        forceResyncAllPeers: () => (khIntegration!.networkAdapter as any).forceResyncAllPeers(),
+        findDoc: (docId) => repo!.find(docId as any),
+      });
+
       const ns = repo.networkSubsystem;
       ns.on('peer', postStatus);
       ns.on('peer-disconnected', postStatus);
@@ -314,19 +270,10 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
 
   if (msg.type === 'create-doc') {
     try {
-      if (!repo) throw new Error('Repo not initialized');
-      if (!khIntegration || !khBridge) throw new Error('Keyhive not available — cannot create encrypted document');
+      if (!repo || !khOps) throw new Error('Repo not initialized');
       const handle = repo.create(msg.initialJson);
       const docId = handle.documentId;
-      // Auto-create a keyhive group so the document is encrypted from birth
-      const kh = khIntegration.keyhive;
-      const ref = new khBridge.ChangeId(new Uint8Array(32));
-      const khDoc = await kh.generateDocument([], ref, []);
-      const khDocId = bytesToBase64(khDoc.id.toBytes());
-      khDocuments.set(khDocId, khDoc);
-      khIntegration.networkAdapter.registerDoc(docId, khDoc.doc_id);
-      await persistKeyhive();
-      triggerKeyhiveSync();
+      const { khDocId } = await khOps.enableSharing(docId);
       (self as any).postMessage({ type: 'result', id: msg.id, result: { docId, khDocId } } satisfies WorkerToMain);
     } catch (err: any) {
       (self as any).postMessage({ type: 'result', id: msg.id, error: errMsg(err) } satisfies WorkerToMain);
@@ -524,11 +471,12 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
 
   // --- Keyhive operations ---
 
+  // --- Keyhive operations (delegated to KeyhiveOps) ---
+
   if (msg.type === 'kh-get-identity') {
     try {
-      if (!khIntegration) throw new Error('Keyhive not available');
-      const kh = khIntegration.keyhive;
-      (self as any).postMessage({ type: 'kh-result', id: msg.id, result: { deviceId: kh.idString } } satisfies WorkerToMain);
+      if (!khOps) throw new Error('Keyhive not available');
+      (self as any).postMessage({ type: 'kh-result', id: msg.id, result: khOps.getIdentity() } satisfies WorkerToMain);
     } catch (err: any) {
       (self as any).postMessage({ type: 'kh-result', id: msg.id, error: errMsg(err) } satisfies WorkerToMain);
     }
@@ -536,9 +484,9 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
 
   if (msg.type === 'kh-get-contact-card') {
     try {
-      if (!khIntegration) throw new Error('Keyhive not available');
-      const card = await khIntegration.keyhive.contactCard();
-      (self as any).postMessage({ type: 'kh-result', id: msg.id, result: card.toJson() } satisfies WorkerToMain);
+      if (!khOps) throw new Error('Keyhive not available');
+      const result = await khOps.getContactCard();
+      (self as any).postMessage({ type: 'kh-result', id: msg.id, result } satisfies WorkerToMain);
     } catch (err: any) {
       (self as any).postMessage({ type: 'kh-result', id: msg.id, error: errMsg(err) } satisfies WorkerToMain);
     }
@@ -546,11 +494,9 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
 
   if (msg.type === 'kh-receive-contact-card') {
     try {
-      if (!khIntegration || !khBridge) throw new Error('Keyhive not available');
-      const card = khBridge.ContactCard.fromJson(msg.cardJson);
-      const individual = await khIntegration.keyhive.receiveContactCard(card);
-      await persistKeyhive();
-      (self as any).postMessage({ type: 'kh-result', id: msg.id, result: { agentId: individual.id.toString() } } satisfies WorkerToMain);
+      if (!khOps) throw new Error('Keyhive not available');
+      const result = await khOps.receiveContactCard(msg.cardJson);
+      (self as any).postMessage({ type: 'kh-result', id: msg.id, result } satisfies WorkerToMain);
     } catch (err: any) {
       (self as any).postMessage({ type: 'kh-result', id: msg.id, error: errMsg(err) } satisfies WorkerToMain);
     }
@@ -558,19 +504,8 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
 
   if (msg.type === 'kh-get-doc-members') {
     try {
-      if (!khIntegration || !khBridge) throw new Error('Keyhive not available');
-      const docId = new khBridge.DocumentId(base64ToBytes(msg.khDocId));
-      const members = await khIntegration.keyhive.docMemberCapabilities(docId);
-      const me = await khIntegration.keyhive.individual;
-      const myAgentStr = me.toAgent().toString();
-      const result = members.map((m: any) => ({
-        agentId: bytesToBase64(m.who.id.toBytes()),
-        displayId: m.who.toString(),
-        role: m.can.toString(),
-        isIndividual: m.who.isIndividual(),
-        isGroup: m.who.isGroup(),
-        isMe: m.who.toString() === myAgentStr,
-      }));
+      if (!khOps) throw new Error('Keyhive not available');
+      const result = await khOps.getDocMembers(msg.khDocId);
       (self as any).postMessage({ type: 'kh-result', id: msg.id, result } satisfies WorkerToMain);
     } catch (err: any) {
       (self as any).postMessage({ type: 'kh-result', id: msg.id, error: errMsg(err) } satisfies WorkerToMain);
@@ -579,17 +514,9 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
 
   if (msg.type === 'kh-get-my-access') {
     try {
-      if (!khIntegration || !khBridge) throw new Error('Keyhive not available');
-      // Check invite access override first (tryToKeyhive gives wrong access for claimed invites)
-      const override = inviteAccessOverrides.get(msg.khDocId);
-      if (override) {
-        (self as any).postMessage({ type: 'kh-result', id: msg.id, result: override } satisfies WorkerToMain);
-        return;
-      }
-      const docId = new khBridge.DocumentId(base64ToBytes(msg.khDocId));
-      const id = new khBridge.Identifier(khIntegration.keyhive.id.bytes);
-      const access = await khIntegration.keyhive.accessForDoc(id, docId);
-      (self as any).postMessage({ type: 'kh-result', id: msg.id, result: access ? access.toString() : null } satisfies WorkerToMain);
+      if (!khOps) throw new Error('Keyhive not available');
+      const result = await khOps.getMyAccess(msg.khDocId);
+      (self as any).postMessage({ type: 'kh-result', id: msg.id, result } satisfies WorkerToMain);
     } catch (err: any) {
       (self as any).postMessage({ type: 'kh-result', id: msg.id, error: errMsg(err) } satisfies WorkerToMain);
     }
@@ -597,7 +524,7 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
 
   if (msg.type === 'kh-list-devices') {
     try {
-      if (!khIntegration) throw new Error('Keyhive not available');
+      if (!khOps) throw new Error('Keyhive not available');
       (self as any).postMessage({ type: 'kh-result', id: msg.id, result: [] } satisfies WorkerToMain);
     } catch (err: any) {
       (self as any).postMessage({ type: 'kh-result', id: msg.id, error: errMsg(err) } satisfies WorkerToMain);
@@ -606,10 +533,8 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
 
   if (msg.type === 'kh-register-doc-mapping') {
     try {
-      if (!khIntegration || !khBridge) throw new Error('Keyhive not available');
-      const khDocId = new khBridge.DocumentId(base64ToBytes(msg.khDocId));
-      khIntegration.networkAdapter.registerDoc(msg.automergeDocId, khDocId);
-      console.log('[kh-register-doc-mapping] registered', msg.automergeDocId, '→', msg.khDocId);
+      if (!khOps) throw new Error('Keyhive not available');
+      khOps.registerDocMapping(msg.automergeDocId, msg.khDocId);
     } catch (err: any) {
       console.warn('[kh-register-doc-mapping] failed:', errMsg(err));
     }
@@ -617,18 +542,9 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
 
   if (msg.type === 'kh-enable-sharing') {
     try {
-      if (!khIntegration || !khBridge) throw new Error('Keyhive not available');
-      const kh = khIntegration.keyhive;
-      const ref = new khBridge.ChangeId(new Uint8Array(32));
-      const doc = await kh.generateDocument([], ref, []);
-      const khDocId = bytesToBase64(doc.id.toBytes());
-      khDocuments.set(khDocId, doc);
-      // Register the automerge→keyhive doc mapping for access enforcement
-      khIntegration.networkAdapter.registerDoc(msg.automergeDocId, doc.doc_id);
-      await persistKeyhive();
-      triggerKeyhiveSync();
-      console.log('[kh-enable-sharing] doc created, khDocId:', khDocId, 'automergeDocId:', msg.automergeDocId);
-      (self as any).postMessage({ type: 'kh-result', id: msg.id, result: { khDocId, groupId: '' } } satisfies WorkerToMain);
+      if (!khOps) throw new Error('Keyhive not available');
+      const result = await khOps.enableSharing(msg.automergeDocId);
+      (self as any).postMessage({ type: 'kh-result', id: msg.id, result } satisfies WorkerToMain);
     } catch (err: any) {
       (self as any).postMessage({ type: 'kh-result', id: msg.id, error: errMsg(err) } satisfies WorkerToMain);
     }
@@ -636,26 +552,9 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
 
   if (msg.type === 'kh-generate-invite') {
     try {
-      if (!khIntegration || !khBridge) throw new Error('Keyhive not available');
-      const kh = khIntegration.keyhive;
-      const doc = khDocuments.get(msg.docId);
-      if (!doc) throw new Error('Document not found. Re-enable sharing.');
-      const seed = crypto.getRandomValues(new Uint8Array(32));
-      const inviteSigner = khBridge.Signer.memorySignerFromBytes(seed);
-      const store = khBridge.CiphertextStore.newInMemory();
-      const tempKh = await khBridge.Keyhive.init(inviteSigner, store, () => {});
-      const inviteCard = await tempKh.contactCard();
-      const inviteIndividual = await kh.receiveContactCard(inviteCard);
-      const inviteSignerAgentId = bytesToBase64(inviteIndividual.id.toBytes());
-      const inviteAgent = inviteIndividual.toAgent();
-      const access = khBridge.Access.tryFromString(msg.role);
-      if (!access) throw new Error(`Invalid role: ${msg.role}`);
-      await kh.addMember(inviteAgent, doc.toMembered(), access, []);
-      const archive = await kh.toArchive();
-      const archiveBytes = Array.from(archive.toBytes());
-      await persistKeyhive();
-      triggerKeyhiveSync();
-      (self as any).postMessage({ type: 'kh-result', id: msg.id, result: { inviteKeyBytes: Array.from(seed), archiveBytes, groupId: '', inviteSignerAgentId } } satisfies WorkerToMain);
+      if (!khOps) throw new Error('Keyhive not available');
+      const result = await khOps.generateInvite(msg.docId, msg.role);
+      (self as any).postMessage({ type: 'kh-result', id: msg.id, result } satisfies WorkerToMain);
     } catch (err: any) {
       (self as any).postMessage({ type: 'kh-result', id: msg.id, error: errMsg(err) } satisfies WorkerToMain);
     }
@@ -663,19 +562,9 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
 
   if (msg.type === 'kh-add-member') {
     try {
-      if (!khIntegration || !khBridge) throw new Error('Keyhive not available');
-      const kh = khIntegration.keyhive;
-      const doc = khDocuments.get(msg.docId);
-      if (!doc) throw new Error('Document not found');
-      const agentId = new khBridge.Identifier(base64ToBytes(msg.agentId));
-      const individual = await kh.getIndividual(agentId as any);
-      if (!individual) throw new Error('Unknown agent');
-      const access = khBridge.Access.tryFromString(msg.role);
-      if (!access) throw new Error(`Invalid role: ${msg.role}`);
-      await kh.addMember(individual.toAgent(), doc.toMembered(), access, []);
-      await persistKeyhive();
-      triggerKeyhiveSync();
-      (self as any).postMessage({ type: 'kh-result', id: msg.id, result: true } satisfies WorkerToMain);
+      if (!khOps) throw new Error('Keyhive not available');
+      const result = await khOps.addMember(msg.agentId, msg.docId, msg.role);
+      (self as any).postMessage({ type: 'kh-result', id: msg.id, result } satisfies WorkerToMain);
     } catch (err: any) {
       (self as any).postMessage({ type: 'kh-result', id: msg.id, error: errMsg(err) } satisfies WorkerToMain);
     }
@@ -683,15 +572,9 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
 
   if (msg.type === 'kh-revoke-member') {
     try {
-      if (!khIntegration || !khBridge) throw new Error('Keyhive not available');
-      const kh = khIntegration.keyhive;
-      const doc = khDocuments.get(msg.docId);
-      if (!doc) throw new Error('Document not found');
-      const agent = await findAgentByIdBytes(kh, doc, msg.agentId);
-      await kh.revokeMember(agent, true, doc.toMembered());
-      await persistKeyhive();
-      triggerKeyhiveSync();
-      (self as any).postMessage({ type: 'kh-result', id: msg.id, result: true } satisfies WorkerToMain);
+      if (!khOps) throw new Error('Keyhive not available');
+      const result = await khOps.revokeMember(msg.agentId, msg.docId);
+      (self as any).postMessage({ type: 'kh-result', id: msg.id, result } satisfies WorkerToMain);
     } catch (err: any) {
       (self as any).postMessage({ type: 'kh-result', id: msg.id, error: errMsg(err) } satisfies WorkerToMain);
     }
@@ -699,18 +582,9 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
 
   if (msg.type === 'kh-change-role') {
     try {
-      if (!khIntegration || !khBridge) throw new Error('Keyhive not available');
-      const kh = khIntegration.keyhive;
-      const doc = khDocuments.get(msg.docId);
-      if (!doc) throw new Error('Document not found');
-      const agent = await findAgentByIdBytes(kh, doc, msg.agentId);
-      await kh.revokeMember(agent, true, doc.toMembered());
-      const access = khBridge.Access.tryFromString(msg.newRole);
-      if (!access) throw new Error(`Invalid role: ${msg.newRole}`);
-      await kh.addMember(agent, doc.toMembered(), access, []);
-      await persistKeyhive();
-      triggerKeyhiveSync();
-      (self as any).postMessage({ type: 'kh-result', id: msg.id, result: true } satisfies WorkerToMain);
+      if (!khOps) throw new Error('Keyhive not available');
+      const result = await khOps.changeRole(msg.agentId, msg.docId, msg.newRole);
+      (self as any).postMessage({ type: 'kh-result', id: msg.id, result } satisfies WorkerToMain);
     } catch (err: any) {
       (self as any).postMessage({ type: 'kh-result', id: msg.id, error: errMsg(err) } satisfies WorkerToMain);
     }
@@ -718,17 +592,9 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
 
   if (msg.type === 'kh-register-sharing-group') {
     try {
-      if (!khIntegration || !khBridge) throw new Error('Keyhive not available');
-      const kh = khIntegration.keyhive;
-      // Restore the keyhive Document object into our in-memory map after reload.
-      if (!khDocuments.has(msg.khDocId)) {
-        const docId = new khBridge.DocumentId(base64ToBytes(msg.khDocId));
-        const doc = await kh.getDocument(docId);
-        if (doc) {
-          khDocuments.set(msg.khDocId, doc);
-        }
-      }
-      (self as any).postMessage({ type: 'kh-result', id: msg.id, result: true } satisfies WorkerToMain);
+      if (!khOps) throw new Error('Keyhive not available');
+      const result = await khOps.registerSharingGroup(msg.khDocId);
+      (self as any).postMessage({ type: 'kh-result', id: msg.id, result } satisfies WorkerToMain);
     } catch (err: any) {
       (self as any).postMessage({ type: 'kh-result', id: msg.id, error: errMsg(err) } satisfies WorkerToMain);
     }
@@ -736,81 +602,9 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
 
   if (msg.type === 'kh-claim-invite') {
     try {
-      if (!khIntegration || !khBridge) throw new Error('Keyhive not available');
-      const kh = khIntegration.keyhive;
-      const inviteSeed = new Uint8Array(msg.inviteSeed);
-      const inviteSigner = khBridge.Signer.memorySignerFromBytes(inviteSeed);
-      const tempStore = khBridge.CiphertextStore.newInMemory();
-      // Use tryToKeyhive (not init + ingestArchive) to preserve CGKA state
-      console.log(`[kh-claim-invite] creating Archive from ${msg.archiveBytes.length} bytes`);
-      const inviterArchive = new khBridge.Archive(new Uint8Array(msg.archiveBytes));
-      console.log(`[kh-claim-invite] calling tryToKeyhive...`);
-      const inviteKh = await inviterArchive.tryToKeyhive(tempStore, inviteSigner, () => {});
-      console.log(`[kh-claim-invite] tryToKeyhive done, getting contactCard...`);
-      const ourCard = await kh.contactCard();
-      console.log(`[kh-claim-invite] receiveContactCard...`);
-      const ourIndividualInInviteKh = await inviteKh.receiveContactCard(ourCard);
-      const ourAgentInInviteKh = ourIndividualInInviteKh.toAgent();
-      console.log(`[kh-claim-invite] reachableDocs...`);
-      const reachable = await inviteKh.reachableDocs();
-      if (reachable.length === 0) throw new Error('Invite has no document access');
-      const docSummaryItem = reachable[0];
-      const inviteDoc = docSummaryItem.doc;
-      const inviteAccess = docSummaryItem.access;
-      // Save as string before addMember consumes the WASM Access object
-      const inviteAccessStr = inviteAccess.toString();
-      console.log(`[kh-claim-invite] inviteAccess=${inviteAccessStr}, inviteDoc.doc_id=${inviteDoc.doc_id}`);
-      console.log(`[kh-claim-invite] addMember...`);
-      await inviteKh.addMember(ourAgentInInviteKh, inviteDoc.toMembered(), inviteAccess, []);
-      console.log(`[kh-claim-invite] toArchive...`);
-      const inviteArchiveOut = await inviteKh.toArchive();
-
-      // Rebuild B's keyhive from the invite archive using tryToKeyhive with B's signer.
-      // This is necessary because ingestArchive does NOT initialize CGKA state.
-      // tryToKeyhive replays all events including CGKA setup, so B gets a working CGKA tree.
-      // NOTE: We do NOT ingest B's old archive — the extra events confuse A's CGKA tree
-      // and prevent A from decrypting B's messages.
-      const newStore = khBridge.CiphertextStore.newInMemory();
-      console.log(`[kh-claim-invite] second tryToKeyhive with B's signer...`);
-      const newKh = await inviteArchiveOut.tryToKeyhive(
-        newStore,
-        khIntegration.active.signer,
-        khIntegration.emitter.handleKeyhiveEvent
-      );
-      console.log(`[kh-claim-invite] second tryToKeyhive done, replacing keyhive...`);
-      // Replace the keyhive in khIntegration
-      (khIntegration as any).keyhive = newKh;
-      // Replace the keyhive in the network adapter (private field)
-      (khIntegration.networkAdapter as any).keyhive = newKh;
-      console.log(`[kh-claim-invite] rebuilt keyhive via tryToKeyhive with B's signer`);
-
-      const khDocId = bytesToBase64(inviteDoc.id.toBytes());
-      // Store the correct access level from the invite. tryToKeyhive incorrectly
-      // gives Admin (it treats the signer as owner), so we override access checks.
-      inviteAccessOverrides.set(khDocId, inviteAccessStr);
-      const docFromOurKh = await newKh.getDocument(inviteDoc.doc_id);
-      if (docFromOurKh) {
-        khDocuments.set(khDocId, docFromOurKh);
-      }
-      // Register the automerge→keyhive doc mapping for access enforcement
-      if (msg.automergeDocId) {
-        khIntegration.networkAdapter.registerDoc(msg.automergeDocId, inviteDoc.doc_id);
-      }
-      await persistKeyhive();
-
-      // Sync keyhive FIRST so peers learn about B's membership and CGKA ops
-      // before automerge sync triggers encrypted message exchange.
-      khIntegration.networkAdapter.syncKeyhive();
-      // Force automerge-repo to re-sync with all peers. This is necessary because
-      // A may have already exchanged sync messages with B before the invite claim,
-      // creating a stale DocHandle. Re-emitting peer-candidate triggers fresh sync.
-      (khIntegration.networkAdapter as any).forceResyncAllPeers();
-      if (msg.automergeDocId && repo) {
-        const docId = msg.automergeDocId;
-        console.log(`[kh-claim-invite] starting repo.find for ${docId}`);
-        repo.find(docId as any);
-      }
-      (self as any).postMessage({ type: 'kh-result', id: msg.id, result: { khDocId } } satisfies WorkerToMain);
+      if (!khOps) throw new Error('Keyhive not available');
+      const result = await khOps.claimInvite(msg.inviteSeed, msg.archiveBytes, msg.automergeDocId);
+      (self as any).postMessage({ type: 'kh-result', id: msg.id, result } satisfies WorkerToMain);
     } catch (err: any) {
       console.error('[kh-claim-invite] failed:', err);
       (self as any).postMessage({ type: 'kh-result', id: msg.id, error: errMsg(err) } satisfies WorkerToMain);
