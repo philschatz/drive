@@ -4,6 +4,9 @@ import { encode, decode } from "cbor-x";
 import { ContactCard, Signed, Keyhive } from "@keyhive/keyhive/slim";
 import { verifyingKeyPeerIdWithoutSuffix } from "../utilities";
 
+let KH_DEBUG = false;
+function debug(...args: any[]) { if (KH_DEBUG) console.log('[AMRepoKeyhive]', ...args); }
+
 export type KeyhiveMessageData = {
   contactCard?: ContactCard;
   signed: Signed;
@@ -29,7 +32,7 @@ export function decodeKeyhiveMessageData(
     };
 
     if (decoded.contactCard !== "") {
-      console.debug(
+      debug(
         "[AMRepoKeyhive] decodeKeyhiveMessageData: parsing contact card from message"
       );
     }
@@ -74,11 +77,11 @@ export function verifyData(peerId: PeerId, data: KeyhiveMessageData): boolean {
   try {
     const verifyingKeyPeerId = verifyingKeyPeerIdWithoutSuffix(peerId);
     if (peerIdFromSigned(data.signed) !== verifyingKeyPeerId) {
-      console.log(
-        "[AMRepoKeyhive] Peer id on Signed does not match provided peer id"
+      debug(
+        "Peer id on Signed does not match provided peer id"
       );
-      console.debug("[AMRepoKeyhive] Expected: " + peerId);
-      console.debug("[AMRepoKeyhive] Found: " + peerIdFromSigned(data.signed));
+      debug("[AMRepoKeyhive] Expected: " + peerId);
+      debug("[AMRepoKeyhive] Found: " + peerIdFromSigned(data.signed));
       return false;
     }
 

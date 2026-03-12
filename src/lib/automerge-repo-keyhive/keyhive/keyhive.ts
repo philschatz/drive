@@ -24,6 +24,10 @@ import { PromiseQueue } from "../network-adapter/pending";
 import { KeyhiveEventEmitter } from "./emitter";
 import { AutomergeRepoKeyhive, keyhiveIdFactory } from "./automerge-repo-keyhive";
 
+/** Set to true to enable verbose debug logging in keyhive storage/init. */
+let KH_DEBUG = false;
+function debug(...args: any[]) { if (KH_DEBUG) console.log('[AMRepoKeyhive]', ...args); }
+
 export const KEYHIVE_DB_KEY = "keyhive-db";
 export const KEYHIVE_ARCHIVES_KEY = "/archives/";
 export const KEYHIVE_EVENTS_KEY = "/ops/";
@@ -117,7 +121,7 @@ export async function initializeAutomergeRepoKeyhive(options: {
 
     emitter.on("update", (event: KeyhiveEvent) => {
       void keyhiveQueue.run(async () => {
-        console.debug(
+        debug(
           "[AMRepoKeyhive] Keyhive updated. Saving event."
         );
         // Always save events to ops/ so the sidecar can pick them up.
@@ -165,7 +169,7 @@ export async function receiveContactCard(keyhive: Keyhive, contactCard: ContactC
     return await keyhive.getIndividual(contactCard.individualId);
   } else {
     if (contactCard.op) {
-      console.debug(`[AMRepoKeyhive] Saving Contact Card event: ${contactCard.op}`);
+      debug(`[AMRepoKeyhive] Saving Contact Card event: ${contactCard.op}`);
       keyhiveStorage.saveEventWithHash(contactCard.op);
     } else {
       console.error(`[AMRepoKeyhive] No op found for ${contactCard.toJson()}`);
@@ -201,7 +205,7 @@ export class KeyhiveStorage {
   async saveKeyhiveWithHash(kh: Keyhive) {
     const khBytes = (await kh.toArchive()).toBytes();
     const hash = uint8ArrayToHex(this.keyhiveStorageId);
-    console.debug(`[AMRepoKeyhive] Saving keyhive archive. Hash: ${hash}`);
+    debug(`[AMRepoKeyhive] Saving keyhive archive. Hash: ${hash}`);
     await this.storage.save(
       [KEYHIVE_DB_KEY, KEYHIVE_ARCHIVES_KEY, hash],
       khBytes
@@ -243,7 +247,7 @@ export class KeyhiveStorage {
       return;
     }
 
-    console.debug(
+    debug(
       `[AMRepoKeyhive] Compacting: ${keyhiveArchiveChunks.length} archives, ${keyhiveEventsChunks.length} events`
     );
 
@@ -253,8 +257,8 @@ export class KeyhiveStorage {
         try {
           await kh.ingestArchive(new Archive(chunk.data));
         } catch (error) {
-          console.warn(
-            `[AMRepoKeyhive] Failed to ingest archive during compaction:`,
+          debug(
+            `Failed to ingest archive during compaction:`,
             error
           );
         }
@@ -281,8 +285,8 @@ export class KeyhiveStorage {
           .map((bytes: Uint8Array) => dataToKey.get(bytes))
           .filter((key): key is StorageKey => key !== undefined);
       } catch (error) {
-        console.warn(
-          `[AMRepoKeyhive] Failed to ingest events during compaction:`,
+        debug(
+          `Failed to ingest events during compaction:`,
           error
         );
       }
@@ -312,7 +316,7 @@ export class KeyhiveStorage {
       }
     }
 
-    console.debug(
+    debug(
       `[AMRepoKeyhive] Compaction complete. ${pendingKeys.length} pending events retained.`
     );
   }
@@ -330,14 +334,14 @@ export class KeyhiveStorage {
     // Ingest all archives
     for (const chunk of keyhiveArchiveChunks) {
       if (chunk.data) {
-        console.debug(
+        debug(
           `[AMRepoKeyhive] Ingesting archive from storage. Hash: ${chunk.key[2]}`
         );
         try {
           await kh.ingestArchive(new Archive(chunk.data));
         } catch (error) {
-          console.warn(
-            `[AMRepoKeyhive] Failed to re-ingest archive during recovery:`,
+          debug(
+            `Failed to re-ingest archive during recovery:`,
             error
           );
         }
@@ -350,20 +354,20 @@ export class KeyhiveStorage {
       .filter((data): data is Uint8Array => data !== undefined);
 
     if (eventsBytes.length > 0) {
-      console.debug(
+      debug(
         `[AMRepoKeyhive] Ingesting ${eventsBytes.length} events from storage`
       );
       try {
         await kh.ingestEventsBytes(eventsBytes);
       } catch (error) {
-        console.warn(
-          `[AMRepoKeyhive] Failed to ingest events during recovery:`,
+        debug(
+          `Failed to ingest events during recovery:`,
           error
         );
       }
     }
 
-    console.debug("[AMRepoKeyhive] Reading from storage completed");
+    debug("[AMRepoKeyhive] Reading from storage completed");
   }
 
   async loadOrCreateKeyhive(
@@ -397,11 +401,11 @@ export class KeyhiveStorage {
       if (firstChunk.data) {
         const firstArchive = new Archive(firstChunk.data);
         try {
-          console.log("[AMRepoKeyhive] Attempting to load Keyhive archive");
+          debug("Attempting to load Keyhive archive");
           let store = CiphertextStore.newInMemory();
           const chunk_count = keyhiveArchiveChunks.length;
-          console.log(
-            `[AMRepoKeyhive] Ingesting archive from storage (1 of ${chunk_count}). Hash: ${firstChunk.key[2]}`
+          debug(
+            `Ingesting archive from storage (1 of ${chunk_count}). Hash: ${firstChunk.key[2]}`
           );
 
           const kh = await firstArchive.tryToKeyhive(
@@ -414,16 +418,16 @@ export class KeyhiveStorage {
           for (let idx = 1; idx < keyhiveArchiveChunks.length; idx++) {
             const chunk = keyhiveArchiveChunks[idx];
             if (chunk.data) {
-              console.log(
-                `[AMRepoKeyhive] Ingesting archive from storage (${idx + 1} of ${chunk_count}). Hash: ${chunk.key[2]}`
+              debug(
+                `Ingesting archive from storage (${idx + 1} of ${chunk_count}). Hash: ${chunk.key[2]}`
               );
               await kh.ingestArchive(new Archive(chunk.data));
             }
           }
 
           // Ingest individual events
-          console.log(
-            `[AMRepoKeyhive] Ingesting ${eventsBytes.length} keyhive events from storage.`
+          debug(
+            `Ingesting ${eventsBytes.length} keyhive events from storage.`
           );
           let pendingKeys: StorageKey[] = [];
           if (eventsBytes.length > 0) {
@@ -432,9 +436,7 @@ export class KeyhiveStorage {
               .filter((key): key is StorageKey => key !== undefined);
           }
 
-          console.log(
-            "[AMRepoKeyhive] Successfully loaded Keyhive from archive"
-          );
+          debug("Successfully loaded Keyhive from archive");
           await this.saveKeyhiveWithHash(kh);
           const currentHash = uint8ArrayToHex(this.keyhiveStorageId);
           for (const chunk of keyhiveArchiveChunks) {
@@ -471,12 +473,12 @@ export class KeyhiveStorage {
 
     // No archives in storage. Create new keyhive
     const store = CiphertextStore.newInMemory();
-    console.log(`[AMRepoKeyhive] Initializing new Keyhive`);
+    debug(`Initializing new Keyhive`);
     const kh = await Keyhive.init(signer, store, event_handler);
 
     if (eventsBytes.length > 0) {
-      console.log(
-        `[AMRepoKeyhive] Ingesting ${eventsBytes.length} keyhive events from storage.`
+      debug(
+        `Ingesting ${eventsBytes.length} keyhive events from storage.`
       );
       try {
         const pendingKeys = (await kh.ingestEventsBytes(eventsBytes))

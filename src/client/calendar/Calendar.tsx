@@ -50,10 +50,8 @@ export function Calendar({ docId, readOnly }: { docId?: string; readOnly?: boole
   const [calColor, setCalColor] = useState('#039be5');
   const [editorState, setEditorState] = useState<EditorState | null>(null);
   const [peerStates, setPeerStates] = useState<Record<string, PeerState<PresenceState>>>({});
-  const [doc, setDoc] = useState<any>(null);
-
   const history = useDocumentHistory(docId!);
-  const validationErrors = useDocumentValidation(doc);
+  const validationErrors = useDocumentValidation(docId);
   const { canEdit: accessCanEdit } = useAccess(getDocEntry(docId!)?.khDocId);
   const canEdit = !readOnly && history.editable && accessCanEdit;
   const canEditRef = useRef(canEdit);
@@ -237,7 +235,6 @@ export function Calendar({ docId, readOnly }: { docId?: string; readOnly?: boole
 
     const unsubscribe = subscribeQuery(docId, CALENDAR_QUERY, (result, heads) => {
       if (!mounted || !result) return;
-      setDoc(result);
       eventsRef.current = result.events || {};
       if (result.timeZone) calTZRef.current = result.timeZone;
       if (result.color && result.color !== calColorRef.current) {

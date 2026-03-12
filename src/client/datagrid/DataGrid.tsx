@@ -64,7 +64,7 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
   const [doc, setDoc] = useState<any>(null);
   const docRef = useRef<DataGridDocument | null>(null);
   const broadcastRef = useRef<((key: keyof PresenceState, value: any) => void) | null>(null);
-  const validationErrors = useDocumentValidation(doc);
+  const validationErrors = useDocumentValidation(docId);
   const { undo, redo, canUndo, canRedo } = useUndoRedo(docId!);
   const history = useDocumentHistory(docId!);
   const { canEdit: accessCanEdit } = useAccess(getDocEntry(docId!)?.khDocId);

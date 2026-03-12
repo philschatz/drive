@@ -6,6 +6,7 @@
 import { workerReady, _worker, registerWorkerMessageHandler } from '../shared/automerge';
 import type { PresenceState } from '../shared/presence';
 import type { PeerState } from '../shared/automerge';
+import type { ValidationError } from './automerge-worker';
 
 // Re-export for convenience
 export { workerReady };
@@ -24,6 +25,8 @@ const pendingRequests = new Map<number, { resolve: (v: any) => void; reject: (e:
 const subscriptionCallbacks = new Map<number, (result: any, heads: string[]) => void>();
 // Presence callbacks: docId → callback
 const presenceCallbacks = new Map<string, (peers: Record<string, PeerState<PresenceState>>) => void>();
+// Validation callbacks: docId → callback
+const validationCallbacks = new Map<string, (errors: ValidationError[]) => void>();
 
 let subIdCounter = 0;
 
@@ -52,6 +55,11 @@ function handleWorkerApiMessage(msg: any): boolean {
   if (msg.type === 'presence-update') {
     const cb = presenceCallbacks.get(msg.docId);
     if (cb) cb(msg.peers);
+    return true;
+  }
+  if (msg.type === 'validation-result') {
+    const cb = validationCallbacks.get(msg.docId);
+    if (cb) cb(msg.errors);
     return true;
   }
   return false;
@@ -114,6 +122,27 @@ export function subscribeQuery(
   return () => {
     subscriptionCallbacks.delete(subId);
     fire('unsubscribe-query', { subId });
+  };
+}
+
+// ── Validation subscriptions ─────────────────────────────────────────────────
+
+export type { ValidationError };
+
+/**
+ * Subscribe to validation results for a document.
+ * The callback receives the first 100 errors (or empty array) on each doc change.
+ * Returns a cleanup function.
+ */
+export function subscribeValidation(
+  docId: string,
+  onResult: (errors: ValidationError[]) => void,
+): () => void {
+  validationCallbacks.set(docId, onResult);
+  fire('validate-subscribe', { docId });
+  return () => {
+    validationCallbacks.delete(docId);
+    fire('validate-unsubscribe', { docId });
   };
 }
 

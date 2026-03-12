@@ -1,5 +1,6 @@
 import { deepAssign } from '../shared/deep-assign';
 import { syncToTarget } from '../shared/sync-to-target';
+import { validateDocument } from '../shared/schemas';
 
 export type MainToWorker =
   | { type: 'init'; wsUrl: string; port?: MessagePort }
@@ -31,7 +32,11 @@ export type MainToWorker =
   | { type: 'kh-enable-sharing'; id: number; automergeDocId: string }
   | { type: 'kh-register-doc-mapping'; automergeDocId: string; khDocId: string }
   | { type: 'kh-register-sharing-group'; id: number; khDocId: string; groupId: string }
-  | { type: 'kh-claim-invite'; id: number; inviteSeed: number[]; archiveBytes: number[]; automergeDocId: string };
+  | { type: 'kh-claim-invite'; id: number; inviteSeed: number[]; archiveBytes: number[]; automergeDocId: string }
+  | { type: 'validate-subscribe'; docId: string }
+  | { type: 'validate-unsubscribe'; docId: string };
+
+export type ValidationError = { path: (string | number)[]; message: string; kind?: 'schema' | 'dependency' | 'warning' };
 
 export type WorkerToMain =
   | { type: 'ready' }
@@ -43,6 +48,8 @@ export type WorkerToMain =
   | { type: 'result'; id: number; result?: any; error?: string }
   | { type: 'sub-result'; subId: number; result: any; heads: string[]; error?: string }
   | { type: 'presence-update'; docId: string; peers: Record<string, any> }
+  // Validation
+  | { type: 'validation-result'; docId: string; errors: ValidationError[] }
   // Keyhive responses
   | { type: 'kh-result'; id: number; result?: any; error?: string };
 
@@ -121,6 +128,8 @@ interface DocEntry {
   pinnedVersion: number | null; // null = live view
   subscriptions: Map<number, string>; // subId → jq filter
   presence: any | null; // PresenceClass instance
+  validationSubscribed: boolean;
+  changeListenerRegistered: boolean;
 }
 const docRegistry = new Map<string, DocEntry>();
 // Maps subId → docId for O(1) unsubscribe lookup
@@ -137,21 +146,24 @@ async function getOrLoadHandle(docId: string): Promise<any> {
 function getOrCreateEntry(docId: string, handle: any): DocEntry {
   let entry = docRegistry.get(docId);
   if (!entry) {
-    entry = { handle, pinnedVersion: null, subscriptions: new Map(), presence: null };
+    entry = { handle, pinnedVersion: null, subscriptions: new Map(), presence: null, validationSubscribed: false, changeListenerRegistered: false };
     docRegistry.set(docId, entry);
   }
   return entry;
 }
 
 async function runQuery(filter: string, doc: any): Promise<any> {
-  const { compile } = await import('../shared/jq');
-  const fn = compile(filter);
-  return fn(doc);
+  const { one } = await import('../shared/jq');
+  return one(filter, doc);
 }
 
 async function pushToSubscriptions(docId: string) {
   const entry = docRegistry.get(docId);
-  if (!entry || entry.subscriptions.size === 0) return;
+  if (!entry) return;
+
+  const hasQuerySubs = entry.subscriptions.size > 0;
+  const hasValidation = entry.validationSubscribed;
+  if (!hasQuerySubs && !hasValidation) return;
 
   const handle = entry.handle;
   let activeDoc: any;
@@ -171,6 +183,16 @@ async function pushToSubscriptions(docId: string) {
       (self as any).postMessage({ type: 'sub-result', subId, result: null, heads, error: errMsg(err) } satisfies WorkerToMain);
     }
   }
+
+  if (hasValidation) {
+    pushValidation(docId, activeDoc);
+  }
+}
+
+function pushValidation(docId: string, doc: any) {
+  const allErrors = validateDocument(doc);
+  const errors = allErrors.slice(0, 100);
+  (self as any).postMessage({ type: 'validation-result', docId, errors } satisfies WorkerToMain);
 }
 
 function postStatus() {
@@ -298,8 +320,9 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
       const handle = await getOrLoadHandle(msg.docId);
       const entry = getOrCreateEntry(msg.docId, handle);
 
-      // Register change listener if first subscriber for this docId
-      if (entry.subscriptions.size === 0) {
+      // Register change listener if not already registered
+      if (!entry.changeListenerRegistered) {
+        entry.changeListenerRegistered = true;
         handle.on('change', () => { pushToSubscriptions(msg.docId); });
       }
 
@@ -322,6 +345,28 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
     }
   }
 
+  if (msg.type === 'validate-subscribe') {
+    try {
+      const handle = await getOrLoadHandle(msg.docId);
+      const entry = getOrCreateEntry(msg.docId, handle);
+      entry.validationSubscribed = true;
+      // Register change listener if not already registered
+      if (!entry.changeListenerRegistered) {
+        entry.changeListenerRegistered = true;
+        handle.on('change', () => { pushToSubscriptions(msg.docId); });
+      }
+      // Push immediately
+      await pushToSubscriptions(msg.docId);
+    } catch (err: any) {
+      (self as any).postMessage({ type: 'validation-result', docId: msg.docId, errors: [] } satisfies WorkerToMain);
+    }
+  }
+
+  if (msg.type === 'validate-unsubscribe') {
+    const entry = docRegistry.get(msg.docId);
+    if (entry) entry.validationSubscribed = false;
+  }
+
   if (msg.type === 'set-doc-version') {
     const entry = docRegistry.get(msg.docId);
     if (!entry) return;
@@ -339,6 +384,9 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
         const fn = new Function(...argKeys, 'deepAssign', 'd', `(${msg.fnSource})(d)`);
         fn(...argVals, deepAssign, d);
       });
+      // Explicitly push subscription updates after local mutation
+      // (the change event may not fire for local changes in all automerge-repo versions)
+      await pushToSubscriptions(msg.docId);
       (self as any).postMessage({ type: 'result', id: msg.id, result: null } satisfies WorkerToMain);
     } catch (err: any) {
       console.error('[worker] update-doc failed:', errMsg(err));
@@ -368,6 +416,7 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
       // Clear pinned version so subscriptions resume live
       const entry = docRegistry.get(msg.docId);
       if (entry) entry.pinnedVersion = null;
+      await pushToSubscriptions(msg.docId);
       (self as any).postMessage({ type: 'result', id: msg.id, result: null } satisfies WorkerToMain);
     } catch (err: any) {
       (self as any).postMessage({ type: 'result', id: msg.id, error: errMsg(err) } satisfies WorkerToMain);
@@ -384,6 +433,7 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
       // Clear pinned version so subscriptions resume live
       const entry = docRegistry.get(msg.docId);
       if (entry) entry.pinnedVersion = null;
+      await pushToSubscriptions(msg.docId);
       (self as any).postMessage({ type: 'result', id: msg.id, result: null } satisfies WorkerToMain);
     } catch (err: any) {
       (self as any).postMessage({ type: 'result', id: msg.id, error: errMsg(err) } satisfies WorkerToMain);

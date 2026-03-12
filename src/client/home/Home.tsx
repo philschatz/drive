@@ -113,8 +113,9 @@ export function Home({ path }: { path?: string }) {
   const handleCreateCalendar = async () => {
     const name = prompt('Calendar name:', 'Untitled');
     if (name === null) return;
-    const docId = await createDoc({ '@type': 'Calendar', name: name || 'Untitled', events: {} });
-    addDocId(docId);
+    const resolvedName = name || 'Untitled';
+    const docId = await createDoc({ '@type': 'Calendar', name: resolvedName, events: {} });
+    addDocId(docId, { type: 'Calendar', name: resolvedName });
     setMessage('Calendar created');
     setError('');
     reloadEntries();
@@ -123,8 +124,9 @@ export function Home({ path }: { path?: string }) {
   const handleCreateTaskList = async () => {
     const name = prompt('Task list name:', 'Untitled');
     if (name === null) return;
-    const docId = await createDoc({ '@type': 'TaskList', name: name || 'Untitled', tasks: {} });
-    addDocId(docId);
+    const resolvedName = name || 'Untitled';
+    const docId = await createDoc({ '@type': 'TaskList', name: resolvedName, tasks: {} });
+    addDocId(docId, { type: 'TaskList', name: resolvedName });
     setMessage('Task list created');
     setError('');
     reloadEntries();
@@ -133,13 +135,14 @@ export function Home({ path }: { path?: string }) {
   const handleCreateDataGrid = async () => {
     const name = prompt('Spreadsheet name:', 'Untitled');
     if (name === null) return;
+    const resolvedName = name || 'Untitled';
     const sid = () => Math.random().toString(36).slice(2, 10);
     const sheetId = sid();
     const rows: Record<string, { index: number }> = {};
     for (let i = 1; i <= 10; i++) rows[sid()] = { index: i };
     const docId = await createDoc({
       '@type': 'DataGrid',
-      name: name || 'Untitled',
+      name: resolvedName,
       sheets: {
         [sheetId]: {
           '@type': 'Sheet',
@@ -151,7 +154,7 @@ export function Home({ path }: { path?: string }) {
         },
       },
     });
-    addDocId(docId);
+    addDocId(docId, { type: 'DataGrid', name: resolvedName });
     setMessage('Spreadsheet created');
     setError('');
     reloadEntries();
@@ -285,7 +288,7 @@ export function Home({ path }: { path?: string }) {
         };
       }
       const docId = await createDoc({ '@type': 'DataGrid', name, sheets });
-      addDocId(docId);
+      addDocId(docId, { type: 'DataGrid', name });
       alert(`/datagrids/${docId}`)
     } catch (err: any) {
       setError('Failed to import: ' + err.message);
@@ -315,7 +318,7 @@ export function Home({ path }: { path?: string }) {
       const events: Record<string, any> = {};
       for (const { uid, event } of parsed) events[uid] = event;
       const docId = await createDoc({ '@type': 'Calendar', name: calName, events });
-      addDocId(docId);
+      addDocId(docId, { type: 'Calendar', name: calName });
       setMessage(`Imported ${parsed.length} event${parsed.length !== 1 ? 's' : ''} into "${calName}"`);
       setError('');
       reloadEntries();

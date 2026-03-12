@@ -60,7 +60,6 @@ function sortedTasks(tasks: Record<string, Task>): { uid: string; task: Task }[]
 
 export function Tasks({ docId, readOnly }: { docId?: string; readOnly?: boolean; path?: string }) {
   const [status, setStatus] = useState('Loading task list...');
-  const [doc, setDoc] = useState<any>(null);
   const [listName, setListName] = useState('Tasks');
   const [listDesc, setListDesc] = useState('');
   const [tasks, setTasks] = useState<Record<string, Task>>({});
@@ -69,7 +68,7 @@ export function Tasks({ docId, readOnly }: { docId?: string; readOnly?: boolean;
   const [quickAddText, setQuickAddText] = useState('');
 
   const history = useDocumentHistory(docId!);
-  const validationErrors = useDocumentValidation(doc);
+  const validationErrors = useDocumentValidation(docId);
   const { canEdit: accessCanEdit } = useAccess(getDocEntry(docId!)?.khDocId);
   const canEdit = !readOnly && history.editable && accessCanEdit;
   const canEditRef = useRef(canEdit);
@@ -185,7 +184,6 @@ export function Tasks({ docId, readOnly }: { docId?: string; readOnly?: boolean;
     const unsubscribe = subscribeQuery(docId, TASKS_QUERY, (result, heads) => {
       if (!mounted) return;
       if (!result) return;
-      setDoc(result);
       setTasks(result.tasks || {});
       if (result.name && !titleFocusedRef.current) {
         setListName(result.name);
