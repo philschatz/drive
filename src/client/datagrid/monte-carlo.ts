@@ -1,14 +1,13 @@
 /**
  * Monte Carlo simulation engine for probabilistic distributions in the datagrid.
  *
- * Creates a temporary HyperFormula instance, replaces distribution cells with
- * sampled scalar values each iteration, and reads all cell results.
+ * Replaces distribution cells with sampled scalar values each iteration,
+ * reads all cell results, then restores original contents.
  */
 import HyperFormula from 'hyperformula';
 import { sampleDistribution, computeStats, type DistributionInfo, type DistributionStats } from './distributions';
-import { getDistributionRegistry, clearDistributionRegistry } from './hf-functions';
-import { buildSheetData, sortedEntries } from './helpers';
 import { registerCustomFunctions } from './hf-functions';
+import { buildSheetData, sortedEntries } from './helpers';
 import type { DataGridDocument } from './schema';
 
 export interface MCResults {
@@ -109,7 +108,7 @@ export function runMonteCarlo(doc: DataGridDocument, registry: Map<string, Distr
  * Returns a cancel function.
  */
 export function runMonteCarloAsync(
-  doc: DataGridDocument,
+  hf: HyperFormula,
   registry: Map<string, DistributionInfo>,
   onComplete: (results: MCResults) => void,
 ): () => void {
@@ -120,34 +119,23 @@ export function runMonteCarloAsync(
     return () => { cancelled = true; };
   }
 
-  registerCustomFunctions();
-  const order = sortedEntries(doc.sheets);
-  const sheetNameLookup = (id: string) => doc.sheets[id]?.name;
-  const sheetRowColFn = (id: string) => {
-    const s = doc.sheets[id];
-    if (!s) return undefined;
-    return { rowIds: sortedEntries(s.rows).map(([r]) => r), colIds: sortedEntries(s.columns).map(([c]) => c) };
-  };
-
-  const sheetsData: Record<string, (string | number | boolean | null)[][]> = {};
-  const sheetMeta: { name: string; rows: number; cols: number }[] = [];
-  for (const [, sheet] of order) {
-    const rIds = sortedEntries(sheet.rows).map(([r]) => r);
-    const cIds = sortedEntries(sheet.columns).map(([c]) => c);
-    sheetsData[sheet.name] = buildSheetData(sheet.cells, rIds, cIds, sheetNameLookup, sheetRowColFn);
-    sheetMeta.push({ name: sheet.name, rows: rIds.length, cols: cIds.length });
-  }
-
   const distCells: { sheet: number; col: number; row: number; info: DistributionInfo; key: string }[] = [];
   for (const [key, info] of registry) {
     const parts = key.split(':');
     distCells.push({ sheet: Number(parts[0]), col: Number(parts[1]), row: Number(parts[2]), info, key });
   }
 
+  // Save original contents to restore after each iteration
+  const originalContents = distCells.map(dc =>
+    hf.getCellSerialized({ sheet: dc.sheet, col: dc.col, row: dc.row })
+  );
+
+  const sheetNames = hf.getSheetNames();
   const allCellKeys: string[] = [];
-  for (let si = 0; si < sheetMeta.length; si++) {
-    for (let r = 0; r < sheetMeta[si].rows; r++) {
-      for (let c = 0; c < sheetMeta[si].cols; c++) {
+  for (let si = 0; si < sheetNames.length; si++) {
+    const { height, width } = hf.getSheetDimensions(si);
+    for (let r = 0; r < height; r++) {
+      for (let c = 0; c < width; c++) {
         allCellKeys.push(`${si}:${c}:${r}`);
       }
     }
@@ -156,11 +144,17 @@ export function runMonteCarloAsync(
   const allSamples: Map<string, number[]> = new Map();
   let iterDone = 0;
 
+  function restore() {
+    for (let i = 0; i < distCells.length; i++) {
+      const dc = distCells[i];
+      hf.setCellContents({ sheet: dc.sheet, col: dc.col, row: dc.row }, [[originalContents[i]]]);
+    }
+  }
+
   function runChunk() {
-    if (cancelled) return;
+    if (cancelled) { restore(); return; }
     const end = Math.min(iterDone + CHUNK_SIZE, MC_SAMPLES);
     for (let iter = iterDone; iter < end; iter++) {
-      const hf = HyperFormula.buildFromSheets(sheetsData, { licenseKey: 'gpl-v3' });
       for (const dc of distCells) {
         hf.setCellContents({ sheet: dc.sheet, col: dc.col, row: dc.row }, [[sampleDistribution(dc.info)]]);
       }
@@ -172,11 +166,11 @@ export function runMonteCarloAsync(
           allSamples.get(cellKey)!.push(val);
         }
       }
-      hf.destroy();
     }
     iterDone = end;
 
     if (iterDone >= MC_SAMPLES) {
+      restore();
       const sources = new Set(distCells.map(dc => dc.key));
       const results = new Map<string, DistributionStats>();
       for (const [key, samples] of allSamples) {
@@ -195,5 +189,5 @@ export function runMonteCarloAsync(
   }
 
   setTimeout(runChunk, 0);
-  return () => { cancelled = true; };
+  return () => { cancelled = true; restore(); };
 }

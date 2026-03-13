@@ -310,6 +310,29 @@ export function Home({ path }: { path?: string }) {
     setEntries(prev => prev.filter(e => e.documentId !== entry.documentId));
   };
 
+  const jsonInputRef = useRef<HTMLInputElement>(null);
+
+  const handleImportJson = useCallback(async (e: Event) => {
+    const file = (e.target as HTMLInputElement).files?.[0];
+    if (!file) return;
+    if (jsonInputRef.current) jsonInputRef.current.value = '';
+    try {
+      const text = await file.text();
+      const data = JSON.parse(text);
+      if (!data || typeof data !== 'object') throw new Error('Invalid JSON: expected an object');
+      const name = data.name || file.name.replace(/\.json$/i, '') || 'Imported';
+      const { docId, khDocId } = await createDoc(data);
+      const type = (data['@type'] === 'Calendar' || data['@type'] === 'TaskList' || data['@type'] === 'DataGrid')
+        ? data['@type'] as DocType : 'unknown';
+      addDocId(docId, { type, name, khDocId });
+      setMessage(`Imported "${name}"`);
+      setError('');
+      reloadEntries();
+    } catch (err: any) {
+      setError('Import failed: ' + err.message);
+    }
+  }, [reloadEntries]);
+
   const icsInputRef = useRef<HTMLInputElement>(null);
 
   const handleImportIcs = useCallback(async (e: Event) => {
@@ -427,6 +450,7 @@ export function Home({ path }: { path?: string }) {
         </DropdownMenu>
         <input type="file" ref={icsInputRef} accept=".ics,text/calendar" style={{ display: 'none' }} onChange={handleImportIcs as any} />
         <input type="file" ref={xlsInputRef} accept=".xls,.xlsx,.csv" style={{ display: 'none' }} onChange={handleImportXlsx as any} />
+        <input type="file" ref={jsonInputRef} accept=".json,application/json" style={{ display: 'none' }} onChange={handleImportJson as any} />
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="outline">
@@ -439,6 +463,9 @@ export function Home({ path }: { path?: string }) {
             </DropdownMenuItem>
             <DropdownMenuItem onSelect={() => xlsInputRef.current?.click()}>
               <span className="material-symbols-outlined">grid_on</span> Import .xlsx
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => jsonInputRef.current?.click()}>
+              <span className="material-symbols-outlined">code</span> Import .json
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>

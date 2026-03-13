@@ -14,6 +14,7 @@ import { ValidationPanel } from '../../shared/ValidationPanel';
 import { hashHistory } from '../hash-history';
 import type { Patch } from '@automerge/automerge';
 import { Progress } from '@/components/ui/progress';
+import { Button } from '@/components/ui/button';
 import { addDocId } from '@/doc-storage';
 import { JqPanel } from './JqPanel';
 import './source-viewer.css';
@@ -407,6 +408,18 @@ export function SourceViewer({ docId, rest }: { docId?: string; rest?: string; p
 
   const peerList = Object.values(peerStates).filter(p => p.value.viewing);
 
+  const handleDownloadJson = useCallback(() => {
+    if (!snapshot) return;
+    const json = JSON.stringify(snapshot, null, 2);
+    const blob = new Blob([json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = (docName || 'document') + '.json';
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [snapshot, docName]);
+
   const historyAdapter: DocumentHistory = {
     active: changeCount > 0,
     editable,
@@ -435,6 +448,14 @@ export function SourceViewer({ docId, rest }: { docId?: string; rest?: string; p
         peers={peerList}
         showSourceLink={false}
       />
+
+      {snapshot && (
+        <div className="flex items-center gap-2 mb-2">
+          <Button variant="outline" size="sm" onClick={handleDownloadJson}>
+            <span className="material-symbols-outlined">download</span> Download JSON
+          </Button>
+        </div>
+      )}
 
       {loadProgress !== null && (
         <Progress className="my-1" value={loadProgress} />

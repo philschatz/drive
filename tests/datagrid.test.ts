@@ -621,3 +621,197 @@ describe('updateFormulasForDeletion', () => {
     expect(result).toEqual({});
   });
 });
+
+// ── Paste pipeline ───────────────────────────────────────────────────────────
+
+// Simulates the paste pipeline: clipboard data → parseHtmlClipboard / TSV split
+// → a1ToInternal for formula cells → stored value in the document.
+// This mirrors the logic in commands.ts paste handler.
+
+const pasteRowIds = ['r0', 'r1', 'r2', 'r3', 'r4'];
+const pasteColIds = ['c0', 'c1', 'c2', 'c3', 'c4'];
+
+/** Simulate the paste storage logic from commands.ts */
+function simulatePaste(
+  values: string[][],
+  destRow: number,
+  destCol: number,
+  rowIds = pasteRowIds,
+  colIds = pasteColIds,
+): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (let dr = 0; dr < values.length; dr++) {
+    for (let dc = 0; dc < values[dr].length; dc++) {
+      const r = destRow + dr;
+      const c = destCol + dc;
+      if (r >= rowIds.length || c >= colIds.length) continue;
+      const val = values[dr][dc];
+      const stored = val.startsWith('=')
+        ? a1ToInternal(val, r, c, rowIds, colIds)
+        : val;
+      result[`${rowIds[r]}:${colIds[c]}`] = stored;
+    }
+  }
+  return result;
+}
+
+describe('paste with formulas', () => {
+  it('pastes plain values without conversion', () => {
+    const result = simulatePaste([['10', '20'], ['30', '40']], 0, 0);
+    expect(result).toEqual({
+      'r0:c0': '10',
+      'r0:c1': '20',
+      'r1:c0': '30',
+      'r1:c1': '40',
+    });
+  });
+
+  it('converts A1-style formula to internal format on paste', () => {
+    // Pasting =A1+B1 into cell (row=1, col=0) should reference r0:c0 and r0:c1
+    const result = simulatePaste([['=A1+B1']], 1, 0);
+    const stored = result['r1:c0'];
+    expect(stored).toMatch(/^=/);
+    // Convert back to A1 to verify round-trip
+    const a1 = internalToA1(stored, 1, 0, pasteRowIds, pasteColIds);
+    expect(a1).toBe('=A1+B1');
+  });
+
+  it('converts R1C1 relative formula to internal format on paste', () => {
+    // =R[-1]C[0] in cell (row=2, col=1) should reference row 1, col 1
+    const result = simulatePaste([['=R[-1]C[0]']], 2, 1);
+    const stored = result['r2:c1'];
+    expect(stored).toMatch(/^=/);
+    // Should reference one row above same column → r1:c1
+    const a1 = internalToA1(stored, 2, 1, pasteRowIds, pasteColIds);
+    expect(a1).toBe('=B2');
+  });
+
+  it('converts R1C1 absolute formula to internal format on paste', () => {
+    // =R1C1 (absolute row 1, col 1 in 1-based) → should always be A1
+    const result = simulatePaste([['=R1C1']], 3, 3);
+    const stored = result['r3:c3'];
+    expect(stored).toMatch(/^=/);
+    const a1 = internalToA1(stored, 3, 3, pasteRowIds, pasteColIds);
+    expect(a1).toBe('=$A$1');
+  });
+
+  it('converts R1C1 range formula on paste', () => {
+    // =SUM(R1C1:R2C3) pasted into (0,0)
+    const result = simulatePaste([['=SUM(R1C1:R2C3)']], 0, 0);
+    const stored = result['r0:c0'];
+    expect(stored).toMatch(/^=/);
+    const a1 = internalToA1(stored, 0, 0, pasteRowIds, pasteColIds);
+    expect(a1).toBe('=SUM($A$1:$C$2)');
+  });
+
+  it('converts R1C1 mixed relative/absolute on paste', () => {
+    // =R[-1]C1 → relative row, absolute col. In cell (row=2, col=2) → $A2
+    const result = simulatePaste([['=R[-1]C1']], 2, 2);
+    const stored = result['r2:c2'];
+    const a1 = internalToA1(stored, 2, 2, pasteRowIds, pasteColIds);
+    expect(a1).toBe('=$A2');
+  });
+
+  it('converts bare RC (current cell) on paste', () => {
+    // =RC means current cell. In cell (row=1, col=1) → B2
+    const result = simulatePaste([['=RC']], 1, 1);
+    const stored = result['r1:c1'];
+    const a1 = internalToA1(stored, 1, 1, pasteRowIds, pasteColIds);
+    expect(a1).toBe('=B2');
+  });
+
+  it('handles paste at offset position: formulas adjust via R1C1 relative refs', () => {
+    // Pasting =R[-1]C[0] at row=3, col=2 should reference row 2, col 2 → C3
+    const parsed = [['=R[-1]C[0]']];
+    const result = simulatePaste(parsed, 3, 2);
+    const a1 = internalToA1(result['r3:c2'], 3, 2, pasteRowIds, pasteColIds);
+    expect(a1).toBe('=C3');
+  });
+
+  it('handles internal copy→paste roundtrip with formulas', () => {
+    // Step 1: Cell at (1,1) has internal formula referencing (0,0)
+    const internalFormula = a1ToInternal('=A1+1', 1, 1, pasteRowIds, pasteColIds);
+
+    // Step 2: Copy converts to R1C1
+    const r1c1 = internalToR1C1(internalFormula, 1, 1, pasteRowIds, pasteColIds);
+
+    // Step 3: Paste at (2,2) converts R1C1 back to internal
+    const pastedInternal = a1ToInternal(r1c1, 2, 2, pasteRowIds, pasteColIds);
+
+    // Step 4: Verify it now references (1,1) — shifted by (1,1) from original
+    const a1 = internalToA1(pastedInternal, 2, 2, pasteRowIds, pasteColIds);
+    expect(a1).toBe('=B2+1');
+  });
+
+  it('handles internal copy→paste roundtrip preserving absolute refs', () => {
+    // $A$1 should stay $A$1 regardless of paste position
+    const internalFormula = a1ToInternal('=$A$1', 0, 0, pasteRowIds, pasteColIds);
+    const r1c1 = internalToR1C1(internalFormula, 0, 0, pasteRowIds, pasteColIds);
+    const pastedInternal = a1ToInternal(r1c1, 3, 3, pasteRowIds, pasteColIds);
+    const a1 = internalToA1(pastedInternal, 3, 3, pasteRowIds, pasteColIds);
+    expect(a1).toBe('=$A$1');
+  });
+
+  it('handles R1C1 formulas with COUNTIF-style function names', () => {
+    // Function names containing R or C should not be confused with R1C1 refs
+    const result = simulatePaste([['=COUNTIF(R1C1:R3C1,">0")']], 0, 0);
+    const stored = result['r0:c0'];
+    const a1 = internalToA1(stored, 0, 0, pasteRowIds, pasteColIds);
+    expect(a1).toBe('=COUNTIF($A$1:$A$3,">0")');
+  });
+
+  it('handles R1C1 formula with CONCATENATE', () => {
+    const result = simulatePaste([['=CONCATENATE(RC[-1],RC[-2])']], 0, 2);
+    const stored = result['r0:c2'];
+    const a1 = internalToA1(stored, 0, 2, pasteRowIds, pasteColIds);
+    expect(a1).toBe('=CONCATENATE(B1,A1)');
+  });
+
+  it('handles R1C1 relative range in SUM', () => {
+    // =SUM(R[-2]C[0]:R[-1]C[0]) at row 3
+    const result = simulatePaste([['=SUM(R[-2]C[0]:R[-1]C[0])']], 3, 0);
+    const stored = result['r3:c0'];
+    const a1 = internalToA1(stored, 3, 0, pasteRowIds, pasteColIds);
+    expect(a1).toBe('=SUM(A2:A3)');
+  });
+
+  it('handles multi-cell paste where some cells have formulas and some are plain', () => {
+    const values = [
+      ['100', '=RC[-1]*2'],
+      ['=R[-1]C[0]+1', '=RC[-1]*2'],
+    ];
+    const result = simulatePaste(values, 0, 0);
+
+    expect(result['r0:c0']).toBe('100');
+
+    const a1_01 = internalToA1(result['r0:c1'], 0, 1, pasteRowIds, pasteColIds);
+    expect(a1_01).toBe('=A1*2');
+
+    const a1_10 = internalToA1(result['r1:c0'], 1, 0, pasteRowIds, pasteColIds);
+    expect(a1_10).toBe('=A1+1');
+
+    const a1_11 = internalToA1(result['r1:c1'], 1, 1, pasteRowIds, pasteColIds);
+    expect(a1_11).toBe('=A2*2');
+  });
+
+  it('handles TSV paste with formula strings (plain text fallback)', () => {
+    // When HTML is unavailable, formulas come as plain text via TSV split
+    const text = '=A1+B1\t=SUM(A1:A3)\n100\t200';
+    const rows = text.split('\n').map(l => l.split('\t'));
+    const result = simulatePaste(rows, 0, 0);
+
+    // Formula cells should be converted
+    expect(result['r0:c0']).toMatch(/^=/);
+    const a1_00 = internalToA1(result['r0:c0'], 0, 0, pasteRowIds, pasteColIds);
+    expect(a1_00).toBe('=A1+B1');
+
+    expect(result['r0:c1']).toMatch(/^=/);
+    const a1_01 = internalToA1(result['r0:c1'], 0, 1, pasteRowIds, pasteColIds);
+    expect(a1_01).toBe('=SUM(A1:A3)');
+
+    // Plain cells
+    expect(result['r1:c0']).toBe('100');
+    expect(result['r1:c1']).toBe('200');
+  });
+
+});

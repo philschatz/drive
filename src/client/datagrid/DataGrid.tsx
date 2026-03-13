@@ -206,15 +206,15 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
   // Schedule MC simulation after HF sync
   const scheduleMC = useCallback(() => {
     if (mcCancelRef.current) { mcCancelRef.current(); mcCancelRef.current = null; }
-    const d = docRef.current;
+    const hf = hfRef.current;
     const registry = getDistributionRegistry();
-    if (!d || registry.size === 0) {
+    if (!hf || registry.size === 0) {
       setMcResults(null);
       return;
     }
     // Deep-copy registry since it may get cleared
     const regCopy = new Map(registry);
-    mcCancelRef.current = runMonteCarloAsync(d, regCopy, (results) => {
+    mcCancelRef.current = runMonteCarloAsync(hf, regCopy, (results) => {
       mcCancelRef.current = null;
       setMcResults(results);
     });
