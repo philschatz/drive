@@ -153,7 +153,81 @@ describe('syncToTarget', () => {
   });
 });
 
-// ── Full undo/redo cycle ─────────────────────────────────────────────────────
+// ── Version-based undo/redo (matches useUndoRedo hook) ───────────────────────
+
+// Mirrors the worker's restore-doc-to-version: view snapshot at version, then
+// syncToTarget into the current doc. This is what the hook does now.
+function restoreToVersion<T>(doc: Automerge.Doc<T>, version: number): Automerge.Doc<T> {
+  const history = Automerge.getHistory(doc);
+  const snapshot = history[version]?.snapshot;
+  if (!snapshot) throw new Error(`Version ${version} not found`);
+  return Automerge.change(doc, (d: any) => syncToTarget(d, snapshot));
+}
+
+describe('version-based undo/redo', () => {
+  it('undoes and redoes using history version indices', () => {
+    let doc = Automerge.from({ x: 'v0' } as any);
+    // version 0: initial
+    doc = Automerge.change(doc, (d: any) => { d.x = 'v1'; }); // version 1
+    doc = Automerge.change(doc, (d: any) => { d.x = 'v2'; }); // version 2
+
+    // Undo to version 1
+    doc = restoreToVersion(doc, 1);
+    expect((Automerge.toJS(doc) as any).x).toBe('v1');
+
+    // Undo to version 0
+    doc = restoreToVersion(doc, 0);
+    expect((Automerge.toJS(doc) as any).x).toBe('v0');
+
+    // Redo to version 1
+    doc = restoreToVersion(doc, 1);
+    expect((Automerge.toJS(doc) as any).x).toBe('v1');
+
+    // Redo to version 2
+    doc = restoreToVersion(doc, 2);
+    expect((Automerge.toJS(doc) as any).x).toBe('v2');
+  });
+
+  it('undo still works after history grows from restores', () => {
+    let doc = Automerge.from({ x: 'a' } as any);  // v0
+    doc = Automerge.change(doc, (d: any) => { d.x = 'b'; }); // v1
+    doc = Automerge.change(doc, (d: any) => { d.x = 'c'; }); // v2
+
+    // Undo to v1 — creates v3 (a restore change)
+    doc = restoreToVersion(doc, 1);
+    expect((Automerge.toJS(doc) as any).x).toBe('b');
+    expect(Automerge.getHistory(doc).length).toBe(4); // v0,v1,v2,v3(restore)
+
+    // Undo to v0 — still works because we reference original version indices
+    doc = restoreToVersion(doc, 0);
+    expect((Automerge.toJS(doc) as any).x).toBe('a');
+
+    // Redo to v2
+    doc = restoreToVersion(doc, 2);
+    expect((Automerge.toJS(doc) as any).x).toBe('c');
+  });
+
+  it('handles structural changes (add/remove keys)', () => {
+    let doc = Automerge.from({ cells: {} } as any); // v0
+    doc = Automerge.change(doc, (d: any) => { d.cells['a'] = { value: 'A' }; }); // v1
+    doc = Automerge.change(doc, (d: any) => { d.cells['b'] = { value: 'B' }; }); // v2
+    doc = Automerge.change(doc, (d: any) => { delete d.cells['a']; }); // v3
+
+    // Undo delete
+    doc = restoreToVersion(doc, 2);
+    expect(Object.keys((Automerge.toJS(doc) as any).cells).sort()).toEqual(['a', 'b']);
+
+    // Undo add b
+    doc = restoreToVersion(doc, 1);
+    expect(Object.keys((Automerge.toJS(doc) as any).cells)).toEqual(['a']);
+
+    // Undo add a
+    doc = restoreToVersion(doc, 0);
+    expect((Automerge.toJS(doc) as any).cells).toEqual({});
+  });
+});
+
+// ── Full undo/redo cycle (head-based, legacy) ───────────────────────────────
 
 describe('undo/redo cycle', () => {
   it('undoes and redoes a single cell edit', () => {

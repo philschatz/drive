@@ -68,7 +68,7 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
   const docRef = useRef<DataGridDocument | null>(null);
   const broadcastRef = useRef<((key: keyof PresenceState, value: any) => void) | null>(null);
   const validationErrors = useDocumentValidation(docId);
-  const { undo, redo, canUndo, canRedo } = useUndoRedo(docId!);
+  const { undo, redo, canUndo, canRedo, onHeadsUpdate } = useUndoRedo(docId!);
   const history = useDocumentHistory(docId!);
   const { canEdit: accessCanEdit } = useAccess(getDocEntry(docId!)?.khDocId);
   const canEdit = !readOnly && history.editable && accessCanEdit;
@@ -876,6 +876,7 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
       if (!titleFocusedRef.current && d.name) setGridName(d.name);
       document.title = (d.name || 'Spreadsheet') + ' - Spreadsheet';
       history.onNewHeads(heads);
+      onHeadsUpdate(heads);
       scheduleSyncHyperFormula();
     });
 
