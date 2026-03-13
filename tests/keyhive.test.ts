@@ -297,7 +297,10 @@ describe('signing & verification', () => {
 
     const wrongKey = crypto.getRandomValues(new Uint8Array(32));
     const wrongPeerId = peerIdFromVerifyingKey(wrongKey);
+    const spy = jest.spyOn(console, 'warn').mockImplementation(() => {});
     expect(verifyData(wrongPeerId, decoded!)).toBe(false);
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining('peer ID mismatch'));
+    spy.mockRestore();
   });
 
   it('peerIdFromSigner matches peerIdFromVerifyingKey', () => {
@@ -538,7 +541,6 @@ describe('cross-peer encrypt/decrypt after invite', () => {
     const docA = await khA.getDocument(docIdA);
     const result = await khA.tryEncryptArchive(docA!, contentRef, [], plaintext);
     const encrypted = result.encrypted_content();
-    console.log('[test] A self-encrypt: update_op?', !!result.update_op());
 
     const docA2 = await khA.getDocument(docIdA);
     const decrypted = await khA.tryDecrypt(docA2!, encrypted);
@@ -556,7 +558,6 @@ describe('cross-peer encrypt/decrypt after invite', () => {
     const docA = await khA.getDocument(docIdA);
     const result = await khA.tryEncryptArchive(docA!, contentRef, [], plaintext);
     const encrypted = result.encrypted_content();
-    console.log('[test] A→B (no sync): update_op?', !!result.update_op());
 
     const bReachable = await khB.reachableDocs();
     const docB = bReachable[0].doc;
@@ -566,8 +567,6 @@ describe('cross-peer encrypt/decrypt after invite', () => {
   it('A encrypts, B decrypts after bidirectional event sync', async () => {
     const { khA, khB, docIdA } = await setupInvitePair();
 
-    const statsB0 = await khB.stats();
-    console.log('[test] B stats initial:', statsB0.totalOps);
 
     // Step 1: Sync B→A so A learns about B's membership/delegation
     const cardA = await khA.contactCard();
@@ -575,15 +574,10 @@ describe('cross-peer encrypt/decrypt after invite', () => {
     const agentA_inB = individualA_inB.toAgent();
 
     const bEventsForA: Map<Uint8Array, Uint8Array> = await khB.eventsForAgent(agentA_inB);
-    console.log('[test] B→A sync: B has', bEventsForA.size, 'events for A');
     const bEventsArr: Uint8Array[] = [];
     bEventsForA.forEach((v: Uint8Array) => bEventsArr.push(v));
 
-    const statsA_before = await khA.stats();
-    console.log('[test] A stats before B→A ingest:', statsA_before.totalOps);
     await khA.ingestEventsBytes(bEventsArr);
-    const statsA_after = await khA.stats();
-    console.log('[test] A stats after B→A ingest:', statsA_after.totalOps);
 
     // Step 2: A encrypts (generates a new CGKA Update op)
     const plaintext = new TextEncoder().encode('hello from A to B');
@@ -591,10 +585,7 @@ describe('cross-peer encrypt/decrypt after invite', () => {
     const docA = await khA.getDocument(docIdA);
     const result = await khA.tryEncryptArchive(docA!, contentRef, [], plaintext);
     const encrypted = result.encrypted_content();
-    console.log('[test] A→B encrypt: update_op?', !!result.update_op());
 
-    const statsA_postEnc = await khA.stats();
-    console.log('[test] A stats after encrypt:', statsA_postEnc.totalOps);
 
     // Step 3: Sync A→B so B gets A's CGKA ops (including the new Update)
     const cardB = await khB.contactCard();
@@ -602,15 +593,10 @@ describe('cross-peer encrypt/decrypt after invite', () => {
     const agentB_inA = individualB_inA.toAgent();
 
     const aEventsForB: Map<Uint8Array, Uint8Array> = await khA.eventsForAgent(agentB_inA);
-    console.log('[test] A→B sync: A has', aEventsForB.size, 'events for B');
     const aEventsArr: Uint8Array[] = [];
     aEventsForB.forEach((v: Uint8Array) => aEventsArr.push(v));
 
-    const statsB_beforeIngest = await khB.stats();
-    console.log('[test] B stats before A→B ingest:', statsB_beforeIngest.totalOps);
     await khB.ingestEventsBytes(aEventsArr);
-    const statsB_afterIngest = await khB.stats();
-    console.log('[test] B stats after A→B ingest:', statsB_afterIngest.totalOps);
 
     // Step 4: B decrypts
     const bReachable = await khB.reachableDocs();
@@ -640,7 +626,6 @@ describe('cross-peer encrypt/decrypt after invite', () => {
     const docB = await khB.getDocument(docIdB);
     const result = await khB.tryEncryptArchive(docB!, contentRef, [], plaintext);
     const encrypted = result.encrypted_content();
-    console.log('[test] B self-encrypt: update_op?', !!result.update_op());
 
     const docB2 = await khB.getDocument(docIdB);
     const decrypted = await khB.tryDecrypt(docB2!, encrypted);
@@ -660,7 +645,6 @@ describe('cross-peer encrypt/decrypt after invite', () => {
 
     const result = await khB.tryEncryptArchive(docB!, contentRef, [], plaintext);
     const encrypted = result.encrypted_content();
-    console.log('[test] B→A encrypt: update_op?', !!result.update_op());
 
     // Sync B's events to A using eventsForAgent + ingestEventsBytes
     const cardA = await khA.contactCard();
@@ -668,18 +652,13 @@ describe('cross-peer encrypt/decrypt after invite', () => {
     const agentA_inB = individualA_inB.toAgent();
 
     const eventsMap: Map<Uint8Array, Uint8Array> = await khB.eventsForAgent(agentA_inB);
-    console.log('[test] B has', eventsMap.size, 'events for A');
 
     const eventsArray: Uint8Array[] = [];
     eventsMap.forEach((eventBytes: Uint8Array) => {
       eventsArray.push(eventBytes);
     });
 
-    const statsBefore = await khA.stats();
-    console.log('[test] A stats before event ingest:', statsBefore.totalOps);
     await khA.ingestEventsBytes(eventsArray);
-    const statsAfter = await khA.stats();
-    console.log('[test] A stats after event ingest:', statsAfter.totalOps);
 
     // A decrypts B's message — THE KEY TEST
     const docA_fresh = await khA.getDocument(docIdA);
@@ -702,15 +681,10 @@ describe('cross-peer encrypt/decrypt after invite', () => {
 
     const result = await khB.tryEncryptArchive(docB!, contentRef, [], plaintext);
     const encrypted = result.encrypted_content();
-    console.log('[test] B encrypt (archive test): update_op?', !!result.update_op());
 
     // Sync via archive ingest (does NOT include CGKA ops)
     const archB = await khB.toArchive();
-    const statsBefore = await khA.stats();
-    console.log('[test] A stats before archive ingest:', statsBefore.totalOps);
     await khA.ingestArchive(archB);
-    const statsAfter = await khA.stats();
-    console.log('[test] A stats after archive ingest:', statsAfter.totalOps);
 
     const docA_fresh = await khA.getDocument(docIdA);
     expect(docA_fresh).toBeDefined();
@@ -992,7 +966,6 @@ describe('automerge-worker patterns', () => {
 
     // KEY: updateOp is undefined because A's CGKA tree only has A (no B)
     // The PCS key is derived from A-only tree. B can never derive this key.
-    console.log(`[test] A encrypt (no event sync): updateOp=${!!result.update_op()}`);
 
     const encBytes = result.encrypted_content().toBytes();
     const wire = new Uint8Array(1 + encBytes.length);
@@ -1034,7 +1007,6 @@ describe('automerge-worker patterns', () => {
     const plaintext2 = new TextEncoder().encode('after proper sync');
     const ref2 = new ChangeId(crypto.getRandomValues(new Uint8Array(32)));
     const result2 = await khA.tryEncrypt(docA3!, ref2, [], plaintext2);
-    console.log(`[test] A encrypt (after proper sync): updateOp=${!!result2.update_op()}`);
     expect(result2.update_op()).toBeTruthy(); // NOW it generates updateOp
 
     // Sync the CGKA update to B
@@ -1110,14 +1082,10 @@ describe('automerge-worker patterns', () => {
         newEvents.push(eventBytes);
       }
     }
-    console.log(`[test] B→A events: ${allBEventsForA.size} total, ${eventsAHas.length} A already has, ${newEvents.length} new (simulated pending)`);
 
     // Only send events A already has — withhold new events (simulating pending)
     // In production, these new events are in B's pending store.
-    const statsBefore = await khA.stats();
     if (eventsAHas.length > 0) await khA.ingestEventsBytes(eventsAHas);
-    const statsAfter = await khA.stats();
-    console.log(`[test] A after partial sync: totalOps ${statsBefore.totalOps} → ${statsAfter.totalOps}`);
 
     // A→B sync (A sends its events to B — this works fine)
     const agentB_inA = await khA.getAgent(new Identifier(khB.id.bytes));
@@ -1133,7 +1101,6 @@ describe('automerge-worker patterns', () => {
     const ref = new ChangeId(crypto.getRandomValues(new Uint8Array(32)));
     const result = await khA.tryEncrypt(docA!, ref, [], plaintext);
     const hasUpdateA = !!result.update_op();
-    console.log(`[test] A encrypt (pending events withheld): updateOp=${hasUpdateA}`);
 
     // Even if A generates a PCS update (key rotation), it's for a tree that
     // doesn't include B. B has no leaf in the tree and can't derive the key.
@@ -1173,7 +1140,6 @@ describe('automerge-worker patterns', () => {
     const refB = new ChangeId(crypto.getRandomValues(new Uint8Array(32)));
     const resultB = await khB.tryEncryptArchive(docB2!, refB, [], plaintextB);
     const hasUpdateB = !!resultB.update_op();
-    console.log(`[test] B encrypt: updateOp=${hasUpdateB}`);
     expect(hasUpdateB).toBe(true);
 
     // Even after multiple keyhive sync rounds (totalOps keeps going up),
@@ -1195,7 +1161,6 @@ describe('automerge-worker patterns', () => {
     const { khA, khB, docIdA } = await setupInvitePairIngestArchive();
 
     const bReachable = await khB.reachableDocs();
-    console.log('[test] ingestArchive: B reachable docs:', bReachable.length);
     expect(bReachable.length).toBeGreaterThan(0);
 
     // Step 1: Sync B→A so A learns about B's membership
@@ -1204,7 +1169,6 @@ describe('automerge-worker patterns', () => {
     const bEventsForA: Map<Uint8Array, Uint8Array> = await khB.eventsForAgent(indA_inB.toAgent());
     const bArr: Uint8Array[] = [];
     bEventsForA.forEach((v: Uint8Array) => bArr.push(v));
-    console.log('[test] ingestArchive: B→A sync events:', bArr.length);
     await khA.ingestEventsBytes(bArr);
 
     // Step 2: A encrypts (generates CGKA Update op)
@@ -1213,7 +1177,6 @@ describe('automerge-worker patterns', () => {
     const refA = new ChangeId(crypto.getRandomValues(new Uint8Array(32)));
     const resultA = await khA.tryEncryptArchive(docA!, refA, [], plainA);
     const encryptedA = resultA.encrypted_content();
-    console.log('[test] ingestArchive: A encrypt update_op?', !!resultA.update_op());
 
     // Step 3: Sync A→B so B gets A's CGKA ops
     const cardB = await khB.contactCard();
@@ -1221,7 +1184,6 @@ describe('automerge-worker patterns', () => {
     const eventsForB: Map<Uint8Array, Uint8Array> = await khA.eventsForAgent(indB_inA.toAgent());
     const arr: Uint8Array[] = [];
     eventsForB.forEach((v: Uint8Array) => arr.push(v));
-    console.log('[test] ingestArchive: A→B sync events:', arr.length);
     await khB.ingestEventsBytes(arr);
 
     // Step 4: B decrypts A's message
@@ -1317,10 +1279,8 @@ describe('invite payload encode/decode with production claimInvite', () => {
 
     const archive = await khA.toArchive();
     const archiveBytes = archive.toBytes();
-    console.log('[test] archive size:', archiveBytes.length, 'bytes');
 
     const b64url = encodePayload(seed, archiveBytes);
-    console.log('[test] b64url length:', b64url.length);
 
     const decoded = decodePayload(b64url);
     expect(decoded.seed).toEqual(seed);
@@ -1443,8 +1403,6 @@ describe('invite payload encode/decode with production claimInvite', () => {
     const signerB = Signer.memorySignerFromBytes(crypto.getRandomValues(new Uint8Array(32)));
     const khB = await Keyhive.init(signerB, CiphertextStore.newInMemory(), () => {});
     const docB_own = await khB.generateDocument([], new ChangeId(crypto.getRandomValues(new Uint8Array(32))), []);
-    const statsB0 = await khB.stats();
-    console.log('[test] B initial stats: totalOps=', statsB0.totalOps);
 
     // A generates invite
     const seed = crypto.getRandomValues(new Uint8Array(32));
@@ -1463,8 +1421,6 @@ describe('invite payload encode/decode with production claimInvite', () => {
     // B claims on its existing keyhive
     await claimInvite(khB, decoded.seed, decoded.archive);
 
-    const statsB1 = await khB.stats();
-    console.log('[test] B after claim: totalOps=', statsB1.totalOps);
 
     // B should see both its own document and A's document
     const bReachable = await khB.reachableDocs();

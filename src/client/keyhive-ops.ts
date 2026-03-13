@@ -182,7 +182,6 @@ export class KeyhiveOps {
     await this.kh.addMember(inviteAgent, doc.toMembered(), access, []);
     const archive = await this.kh.toArchive();
     const archiveBytes: number[] = Array.from(archive.toBytes());
-    console.log('[generateInvite] archiveBytes.length:', archiveBytes.length);
     await this.fx.persist();
     this.fx.syncKeyhive();
     return { inviteKeyBytes: Array.from(seed) as number[], archiveBytes, groupId: '', inviteSignerAgentId };
@@ -194,42 +193,33 @@ export class KeyhiveOps {
     automergeDocId?: string,
   ): Promise<{ khDocId: string }> {
     const seed = new Uint8Array(inviteSeed);
-    console.log('[claimInvite] step 1: creating signer + archive', { seedLen: seed.length, archiveLen: archiveBytes.length });
     const inviteSigner = this.bridge.Signer.memorySignerFromBytes(seed);
     const tempStore = this.bridge.CiphertextStore.newInMemory();
     const inviterArchive = new this.bridge.Archive(new Uint8Array(archiveBytes));
-    console.log('[claimInvite] step 2: tryToKeyhive');
     const inviteKh = await inviterArchive.tryToKeyhive(tempStore, inviteSigner, () => {});
-    console.log('[claimInvite] step 3: receiveContactCard');
     const ourCard = await this.kh.contactCard();
     const ourIndividualInInviteKh = await inviteKh.receiveContactCard(ourCard);
     const ourAgentInInviteKh = ourIndividualInInviteKh.toAgent();
-    console.log('[claimInvite] step 4: reachableDocs');
     const reachable = await inviteKh.reachableDocs();
     if (reachable.length === 0) throw new Error('Invite has no document access');
     const docSummaryItem = reachable[0];
     const inviteDoc = docSummaryItem.doc;
     const inviteAccess = docSummaryItem.access;
     const inviteAccessStr = inviteAccess.toString();
-    console.log('[claimInvite] step 5: addMember', { access: inviteAccessStr });
     await inviteKh.addMember(ourAgentInInviteKh, inviteDoc.toMembered(), inviteAccess, []);
 
     // Ingest the invite archive into our existing keyhive. This adds the
     // individuals, delegation chain, and document structure — but NOT CGKA state.
-    console.log('[claimInvite] step 6: inviteKh.toArchive');
     const inviteArchiveOut = await inviteKh.toArchive();
-    console.log('[claimInvite] step 7: kh.ingestArchive');
     await this.kh.ingestArchive(inviteArchiveOut);
 
     // Ingest CGKA events from inviteKh. When our keyhive processes the
     // CGKA Add op for us, receive_cgka_op detects active_id == added_id and
     // calls merge_cgka_invite_op, which properly sets CGKA owner_id and
     // includes our secret prekey in owner_sks.
-    console.log('[claimInvite] step 8: eventsForAgent + ingestEventsBytes');
     const eventsForUs: Map<Uint8Array, Uint8Array> = await inviteKh.eventsForAgent(ourAgentInInviteKh);
     const eventsArr: Uint8Array[] = [];
     eventsForUs.forEach((v: Uint8Array) => eventsArr.push(v));
-    console.log('[claimInvite] step 8: ingesting', eventsArr.length, 'events');
     await this.kh.ingestEventsBytes(eventsArr);
 
     const khDocId = bytesToBase64(inviteDoc.id.toBytes());

@@ -1,5 +1,5 @@
 import * as Automerge from '@automerge/automerge';
-import { toPlain, syncToTarget } from '../src/shared/useUndoRedo';
+import { toPlain, syncToTarget } from '../src/shared/sync-to-target';
 
 // Helper: perform a full undo/redo restore cycle using Automerge.view + syncToTarget
 // (mirrors what the hook does via handle.view().doc() + handle.change())
