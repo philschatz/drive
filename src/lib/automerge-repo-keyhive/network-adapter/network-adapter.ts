@@ -510,7 +510,7 @@ export class KeyhiveNetworkAdapter extends NetworkAdapter {
    */
   forceResyncAllPeers(): void {
     this.docObjects.clear();
-    console.log(`[AMRepoKeyhive] forceResyncAllPeers: cycling disconnect/reconnect for ${this.peers.size} peers`);
+    debug(`forceResyncAllPeers: cycling disconnect/reconnect for ${this.peers.size} peers`);
     for (const [peerId, peer] of this.peers) {
       // Reset keyhiveSynced so outgoing sync messages are unencrypted until
       // the next keyhive sync confirmation. This prevents the deadlock where
@@ -626,7 +626,7 @@ export class KeyhiveNetworkAdapter extends NetworkAdapter {
         data.length > 0 &&
         peerReady;
       if (automergeDocId && (message.type === "sync" || message.type === "change")) {
-        console.log(`[AMRepoKeyhive] SYNC-SEND: ${message.type} doc=${automergeDocId} target=${(message as any).targetId ?? 'n/a'} shouldEncrypt=${shouldEncrypt} dataLen=${data.length}`);
+        debug(`SYNC-SEND: ${message.type} doc=${automergeDocId} target=${(message as any).targetId ?? 'n/a'} shouldEncrypt=${shouldEncrypt} dataLen=${data.length}`);
       }
       let hashBuf: ArrayBuffer | undefined;
       if (shouldEncrypt) {
@@ -664,7 +664,7 @@ export class KeyhiveNetworkAdapter extends NetworkAdapter {
               payload = new Uint8Array(1 + encBytes.length);
               payload[0] = ENC_ENCRYPTED;
               payload.set(encBytes, 1);
-              console.log(`[AMRepoKeyhive] Encrypted outgoing ${message.type} for doc ${automergeDocId}, updateOp=${result.update_op()}`);
+              debug(`Encrypted outgoing ${message.type} for doc ${automergeDocId}, updateOp=${result.update_op()}`);
             } catch (e) {
               console.error(`[AMRepoKeyhive] encryptPayload failed for doc ${automergeDocId}:`, e);
             }
@@ -728,7 +728,7 @@ export class KeyhiveNetworkAdapter extends NetworkAdapter {
       this.peerHasWriteAccess(message.senderId, docId)
     );
     if (hasAccess) {
-      console.log(`[AMRepoKeyhive] ACCESS-OK: emitting ${message.type} from ${message.senderId} for doc ${docId}`);
+      debug(`ACCESS-OK: emitting ${message.type} from ${message.senderId} for doc ${docId}`);
       this.emit("message", message);
     } else {
       console.warn(`[AMRepoKeyhive] DROPPED sync message from ${message.senderId} for doc ${docId} (insufficient access)`);
@@ -737,8 +737,8 @@ export class KeyhiveNetworkAdapter extends NetworkAdapter {
 
   private _rcvCount = 0;
   receiveMessage(message: Message): void {
-    if (++this._rcvCount <= 20 || this._rcvCount % 50 === 0) {
-      console.log(`[AMRepoKeyhive] receiveMessage #${this._rcvCount}: type=${message.type} from=${message.senderId} doc=${(message as any).documentId ?? 'n/a'}`);
+    if (KH_DEBUG && (++this._rcvCount <= 20 || this._rcvCount % 50 === 0)) {
+      debug(`receiveMessage #${this._rcvCount}: type=${message.type} from=${message.senderId} doc=${(message as any).documentId ?? 'n/a'}`);
     }
     try {
       if (
@@ -777,21 +777,21 @@ export class KeyhiveNetworkAdapter extends NetworkAdapter {
               const automergeDocId = (message as any).documentId as string | undefined;
               const isEncrypted = rawPayload && rawPayload.length > 0 && rawPayload[0] === ENC_ENCRYPTED;
               const inDocMap = automergeDocId ? this.docMap.has(automergeDocId) : false;
-              if (automergeDocId && (message.type === "sync" || message.type === "change")) {
-                console.log(`[AMRepoKeyhive] SYNC-RCV: ${message.type} from=${message.senderId} doc=${automergeDocId} encrypted=${isEncrypted} inDocMap=${inDocMap} pendingDecrypt=${this.pendingDecrypt.length}`);
+              if (KH_DEBUG && automergeDocId && (message.type === "sync" || message.type === "change")) {
+                debug(`SYNC-RCV: ${message.type} from=${message.senderId} doc=${automergeDocId} encrypted=${isEncrypted} inDocMap=${inDocMap} pendingDecrypt=${this.pendingDecrypt.length}`);
               }
               if (automergeDocId && inDocMap &&
                   (message.type === "sync" || message.type === "change") &&
                   isEncrypted) {
                 // Decrypt inside the queue to prevent concurrent WASM access
                 void this.keyhiveQueue.run(async () => {
-                  console.log(`[AMRepoKeyhive] DECRYPT-TASK: starting for doc=${automergeDocId} type=${message.type} from=${message.senderId}`);
+                  debug(`DECRYPT-TASK: starting for doc=${automergeDocId} type=${message.type} from=${message.senderId}`);
                   try {
                     let doc = this.docObjects.get(automergeDocId);
                     if (!doc) {
                       // Cache miss — fetch now (inside queue to avoid concurrent WASM access)
                       const khDocId = this.docMap.get(automergeDocId);
-                      console.log(`[AMRepoKeyhive] DECRYPT-TASK: cache miss, khDocId=${khDocId}`);
+                      debug(`DECRYPT-TASK: cache miss, khDocId=${khDocId}`);
                       if (khDocId) {
                         const fetched = await this.keyhive.getDocument(khDocId);
                         if (fetched) {
@@ -812,7 +812,7 @@ export class KeyhiveNetworkAdapter extends NetworkAdapter {
                         return;
                       }
                       message.data = decrypted;
-                      console.log(`[AMRepoKeyhive] Decrypted ${message.type} for doc ${automergeDocId}`);
+                      debug(`Decrypted ${message.type} for doc ${automergeDocId}`);
                       if (message.type === "sync" || message.type === "request") {
                         void this.checkAccessAndEmit(message);
                       } else {
@@ -1292,14 +1292,14 @@ export class KeyhiveNetworkAdapter extends NetworkAdapter {
             }
           }
           if (statsAfterIngest.totalOps !== this.lastKnownTotalOps) {
-            console.log(`[AMRepoKeyhive] ingest-remote (sync-response): totalOps changed ${this.lastKnownTotalOps} → ${statsAfterIngest.totalOps}, pendingDecrypt=${this.pendingDecrypt.length}`);
+            debug(`ingest-remote (sync-response): totalOps changed ${this.lastKnownTotalOps} → ${statsAfterIngest.totalOps}, pendingDecrypt=${this.pendingDecrypt.length}`);
             this.lastKnownTotalOps = statsAfterIngest.totalOps;
             // Only clear beliefs when state actually changed
             this.invalidateBeliefs();
             (this.emit as any)("ingest-remote");
             this.retryPendingDecrypt();
           } else {
-            console.log(`[AMRepoKeyhive] ingest-remote SUPPRESSED (sync-response): totalOps unchanged at ${this.lastKnownTotalOps}, pendingDecrypt=${this.pendingDecrypt.length}`);
+            debug(`ingest-remote SUPPRESSED (sync-response): totalOps unchanged at ${this.lastKnownTotalOps}, pendingDecrypt=${this.pendingDecrypt.length}`);
             // Even if no new ops, retry pending decrypts — CGKA key state may have changed
             this.retryPendingDecrypt();
           }
@@ -1508,14 +1508,14 @@ export class KeyhiveNetworkAdapter extends NetworkAdapter {
             }
           }
           if (statsAfterIngest.totalOps !== this.lastKnownTotalOps) {
-            console.log(`[AMRepoKeyhive] ingest-remote (sync-ops): totalOps changed ${this.lastKnownTotalOps} → ${statsAfterIngest.totalOps}, pendingDecrypt=${this.pendingDecrypt.length}`);
+            debug(`ingest-remote (sync-ops): totalOps changed ${this.lastKnownTotalOps} → ${statsAfterIngest.totalOps}, pendingDecrypt=${this.pendingDecrypt.length}`);
             this.lastKnownTotalOps = statsAfterIngest.totalOps;
             // Only clear beliefs when state actually changed
             this.invalidateBeliefs();
             (this.emit as any)("ingest-remote");
             this.retryPendingDecrypt();
           } else {
-            console.log(`[AMRepoKeyhive] ingest-remote SUPPRESSED (sync-ops): totalOps unchanged at ${this.lastKnownTotalOps}, pendingDecrypt=${this.pendingDecrypt.length}`);
+            debug(`ingest-remote SUPPRESSED (sync-ops): totalOps unchanged at ${this.lastKnownTotalOps}, pendingDecrypt=${this.pendingDecrypt.length}`);
             // Even if no new ops, retry pending decrypts — CGKA key state may have changed
             this.retryPendingDecrypt();
           }
@@ -1529,7 +1529,7 @@ export class KeyhiveNetworkAdapter extends NetworkAdapter {
                 theirTotalForMe: opsReceiverTotal,
               };
               if (!peer.keyhiveSynced) {
-                console.log(`[AMRepoKeyhive] peer ${message.senderId} keyhive sync completed (sending confirmation), enabling encryption`);
+                debug(`peer ${message.senderId} keyhive sync completed (sending confirmation), enabling encryption`);
                 peer.keyhiveSynced = true;
               }
             }
@@ -1653,7 +1653,7 @@ export class KeyhiveNetworkAdapter extends NetworkAdapter {
         theirTotalForMe: theirTotalForUs,
       };
       if (!peer.keyhiveSynced) {
-        console.log(`[AMRepoKeyhive] peer ${message.senderId} keyhive sync confirmed, enabling encryption`);
+        debug(`peer ${message.senderId} keyhive sync confirmed, enabling encryption`);
         peer.keyhiveSynced = true;
       }
       debug(
@@ -1738,7 +1738,7 @@ export class KeyhiveNetworkAdapter extends NetworkAdapter {
   private retryPendingDecrypt(): void {
     if (this.pendingDecrypt.length === 0) return;
     const pending = this.pendingDecrypt.splice(0);
-    console.log(`[AMRepoKeyhive] retrying ${pending.length} buffered decrypt messages`);
+    debug(`retrying ${pending.length} buffered decrypt messages`);
     // Clear cached doc objects so we get fresh ones with new keys
     this.docObjects.clear();
     for (const entry of pending) {
@@ -1767,7 +1767,7 @@ export class KeyhiveNetworkAdapter extends NetworkAdapter {
         }
         try {
           const encrypted = (Encrypted as any).fromBytes(rawPayload.slice(1));
-          console.log(`[AMRepoKeyhive] RETRY-DECRYPT: attempt ${entry.retries + 1} for doc ${automergeDocId} from ${message.senderId}`);
+          debug(`RETRY-DECRYPT: attempt ${entry.retries + 1} for doc ${automergeDocId} from ${message.senderId}`);
           const decrypted = await this.keyhive.tryDecrypt(doc, encrypted);
           if (!decrypted) {
             console.warn(`[AMRepoKeyhive] RETRY-DECRYPT: tryDecrypt returned null for doc ${automergeDocId}`);
@@ -1775,7 +1775,7 @@ export class KeyhiveNetworkAdapter extends NetworkAdapter {
           }
           message.data = decrypted;
           // CGKA keys confirmed working — end grace period early
-          console.log(`[AMRepoKeyhive] retry decrypted ${message.type} for doc ${automergeDocId}`);
+          debug(`retry decrypted ${message.type} for doc ${automergeDocId}`);
           if (message.type === "sync" || message.type === "request") {
             void this.checkAccessAndEmit(message);
           } else {

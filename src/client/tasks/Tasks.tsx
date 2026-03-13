@@ -80,6 +80,7 @@ export function Tasks({ docId, readOnly }: { docId?: string; readOnly?: boolean;
   editorStateRef.current = editorState;
   const titleFocusedRef = useRef(false);
   const descFocusedRef = useRef(false);
+  const quickAddRef = useRef<HTMLInputElement>(null);
 
   const saveTask = useCallback((uid: string, taskData: Task) => {
     if (!canEditRef.current || !docId) return;
@@ -142,6 +143,10 @@ export function Tasks({ docId, readOnly }: { docId?: string; readOnly?: boolean;
 
   const handleFieldFocus = useCallback((path: (string | number)[] | null) => {
     broadcastRef.current?.('focusedField', path);
+  }, []);
+
+  useEffect(() => {
+    quickAddRef.current?.focus();
   }, []);
 
   useEffect(() => {
@@ -273,6 +278,7 @@ export function Tasks({ docId, readOnly }: { docId?: string; readOnly?: boolean;
       <ValidationPanel errors={validationErrors} docId={docId} />
       <div className="flex items-center gap-2 mb-3">
         <Input
+          ref={quickAddRef}
           placeholder="Add a task..."
           value={quickAddText}
           onInput={(e: any) => setQuickAddText(e.currentTarget.value)}
