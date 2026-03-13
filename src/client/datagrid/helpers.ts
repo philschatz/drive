@@ -176,6 +176,15 @@ export function shortId(): string {
   return Math.random().toString(36).slice(2, 10);
 }
 
+/** Format a cell value with distribution uncertainty. */
+export function formatDistValue(mean: number, stdev: number): string {
+  const fmt = (v: number) => {
+    if (Number.isInteger(v) && Math.abs(v) < 1e6) return String(v);
+    return Math.abs(v) >= 1e6 || Math.abs(v) < 0.01 ? v.toExponential(2) : v.toFixed(2);
+  };
+  return `${fmt(mean)} ±${fmt(stdev)}`;
+}
+
 // --- Autofill ---
 
 /** Detect if values form a numeric pattern (constant or arithmetic sequence). */

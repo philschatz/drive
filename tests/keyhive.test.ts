@@ -27,7 +27,10 @@ import {
   Archive,
   ChangeId,
   Identifier,
+  Encrypted,
 } from '@keyhive/keyhive/slim';
+// getEventHashesForAgent used by production sync protocol — kept for reference
+// import { getEventHashesForAgent } from '../src/lib/automerge-repo-keyhive/utilities';
 import {
   signData,
   verifyData,
@@ -946,6 +949,239 @@ describe('automerge-worker patterns', () => {
     const docIdStr = docIdA.toString();
     expect(bReachable[0].doc.doc_id.toString()).toBe(docIdStr);
     expect(cReachable[0].doc.doc_id.toString()).toBe(docIdStr);
+  });
+
+  it('syncKeyhive(B) skip bug: after contact card exchange, A never syncs events with B', async () => {
+    // This test reproduces the exact production failure sequence.
+    //
+    // In the network adapter, when B initiates keyhive sync:
+    // 1. B sends keyhive-sync-request to A
+    // 2. A doesn't know B → sends keyhive-sync-request-contact-card
+    // 3. B responds with keyhive-sync-missing-contact-card (includes B's card)
+    // 4. A receives B's card → calls receiveContactCard(B)
+    // 5. A calls syncKeyhive(B_peerId, true)
+    //
+    // BUG: syncKeyhive(maybeSenderId) uses senderId to EXCLUDE from the sync
+    // loop (to avoid echo). But here senderId=B, so A SKIPS B!
+    //   for (const targetId of this.peers.keys()) {
+    //     if (targetId == senderId) continue;  // ← skips B!
+    //   }
+    //
+    // Result: A receives B's contact card but never exchanges events with B.
+    // A's CGKA tree never includes B. All of A's encryptions use a key
+    // that B can't derive. "Updates from either browser never showed up."
+    const { khA, khB, docIdA } = await setupInvitePairIngestArchive();
+
+    // --- Simulate the production contact card exchange ---
+    // A and B exchange contact cards (this part works)
+    const cardB = await khB.contactCard();
+    await khA.receiveContactCard(cardB);
+    const cardA = await khA.contactCard();
+    await khB.receiveContactCard(cardA);
+
+    // --- BUG: syncKeyhive(B) skips B, so NO events are exchanged ---
+    // In production, this is where A would call syncKeyhive(B_peerId, true)
+    // which skips B. We simulate this by simply NOT exchanging events.
+    // (The passing tests all call eventsForAgent + ingestEventsBytes here.)
+
+    // A encrypts — B is NOT in A's CGKA tree because no events were synced
+    const docA = await khA.getDocument(docIdA);
+    const plaintext = new TextEncoder().encode('encrypted without sync');
+    const ref = new ChangeId(crypto.getRandomValues(new Uint8Array(32)));
+    const result = await khA.tryEncrypt(docA!, ref, [], plaintext);
+
+    // KEY: updateOp is undefined because A's CGKA tree only has A (no B)
+    // The PCS key is derived from A-only tree. B can never derive this key.
+    console.log(`[test] A encrypt (no event sync): updateOp=${!!result.update_op()}`);
+
+    const encBytes = result.encrypted_content().toBytes();
+    const wire = new Uint8Array(1 + encBytes.length);
+    wire[0] = 0x01;
+    wire.set(encBytes, 1);
+
+    // B tries to decrypt — fails because B doesn't have A's CGKA state
+    const bReachable = await khB.reachableDocs();
+    expect(bReachable.length).toBeGreaterThan(0);
+    const docB = await khB.getDocument(bReachable[0].doc.doc_id);
+    const encrypted = (Encrypted as any).fromBytes(wire.slice(1));
+    await expect(khB.tryDecrypt(docB!, encrypted)).rejects.toThrow('Key not found');
+
+    // Even B encrypting fails for A (reverse direction also broken)
+    const docB2 = await khB.getDocument(bReachable[0].doc.doc_id);
+    const plaintextB = new TextEncoder().encode('from B, no sync');
+    const refB = new ChangeId(crypto.getRandomValues(new Uint8Array(32)));
+    const resultB = await khB.tryEncryptArchive(docB2!, refB, [], plaintextB);
+    const encryptedB = resultB.encrypted_content();
+
+    const docA2 = await khA.getDocument(docIdA);
+    await expect(khA.tryDecrypt(docA2!, encryptedB)).rejects.toThrow('Key not found');
+
+    // PROOF: if we actually exchange events (what the buggy syncKeyhive should do),
+    // everything works. This shows the hash-based sync ITSELF is fine — the bug is
+    // that syncKeyhive(B) never initiates it.
+    const agentA_inB = await khB.getAgent(new Identifier(khA.id.bytes));
+    const bEvts: Uint8Array[] = [];
+    (await khB.eventsForAgent(agentA_inB!)).forEach((v: Uint8Array) => bEvts.push(v));
+    await khA.ingestEventsBytes(bEvts);
+
+    const agentB_inA = await khA.getAgent(new Identifier(khB.id.bytes));
+    const aEvts: Uint8Array[] = [];
+    (await khA.eventsForAgent(agentB_inA!)).forEach((v: Uint8Array) => aEvts.push(v));
+    await khB.ingestEventsBytes(aEvts);
+
+    // Now A encrypts with B in the CGKA tree
+    const docA3 = await khA.getDocument(docIdA);
+    const plaintext2 = new TextEncoder().encode('after proper sync');
+    const ref2 = new ChangeId(crypto.getRandomValues(new Uint8Array(32)));
+    const result2 = await khA.tryEncrypt(docA3!, ref2, [], plaintext2);
+    console.log(`[test] A encrypt (after proper sync): updateOp=${!!result2.update_op()}`);
+    expect(result2.update_op()).toBeTruthy(); // NOW it generates updateOp
+
+    // Sync the CGKA update to B
+    const aEvts2: Uint8Array[] = [];
+    (await khA.eventsForAgent(agentB_inA!)).forEach((v: Uint8Array) => aEvts2.push(v));
+    await khB.ingestEventsBytes(aEvts2);
+
+    const docB3 = await khB.getDocument(bReachable[0].doc.doc_id);
+    const encrypted2 = (Encrypted as any).fromBytes(result2.encrypted_content().toBytes());
+    const decrypted = await khB.tryDecrypt(docB3!, encrypted2);
+    expect(new Uint8Array(decrypted)).toEqual(plaintext2);
+  });
+
+  it('production bug: B has pending events → A never gets CGKA ops → B cannot decrypt', async () => {
+    // Reproduces the exact production failure from browser logs:
+    //
+    // Browser A:
+    //   totalOps changed 0 → 593   (keyhive sync delivers B's events)
+    //   Encrypted outgoing sync, updateOp=undefined  ← ALWAYS undefined
+    //   totalOps changed 593 → 597 → 600
+    //   Encrypted outgoing sync, updateOp=undefined  ← STILL undefined
+    //
+    // Browser B:
+    //   totalOps changed 0 → 678   (keyhive sync delivers A's events)
+    //   "140 hashes and 24 pending" ← B has 24 unresolvable events!
+    //   Encrypted outgoing sync, updateOp=[object Object]  ← B's tree works
+    //   decryptPayload failed: Key not found
+    //   RETRY-DECRYPT failed (attempt 1-7/50): Key not found
+    //
+    // Root cause: During claimInvite, B calls ingestArchive + ingestEventsBytes.
+    // Some events (including CGKA ops for B's membership) go to B's "pending"
+    // store because their predecessors aren't available. In the hash-based
+    // sync protocol, pending events are included in the hash count but
+    // CANNOT BE SERVED to peers:
+    //   "don't request pending events — peers can't serve them"
+    // So A never receives B's CGKA membership ops. A's CGKA tree never
+    // includes B. A encrypts with a key that excludes B forever.
+    //
+    // This test simulates this by withholding the CGKA events from
+    // B→A sync, matching what happens when they're stuck in B's pending.
+    const { khA, khB, docIdA } = await setupInvitePairIngestArchive();
+
+    // --- Contact card exchange ---
+    const cardB = await khB.contactCard();
+    await khA.receiveContactCard(cardB);
+    const cardA = await khA.contactCard();
+    await khB.receiveContactCard(cardA);
+
+    // --- B→A sync: but simulate pending events by only sending a SUBSET ---
+    // In production, B has 140 found + 24 pending. The pending events
+    // (which include CGKA membership ops) can't be served. A only gets
+    // events from B's "found" set.
+    //
+    // We simulate this by sending only A's own events back to A (events A
+    // already has) — B's NEW events (membership delegation, CGKA Add(B))
+    // are withheld, simulating them being in pending.
+    const agentA_inB = await khB.getAgent(new Identifier(khA.id.bytes));
+    const allBEventsForA: Map<Uint8Array, Uint8Array> = await khB.eventsForAgent(agentA_inB!);
+
+    // Also get what A already knows, so we can send only duplicates
+    const agentA_inA = await khA.getAgent(new Identifier(khA.id.bytes));
+    const aOwnEvents: Map<Uint8Array, Uint8Array> = await khA.eventsForAgent(agentA_inA!);
+    const aOwnHashes = new Set<string>();
+    for (const hash of aOwnEvents.keys()) aOwnHashes.add(hash.toString());
+
+    // Split B's events into "events A already has" and "new events"
+    const eventsAHas: Uint8Array[] = [];
+    const newEvents: Uint8Array[] = [];
+    for (const [hash, eventBytes] of allBEventsForA) {
+      if (aOwnHashes.has(hash.toString())) {
+        eventsAHas.push(eventBytes);
+      } else {
+        newEvents.push(eventBytes);
+      }
+    }
+    console.log(`[test] B→A events: ${allBEventsForA.size} total, ${eventsAHas.length} A already has, ${newEvents.length} new (simulated pending)`);
+
+    // Only send events A already has — withhold new events (simulating pending)
+    // In production, these new events are in B's pending store.
+    const statsBefore = await khA.stats();
+    if (eventsAHas.length > 0) await khA.ingestEventsBytes(eventsAHas);
+    const statsAfter = await khA.stats();
+    console.log(`[test] A after partial sync: totalOps ${statsBefore.totalOps} → ${statsAfter.totalOps}`);
+
+    // A→B sync (A sends its events to B — this works fine)
+    const agentB_inA = await khA.getAgent(new Identifier(khB.id.bytes));
+    if (agentB_inA) {
+      const aEvts: Uint8Array[] = [];
+      (await khA.eventsForAgent(agentB_inA)).forEach((v: Uint8Array) => aEvts.push(v));
+      if (aEvts.length > 0) await khB.ingestEventsBytes(aEvts);
+    }
+
+    // --- A encrypts (production: outgoing automerge sync) ---
+    const docA = await khA.getDocument(docIdA);
+    const plaintext = new TextEncoder().encode('A encrypts without B in CGKA');
+    const ref = new ChangeId(crypto.getRandomValues(new Uint8Array(32)));
+    const result = await khA.tryEncrypt(docA!, ref, [], plaintext);
+    const hasUpdateA = !!result.update_op();
+    console.log(`[test] A encrypt (pending events withheld): updateOp=${hasUpdateA}`);
+
+    // Even if A generates a PCS update (key rotation), it's for a tree that
+    // doesn't include B. B has no leaf in the tree and can't derive the key.
+    // In production: "Encrypted outgoing sync, updateOp=undefined" — but
+    // even when updateOp IS present, B still can't decrypt.
+
+    // Sync A's CGKA update to B (in production this happens via keyhive sync).
+    // Even though the update reaches B, B can't use it because B has no
+    // leaf in A's CGKA tree — the membership events were in B's pending store.
+    if (hasUpdateA) {
+      const agentB_inA2 = await khA.getAgent(new Identifier(khB.id.bytes));
+      if (agentB_inA2) {
+        const aUpdateEvts: Uint8Array[] = [];
+        (await khA.eventsForAgent(agentB_inA2)).forEach((v: Uint8Array) => aUpdateEvts.push(v));
+        if (aUpdateEvts.length > 0) await khB.ingestEventsBytes(aUpdateEvts);
+      }
+    }
+
+    // B tries to decrypt A's message → Key not found
+    // This matches production: "RETRY-DECRYPT failed: Key not found"
+    const ENC_ENCRYPTED = 0x01;
+    const encBytes = result.encrypted_content().toBytes();
+    const wire = new Uint8Array(1 + encBytes.length);
+    wire[0] = ENC_ENCRYPTED;
+    wire.set(encBytes, 1);
+
+    const bReachable = await khB.reachableDocs();
+    const docB = await khB.getDocument(bReachable[0].doc.doc_id);
+    const encrypted = (Encrypted as any).fromBytes(wire.slice(1));
+    await expect(khB.tryDecrypt(docB!, encrypted)).rejects.toThrow('Key not found');
+
+    // --- B encrypts (production: B's outgoing sync) ---
+    // B's CGKA tree DOES include A, so B generates updateOp
+    // This matches production: "updateOp=[object Object]"
+    const docB2 = await khB.getDocument(bReachable[0].doc.doc_id);
+    const plaintextB = new TextEncoder().encode('B encrypts with A in CGKA');
+    const refB = new ChangeId(crypto.getRandomValues(new Uint8Array(32)));
+    const resultB = await khB.tryEncryptArchive(docB2!, refB, [], plaintextB);
+    const hasUpdateB = !!resultB.update_op();
+    console.log(`[test] B encrypt: updateOp=${hasUpdateB}`);
+    expect(hasUpdateB).toBe(true);
+
+    // Even after multiple keyhive sync rounds (totalOps keeps going up),
+    // A's CGKA tree never includes B because the critical events are
+    // stuck in B's pending store and can't be served.
+    // Retrying A's decrypt is futile — the key was derived from a tree
+    // that excludes B. This matches production retry attempts 1-7 all
+    // failing with "Key not found".
   });
 
   it('ingestArchive flow: full bidirectional encrypt/decrypt', async () => {

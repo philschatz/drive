@@ -18,12 +18,14 @@ npm run cy:open      # Cypress GUI (uses run-cypress.sh for NixOS compat)
 ```
 
 **Type checking** (two separate tsconfigs):
+
 ```bash
 npx tsc --noEmit                          # Backend (src/backend/)
 npx tsc -p tsconfig.client.json --noEmit  # Frontend (src/client/ + src/shared/)
 ```
 
 **Run a single test file:**
+
 ```bash
 npx jest tests/parser.test.ts
 ```
@@ -53,6 +55,7 @@ npx jest tests/parser.test.ts
 ### Document Design Principles
 
 Documents follow JSCalendar (RFC 8984) with modifications for CRDT collaboration:
+
 - **Maps over Arrays**: Events, tasks, rows are `Record<string, Item>` for conflict-free concurrent edits
 - **No stored IDs**: Document identity comes from the Automerge repo handle, not a field in the document
 - **Single recurrence rule** per event (not an array) since editors don't support multiple
@@ -69,6 +72,7 @@ Documents follow JSCalendar (RFC 8984) with modifications for CRDT collaboration
 ### Routing
 
 `src/client/App.tsx` defines routes via preact-router:
+
 - `/` → Home (document list)
 - `/calendars/:docId` → Calendar editor
 - `/tasks/:docId` → Task list editor
@@ -86,6 +90,7 @@ The backend implements CalDAV (RFC 4791) at `/dav/`. `src/backend/parser.ts` con
 - Client imports use `@/` path alias (maps to `src/client/`)
 - UI components in `src/client/components/ui/` follow shadcn/radix-ui patterns
 - The Vite config has a custom `radixPreactPatchPlugin` to fix a Radix UI compat issue with Preact's ref handling
+- When an error or bug occurs, create a test that reproduces the error first. Then focus on fixing it.
 
 ## Environment Variables
 

@@ -10,9 +10,24 @@ import HyperFormula, {
   ArraySize,
   EmptyValue,
 } from 'hyperformula';
+import { distributionMean, type DistributionInfo } from './distributions';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type CellValue = any;
+
+// ---------------------------------------------------------------------------
+// Distribution registry — populated during HF evaluation, read by MC engine
+// ---------------------------------------------------------------------------
+
+const distRegistry = new Map<string, DistributionInfo>();
+
+export function getDistributionRegistry(): Map<string, DistributionInfo> {
+  return distRegistry;
+}
+
+export function clearDistributionRegistry(): void {
+  distRegistry.clear();
+}
 
 // ---------------------------------------------------------------------------
 // CONCAT — concatenates ranges/scalars without a delimiter (Excel/Sheets compat)
@@ -227,6 +242,101 @@ function uniqueColumns(range: SimpleRangeValue, exactlyOnce: boolean): SimpleRan
 }
 
 // ---------------------------------------------------------------------------
+// Distribution functions — NORMAL, UNIFORM, TRIANGULAR, PERT, LOGNORMAL
+// During normal HF evaluation they return analytical mean and register in
+// the distribution registry.  The MC engine reads the registry to sample.
+// ---------------------------------------------------------------------------
+
+class DistributionPlugin extends FunctionPlugin {
+  static implementedFunctions = {
+    'NORMAL': {
+      method: 'normal',
+      parameters: [
+        { argumentType: FunctionArgumentType.NUMBER },
+        { argumentType: FunctionArgumentType.NUMBER },
+      ],
+    },
+    'UNIFORM': {
+      method: 'uniform',
+      parameters: [
+        { argumentType: FunctionArgumentType.NUMBER },
+        { argumentType: FunctionArgumentType.NUMBER },
+      ],
+    },
+    'TRIANGULAR': {
+      method: 'triangular',
+      parameters: [
+        { argumentType: FunctionArgumentType.NUMBER },
+        { argumentType: FunctionArgumentType.NUMBER },
+        { argumentType: FunctionArgumentType.NUMBER },
+      ],
+    },
+    'PERT': {
+      method: 'pert',
+      parameters: [
+        { argumentType: FunctionArgumentType.NUMBER },
+        { argumentType: FunctionArgumentType.NUMBER },
+        { argumentType: FunctionArgumentType.NUMBER },
+      ],
+    },
+    'LOGNORMAL': {
+      method: 'lognormal',
+      parameters: [
+        { argumentType: FunctionArgumentType.NUMBER },
+        { argumentType: FunctionArgumentType.NUMBER },
+      ],
+    },
+  };
+
+  private register(ast: any, state: any, info: DistributionInfo): void {
+    const addr = ast.start ?? state.formulaAddress;
+    if (addr) {
+      distRegistry.set(`${addr.sheet}:${addr.col}:${addr.row}`, info);
+    }
+  }
+
+  normal(ast: any, state: any) {
+    return this.runFunction(ast.args, state, this.metadata('NORMAL'), (mean: number, stdev: number) => {
+      const info: DistributionInfo = { type: 'normal', params: [mean, stdev] };
+      this.register(ast, state, info);
+      return distributionMean(info);
+    });
+  }
+
+  uniform(ast: any, state: any) {
+    return this.runFunction(ast.args, state, this.metadata('UNIFORM'), (min: number, max: number) => {
+      const info: DistributionInfo = { type: 'uniform', params: [min, max] };
+      this.register(ast, state, info);
+      return distributionMean(info);
+    });
+  }
+
+  triangular(ast: any, state: any) {
+    return this.runFunction(ast.args, state, this.metadata('TRIANGULAR'), (min: number, max: number, mode: number) => {
+      const info: DistributionInfo = { type: 'triangular', params: [min, max, mode] };
+      this.register(ast, state, info);
+      return distributionMean(info);
+    });
+  }
+
+  pert(ast: any, state: any) {
+    return this.runFunction(ast.args, state, this.metadata('PERT'), (min: number, mode: number, max: number) => {
+      const info: DistributionInfo = { type: 'pert', params: [min, mode, max] };
+      this.register(ast, state, info);
+      return distributionMean(info);
+    });
+  }
+
+  lognormal(ast: any, state: any) {
+    return this.runFunction(ast.args, state, this.metadata('LOGNORMAL'), (mu: number, sigma: number) => {
+      const info: DistributionInfo = { type: 'lognormal', params: [mu, sigma] };
+      this.register(ast, state, info);
+      return distributionMean(info);
+    });
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Registration
 // ---------------------------------------------------------------------------
 
@@ -238,4 +348,7 @@ export function registerCustomFunctions() {
   HyperFormula.registerFunctionPlugin(ConcatPlugin, { enGB: { CONCAT: 'CONCAT' } });
   HyperFormula.registerFunctionPlugin(SortPlugin, { enGB: { SORT: 'SORT' } });
   HyperFormula.registerFunctionPlugin(UniquePlugin, { enGB: { UNIQUE: 'UNIQUE' } });
+  HyperFormula.registerFunctionPlugin(DistributionPlugin, {
+    enGB: { NORMAL: 'NORMAL', UNIFORM: 'UNIFORM', TRIANGULAR: 'TRIANGULAR', PERT: 'PERT', LOGNORMAL: 'LOGNORMAL' },
+  });
 }

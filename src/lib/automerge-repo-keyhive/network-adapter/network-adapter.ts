@@ -320,6 +320,12 @@ class Peer {
   // Set when new CGKA ops are generated locally (e.g., during encryption).
   // Cleared after the full sync request is sent.
   forceFullSync: boolean = false;
+  // Whether keyhive sync has completed with this peer. When false, outgoing
+  // sync messages are sent unencrypted to avoid the deadlock where A encrypts
+  // with a PCS key B doesn't have (B not yet in A's CGKA tree).
+  // Set to true after keyhive-sync-confirmation is sent or received.
+  // Reset to false by forceResyncAllPeers() when CGKA state changes.
+  keyhiveSynced: boolean = false;
   constructor() {}
 };
 
@@ -493,14 +499,26 @@ export class KeyhiveNetworkAdapter extends NetworkAdapter {
   }
 
   /**
-   * Force automerge-repo to re-sync with all connected peers by re-emitting
-   * peer-candidate events. Also clears stale document object caches.
-   * Call after replacing the keyhive instance (e.g., after invite claim rebuild).
+   * Force automerge-repo to re-sync with all connected peers by cycling
+   * peer-disconnected → peer-candidate events. This resets automerge-repo's
+   * sync state for each peer, forcing fresh sync from scratch.
+   *
+   * A simple peer-candidate re-emit is insufficient because automerge-repo
+   * ignores peer-candidate for already-connected peers.
+   *
+   * Call after keyhive state changes (e.g., new member ingested, invite claim).
    */
   forceResyncAllPeers(): void {
     this.docObjects.clear();
-    console.log(`[AMRepoKeyhive] forceResyncAllPeers: re-emitting peer-candidate for ${this.peers.size} peers`);
-    for (const [peerId] of this.peers) {
+    console.log(`[AMRepoKeyhive] forceResyncAllPeers: cycling disconnect/reconnect for ${this.peers.size} peers`);
+    for (const [peerId, peer] of this.peers) {
+      // Reset keyhiveSynced so outgoing sync messages are unencrypted until
+      // the next keyhive sync confirmation. This prevents the deadlock where
+      // A encrypts with a PCS key B doesn't have yet.
+      peer.keyhiveSynced = false;
+      // Emit disconnect to tear down automerge-repo's sync state for this peer.
+      // We do NOT delete from this.peers — we keep our keyhive-level peer tracking.
+      this.emit("peer-disconnected", { peerId });
       this.emit("peer-candidate", { peerId, peerMetadata: {} });
     }
   }
@@ -596,11 +614,17 @@ export class KeyhiveNetworkAdapter extends NetworkAdapter {
     try {
       // Pre-compute SHA-256 hash outside WASM (native crypto API, safe to call concurrently)
       const automergeDocId = (message as any).documentId as string | undefined;
+      const targetId = (message as any).targetId as PeerId | undefined;
+      // Don't encrypt for peers who haven't completed keyhive sync — they don't
+      // have the CGKA keys yet and would buffer/drop the message. After keyhive
+      // sync confirms, keyhiveSynced becomes true and encryption kicks in.
+      const peerReady = !targetId || (this.peers.get(targetId)?.keyhiveSynced !== false);
       const shouldEncrypt =
         automergeDocId !== undefined &&
         this.docMap.has(automergeDocId) &&
         (message.type === "sync" || message.type === "change") &&
-        data.length > 0;
+        data.length > 0 &&
+        peerReady;
       if (automergeDocId && (message.type === "sync" || message.type === "change")) {
         console.log(`[AMRepoKeyhive] SYNC-SEND: ${message.type} doc=${automergeDocId} target=${(message as any).targetId ?? 'n/a'} shouldEncrypt=${shouldEncrypt} dataLen=${data.length}`);
       }
@@ -796,7 +820,7 @@ export class KeyhiveNetworkAdapter extends NetworkAdapter {
                       }
                     } catch (e: any) {
                       // Decryption failed (key not yet available) — buffer for retry after keyhive sync
-                      const errDetail = e?.message?.() ?? e?.message ?? String(e);
+                      const errDetail = typeof e?.message === 'function' ? e.message() : (e?.message ?? String(e));
                       console.warn(`[AMRepoKeyhive] decryptPayload failed for doc ${automergeDocId}, buffering for retry (${this.pendingDecrypt.length + 1} pending): ${errDetail}`);
                       this.pendingDecrypt.push({ message, rawPayload, automergeDocId, retries: 0 });
                     }
@@ -872,7 +896,9 @@ export class KeyhiveNetworkAdapter extends NetworkAdapter {
     } else if (message.type === "keyhive-sync-request-contact-card") {
       await this.sendKeyhiveSyncMissingContactCard(message);
     } else if (message.type === "keyhive-sync-missing-contact-card") {
-      await this.syncKeyhive(message.senderId, true);
+      // Pass undefined so the sync loop doesn't skip the peer who just sent
+      // their contact card — that's the peer we need to sync WITH.
+      await this.syncKeyhive(undefined, true);
     } else if (message.type === "keyhive-sync-ops") {
       await this.receiveKeyhiveSyncOps(message, metrics);
     } else if (message.type === "keyhive-sync-check") {
@@ -1502,6 +1528,10 @@ export class KeyhiveNetworkAdapter extends NetworkAdapter {
                 myTotalForThem: opsSenderTotal,
                 theirTotalForMe: opsReceiverTotal,
               };
+              if (!peer.keyhiveSynced) {
+                console.log(`[AMRepoKeyhive] peer ${message.senderId} keyhive sync completed (sending confirmation), enabling encryption`);
+                peer.keyhiveSynced = true;
+              }
             }
             const confirmData = encode({
               myTotalForThem: opsSenderTotal,
@@ -1622,6 +1652,10 @@ export class KeyhiveNetworkAdapter extends NetworkAdapter {
         myTotalForThem: theirBeliefOfOurTotal,
         theirTotalForMe: theirTotalForUs,
       };
+      if (!peer.keyhiveSynced) {
+        console.log(`[AMRepoKeyhive] peer ${message.senderId} keyhive sync confirmed, enabling encryption`);
+        peer.keyhiveSynced = true;
+      }
       debug(
         `[AMRepoKeyhive] Updated beliefs for ${message.senderId}: myTotalForThem=${theirBeliefOfOurTotal}, theirTotalForMe=${theirTotalForUs}`
       );
@@ -1749,7 +1783,7 @@ export class KeyhiveNetworkAdapter extends NetworkAdapter {
           }
         } catch (e: any) {
           // Still can't decrypt — re-buffer if under retry limit
-          const errDetail = e?.message?.() ?? e?.message ?? String(e);
+          const errDetail = typeof e?.message === 'function' ? e.message() : (e?.message ?? String(e));
           if (entry.retries < KeyhiveNetworkAdapter.MAX_DECRYPT_RETRIES) {
             entry.retries++;
             console.warn(`[AMRepoKeyhive] RETRY-DECRYPT failed for doc ${automergeDocId} (attempt ${entry.retries}/${KeyhiveNetworkAdapter.MAX_DECRYPT_RETRIES}): ${errDetail}`);

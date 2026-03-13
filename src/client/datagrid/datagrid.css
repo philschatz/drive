@@ -467,3 +467,49 @@
 .add-rows-input:focus {
   border-color: #228be6;
 }
+
+/* Distribution cells */
+.dist-source {
+  background: rgba(139, 92, 246, 0.08) !important;
+}
+
+.dist-dependent {
+  background: rgba(59, 130, 246, 0.06) !important;
+}
+
+/* Distribution panel below formula bar */
+.dist-panel {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  padding: 4px 8px;
+  border: 1px solid #dee2e6;
+  border-radius: 4px;
+  margin-bottom: 4px;
+  background: #fafafa;
+  min-height: 40px;
+}
+
+.dist-histogram {
+  display: flex;
+  align-items: flex-end;
+  gap: 1px;
+  height: 32px;
+  flex-shrink: 0;
+}
+
+.dist-bar {
+  width: 6px;
+  background: #7c3aed;
+  border-radius: 1px 1px 0 0;
+  min-height: 1px;
+}
+
+.dist-stats {
+  display: flex;
+  gap: 12px;
+  font-size: 0.75rem;
+  font-family: monospace;
+  color: #495057;
+  flex-wrap: wrap;
+}
