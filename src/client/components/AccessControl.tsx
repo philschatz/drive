@@ -140,6 +140,7 @@ export function AccessControl({ khDocId, docId, docType, sharingGroupId, onGroup
       for (let i = 0; i < payload.length; i++) binary += String.fromCharCode(payload[i]);
       const payloadB64 = btoa(binary)
         .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+      console.log('[AccessControl] invite encode: archiveLen=', archive.length, 'payloadLen=', payload.length, 'b64Len=', payloadB64.length);
       const base = window.location.origin + window.location.pathname;
       const inviteUrl = `${base}#/invite/${docId}/${docType ?? 'unknown'}/${payloadB64}`;
 

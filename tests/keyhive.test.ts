@@ -1248,6 +1248,266 @@ describe('automerge-worker patterns', () => {
   });
 });
 
+// ── Invite payload encode/decode with production claimInvite ────────────────
+
+describe('invite payload encode/decode with production claimInvite', () => {
+  // Replicates: AccessControl.tsx encode → URL → InvitePage.tsx decode → keyhive-ops.ts claimInvite
+  // This is the EXACT production path including ingestArchive.
+
+  function encodePayload(seed: Uint8Array, archiveBytes: Uint8Array): string {
+    const payload = new Uint8Array(4 + seed.length + archiveBytes.length);
+    new DataView(payload.buffer).setUint32(0, seed.length);
+    payload.set(seed, 4);
+    payload.set(archiveBytes, 4 + seed.length);
+    let binary = '';
+    for (let i = 0; i < payload.length; i++) binary += String.fromCharCode(payload[i]);
+    return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  }
+
+  function decodePayload(b64url: string): { seed: Uint8Array; archive: Uint8Array } {
+    const b64 = b64url.replace(/-/g, '+').replace(/_/g, '/');
+    const binary = atob(b64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    const view = new DataView(bytes.buffer);
+    const seedLen = view.getUint32(0);
+    const seed = bytes.slice(4, 4 + seedLen);
+    const archive = bytes.slice(4 + seedLen);
+    return { seed, archive };
+  }
+
+  // Production claimInvite (keyhive-ops.ts:190-241)
+  async function claimInvite(khB: any, seed: Uint8Array, archiveBytes: Uint8Array) {
+    const inviteSigner = Signer.memorySignerFromBytes(seed);
+    const tempStore = CiphertextStore.newInMemory();
+    const inviterArchive = new Archive(archiveBytes);
+    const inviteKh = await inviterArchive.tryToKeyhive(tempStore, inviteSigner, () => {});
+    const ourCard = await khB.contactCard();
+    const ourIndividualInInviteKh = await inviteKh.receiveContactCard(ourCard);
+    const ourAgentInInviteKh = ourIndividualInInviteKh.toAgent();
+    const reachable = await inviteKh.reachableDocs();
+    if (reachable.length === 0) throw new Error('Invite has no document access');
+    const docSummaryItem = reachable[0];
+    const inviteDoc = docSummaryItem.doc;
+    const inviteAccess = docSummaryItem.access;
+    await inviteKh.addMember(ourAgentInInviteKh, inviteDoc.toMembered(), inviteAccess, []);
+
+    const inviteArchiveOut = await inviteKh.toArchive();
+    await khB.ingestArchive(inviteArchiveOut);
+
+    const eventsForUs: Map<Uint8Array, Uint8Array> = await inviteKh.eventsForAgent(ourAgentInInviteKh);
+    const eventsArr: Uint8Array[] = [];
+    eventsForUs.forEach((v: Uint8Array) => eventsArr.push(v));
+    await khB.ingestEventsBytes(eventsArr);
+
+    return { inviteDoc, inviteAccess };
+  }
+
+  it('archive bytes survive encode → decode round-trip', async () => {
+    const signerA = Signer.memorySignerFromBytes(crypto.getRandomValues(new Uint8Array(32)));
+    const khA = await Keyhive.init(signerA, CiphertextStore.newInMemory(), () => {});
+    await khA.generateDocument([], new ChangeId(new Uint8Array(32)), []);
+
+    const seed = crypto.getRandomValues(new Uint8Array(32));
+    const inviteSigner = Signer.memorySignerFromBytes(seed);
+    const tempKh = await Keyhive.init(inviteSigner, CiphertextStore.newInMemory(), () => {});
+    const inviteCard = await tempKh.contactCard();
+    const inviteIndividual = await khA.receiveContactCard(inviteCard);
+    await khA.addMember(inviteIndividual.toAgent(), (await khA.reachableDocs())[0].doc.toMembered(), Access.tryFromString('write')!, []);
+
+    const archive = await khA.toArchive();
+    const archiveBytes = archive.toBytes();
+    console.log('[test] archive size:', archiveBytes.length, 'bytes');
+
+    const b64url = encodePayload(seed, archiveBytes);
+    console.log('[test] b64url length:', b64url.length);
+
+    const decoded = decodePayload(b64url);
+    expect(decoded.seed).toEqual(seed);
+    expect(decoded.archive.length).toBe(archiveBytes.length);
+    expect(decoded.archive).toEqual(archiveBytes);
+  });
+
+  it('full production claimInvite (ingestArchive) after encode/decode', async () => {
+    // A: generate invite
+    const signerA = Signer.memorySignerFromBytes(crypto.getRandomValues(new Uint8Array(32)));
+    const khA = await Keyhive.init(signerA, CiphertextStore.newInMemory(), () => {});
+    const docA = await khA.generateDocument([], new ChangeId(new Uint8Array(32)), []);
+
+    const seed = crypto.getRandomValues(new Uint8Array(32));
+    const inviteSigner = Signer.memorySignerFromBytes(seed);
+    const tempKh = await Keyhive.init(inviteSigner, CiphertextStore.newInMemory(), () => {});
+    const inviteCard = await tempKh.contactCard();
+    const inviteIndividual = await khA.receiveContactCard(inviteCard);
+    await khA.addMember(inviteIndividual.toAgent(), docA.toMembered(), Access.tryFromString('write')!, []);
+    const archive = await khA.toArchive();
+    const archiveBytes = archive.toBytes();
+
+    // Encode → decode (simulates URL copy/paste)
+    const b64url = encodePayload(seed, archiveBytes);
+    const decoded = decodePayload(b64url);
+
+    // B: claim invite using production pattern (ingestArchive)
+    const signerB = Signer.memorySignerFromBytes(crypto.getRandomValues(new Uint8Array(32)));
+    const khB = await Keyhive.init(signerB, CiphertextStore.newInMemory(), () => {});
+    const { inviteDoc } = await claimInvite(khB, decoded.seed, decoded.archive);
+
+    // Verify B sees the document
+    const bReachable = await khB.reachableDocs();
+    expect(bReachable.length).toBeGreaterThan(0);
+    expect(bReachable[0].doc.doc_id.toString()).toBe(docA.doc_id.toString());
+  });
+
+  it('production claimInvite + bidirectional encrypt/decrypt', async () => {
+    // A: generate invite
+    const signerA = Signer.memorySignerFromBytes(crypto.getRandomValues(new Uint8Array(32)));
+    const khA = await Keyhive.init(signerA, CiphertextStore.newInMemory(), () => {});
+    const docA = await khA.generateDocument([], new ChangeId(new Uint8Array(32)), []);
+    const docIdA = docA.doc_id;
+
+    const seed = crypto.getRandomValues(new Uint8Array(32));
+    const inviteSigner = Signer.memorySignerFromBytes(seed);
+    const tempKh = await Keyhive.init(inviteSigner, CiphertextStore.newInMemory(), () => {});
+    const inviteCard = await tempKh.contactCard();
+    const inviteIndividual = await khA.receiveContactCard(inviteCard);
+    await khA.addMember(inviteIndividual.toAgent(), docA.toMembered(), Access.tryFromString('write')!, []);
+    const archive = await khA.toArchive();
+    const archiveBytes = archive.toBytes();
+
+    // Encode → decode
+    const b64url = encodePayload(seed, archiveBytes);
+    const decoded = decodePayload(b64url);
+
+    // B: claim invite using production ingestArchive pattern
+    const signerB = Signer.memorySignerFromBytes(crypto.getRandomValues(new Uint8Array(32)));
+    const khB = await Keyhive.init(signerB, CiphertextStore.newInMemory(), () => {});
+    await claimInvite(khB, decoded.seed, decoded.archive);
+
+    // Bidirectional event sync (simulates keyhive sync protocol)
+    // B→A
+    const cardA = await khA.contactCard();
+    const indA_inB = await khB.receiveContactCard(cardA);
+    const bEventsForA: Map<Uint8Array, Uint8Array> = await khB.eventsForAgent(indA_inB.toAgent());
+    const bArr: Uint8Array[] = [];
+    bEventsForA.forEach((v: Uint8Array) => bArr.push(v));
+    await khA.ingestEventsBytes(bArr);
+
+    // A encrypts
+    const plainA = new TextEncoder().encode('hello from A');
+    const refA = new ChangeId(crypto.getRandomValues(new Uint8Array(32)));
+    const docA2 = await khA.getDocument(docIdA);
+    const resultA = await khA.tryEncryptArchive(docA2!, refA, [], plainA);
+    const encryptedA = resultA.encrypted_content();
+
+    // A→B
+    const cardB = await khB.contactCard();
+    const indB_inA = await khA.receiveContactCard(cardB);
+    const aEventsForB: Map<Uint8Array, Uint8Array> = await khA.eventsForAgent(indB_inA.toAgent());
+    const aArr: Uint8Array[] = [];
+    aEventsForB.forEach((v: Uint8Array) => aArr.push(v));
+    await khB.ingestEventsBytes(aArr);
+
+    // B decrypts A's message
+    const bReachable = await khB.reachableDocs();
+    const docB = await khB.getDocument(bReachable[0].doc.doc_id);
+    const decryptedA = await khB.tryDecrypt(docB!, encryptedA);
+    expect(new Uint8Array(decryptedA)).toEqual(plainA);
+
+    // B encrypts
+    const plainB = new TextEncoder().encode('hello from B');
+    const refB = new ChangeId(crypto.getRandomValues(new Uint8Array(32)));
+    const docB2 = await khB.getDocument(bReachable[0].doc.doc_id);
+    const resultB = await khB.tryEncryptArchive(docB2!, refB, [], plainB);
+    const encryptedB = resultB.encrypted_content();
+
+    // Sync B→A again
+    const bEventsForA2: Map<Uint8Array, Uint8Array> = await khB.eventsForAgent(indA_inB.toAgent());
+    const bArr2: Uint8Array[] = [];
+    bEventsForA2.forEach((v: Uint8Array) => bArr2.push(v));
+    await khA.ingestEventsBytes(bArr2);
+
+    // A decrypts B's message
+    const docA3 = await khA.getDocument(docIdA);
+    const decryptedB = await khA.tryDecrypt(docA3!, encryptedB);
+    expect(new Uint8Array(decryptedB)).toEqual(plainB);
+  });
+
+  it('production claimInvite on existing keyhive (B already has state)', async () => {
+    // Simulates: B already has a keyhive with its own document, then claims
+    // A's invite. This matches production where B loads from IndexedDB first.
+    const signerA = Signer.memorySignerFromBytes(crypto.getRandomValues(new Uint8Array(32)));
+    const khA = await Keyhive.init(signerA, CiphertextStore.newInMemory(), () => {});
+    const docA = await khA.generateDocument([], new ChangeId(new Uint8Array(32)), []);
+
+    // B has its own keyhive with its own document (simulates prior session)
+    const signerB = Signer.memorySignerFromBytes(crypto.getRandomValues(new Uint8Array(32)));
+    const khB = await Keyhive.init(signerB, CiphertextStore.newInMemory(), () => {});
+    const docB_own = await khB.generateDocument([], new ChangeId(crypto.getRandomValues(new Uint8Array(32))), []);
+    const statsB0 = await khB.stats();
+    console.log('[test] B initial stats: totalOps=', statsB0.totalOps);
+
+    // A generates invite
+    const seed = crypto.getRandomValues(new Uint8Array(32));
+    const inviteSigner = Signer.memorySignerFromBytes(seed);
+    const tempKh = await Keyhive.init(inviteSigner, CiphertextStore.newInMemory(), () => {});
+    const inviteCard = await tempKh.contactCard();
+    const inviteIndividual = await khA.receiveContactCard(inviteCard);
+    await khA.addMember(inviteIndividual.toAgent(), docA.toMembered(), Access.tryFromString('write')!, []);
+    const archive = await khA.toArchive();
+    const archiveBytes = archive.toBytes();
+
+    // Encode → decode
+    const b64url = encodePayload(seed, archiveBytes);
+    const decoded = decodePayload(b64url);
+
+    // B claims on its existing keyhive
+    await claimInvite(khB, decoded.seed, decoded.archive);
+
+    const statsB1 = await khB.stats();
+    console.log('[test] B after claim: totalOps=', statsB1.totalOps);
+
+    // B should see both its own document and A's document
+    const bReachable = await khB.reachableDocs();
+    expect(bReachable.length).toBe(2);
+    const docIds = bReachable.map((r: any) => r.doc.doc_id.toString());
+    expect(docIds).toContain(docA.doc_id.toString());
+    expect(docIds).toContain(docB_own.doc_id.toString());
+  });
+
+  it('archive bytes via Array.from round-trip (worker message path)', async () => {
+    // Tests the exact serialization path: Uint8Array → number[] → postMessage → number[] → Uint8Array
+    // This is how archiveBytes travel through the worker boundary.
+    const signerA = Signer.memorySignerFromBytes(crypto.getRandomValues(new Uint8Array(32)));
+    const khA = await Keyhive.init(signerA, CiphertextStore.newInMemory(), () => {});
+    await khA.generateDocument([], new ChangeId(new Uint8Array(32)), []);
+
+    const seed = crypto.getRandomValues(new Uint8Array(32));
+    const inviteSigner = Signer.memorySignerFromBytes(seed);
+    const tempKh = await Keyhive.init(inviteSigner, CiphertextStore.newInMemory(), () => {});
+    const inviteCard = await tempKh.contactCard();
+    const inviteIndividual = await khA.receiveContactCard(inviteCard);
+    await khA.addMember(inviteIndividual.toAgent(), (await khA.reachableDocs())[0].doc.toMembered(), Access.tryFromString('write')!, []);
+    const archive = await khA.toArchive();
+    const archiveBytes = archive.toBytes();
+
+    // Simulate worker path: Uint8Array → Array.from (number[]) → new Uint8Array
+    const asNumberArray: number[] = Array.from(archiveBytes);
+    const backToUint8 = new Uint8Array(asNumberArray);
+
+    expect(backToUint8.length).toBe(archiveBytes.length);
+    expect(backToUint8).toEqual(archiveBytes);
+
+    // Verify the round-tripped bytes can still be deserialized
+    const reconstructed = new Archive(backToUint8);
+    const inviteSigner2 = Signer.memorySignerFromBytes(seed);
+    const inviteKh = await reconstructed.tryToKeyhive(
+      CiphertextStore.newInMemory(), inviteSigner2, () => {}
+    );
+    const reachable = await inviteKh.reachableDocs();
+    expect(reachable.length).toBeGreaterThan(0);
+  });
+});
+
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 function delay(ms: number): Promise<void> {

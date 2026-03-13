@@ -1922,8 +1922,12 @@ export class KeyhiveNetworkAdapter extends NetworkAdapter {
     return hashes;
   }
 
-  // Returns intersection of hashes both peers can access, plus public hashes.
-  // (A ∪ Public) ∩ (B ∪ Public) = (A ∩ B) ∪ Public
+  // Returns union of hashes both peers can access, plus public hashes.
+  // Using union (not intersection) ensures prerequisite events are included:
+  // if event X is relevant to both peers but its prerequisite Y is only
+  // relevant to one peer, Y must still be in the hash set so it can be
+  // exchanged. Without Y, the receiving peer can't process X and it gets
+  // stuck in their pending store forever.
   private async getHashesForPeerPair(
     peerA: PeerId,
     peerB: PeerId,
@@ -1938,9 +1942,10 @@ export class KeyhiveNetworkAdapter extends NetworkAdapter {
 
     const result = new Map<string, Uint8Array>(publicHashes);
     for (const [hashString, hashBytes] of hashesForA.entries()) {
-      if (hashesForB.has(hashString)) {
-        result.set(hashString, hashBytes);
-      }
+      result.set(hashString, hashBytes);
+    }
+    for (const [hashString, hashBytes] of hashesForB.entries()) {
+      result.set(hashString, hashBytes);
     }
 
     return result;

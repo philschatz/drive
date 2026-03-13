@@ -26,6 +26,7 @@ interface InvitePageProps {
 }
 
 function decodePayload(b64url: string): { seed: Uint8Array; archive: Uint8Array } {
+  console.log('[InvitePage] decodePayload: b64url.length=', b64url.length);
   const b64 = b64url.replace(/-/g, '+').replace(/_/g, '/');
   const binary = atob(b64);
   const bytes = new Uint8Array(binary.length);
@@ -34,6 +35,7 @@ function decodePayload(b64url: string): { seed: Uint8Array; archive: Uint8Array 
   const seedLen = view.getUint32(0);
   const seed = bytes.slice(4, 4 + seedLen);
   const archive = bytes.slice(4 + seedLen);
+  console.log('[InvitePage] decodePayload: totalBytes=', bytes.length, 'seedLen=', seedLen, 'archiveLen=', archive.length);
   return { seed, archive };
 }
 
