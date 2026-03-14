@@ -6,22 +6,15 @@ describe('DataGrid', () => {
 
   before(() => {
     cy.visit('/');
-    cy.contains('New spreadsheet').click();
-    cy.get('a[href^="/datagrids/"]', { timeout: 10000 }).first().invoke('attr', 'href').then((href) => {
-      const docId = href!.replace(/.*\/datagrids\//, '');
-      // The repo singleton is destroyed on full-page navigation. The new
-      // page's repo must find the doc via server sync (IndexedDB may be
-      // empty). Poll until the server confirms it has the doc.
-      const waitForServerSync = (): Cypress.Chainable =>
-        cy.request('/api/docs').then(({ body }) => {
-          if (!body.some((d: any) => d.documentId === docId)) {
-            return cy.wait(500).then(waitForServerSync);
-          }
-        });
-      waitForServerSync();
-      cy.visit(href!);
-      cy.get('.datagrid-table', { timeout: 10000 }).should('exist');
+    // Stub window.prompt so the "Spreadsheet name" dialog returns immediately
+    cy.window().then(win => {
+      cy.stub(win, 'prompt').returns('Test Grid');
     });
+    // Open the "New" dropdown and click "Spreadsheet"
+    cy.contains('button', 'New').click();
+    cy.get('[role="menuitem"]').contains('Spreadsheet').click();
+    // App navigates to the new datagrid via hash routing
+    cy.get('.datagrid-table', { timeout: 15000 }).should('exist');
   });
 
   // Single test to avoid Chromium renderer crashes from memory pressure

@@ -1,14 +1,3 @@
-import type {
-  Keyhive,
-  DocumentId,
-  CiphertextStore,
-  Signer,
-  Archive,
-  Access,
-  ChangeId,
-  Identifier,
-  ContactCard,
-} from '@keyhive/keyhive/slim';
 
 // Re-export these so the worker can use them without duplicating
 export function bytesToBase64(bytes: Uint8Array): string {

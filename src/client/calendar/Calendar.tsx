@@ -45,14 +45,22 @@ function generateUid() {
 }
 
 export function Calendar({ docId, readOnly }: { docId?: string; readOnly?: boolean; path?: string }) {
+  return (
+    <DocLoader docId={docId}>
+      <CalendarInner docId={docId!} readOnly={readOnly} />
+    </DocLoader>
+  );
+}
+
+function CalendarInner({ docId, readOnly }: { docId: string; readOnly?: boolean }) {
   const [calName, setCalName] = useState('Calendar');
   const [calDesc, setCalDesc] = useState('');
   const [calColor, setCalColor] = useState('#039be5');
   const [editorState, setEditorState] = useState<EditorState | null>(null);
   const [peerStates, setPeerStates] = useState<Record<string, PeerState<PresenceState>>>({});
-  const history = useDocumentHistory(docId!);
+  const history = useDocumentHistory(docId);
   const validationErrors = useDocumentValidation(docId);
-  const { canEdit: accessCanEdit } = useAccess(getDocEntry(docId!)?.khDocId);
+  const { canEdit: accessCanEdit } = useAccess(getDocEntry(docId)?.khDocId);
   const canEdit = !readOnly && history.editable && accessCanEdit;
   const canEditRef = useRef(canEdit);
   canEditRef.current = canEdit;
@@ -276,7 +284,6 @@ export function Calendar({ docId, readOnly }: { docId?: string; readOnly?: boole
   const peerList = Object.values(peerStates).filter(p => p.value.viewing);
 
   return (
-    <DocLoader docId={docId}>
     <div className="calendar-page">
       <EditorTitleBar
         icon="date_range"
@@ -297,10 +304,10 @@ export function Calendar({ docId, readOnly }: { docId?: string; readOnly?: boole
         peerTitle={(peer) => `Peer ${peer.peerId.slice(0, 8)}${peer.value.focusedField ? ' (editing)' : ''}`}
         onToggleHistory={history.toggleHistory}
         historyActive={history.active}
-        khDocId={getDocEntry(docId!)?.khDocId}
+        khDocId={getDocEntry(docId)?.khDocId}
         docType="Calendar"
-        sharingGroupId={getDocEntry(docId!)?.sharingGroupId}
-        onSharingEnabled={(khDocId, groupId) => updateDocCache(docId!, { khDocId, sharingGroupId: groupId })}
+        sharingGroupId={getDocEntry(docId)?.sharingGroupId}
+        onSharingEnabled={(khDocId, groupId) => updateDocCache(docId, { khDocId, sharingGroupId: groupId })}
       >
         <input
           type="color"
@@ -361,6 +368,5 @@ export function Calendar({ docId, readOnly }: { docId?: string; readOnly?: boole
         peerFocusedFields={peerFocusedFields}
       />
     </div>
-    </DocLoader>
   );
 }

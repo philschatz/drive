@@ -8,7 +8,7 @@ import { useState, useEffect, useCallback } from 'preact/hooks';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
+import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from '@/components/ui/tooltip';
 import {
   getDocMembers,
   getMyAccess,
@@ -290,19 +290,21 @@ export function AccessControl({ khDocId, docId, docType, sharingGroupId, onGroup
                               readOnly
                               onClick={(e: any) => e.currentTarget.select()}
                             />
-                            <Tooltip open={copiedUrl === record.inviteUrl}>
-                              <TooltipTrigger asChild>
-                                <Button size="sm" variant="outline"
-                                  onClick={() => {
-                                    navigator.clipboard.writeText(record.inviteUrl);
-                                    setCopiedUrl(record.inviteUrl);
-                                    setTimeout(() => setCopiedUrl(null), 1500);
-                                  }}>
-                                  Copy
-                                </Button>
-                              </TooltipTrigger>
-                              <TooltipContent>Copied!</TooltipContent>
-                            </Tooltip>
+                            <TooltipProvider>
+                              <Tooltip open={copiedUrl === record.inviteUrl}>
+                                <TooltipTrigger asChild>
+                                  <Button size="sm" variant="outline"
+                                    onClick={() => {
+                                      navigator.clipboard.writeText(record.inviteUrl);
+                                      setCopiedUrl(record.inviteUrl);
+                                      setTimeout(() => setCopiedUrl(null), 1500);
+                                    }}>
+                                    Copy
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>Copied!</TooltipContent>
+                              </Tooltip>
+                            </TooltipProvider>
                           </div>
                         </>
                       )}

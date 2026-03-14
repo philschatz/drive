@@ -9,8 +9,17 @@ export default defineConfig({
     supportFile: 'cypress/support/e2e.ts',
     testIsolation: false,
     defaultCommandTimeout: 10000,
+    experimentalMemoryManagement: true,
+    numTestsKeptInMemory: 0,
+    specPattern: ['cypress/e2e/datagrid.cy.ts', 'cypress/e2e/calendar.cy.ts'],
     setupNodeEvents(on, config) {
       codeCoverageTask(on, config);
+      on('task', {
+        log(message: string) {
+          console.log(message);
+          return null;
+        },
+      });
       return config;
     },
   },

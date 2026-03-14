@@ -43,13 +43,23 @@ export function DocLoader({ docId, children }: { docId: string | undefined; chil
   const { status, progress, message, error } = useDocument(docId);
 
   if (status === 'loading') return (
-    <div className="p-6 max-w-sm mx-auto mt-12">
-      <Progress value={progress} />
-      <p className="text-sm text-muted-foreground mt-2 text-center">{message}</p>
+    <div className="p-6 max-w-sm mx-auto mt-12 flex items-center gap-3">
+      <a href="#/" className="text-muted-foreground hover:text-foreground shrink-0">
+        <span className="material-symbols-outlined" style={{ fontSize: 20 }}>arrow_back</span>
+      </a>
+      <div className="flex-1">
+        <Progress value={progress} />
+        <p className="text-sm text-muted-foreground mt-2 text-center">{message}</p>
+      </div>
     </div>
   );
   if (status === 'error') return (
-    <p className="text-sm text-destructive p-4">{error}</p>
+    <div className="p-6 max-w-sm mx-auto mt-12 flex items-start gap-3">
+      <a href="#/" className="text-muted-foreground hover:text-foreground shrink-0">
+        <span className="material-symbols-outlined" style={{ fontSize: 20 }}>arrow_back</span>
+      </a>
+      <p className="text-sm text-destructive">{error}</p>
+    </div>
   );
 
   return <>{children}</>;

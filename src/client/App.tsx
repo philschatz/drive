@@ -8,11 +8,8 @@ import { DataGrid } from './datagrid/DataGrid';
 import { Settings } from './settings/Settings';
 import { InvitePage } from './invite/InvitePage';
 import { hashHistory } from './hash-history';
-import { TooltipProvider } from '@/components/ui/tooltip';
-
 export function App() {
   return (
-    <TooltipProvider>
     <Router history={hashHistory}>
       <Home path="/" />
       <Settings path="/settings" />
@@ -30,6 +27,5 @@ export function App() {
       <SourceViewer path="/source/:docId/:rest*" />
       <SourceViewer path="/source/:docId" />
     </Router>
-    </TooltipProvider>
   );
 }

@@ -11,7 +11,13 @@
     "resolveJsonModule": true,
     "declaration": true,
     "outDir": "./dist",
-    "rootDir": "./src"
+    "rootDir": "./src",
+    "baseUrl": ".",
+    "paths": {
+      "@keyhive/keyhive/slim": ["vendor/keyhive/keyhive_wasm/pkg-slim"],
+      "@keyhive/keyhive/keyhive_wasm.base64.js": ["vendor/keyhive/keyhive_wasm/pkg-slim/keyhive_wasm_bg.wasm.base64"],
+      "@automerge/automerge-repo/slim": ["node_modules/@automerge/automerge-repo/dist/entrypoints/slim"]
+    }
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist", "src/client", "src/shared"]
