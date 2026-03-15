@@ -53,7 +53,8 @@ export interface DeviceInfo {
 }
 
 export interface IdentityInfo {
-  deviceId: string;
+  id: string;
+  device: string;
   devices: DeviceInfo[];
 }
 

@@ -14,7 +14,7 @@ export function createAdminRoutes(getCaldavKeyhive: () => CaldavKeyhive | null):
 
   router.get('/admin/caldav', (_req: Request, res: Response) => {
     const kh = getCaldavKeyhive();
-    const identity = kh ? kh.khOps.getIdentity().deviceId : '(not initialized)';
+    const identity = kh ? kh.khOps.getIdentity().device : '(not initialized)';
     const docs = kh ? Array.from(kh.khOps.khDocuments.keys()) : [];
 
     res.type('html').send(adminPageHtml(identity, docs));

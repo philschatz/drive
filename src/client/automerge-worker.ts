@@ -536,7 +536,8 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
   if (msg.type === 'kh-get-identity') {
     try {
       if (!khOps) throw new Error('Keyhive not available');
-      (self as any).postMessage({ type: 'kh-result', id: msg.id, result: khOps.getIdentity() } satisfies WorkerToMain);
+      const identity = await khOps.getIdentity();
+      (self as any).postMessage({ type: 'kh-result', id: msg.id, result: identity } satisfies WorkerToMain);
     } catch (err: any) {
       (self as any).postMessage({ type: 'kh-result', id: msg.id, error: errMsg(err) } satisfies WorkerToMain);
     }

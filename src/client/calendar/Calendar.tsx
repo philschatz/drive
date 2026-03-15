@@ -29,7 +29,7 @@ interface EditorState {
   isNew: boolean;
 }
 
-const CALENDAR_QUERY = '{ events: (.events // {}), name: (.name // "Calendar"), description: (.description // ""), color: (.color // "#039be5"), timeZone: .timeZone }';
+import { calendarQuery, expandRange } from './calendar-query';
 
 const PATH_PROP_TO_FIELDS: Record<string, string[]> = {
   title: ['ed-title'],
@@ -67,6 +67,8 @@ function CalendarInner({ docId, readOnly }: { docId: string; readOnly?: boolean 
   const eventsRef = useRef<Record<string, CalendarEvent>>({});
   const eventLookupRef = useRef<EventLookupMap>({});
   const currentRangeRef = useRef({ start: '', end: '' });
+  const queryRangeRef = useRef({ start: '', end: '' });
+  const unsubQueryRef = useRef<(() => void) | null>(null);
   const eventsPluginRef = useRef<any>(null);
   const calendarRef = useRef<any>(null);
   const calColorRef = useRef('#039be5');
@@ -207,6 +209,10 @@ function CalendarInner({ docId, readOnly }: { docId: string; readOnly?: boolean 
         if (key === lastRangeKey) return;
         lastRangeKey = key;
         currentRangeRef.current = { start, end };
+        // Resubscribe if the visible range has moved outside the queried range
+        if (start < queryRangeRef.current.start || end > queryRangeRef.current.end) {
+          resubscribe(start, end);
+        }
         refreshCalendar();
       },
     });
@@ -243,7 +249,7 @@ function CalendarInner({ docId, readOnly }: { docId: string; readOnly?: boolean 
     broadcastRef.current = broadcast;
     presenceCleanupRef.current = presenceCleanup;
 
-    const unsubscribe = subscribeQuery(docId, CALENDAR_QUERY, (result, heads) => {
+    const onQueryResult = (result: any, heads: string[]) => {
       if (!mounted || !result) return;
       eventsRef.current = result.events || {};
       if (result.timeZone) calTZRef.current = result.timeZone;
@@ -273,7 +279,18 @@ function CalendarInner({ docId, readOnly }: { docId: string; readOnly?: boolean 
           setEditorState(null);
         }
       }
-    });
+    };
+
+    function resubscribe(visibleStart: string, visibleEnd: string) {
+      unsubQueryRef.current?.();
+      const expanded = expandRange(visibleStart, visibleEnd);
+      queryRangeRef.current = expanded;
+      unsubQueryRef.current = subscribeQuery(docId, calendarQuery(expanded.start, expanded.end), onQueryResult);
+    }
+
+    // Initial subscription with the initial range
+    const initRange = currentRangeRef.current;
+    resubscribe(initRange.start, initRange.end);
 
     return () => {
       mounted = false;
@@ -282,7 +299,8 @@ function CalendarInner({ docId, readOnly }: { docId: string; readOnly?: boolean 
       presenceCleanupRef.current?.();
       broadcastRef.current = null;
       presenceCleanupRef.current = null;
-      unsubscribe();
+      unsubQueryRef.current?.();
+      unsubQueryRef.current = null;
     };
   }, [docId, openEditor, refreshCalendar]);
 

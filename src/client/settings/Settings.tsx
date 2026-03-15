@@ -108,11 +108,17 @@ export function Settings({ path }: { path?: string }) {
         {loading ? (
           <p className="text-sm text-muted-foreground">Loading...</p>
         ) : identity ? (
-          <div className="text-sm">
-            <div className="flex items-center gap-2 mb-1">
+          <div className="text-sm space-y-1">
+            <div className="flex items-center gap-2">
+              <span className="text-muted-foreground">ID:</span>
+              <code className="bg-muted px-1.5 py-0.5 rounded text-xs font-mono">
+                {identity.id.slice(0, 16)}...
+              </code>
+            </div>
+            <div className="flex items-center gap-2">
               <span className="text-muted-foreground">Device ID:</span>
               <code className="bg-muted px-1.5 py-0.5 rounded text-xs font-mono">
-                {identity.deviceId.slice(0, 16)}...
+                {identity.device.slice(0, 16)}...
               </code>
             </div>
           </div>

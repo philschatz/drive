@@ -15,7 +15,7 @@ import { initDragDrop } from './drag-drop';
 import { EventEditor } from './EventEditor';
 import { CalendarSettings } from './CalendarSettings';
 
-const CALENDAR_QUERY = '{ events: (.events // {}), name: (.name // "Calendar"), description: (.description // ""), color: (.color // "#039be5"), timeZone: .timeZone }';
+import { calendarQuery, expandRange } from './calendar-query';
 
 interface LoadedCalendar {
   docId: string;
@@ -70,6 +70,7 @@ export function AllCalendars({ path }: { path?: string }) {
   calendarsRef.current = calendars;
   const eventLookupRef = useRef<MultiCalEventLookupMap>({});
   const currentRangeRef = useRef({ start: '', end: '' });
+  const queryRangeRef = useRef({ start: '', end: '' });
   const eventsPluginRef = useRef<any>(null);
   const calendarSXRef = useRef<any>(null);
   const editorStateRef = useRef(editorState);
@@ -237,13 +238,22 @@ export function AllCalendars({ path }: { path?: string }) {
     (async () => {
       const allIds = getSavedIds();
 
+      // Compute initial date range for querying
+      const now = new Date();
+      const initStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+      const initEnd = new Date(now.getFullYear(), now.getMonth() + 2, 0);
+      currentRangeRef.current = { start: toDateStr(initStart), end: toDateStr(initEnd) };
+      const initExpanded = expandRange(toDateStr(initStart), toDateStr(initEnd));
+      queryRangeRef.current = initExpanded;
+      const initQuery = calendarQuery(initExpanded.start, initExpanded.end);
+
       const loaded: LoadedCalendar[] = [];
       await Promise.all(allIds.map(async (id) => {
         try {
           const entry = getDocEntry(id);
           const timeout = new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), 3000));
           await Promise.race([openDoc(id, { secure: entry?.encrypted }), timeout]);
-          const { result: doc } = await queryDoc(id, CALENDAR_QUERY);
+          const { result: doc } = await queryDoc(id, initQuery);
           if (!doc || doc['@type'] !== 'Calendar') return;
           if (!mounted) return;
           loaded.push({
@@ -293,11 +303,6 @@ export function AllCalendars({ path }: { path?: string }) {
       }
 
       // Initialize schedule-x calendar
-      const now = new Date();
-      const initStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-      const initEnd = new Date(now.getFullYear(), now.getMonth() + 2, 0);
-      currentRangeRef.current = { start: toDateStr(initStart), end: toDateStr(initEnd) };
-
       const sources: CalendarSource[] = loaded.map(c => ({
         '@type': 'Calendar' as const,
         docId: c.docId,
@@ -336,6 +341,10 @@ export function AllCalendars({ path }: { path?: string }) {
           if (key === lastRangeKey) return;
           lastRangeKey = key;
           currentRangeRef.current = { start, end };
+          // Resubscribe if the visible range has moved outside the queried range
+          if (start < queryRangeRef.current.start || end > queryRangeRef.current.end) {
+            resubscribeAll(start, end);
+          }
           refreshCalendar();
         },
       });
@@ -343,40 +352,51 @@ export function AllCalendars({ path }: { path?: string }) {
       eventsPluginRef.current = eventsPlugin;
 
       // Subscribe to changes on each calendar via worker query subscriptions
-      for (const cal of loaded) {
-        const unsub = subscribeQuery(cal.docId, CALENDAR_QUERY, (result) => {
-          if (!result || !mounted) return;
-          cal.events = result.events || {};
-          cal.name = result.name || 'Untitled';
-          cal.color = result.color || '#039be5';
-          cal.description = result.description || '';
+      function onCalResult(cal: LoadedCalendar, result: any) {
+        if (!result || !mounted) return;
+        cal.events = result.events || {};
+        cal.name = result.name || 'Untitled';
+        cal.color = result.color || '#039be5';
+        cal.description = result.description || '';
 
-          // Update React state for the header chips
-          setCalendars(prev => prev.map(c =>
-            c.docId === cal.docId ? { ...c, name: cal.name, color: cal.color, description: cal.description, events: cal.events } : c
-          ));
+        // Update React state for the header chips
+        setCalendars(prev => prev.map(c =>
+          c.docId === cal.docId ? { ...c, name: cal.name, color: cal.color, description: cal.description, events: cal.events } : c
+        ));
 
-          // Update editor state if currently editing an event from this calendar
-          const es = editorStateRef.current;
-          if (es && !es.isNew && es.calDocId === cal.docId) {
-            const fresh = cal.events[es.uid];
-            if (fresh) {
-              setEditorState(prev => {
-                if (!prev || prev.uid !== es.uid) return prev;
-                if (prev.recurrenceDate) {
-                  return { ...prev, masterEvent: fresh };
-                }
-                return { ...prev, event: fresh, masterEvent: fresh };
-              });
-            } else {
-              setEditorState(null);
-            }
+        // Update editor state if currently editing an event from this calendar
+        const es = editorStateRef.current;
+        if (es && !es.isNew && es.calDocId === cal.docId) {
+          const fresh = cal.events[es.uid];
+          if (fresh) {
+            setEditorState(prev => {
+              if (!prev || prev.uid !== es.uid) return prev;
+              if (prev.recurrenceDate) {
+                return { ...prev, masterEvent: fresh };
+              }
+              return { ...prev, event: fresh, masterEvent: fresh };
+            });
+          } else {
+            setEditorState(null);
           }
+        }
 
-          refreshCalendar();
-        });
-        unsubscribes.push(unsub);
+        refreshCalendar();
       }
+
+      function resubscribeAll(visibleStart: string, visibleEnd: string) {
+        for (const unsub of unsubscribes) unsub();
+        unsubscribes.length = 0;
+        const expanded = expandRange(visibleStart, visibleEnd);
+        queryRangeRef.current = expanded;
+        const query = calendarQuery(expanded.start, expanded.end);
+        for (const cal of calendarsRef.current) {
+          const unsub = subscribeQuery(cal.docId, query, (result) => onCalResult(cal, result));
+          unsubscribes.push(unsub);
+        }
+      }
+
+      resubscribeAll(toDateStr(initStart), toDateStr(initEnd));
 
       // Set up drag-drop
       initDragDrop(
