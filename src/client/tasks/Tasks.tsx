@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'preact/hooks';
 import './tasks.css';
-import { subscribeQuery, updateDoc } from '../worker-api';
+import { subscribeQuery, updateDoc, deepAssign } from '../worker-api';
 import type { PeerState } from '../../shared/automerge';
 import { peerColor, initPresence, type PresenceState } from '../../shared/presence';
 import { EditorTitleBar } from '../../shared/EditorTitleBar';
@@ -83,7 +83,7 @@ export function Tasks({ docId, readOnly }: { docId?: string; readOnly?: boolean;
 
   const saveTask = useCallback((uid: string, taskData: Task) => {
     if (!canEditRef.current || !docId) return;
-    updateDoc(docId, (d) => {
+    updateDoc(docId, (d, deepAssign, uid, taskData) => {
       if (!d.tasks[uid]) {
         const clean: any = {};
         for (const key in taskData) {
@@ -93,13 +93,13 @@ export function Tasks({ docId, readOnly }: { docId?: string; readOnly?: boolean;
       } else {
         deepAssign(d.tasks[uid], taskData);
       }
-    }, { uid, taskData });
+    }, deepAssign, uid, taskData);
     setEditorState(null);
   }, [docId]);
 
   const deleteTask = useCallback((uid: string) => {
     if (!canEditRef.current || !docId) return;
-    updateDoc(docId, (d) => { delete d.tasks[uid]; }, { uid });
+    updateDoc(docId, (d, uid) => { delete d.tasks[uid]; }, uid);
     setEditorState(null);
   }, [docId]);
 
@@ -127,9 +127,9 @@ export function Tasks({ docId, readOnly }: { docId?: string; readOnly?: boolean;
       .filter(([, t]) => t.progress === 'completed' || t.progress === 'cancelled')
       .map(([uid]) => uid);
     if (uids.length === 0) return;
-    updateDoc(docId, (d) => {
+    updateDoc(docId, (d, uids) => {
       for (const uid of uids) delete d.tasks[uid];
-    }, { uids });
+    }, uids);
     const es = editorStateRef.current;
     if (es && uids.includes(es.uid)) setEditorState(null);
   }, [docId, tasks]);
@@ -137,7 +137,7 @@ export function Tasks({ docId, readOnly }: { docId?: string; readOnly?: boolean;
   const toggleComplete = useCallback((uid: string, task: Task) => {
     if (!canEditRef.current || !docId) return;
     const newProgress = task.progress === 'completed' ? 'needs-action' : 'completed';
-    updateDoc(docId, (d) => { d.tasks[uid].progress = newProgress; }, { uid, newProgress });
+    updateDoc(docId, (d, uid, newProgress) => { d.tasks[uid].progress = newProgress; }, uid, newProgress);
   }, [docId]);
 
   const handleFieldFocus = useCallback((path: (string | number)[] | null) => {
@@ -245,7 +245,7 @@ export function Tasks({ docId, readOnly }: { docId?: string; readOnly?: boolean;
           if (!docId || !canEdit) return;
           const name = value.trim() || 'Tasks';
           setListName(name);
-          updateDoc(docId, (d) => { d.name = name; }, { name });
+          updateDoc(docId, (d, name) => { d.name = name; }, name);
           document.title = name + ' - Tasks';
         }}
         docId={docId}
@@ -270,7 +270,7 @@ export function Tasks({ docId, readOnly }: { docId?: string; readOnly?: boolean;
           if (!docId || !canEdit) return;
           const desc = e.currentTarget.value.trim();
           setListDesc(desc);
-          updateDoc(docId, (d) => { d.description = desc || undefined; }, { desc });
+          updateDoc(docId, (d, desc) => { d.description = desc || undefined; }, desc);
         }}
         onKeyDown={(e: any) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
       />

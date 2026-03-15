@@ -77,7 +77,7 @@ export interface GridCommandContext {
   clipboardRef: { current: ClipboardEntry | null };
   setClipboardSource: (r: CellRange | null) => void;
   /** Apply a mutation to the document. */
-  mutate: (fn: (doc: DataGridDocument) => void, args?: Record<string, unknown>, noHfSync?: boolean) => void;
+  mutate: (fn: (doc: DataGridDocument, ...args: any[]) => void, args: unknown[], noHfSync?: boolean) => void;
   setSelectionAnchor: (anchor: [number, number] | null) => void;
   setSelectedCell: (cell: [number, number]) => void;
   setContextMenu: (m: null) => void;
@@ -350,7 +350,7 @@ const clipboardPlugin: GridPlugin = {
             }
           }
 
-          mutate((d) => {
+          mutate((d, currentSheetId, newRowEntries, newColEntries, cellWrites, cutDeletes) => {
             const ms = d.sheets[currentSheetId];
             for (const [id, entry] of newRowEntries) ms.rows[id] = entry;
             for (const [id, entry] of newColEntries) ms.columns[id] = entry;
@@ -360,7 +360,7 @@ const clipboardPlugin: GridPlugin = {
               else { ms.cells[key].value = stored; }
             }
             for (const key of cutDeletes) delete ms.cells[key];
-          }, { currentSheetId, newRowEntries, newColEntries, cellWrites, cutDeletes });
+          }, [currentSheetId, newRowEntries, newColEntries, cellWrites, cutDeletes]);
 
           clipboardRef.current = null;
           setClipboardSource(null);
@@ -408,7 +408,7 @@ const clipboardPlugin: GridPlugin = {
                 extCellWrites.push([`${extAllRowIds[r]}:${extAllColIds[c]}`, stored]);
               }
             }
-            mutate((d) => {
+            mutate((d, currentSheetId, extNewRowEntries, extNewColEntries, extCellWrites) => {
               const ms = d.sheets[currentSheetId];
               for (const [id, entry] of extNewRowEntries) ms.rows[id] = entry;
               for (const [id, entry] of extNewColEntries) ms.columns[id] = entry;
@@ -417,7 +417,7 @@ const clipboardPlugin: GridPlugin = {
                 else if (!ms.cells[key]) { ms.cells[key] = { value: stored }; }
                 else { ms.cells[key].value = stored; }
               }
-            }, { currentSheetId, newRowEntries: extNewRowEntries, newColEntries: extNewColEntries, cellWrites: extCellWrites });
+            }, [currentSheetId, extNewRowEntries, extNewColEntries, extCellWrites]);
 
             setClipboardSource(null);
 
@@ -484,7 +484,7 @@ const clipboardPlugin: GridPlugin = {
         } : null;
 
         if (range && (range.minCol !== range.maxCol || range.minRow !== range.maxRow)) {
-          ctx.mutate((d) => {
+          ctx.mutate((d, currentSheetId, range, sortedRowIds, sortedColIds) => {
             const cells = d.sheets[currentSheetId].cells;
             for (let r = range.minRow; r <= range.maxRow; r++) {
               for (let c = range.minCol; c <= range.maxCol; c++) {
@@ -493,13 +493,13 @@ const clipboardPlugin: GridPlugin = {
                 }
               }
             }
-          }, { currentSheetId, range, sortedRowIds, sortedColIds });
+          }, [currentSheetId, range, sortedRowIds, sortedColIds]);
         } else {
           if (col >= sortedColIds.length || row >= sortedRowIds.length) return;
           const cellKey = `${sortedRowIds[row]}:${sortedColIds[col]}`;
-          ctx.mutate((d) => {
+          ctx.mutate((d, currentSheetId, cellKey) => {
             if (d.sheets[currentSheetId].cells[cellKey]) delete d.sheets[currentSheetId].cells[cellKey];
-          }, { currentSheetId, cellKey });
+          }, [currentSheetId, cellKey]);
         }
       },
     },
@@ -548,12 +548,12 @@ const rowPlugin: GridPlugin = {
         const hi = entries[minIdx][1].index;
         const lo = minIdx === 0 ? hi - count : entries[minIdx - 1][1].index;
         const newIds = Array.from({ length: count }, () => shortId());
-        ctx.mutate((d) => {
+        ctx.mutate((d, currentSheetId, newIds, lo, hi, count) => {
           const ms = d.sheets[currentSheetId];
           for (let i = 0; i < count; i++) {
             ms.rows[newIds[i]] = { index: lo + ((hi - lo) * (i + 1)) / (count + 1) };
           }
-        }, { currentSheetId, count, newIds, lo, hi });
+        }, [currentSheetId, newIds, lo, hi, count]);
         setContextMenu(null);
       },
     },
@@ -577,12 +577,12 @@ const rowPlugin: GridPlugin = {
         const lo = entries[maxIdx][1].index;
         const hi = maxIdx >= entries.length - 1 ? lo + count : entries[maxIdx + 1][1].index;
         const newIds = Array.from({ length: count }, () => shortId());
-        ctx.mutate((d) => {
+        ctx.mutate((d, currentSheetId, newIds, lo, hi, count) => {
           const ms = d.sheets[currentSheetId];
           for (let i = 0; i < count; i++) {
             ms.rows[newIds[i]] = { index: lo + ((hi - lo) * (i + 1)) / (count + 1) };
           }
-        }, { currentSheetId, count, newIds, lo, hi });
+        }, [currentSheetId, newIds, lo, hi, count]);
         setContextMenu(null);
       },
     },
@@ -603,7 +603,7 @@ const rowPlugin: GridPlugin = {
         const newIndex = lastIdx >= entries.length - 1
           ? entries[lastIdx][1].index + 1
           : (entries[lastIdx][1].index + entries[lastIdx + 1][1].index) / 2;
-        ctx.mutate((d) => { d.sheets[currentSheetId].rows[aboveId].index = newIndex; }, { currentSheetId, aboveId, newIndex });
+        ctx.mutate((d, currentSheetId, aboveId, newIndex) => { d.sheets[currentSheetId].rows[aboveId].index = newIndex; }, [currentSheetId, aboveId, newIndex]);
         setSelectedRows(new Set(indices.map(i => i - 1)));
         setContextMenu(null);
       },
@@ -625,7 +625,7 @@ const rowPlugin: GridPlugin = {
         const newIndex = firstIdx === 0
           ? entries[0][1].index - 1
           : (entries[firstIdx - 1][1].index + entries[firstIdx][1].index) / 2;
-        ctx.mutate((d) => { d.sheets[currentSheetId].rows[belowId].index = newIndex; }, { currentSheetId, belowId, newIndex });
+        ctx.mutate((d, currentSheetId, belowId, newIndex) => { d.sheets[currentSheetId].rows[belowId].index = newIndex; }, [currentSheetId, belowId, newIndex]);
         setSelectedRows(new Set(indices.map(i => i + 1)));
         setContextMenu(null);
       },
@@ -651,7 +651,7 @@ const rowPlugin: GridPlugin = {
         const sortedRowIds = rowEntries.map(([id]) => id);
         const sortedColIds = sortedEntries(sh.columns).map(([id]) => id);
         const rewrites = updateFormulasForDeletion(sh.cells, deletedSet, new Set(), sortedRowIds, sortedColIds);
-        ctx.mutate((d) => {
+        ctx.mutate((d, currentSheetId, rewrites: Record<string, string>, idsToDelete) => {
           const ms = d.sheets[currentSheetId];
           for (const [key, newVal] of Object.entries(rewrites)) {
             if (ms.cells[key] && ms.cells[key].value !== newVal) ms.cells[key].value = newVal;
@@ -662,7 +662,7 @@ const rowPlugin: GridPlugin = {
               if (key.startsWith(`${id}:`)) delete ms.cells[key];
             }
           }
-        }, { currentSheetId, rewrites, idsToDelete });
+        }, [currentSheetId, rewrites, idsToDelete]);
         setSelectedRows(new Set());
         setContextMenu(null);
       },
@@ -716,12 +716,12 @@ const columnPlugin: GridPlugin = {
         const hi = entries[minIdx][1].index;
         const lo = minIdx === 0 ? hi - count : entries[minIdx - 1][1].index;
         const newIds = Array.from({ length: count }, () => shortId());
-        ctx.mutate((d) => {
+        ctx.mutate((d, currentSheetId, newIds, lo, hi, count) => {
           const ms = d.sheets[currentSheetId];
           for (let i = 0; i < count; i++) {
             ms.columns[newIds[i]] = { index: lo + ((hi - lo) * (i + 1)) / (count + 1), name: '' };
           }
-        }, { currentSheetId, count, newIds, lo, hi });
+        }, [currentSheetId, newIds, lo, hi, count]);
         setContextMenu(null);
       },
     },
@@ -745,12 +745,12 @@ const columnPlugin: GridPlugin = {
         const lo = entries[maxIdx][1].index;
         const hi = maxIdx >= entries.length - 1 ? lo + count : entries[maxIdx + 1][1].index;
         const newIds = Array.from({ length: count }, () => shortId());
-        ctx.mutate((d) => {
+        ctx.mutate((d, currentSheetId, newIds, lo, hi, count) => {
           const ms = d.sheets[currentSheetId];
           for (let i = 0; i < count; i++) {
             ms.columns[newIds[i]] = { index: lo + ((hi - lo) * (i + 1)) / (count + 1), name: '' };
           }
-        }, { currentSheetId, count, newIds, lo, hi });
+        }, [currentSheetId, newIds, lo, hi, count]);
         setContextMenu(null);
       },
     },
@@ -771,7 +771,7 @@ const columnPlugin: GridPlugin = {
         const newIndex = lastIdx >= entries.length - 1
           ? entries[lastIdx][1].index + 1
           : (entries[lastIdx][1].index + entries[lastIdx + 1][1].index) / 2;
-        ctx.mutate((d) => { d.sheets[currentSheetId].columns[leftId].index = newIndex; }, { currentSheetId, leftId, newIndex });
+        ctx.mutate((d, currentSheetId, leftId, newIndex) => { d.sheets[currentSheetId].columns[leftId].index = newIndex; }, [currentSheetId, leftId, newIndex]);
         setSelectedCols(new Set(indices.map(i => i - 1)));
         setContextMenu(null);
       },
@@ -793,7 +793,7 @@ const columnPlugin: GridPlugin = {
         const newIndex = firstIdx === 0
           ? entries[0][1].index - 1
           : (entries[firstIdx - 1][1].index + entries[firstIdx][1].index) / 2;
-        ctx.mutate((d) => { d.sheets[currentSheetId].columns[rightId].index = newIndex; }, { currentSheetId, rightId, newIndex });
+        ctx.mutate((d, currentSheetId, rightId, newIndex) => { d.sheets[currentSheetId].columns[rightId].index = newIndex; }, [currentSheetId, rightId, newIndex]);
         setSelectedCols(new Set(indices.map(i => i + 1)));
         setContextMenu(null);
       },
@@ -819,7 +819,7 @@ const columnPlugin: GridPlugin = {
         const sortedRowIds = sortedEntries(sh.rows).map(([id]) => id);
         const sortedColIds = colEntries.map(([id]) => id);
         const rewrites = updateFormulasForDeletion(sh.cells, new Set(), deletedSet, sortedRowIds, sortedColIds);
-        ctx.mutate((d) => {
+        ctx.mutate((d, currentSheetId, rewrites: Record<string, string>, idsToDelete) => {
           const ms = d.sheets[currentSheetId];
           for (const [key, newVal] of Object.entries(rewrites)) {
             if (ms.cells[key] && ms.cells[key].value !== newVal) ms.cells[key].value = newVal;
@@ -830,7 +830,7 @@ const columnPlugin: GridPlugin = {
               if (key.endsWith(`:${id}`)) delete ms.cells[key];
             }
           }
-        }, { currentSheetId, rewrites, idsToDelete });
+        }, [currentSheetId, rewrites, idsToDelete]);
         setSelectedCols(new Set());
         setContextMenu(null);
       },
@@ -887,7 +887,7 @@ const sheetPlugin: GridPlugin = {
         const rows: Record<string, { index: number }> = {};
         for (let i = 0; i < 10; i++) rows[shortId()] = { index: i + 1 };
         const newSheet = { '@type': 'Sheet', name: `Sheet ${sheetCount + 1}`, index: maxIndex + 1, columns: cols, rows, cells: {} };
-        mutate((d) => { d.sheets[sid] = newSheet as any; }, { sid, newSheet });
+        mutate((d, sid, newSheet) => { d.sheets[sid] = newSheet as any; }, [sid, newSheet]);
         // The DataGrid component will detect the new sheet and switch to it
       },
     },
@@ -1022,13 +1022,13 @@ export function commitReorder(
   const step = gap / (sorted.length + 1);
   const ids = sorted.map(i => entries[i][0]);
 
-  mutate((d) => {
+  mutate((d, currentSheetId, type, ids, prevIndex, step) => {
     const ms = d.sheets[currentSheetId];
     const map = type === 'row' ? ms.rows : ms.columns;
     for (let i = 0; i < ids.length; i++) {
       map[ids[i]].index = prevIndex + step * (i + 1);
     }
-  }, { currentSheetId, type, ids, prevIndex, step });
+  }, [currentSheetId, type, ids, prevIndex, step]);
 
   const newIndices = new Set(sorted.map((_, i) => adjustedDrop + i));
   if (type === 'row') setSelectedRows(newIndices);
@@ -1100,14 +1100,14 @@ export function commitAutofill(
     });
   });
 
-  mutate((d) => {
+  mutate((d, currentSheetId, cellWrites) => {
     const ms = d.sheets[currentSheetId];
     for (const [key, stored] of cellWrites) {
       if (stored === '') { delete ms.cells[key]; }
       else if (!ms.cells[key]) { ms.cells[key] = { value: stored }; }
       else { ms.cells[key].value = stored; }
     }
-  }, { currentSheetId, cellWrites });
+  }, [currentSheetId, cellWrites]);
 
   // Extend selection to cover source + fill range
   const totalRange = {

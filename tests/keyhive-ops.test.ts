@@ -65,7 +65,7 @@ describe('KeyhiveOps', () => {
     it('returns the keyhive device ID', async () => {
       const { ops, kh } = await createOps();
       const result = await ops.getIdentity();
-      expect(result.device).toBe(kh.idString);
+      expect(result.deviceId).toBe(kh.idString);
     });
   });
 

@@ -336,30 +336,30 @@ export function SourceViewer({ docId, rest }: { docId?: string; rest?: string; p
 
   const handleEdit = (path: Path, value: any) => {
     if (!docId || !editable) return;
-    updateDoc(docId, (doc: any) => {
+    updateDoc(docId, (doc: any, path: any, value: any) => {
       let current = doc;
       for (let i = 0; i < path.length - 1; i++) current = current[path[i]];
       current[path[path.length - 1]] = value;
-    }, { path, value });
+    }, path, value);
   };
 
   const handleDelete = (path: Path) => {
     if (!docId || !editable || path.length === 0) return;
-    updateDoc(docId, (doc: any) => {
+    updateDoc(docId, (doc: any, path: any) => {
       let current = doc;
       for (let i = 0; i < path.length - 1; i++) current = current[path[i]];
       delete current[path[path.length - 1]];
-    }, { path });
+    }, path);
   };
 
   const handleAdd = (path: Path, key: string, value: any) => {
     if (!docId || !editable) return;
     const fullPath = [...path, key];
-    updateDoc(docId, (doc: any) => {
+    updateDoc(docId, (doc: any, fullPath: any, value: any) => {
       let current = doc;
       for (let i = 0; i < fullPath.length - 1; i++) current = current[fullPath[i]];
       current[fullPath[fullPath.length - 1]] = value;
-    }, { fullPath, value });
+    }, fullPath, value);
   };
 
   const peerList = Object.values(peerStates).filter(p => p.value.viewing);
@@ -413,7 +413,7 @@ export function SourceViewer({ docId, rest }: { docId?: string; rest?: string; p
           if (!docId || !editable) return;
           const name = value.trim() || 'Document';
           setDocName(name);
-          updateDoc(docId, (d: any) => { d.name = name; }, { name });
+          updateDoc(docId, (d: any, name: string) => { d.name = name; }, name);
           document.title = name + ' - Source Editor';
         }}
         docId={docId}

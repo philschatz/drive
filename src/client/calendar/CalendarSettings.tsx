@@ -24,13 +24,13 @@ export function CalendarSettings({ opened, docId, name, description, color, onCl
 
   const handleSave = () => {
     if (!docId) return;
-    updateDoc(docId, (d: any) => {
+    updateDoc(docId, (d: any, localName: string, localDesc: string, localColor: string) => {
       d.name = localName.trim() || 'Untitled';
       const desc = localDesc.trim();
       if (desc) d.description = desc;
       else delete d.description;
       d.color = localColor;
-    }, { localName, localDesc, localColor });
+    }, localName, localDesc, localColor);
     onClose();
   };
 

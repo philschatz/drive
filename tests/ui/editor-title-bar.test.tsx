@@ -3,6 +3,7 @@ import { render, screen, fireEvent } from '@testing-library/preact';
 // Mock automerge module before importing EditorTitleBar
 jest.mock('../../src/shared/automerge', () => ({
   useWsStatus: jest.fn(() => true),
+  getWorkerPeerId: jest.fn(() => 'self-peer-id'),
   repo: { peerId: 'self-peer-id' },
 }));
 

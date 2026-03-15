@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'preact/hooks'
 import '@schedule-x/theme-default/dist/index.css';
 import './calendar.css';
 import type { PeerState } from '../../shared/automerge';
-import { openDoc, subscribeQuery, updateDoc, queryDoc } from '../worker-api';
+import { openDoc, subscribeQuery, updateDoc, queryDoc, deepAssign } from '../worker-api';
 import { getDocEntry } from '../doc-storage';
 import { peerColor, initPresence, type PresenceState } from '../../shared/presence';
 import { EditorTitleBar } from '../../shared/EditorTitleBar';
@@ -106,7 +106,7 @@ export function AllCalendars({ path }: { path?: string }) {
   }, []);
 
   const saveEvent = useCallback((uid: string, eventData: CalendarEvent, calDocId: string) => {
-    updateDoc(calDocId, (d: any) => {
+    updateDoc(calDocId, (d: any, deepAssign: any, uid: string, eventData: any) => {
       if (!d.events[uid]) {
         const clean: any = {};
         for (const key in eventData) {
@@ -116,26 +116,26 @@ export function AllCalendars({ path }: { path?: string }) {
       } else {
         deepAssign(d.events[uid], eventData);
       }
-    }, { uid, eventData });
+    }, deepAssign, uid, eventData);
     setEditorState(null);
   }, []);
 
   const saveOverride = useCallback((uid: string, recurrenceDate: string, overrideData: any, calDocId: string) => {
-    updateDoc(calDocId, (d: any) => {
+    updateDoc(calDocId, (d: any, deepAssign: any, uid: string, recurrenceDate: string, overrideData: any) => {
       if (!d.events[uid].recurrenceOverrides) d.events[uid].recurrenceOverrides = {};
       if (!d.events[uid].recurrenceOverrides[recurrenceDate]) {
         d.events[uid].recurrenceOverrides[recurrenceDate] = overrideData;
       } else {
         deepAssign(d.events[uid].recurrenceOverrides[recurrenceDate], overrideData);
       }
-    }, { uid, recurrenceDate, overrideData });
+    }, deepAssign, uid, recurrenceDate, overrideData);
     setEditorState(null);
   }, []);
 
   const deleteEvent = useCallback((uid: string) => {
     const es = editorStateRef.current;
     if (!es) return;
-    updateDoc(es.calDocId, (d: any) => { delete d.events[uid]; }, { uid });
+    updateDoc(es.calDocId, (d: any, uid: string) => { delete d.events[uid]; }, uid);
     setEditorState(null);
   }, []);
 
@@ -150,16 +150,16 @@ export function AllCalendars({ path }: { path?: string }) {
     if (!es) return;
 
     // Delete from source
-    updateDoc(es.calDocId, (d: any) => { delete d.events[uid]; }, { uid });
+    updateDoc(es.calDocId, (d: any, uid: string) => { delete d.events[uid]; }, uid);
 
     // Create in target with same UID
-    updateDoc(targetDocId, (d: any) => {
+    updateDoc(targetDocId, (d: any, uid: string, eventData: any) => {
       const clean: any = {};
       for (const key in eventData) {
         if ((eventData as any)[key] !== undefined) clean[key] = (eventData as any)[key];
       }
       d.events[uid] = clean;
-    }, { uid, eventData });
+    }, uid, eventData);
 
     setEditorState(null);
   }, []);
@@ -412,19 +412,19 @@ export function AllCalendars({ path }: { path?: string }) {
         (uid, data, eventId) => {
           const item = eventLookupRef.current[eventId];
           if (!item) return;
-          updateDoc(item.calDocId, (dd: any) => {
+          updateDoc(item.calDocId, (dd: any, deepAssign: any, uid: string, data: any) => {
             if (!dd.events[uid]) dd.events[uid] = data;
             else deepAssign(dd.events[uid], data);
-          }, { uid, data });
+          }, deepAssign, uid, data);
         },
         (uid, recDate, data, eventId) => {
           const item = eventLookupRef.current[eventId];
           if (!item) return;
-          updateDoc(item.calDocId, (dd: any) => {
+          updateDoc(item.calDocId, (dd: any, deepAssign: any, uid: string, recDate: string, data: any) => {
             if (!dd.events[uid].recurrenceOverrides) dd.events[uid].recurrenceOverrides = {};
             if (!dd.events[uid].recurrenceOverrides[recDate]) dd.events[uid].recurrenceOverrides[recDate] = data;
             else deepAssign(dd.events[uid].recurrenceOverrides[recDate], data);
-          }, { uid, recDate, data });
+          }, deepAssign, uid, recDate, data);
         },
         refreshCalendar
       );

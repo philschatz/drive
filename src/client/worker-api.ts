@@ -7,9 +7,14 @@ import { workerReady, _worker, registerWorkerMessageHandler } from '../shared/au
 import type { PresenceState } from '../shared/presence';
 import type { PeerState } from '../shared/automerge';
 import type { ValidationError } from './automerge-worker';
+import { deepAssign } from '../shared/deep-assign';
+
+// Functions that the worker provides its own copy of. Callers pass the real ref;
+// updateDoc detects it by identity and sends a marker the worker substitutes.
+const WORKER_FNS = new Map<unknown, string>([[deepAssign, 'deepAssign']]);
 
 // Re-export for convenience
-export { workerReady };
+export { workerReady, deepAssign };
 
 // ── jq filter constants ─────────────────────────────────────────────────────
 
@@ -117,20 +122,23 @@ export function openDoc(
 /**
  * Apply a mutation to a document in the worker.
  * The function body is serialized and reconstructed in the worker via new Function().
- * All closed-over variables must be listed explicitly in `args`.
- * `deepAssign` is always available in the worker scope without listing it in args.
+ * All closed-over variables must be passed as extra arguments matching the callback params.
+ * Worker-provided functions (like `deepAssign`) are detected and substituted automatically.
  *
  * @example
- * updateDoc(docId, (d) => { d.events[uid] = data; }, { uid, data });
- * updateDoc(docId, (d) => { deepAssign(d.events[uid], patch); }, { uid, patch });
- * updateDoc(docId, (d) => { delete d.tasks[uid]; }, { uid });
+ * updateDoc(docId, (d, uid, data) => { d.events[uid] = data; }, uid, data);
+ * updateDoc(docId, (d, deepAssign, uid, patch) => { deepAssign(d.events[uid], patch); }, deepAssign, uid, patch);
+ * updateDoc(docId, (d, uid) => { delete d.tasks[uid]; }, uid);
  */
 export function updateDoc(
   docId: string,
-  fn: (d: any) => void,
-  args: Record<string, unknown> = {},
+  fn: (d: any, ...args: any[]) => void,
+  ...args: unknown[]
 ): Promise<void> {
-  return request('update-doc', { docId, fnSource: fn.toString(), args });
+  const serializedArgs = args.map(a =>
+    WORKER_FNS.has(a) ? { __workerFn__: WORKER_FNS.get(a)! } : a
+  );
+  return request('update-doc', { docId, fnSource: fn.toString(), args: serializedArgs });
 }
 
 // ── Query subscriptions ─────────────────────────────────────────────────────

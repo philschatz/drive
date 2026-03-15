@@ -9,7 +9,7 @@ export type MainToWorker =
   | { type: 'query'; id: number; docId: string; filter: string }
   // New worker-owned doc API
   | { type: 'create-doc'; id: number; initialJson: any; secure: boolean }
-  | { type: 'update-doc'; id: number; docId: string; fnSource: string; args: Record<string, unknown> }
+  | { type: 'update-doc'; id: number; docId: string; fnSource: string; args: unknown[] }
   | { type: 'subscribe-query'; subId: number; docId: string; filter: string }
   | { type: 'unsubscribe-query'; subId: number }
   | { type: 'set-doc-version'; docId: string; version: number | null }
@@ -433,12 +433,15 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
   if (msg.type === 'update-doc') {
     try {
       const handle = await getOrLoadHandle(msg.docId);
-      const { args } = msg;
-      const argKeys = Object.keys(args);
-      const argVals = Object.values(args);
+      // Worker-provided functions: callers pass the real ref, updateDoc replaces
+      // with { __workerFn__: name }, and we substitute the worker-local implementation.
+      const workerFns: Record<string, any> = { deepAssign };
+      const argVals = (msg.args as any[]).map((a: any) =>
+        a && typeof a === 'object' && '__workerFn__' in a ? workerFns[a.__workerFn__] : a
+      );
       handle.change((d: any) => {
-        const fn = new Function(...argKeys, 'deepAssign', 'd', `(${msg.fnSource})(d)`);
-        fn(...argVals, deepAssign, d);
+        const fn = new Function('return ' + msg.fnSource)();
+        fn(d, ...argVals);
       });
       // Explicitly push subscription updates after local mutation
       // (the change event may not fire for local changes in all automerge-repo versions)

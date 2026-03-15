@@ -119,11 +119,11 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
     for (let i = 0; i < count; i++) {
       newRowEntries.push([shortId(), { index: lastIdx + i + 1 }]);
     }
-    mutate((d) => {
+    mutate((d, sid, newRowEntries) => {
       for (const [id, entry] of newRowEntries) {
         d.sheets[sid].rows[id] = entry as any;
       }
-    }, { sid, newRowEntries });
+    }, [sid, newRowEntries]);
   };
 
   // Memoize sorted IDs from the current sheet
@@ -282,9 +282,9 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
   }, [syncHyperFormula]);
 
   // Single gateway for all document mutations.
-  const mutate = useCallback((fn: (d: any) => void, args: Record<string, unknown> = {}, noHfSync = false) => {
+  const mutate = useCallback((fn: (d: any, ...args: any[]) => void, args: unknown[], noHfSync = false) => {
     if (!canEditRef.current || !docId) return;
-    updateDoc(docId, fn, args);
+    updateDoc(docId, fn, ...args);
     if (!noHfSync) scheduleSyncHyperFormula();
     else setTick(t => t + 1);
   }, [scheduleSyncHyperFormula, docId]);
@@ -301,12 +301,12 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
     const stored = value.startsWith('=')
       ? a1ToInternal(value, row, col, sortedRowIds, sortedColIds, sheetIdLookup, sheetRowColLookup)
       : value;
-    updateDoc(docId, (d) => {
+    updateDoc(docId, (d, sid, cellKey, stored) => {
       const existing = d.sheets[sid].cells[cellKey];
       if (stored === '') { if (existing) delete d.sheets[sid].cells[cellKey]; }
       else if (!existing) { d.sheets[sid].cells[cellKey] = { value: stored }; }
       else if (existing.value !== stored) { existing.value = stored; }
-    }, { sid, cellKey, stored });
+    }, sid, cellKey, stored);
     const hf = hfRef.current;
     if (hf) {
       const hfValue = cellToHfValue(stored || undefined, row, col, sortedRowIds, sortedColIds, sheetNameLookup, sheetRowColLookup);
@@ -525,7 +525,7 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
       if (ci < sortedColIds.length && currentSheetId) {
         const colId = sortedColIds[ci];
         const sid = currentSheetId;
-        mutate((d) => { d.sheets[sid].columns[colId].width = finalWidth; }, { sid, colId, finalWidth }, true);
+        mutate((d, sid, colId, finalWidth) => { d.sheets[sid].columns[colId].width = finalWidth; }, [sid, colId, finalWidth], true);
       }
     };
 
@@ -552,7 +552,7 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
     });
     const colId = sortedColIds[ci];
     const sid = currentSheetId;
-    mutate((d) => { d.sheets[sid].columns[colId].width = Math.ceil(maxWidth); }, { sid, colId, finalWidth: Math.ceil(maxWidth) }, true);
+    mutate((d, sid, colId, width) => { d.sheets[sid].columns[colId].width = width; }, [sid, colId, Math.ceil(maxWidth)], true);
   }, [sortedColIds, mutate, currentSheetId]);
 
   // -- Sheet management handlers --
@@ -594,13 +594,13 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
     const rows: Record<string, { index: number }> = {};
     for (let i = 0; i < 10; i++) rows[shortId()] = { index: i + 1 };
     const newSheet = { '@type': 'Sheet', name: `Sheet ${sheetCount + 1}`, index: maxIndex + 1, columns: cols, rows, cells: {} };
-    updateDoc(docId, (d) => { d.sheets[sid] = newSheet as any; }, { sid, newSheet });
+    updateDoc(docId, (d, sid, newSheet) => { d.sheets[sid] = newSheet as any; }, sid, newSheet);
     rebuildHyperFormula();
     handleSelectSheet(sid);
   }, [docId, handleSelectSheet, rebuildHyperFormula]);
 
   const handleRenameSheet = useCallback((id: string, name: string) => {
-    mutate((d) => { d.sheets[id].name = name; }, { id, name }, true);
+    mutate((d, id, name) => { d.sheets[id].name = name; }, [id, name], true);
   }, [mutate]);
 
   const handleDeleteSheet = useCallback((id: string) => {
@@ -609,14 +609,14 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
     if (Object.keys(docSnap.sheets).length <= 1) return;
     const rewrites = rewriteFormulasForSheetDeletion(docSnap.sheets as any, id);
     const remaining = sortedEntries(docSnap.sheets).filter(([sid]) => sid !== id);
-    updateDoc(docId, (d) => {
+    updateDoc(docId, (d, id, rewrites) => {
       for (const [sheetId, cellUpdates] of Object.entries(rewrites)) {
-        for (const [cellKey, newFormula] of Object.entries(cellUpdates)) {
+        for (const [cellKey, newFormula] of Object.entries(cellUpdates as any)) {
           if (d.sheets[sheetId]?.cells?.[cellKey]) d.sheets[sheetId].cells[cellKey].value = newFormula;
         }
       }
       delete d.sheets[id];
-    }, { id, rewrites });
+    }, id, rewrites);
     rebuildHyperFormula();
     if (id === currentSheetId) {
       setCurrentSheetId(remaining.length > 0 ? remaining[0][0] : null);
@@ -630,7 +630,7 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
     if (!docSnap) return;
     const visibleCount = Object.values(docSnap.sheets).filter(s => !s.hidden).length;
     if (visibleCount <= 1) return;
-    mutate((d) => { d.sheets[id].hidden = true; }, { id }, true);
+    mutate((d, id) => { d.sheets[id].hidden = true; }, [id], true);
     if (id === currentSheetId) {
       const order = sortedEntries(docSnap.sheets);
       const firstVisible = order.find(([, s]) => !s.hidden);
@@ -653,7 +653,7 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
     } else {
       newIdx = (filtered[dropIndex - 1][1].index + filtered[dropIndex][1].index) / 2;
     }
-    mutate((d) => { d.sheets[draggedId].index = newIdx; }, { draggedId, newIdx }, true);
+    mutate((d, draggedId, newIdx) => { d.sheets[draggedId].index = newIdx; }, [draggedId, newIdx], true);
   }, [mutate]);
 
   // -- Context menu handlers --
@@ -1082,7 +1082,7 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
           titleFocusedRef.current = false;
           const name = value.trim() || 'Spreadsheet';
           setGridName(name);
-          if (docId) updateDoc(docId, (d) => { d.name = name; }, { name });
+          if (docId) updateDoc(docId, (d, name) => { d.name = name; }, name);
           document.title = name + ' - Spreadsheet';
         }}
         docId={docId}

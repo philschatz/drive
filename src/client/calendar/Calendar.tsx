@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'preact/hooks';
 import '@schedule-x/theme-default/dist/index.css';
 import './calendar.css';
-import { subscribeQuery, updateDoc } from '../worker-api';
+import { subscribeQuery, updateDoc, deepAssign } from '../worker-api';
 import type { PeerState } from '../../shared/automerge';
 import { peerColor, initPresence, type PresenceState } from '../../shared/presence';
 import { EditorTitleBar } from '../../shared/EditorTitleBar';
@@ -92,7 +92,7 @@ function CalendarInner({ docId, readOnly }: { docId: string; readOnly?: boolean 
 
   const saveEvent = useCallback((uid: string, eventData: CalendarEvent) => {
     if (!canEditRef.current || !docId) return;
-    updateDoc(docId, (d) => {
+    updateDoc(docId, (d, deepAssign, uid, eventData) => {
       if (!d.events[uid]) {
         const clean: any = {};
         for (const key in eventData) {
@@ -102,26 +102,26 @@ function CalendarInner({ docId, readOnly }: { docId: string; readOnly?: boolean 
       } else {
         deepAssign(d.events[uid], eventData);
       }
-    }, { uid, eventData });
+    }, deepAssign, uid, eventData);
     setEditorState(null);
   }, [docId]);
 
   const saveOverride = useCallback((uid: string, recurrenceDate: string, overrideData: any) => {
     if (!canEditRef.current || !docId) return;
-    updateDoc(docId, (d) => {
+    updateDoc(docId, (d, deepAssign, uid, recurrenceDate, overrideData) => {
       if (!d.events[uid].recurrenceOverrides) d.events[uid].recurrenceOverrides = {};
       if (!d.events[uid].recurrenceOverrides[recurrenceDate]) {
         d.events[uid].recurrenceOverrides[recurrenceDate] = overrideData;
       } else {
         deepAssign(d.events[uid].recurrenceOverrides[recurrenceDate], overrideData);
       }
-    }, { uid, recurrenceDate, overrideData });
+    }, deepAssign, uid, recurrenceDate, overrideData);
     setEditorState(null);
   }, [docId]);
 
   const deleteEvent = useCallback((uid: string) => {
     if (!canEditRef.current || !docId) return;
-    updateDoc(docId, (d) => { delete d.events[uid]; }, { uid });
+    updateDoc(docId, (d, uid) => { delete d.events[uid]; }, uid);
     setEditorState(null);
   }, [docId]);
 
@@ -224,18 +224,18 @@ function CalendarInner({ docId, readOnly }: { docId: string; readOnly?: boolean 
       () => eventsRef.current,
       (uid, data) => {
         if (!canEditRef.current) return;
-        updateDoc(docId, (d) => {
+        updateDoc(docId, (d, deepAssign, uid, data) => {
           if (!d.events[uid]) d.events[uid] = data;
           else deepAssign(d.events[uid], data);
-        }, { uid, data });
+        }, deepAssign, uid, data);
       },
       (uid, recDate, data) => {
         if (!canEditRef.current) return;
-        updateDoc(docId, (d) => {
+        updateDoc(docId, (d, deepAssign, uid, recDate, data) => {
           if (!d.events[uid].recurrenceOverrides) d.events[uid].recurrenceOverrides = {};
           if (!d.events[uid].recurrenceOverrides[recDate]) d.events[uid].recurrenceOverrides[recDate] = data;
           else deepAssign(d.events[uid].recurrenceOverrides[recDate], data);
-        }, { uid, recDate, data });
+        }, deepAssign, uid, recDate, data);
       },
       refreshCalendar,
     );
@@ -318,7 +318,7 @@ function CalendarInner({ docId, readOnly }: { docId: string; readOnly?: boolean 
           if (!docId || !canEdit) return;
           const name = value.trim() || 'Calendar';
           setCalName(name);
-          updateDoc(docId, (d) => { d.name = name; }, { name });
+          updateDoc(docId, (d, name) => { d.name = name; }, name);
           document.title = name + ' - Calendar';
         }}
         docId={docId}
@@ -347,7 +347,7 @@ function CalendarInner({ docId, readOnly }: { docId: string; readOnly?: boolean 
           onChange={(e: any) => {
             if (!canEdit || !docId) return;
             const color = e.currentTarget.value;
-            updateDoc(docId, (d) => { d.color = color; }, { color });
+            updateDoc(docId, (d, color) => { d.color = color; }, color);
           }}
         />
       </EditorTitleBar>
@@ -364,7 +364,7 @@ function CalendarInner({ docId, readOnly }: { docId: string; readOnly?: boolean 
           if (!canEdit || !docId) return;
           const desc = e.currentTarget.value.trim();
           setCalDesc(desc);
-          updateDoc(docId, (d) => { d.description = desc || undefined; }, { desc });
+          updateDoc(docId, (d, desc) => { d.description = desc || undefined; }, desc);
         }}
         onKeyDown={(e: any) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
       />
