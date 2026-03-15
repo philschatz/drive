@@ -176,8 +176,8 @@ export function AllCalendars({ path }: { path?: string }) {
 
     if (isNew) {
       uid = generateUid();
-      const date = defaultDate || toDateStr(new Date()) + 'T09:00:00';
-      ev = { '@type': 'Event', title: '', start: date.includes('T') ? date : date + 'T09:00:00', duration: 'PT1H', timeZone: null };
+      const date = defaultDate || toDateStr(new Date());
+      ev = { '@type': 'Event', title: '', start: date, duration: date.includes('T') ? 'PT1H' : 'P1D', timeZone: null };
     }
 
     setEditorState({
@@ -322,8 +322,12 @@ export function AllCalendars({ path }: { path?: string }) {
           if (firstDocId) openEditor(null, null, date.toString(), null, firstDocId);
         },
         onClickDateTime: (dateTime: any) => {
+          const dt = new Date(dateTime.toString().substring(0, 19));
+          dt.setMinutes(Math.round(dt.getMinutes() / 30) * 30, 0, 0);
+          const iso = dt.getFullYear() + '-' + String(dt.getMonth() + 1).padStart(2, '0') + '-' + String(dt.getDate()).padStart(2, '0')
+            + 'T' + String(dt.getHours()).padStart(2, '0') + ':' + String(dt.getMinutes()).padStart(2, '0') + ':00';
           const firstDocId = calendarsRef.current[0]?.docId;
-          if (firstDocId) openEditor(null, null, dateTime.toString().substring(0, 19), null, firstDocId);
+          if (firstDocId) openEditor(null, null, iso, null, firstDocId);
         },
         onRangeUpdate: (range: any) => {
           const start = range.start.toString().substring(0, 10);
