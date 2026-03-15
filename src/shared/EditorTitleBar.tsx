@@ -1,6 +1,6 @@
 import type { ComponentChildren } from 'preact';
 import { useState, useEffect } from 'preact/hooks';
-import { useWsStatus, repo } from './automerge';
+import { useWsStatus, getWorkerPeerId } from './automerge';
 import { peerColor } from './presence';
 import { AccessControl } from '../client/components/AccessControl';
 import { enableSharing, registerSharingGroup, registerDocMapping } from './keyhive-api';
@@ -109,7 +109,7 @@ export function EditorTitleBar<P extends PeerLike>({
 
       {/* Right side */}
       <div className="flex items-center gap-1.5 ml-auto shrink-0">
-        {peers.filter(p => p.peerId !== repo.peerId).map(peer => (
+        {peers.filter(p => p.peerId !== getWorkerPeerId()).map(peer => (
           <div
             key={peer.peerId}
             style={{ width: 12, height: 12, borderRadius: '50%', flexShrink: 0, backgroundColor: peerColor(peer.peerId) }}
@@ -119,7 +119,7 @@ export function EditorTitleBar<P extends PeerLike>({
 
         <span
           className="text-xs text-muted-foreground whitespace-nowrap"
-          title={connected ? `Me: ${repo.peerId}` : 'Disconnected from server'}
+          title={connected ? `Me: ${getWorkerPeerId()}` : 'Disconnected from server'}
         >
           {connected ? 'Connected' : 'Disconnected'}
         </span>

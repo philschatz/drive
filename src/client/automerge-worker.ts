@@ -41,7 +41,7 @@ export type MainToWorker =
 export type ValidationError = { path: (string | number)[]; message: string; kind?: 'schema' | 'dependency' | 'warning' };
 
 export type WorkerToMain =
-  | { type: 'ready' }
+  | { type: 'ready'; peerId: string }
   | { type: 'kh-ready' }
   | { type: 'error'; message: string }
   | { type: 'peer-connected'; peerCount: number; peers: string[] }
@@ -299,14 +299,14 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
       populateDocRepoMap(msg.docList);
 
       // --- Attach MessageChannel port to primary repo ---
+      const primaryRepo = secureRepo ?? insecureRepo;
       if (msg.port) {
         const { MessageChannelNetworkAdapter } = await import('@automerge/automerge-repo-network-messagechannel');
-        const primaryRepo = secureRepo ?? insecureRepo;
         primaryRepo.networkSubsystem.addNetworkAdapter(new MessageChannelNetworkAdapter(msg.port));
       }
 
       console.log('[worker] init complete');
-      (self as any).postMessage({ type: 'ready' } satisfies WorkerToMain);
+      (self as any).postMessage({ type: 'ready', peerId: primaryRepo.peerId } satisfies WorkerToMain);
     } catch (err: any) {
       console.error('[worker] init failed:', err);
       (self as any).postMessage({ type: 'error', message: errMsg(err) } satisfies WorkerToMain);

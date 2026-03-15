@@ -134,7 +134,8 @@ function CalendarInner({ docId, readOnly }: { docId: string; readOnly?: boolean 
 
     if (isNew) {
       uid = generateUid();
-      ev = { '@type': 'Event', title: '', start: (defaultDate || toDateStr(new Date())) + 'T09:00:00', duration: 'PT1H', timeZone: null };
+      const date = defaultDate || toDateStr(new Date()) + 'T09:00:00';
+      ev = { '@type': 'Event', title: '', start: date.includes('T') ? date : date + 'T09:00:00', duration: 'PT1H', timeZone: null };
     }
 
     setEditorState({
@@ -193,7 +194,7 @@ function CalendarInner({ docId, readOnly }: { docId: string; readOnly?: boolean 
         openEditor(null, null, date.toString(), null);
       },
       onClickDateTime: (dateTime: any) => {
-        openEditor(null, null, dateTime.toPlainDate().toString(), null);
+        openEditor(null, null, dateTime.toString().substring(0, 19), null);
       },
       onRangeUpdate: (range: any) => {
         const start = range.start.toString().substring(0, 10);

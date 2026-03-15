@@ -1,9 +1,8 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'preact/hooks';
 import '@schedule-x/theme-default/dist/index.css';
 import './calendar.css';
-import { repo } from '../../shared/automerge';
-import type { DocHandle, PeerState, Presence } from '../../shared/automerge';
-import { openDoc } from '../worker-api';
+import type { PeerState } from '../../shared/automerge';
+import { openDoc, subscribeQuery, updateDoc, queryDoc } from '../worker-api';
 import { getDocEntry } from '../doc-storage';
 import { peerColor, initPresence, type PresenceState } from '../../shared/presence';
 import { EditorTitleBar } from '../../shared/EditorTitleBar';
@@ -16,9 +15,10 @@ import { initDragDrop } from './drag-drop';
 import { EventEditor } from './EventEditor';
 import { CalendarSettings } from './CalendarSettings';
 
+const CALENDAR_QUERY = '{ events: (.events // {}), name: (.name // "Calendar"), description: (.description // ""), color: (.color // "#039be5"), timeZone: .timeZone }';
+
 interface LoadedCalendar {
   docId: string;
-  handle: DocHandle<CalendarDocument>;
   name: string;
   color: string;
   description: string;
@@ -106,9 +106,7 @@ export function AllCalendars({ path }: { path?: string }) {
   }, []);
 
   const saveEvent = useCallback((uid: string, eventData: CalendarEvent, calDocId: string) => {
-    const cal = findCalendar(calDocId);
-    if (!cal) return;
-    cal.handle.change((d: any) => {
+    updateDoc(calDocId, (d: any) => {
       if (!d.events[uid]) {
         const clean: any = {};
         for (const key in eventData) {
@@ -118,38 +116,28 @@ export function AllCalendars({ path }: { path?: string }) {
       } else {
         deepAssign(d.events[uid], eventData);
       }
-    });
-    cal.events = cal.handle.doc()?.events || {};
+    }, { uid, eventData });
     setEditorState(null);
-    refreshCalendar();
-  }, [findCalendar, refreshCalendar]);
+  }, []);
 
   const saveOverride = useCallback((uid: string, recurrenceDate: string, overrideData: any, calDocId: string) => {
-    const cal = findCalendar(calDocId);
-    if (!cal) return;
-    cal.handle.change((d: any) => {
+    updateDoc(calDocId, (d: any) => {
       if (!d.events[uid].recurrenceOverrides) d.events[uid].recurrenceOverrides = {};
       if (!d.events[uid].recurrenceOverrides[recurrenceDate]) {
         d.events[uid].recurrenceOverrides[recurrenceDate] = overrideData;
       } else {
         deepAssign(d.events[uid].recurrenceOverrides[recurrenceDate], overrideData);
       }
-    });
-    cal.events = cal.handle.doc()?.events || {};
+    }, { uid, recurrenceDate, overrideData });
     setEditorState(null);
-    refreshCalendar();
-  }, [findCalendar, refreshCalendar]);
+  }, []);
 
   const deleteEvent = useCallback((uid: string) => {
     const es = editorStateRef.current;
     if (!es) return;
-    const cal = findCalendar(es.calDocId);
-    if (!cal) return;
-    cal.handle.change((d: any) => { delete d.events[uid]; });
-    cal.events = cal.handle.doc()?.events || {};
+    updateDoc(es.calDocId, (d: any) => { delete d.events[uid]; }, { uid });
     setEditorState(null);
-    refreshCalendar();
-  }, [findCalendar, refreshCalendar]);
+  }, []);
 
   const deleteOccurrence = useCallback((uid: string, recurrenceDate: string) => {
     const es = editorStateRef.current;
@@ -160,27 +148,21 @@ export function AllCalendars({ path }: { path?: string }) {
   const moveEvent = useCallback((uid: string, eventData: CalendarEvent, targetDocId: string) => {
     const es = editorStateRef.current;
     if (!es) return;
-    const sourceCal = findCalendar(es.calDocId);
-    const targetCal = findCalendar(targetDocId);
-    if (!sourceCal || !targetCal) return;
 
     // Delete from source
-    sourceCal.handle.change((d: any) => { delete d.events[uid]; });
-    sourceCal.events = sourceCal.handle.doc()?.events || {};
+    updateDoc(es.calDocId, (d: any) => { delete d.events[uid]; }, { uid });
 
     // Create in target with same UID
-    targetCal.handle.change((d: any) => {
+    updateDoc(targetDocId, (d: any) => {
       const clean: any = {};
       for (const key in eventData) {
         if ((eventData as any)[key] !== undefined) clean[key] = (eventData as any)[key];
       }
       d.events[uid] = clean;
-    });
-    targetCal.events = targetCal.handle.doc()?.events || {};
+    }, { uid, eventData });
 
     setEditorState(null);
-    refreshCalendar();
-  }, [findCalendar, refreshCalendar]);
+  }, []);
 
   const activeCalDocId = useMemo(() => {
     if (editorState?.calDocId) return editorState.calDocId;
@@ -194,7 +176,8 @@ export function AllCalendars({ path }: { path?: string }) {
 
     if (isNew) {
       uid = generateUid();
-      ev = { '@type': 'Event', title: '', start: (defaultDate || toDateStr(new Date())) + 'T09:00:00', duration: 'PT1H', timeZone: null };
+      const date = defaultDate || toDateStr(new Date()) + 'T09:00:00';
+      ev = { '@type': 'Event', title: '', start: date.includes('T') ? date : date + 'T09:00:00', duration: 'PT1H', timeZone: null };
     }
 
     setEditorState({
@@ -249,6 +232,7 @@ export function AllCalendars({ path }: { path?: string }) {
   // Load all calendar documents
   useEffect(() => {
     let mounted = true;
+    const unsubscribes: (() => void)[] = [];
 
     (async () => {
       const allIds = getSavedIds();
@@ -259,13 +243,11 @@ export function AllCalendars({ path }: { path?: string }) {
           const entry = getDocEntry(id);
           const timeout = new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), 3000));
           await Promise.race([openDoc(id, { secure: entry?.encrypted }), timeout]);
-          const handle = await repo.find<CalendarDocument>(id as any);
-          const doc = handle.doc();
+          const { result: doc } = await queryDoc(id, CALENDAR_QUERY);
           if (!doc || doc['@type'] !== 'Calendar') return;
           if (!mounted) return;
           loaded.push({
             docId: id,
-            handle,
             name: doc.name || 'Untitled',
             color: doc.color || '#039be5',
             description: doc.description || '',
@@ -287,7 +269,6 @@ export function AllCalendars({ path }: { path?: string }) {
       document.title = 'All Calendars';
 
       // Set up presence for each calendar
-      const allPeerStates: Record<string, PeerState<PresenceState>> = {};
       for (const cal of loaded) {
         const { broadcast, cleanup } = initPresence<PresenceState>(
           cal.docId,
@@ -342,7 +323,7 @@ export function AllCalendars({ path }: { path?: string }) {
         },
         onClickDateTime: (dateTime: any) => {
           const firstDocId = calendarsRef.current[0]?.docId;
-          if (firstDocId) openEditor(null, null, dateTime.toPlainDate().toString(), null, firstDocId);
+          if (firstDocId) openEditor(null, null, dateTime.toString().substring(0, 19), null, firstDocId);
         },
         onRangeUpdate: (range: any) => {
           const start = range.start.toString().substring(0, 10);
@@ -357,15 +338,14 @@ export function AllCalendars({ path }: { path?: string }) {
       calendarSXRef.current = calendar;
       eventsPluginRef.current = eventsPlugin;
 
-      // Subscribe to changes on each calendar
+      // Subscribe to changes on each calendar via worker query subscriptions
       for (const cal of loaded) {
-        cal.handle.on('change', () => {
-          const d = cal.handle.doc();
-          if (!d) return;
-          cal.events = d.events || {};
-          cal.name = d.name || 'Untitled';
-          cal.color = d.color || '#039be5';
-          cal.description = d.description || '';
+        const unsub = subscribeQuery(cal.docId, CALENDAR_QUERY, (result) => {
+          if (!result || !mounted) return;
+          cal.events = result.events || {};
+          cal.name = result.name || 'Untitled';
+          cal.color = result.color || '#039be5';
+          cal.description = result.description || '';
 
           // Update React state for the header chips
           setCalendars(prev => prev.map(c =>
@@ -391,6 +371,7 @@ export function AllCalendars({ path }: { path?: string }) {
 
           refreshCalendar();
         });
+        unsubscribes.push(unsub);
       }
 
       // Set up drag-drop
@@ -408,25 +389,19 @@ export function AllCalendars({ path }: { path?: string }) {
         (uid, data, eventId) => {
           const item = eventLookupRef.current[eventId];
           if (!item) return;
-          const cal = findCalendar(item.calDocId);
-          if (!cal) return;
-          cal.handle.change((dd: any) => {
+          updateDoc(item.calDocId, (dd: any) => {
             if (!dd.events[uid]) dd.events[uid] = data;
             else deepAssign(dd.events[uid], data);
-          });
-          cal.events = cal.handle.doc()?.events || {};
+          }, { uid, data });
         },
         (uid, recDate, data, eventId) => {
           const item = eventLookupRef.current[eventId];
           if (!item) return;
-          const cal = findCalendar(item.calDocId);
-          if (!cal) return;
-          cal.handle.change((dd: any) => {
+          updateDoc(item.calDocId, (dd: any) => {
             if (!dd.events[uid].recurrenceOverrides) dd.events[uid].recurrenceOverrides = {};
             if (!dd.events[uid].recurrenceOverrides[recDate]) dd.events[uid].recurrenceOverrides[recDate] = data;
             else deepAssign(dd.events[uid].recurrenceOverrides[recDate], data);
-          });
-          cal.events = cal.handle.doc()?.events || {};
+          }, { uid, recDate, data });
         },
         refreshCalendar
       );
@@ -434,6 +409,7 @@ export function AllCalendars({ path }: { path?: string }) {
 
     return () => {
       mounted = false;
+      for (const unsub of unsubscribes) unsub();
       calendarSXRef.current?.destroy();
       calendarSXRef.current = null;
       for (const { cleanup } of presenceMapRef.current.values()) cleanup();
@@ -493,7 +469,6 @@ export function AllCalendars({ path }: { path?: string }) {
       <CalendarSettings
         opened={!!settingsDocId}
         docId={settingsDocId}
-        handle={settingsCal?.handle || null}
         name={settingsCal?.name || ''}
         description={settingsCal?.description || ''}
         color={settingsCal?.color || '#039be5'}

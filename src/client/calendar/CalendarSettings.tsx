@@ -4,20 +4,18 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
-import type { DocHandle } from '../../shared/automerge';
-import type { CalendarDocument } from './schema';
+import { updateDoc } from '../worker-api';
 
 interface CalendarSettingsProps {
   opened: boolean;
   docId: string | null;
-  handle: DocHandle<CalendarDocument> | null;
   name: string;
   description: string;
   color: string;
   onClose: () => void;
 }
 
-export function CalendarSettings({ opened, docId, handle, name, description, color, onClose }: CalendarSettingsProps) {
+export function CalendarSettings({ opened, docId, name, description, color, onClose }: CalendarSettingsProps) {
   const [localName, setLocalName] = useState(name);
   const [localDesc, setLocalDesc] = useState(description);
   const [localColor, setLocalColor] = useState(color);
@@ -25,14 +23,14 @@ export function CalendarSettings({ opened, docId, handle, name, description, col
   useEffect(() => { setLocalName(name); setLocalDesc(description); setLocalColor(color); }, [name, description, color]);
 
   const handleSave = () => {
-    if (!handle) return;
-    handle.change((d: any) => {
+    if (!docId) return;
+    updateDoc(docId, (d: any) => {
       d.name = localName.trim() || 'Untitled';
       const desc = localDesc.trim();
       if (desc) d.description = desc;
       else delete d.description;
       d.color = localColor;
-    });
+    }, { localName, localDesc, localColor });
     onClose();
   };
 

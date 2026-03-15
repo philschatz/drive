@@ -77,6 +77,12 @@ let resolveKeyhiveReady!: () => void;
 export const keyhiveReady = new Promise<void>(r => { resolveKeyhiveReady = r; });
 if (!_secureAvailable) resolveKeyhiveReady();
 
+// --- Worker peer ID ---
+// The actual peerId of the worker's primary repo (keyhive-derived or random).
+// Set when the worker sends the 'ready' message.
+let _workerPeerId = '';
+export function getWorkerPeerId(): string { return _workerPeerId; }
+
 // --- Read-only enforcement ---
 // Documents where the current user has read-only access.
 // handle.change() is blocked for these documents.
@@ -182,6 +188,7 @@ const peerListListeners = new Set<PeerListListener>();
 worker.onmessage = (e: MessageEvent<WorkerToMain>) => {
   const msg = e.data;
   if (msg.type === 'ready') {
+    _workerPeerId = msg.peerId;
     // Resolve workerReady now — this will also be resolved by the MessageChannel peer event,
     // but resolving twice is a no-op. Resolving here ensures it works after MessageChannel removal.
     resolveRepoReady();
