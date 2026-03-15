@@ -4,7 +4,7 @@
 // WASM initialization is handled by the original package — this fork
 // only re-exports the bridge layer with encryption hooks.
 
-import initFromBase64Wasm from "@keyhive/keyhive/slim";
+import { initFromBase64Wasm } from "@keyhive/keyhive/slim";
 // @ts-expect-error
 import { wasmBase64 } from "@keyhive/keyhive/keyhive_wasm.base64.js";
 
