@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'preact/hooks';
 import type { PeerState } from '../../shared/automerge';
 import { openDoc, subscribeQuery, updateDoc, getDocHistory, debugGetVersionPatches, setDocVersion } from '../worker-api';
-import { getDocEntry } from '../doc-storage';
+import { getDocEntry, updateDocCache } from '../doc-storage';
 import { peerColor, initPresence, type PresenceState } from '../../shared/presence';
 import { EditorTitleBar } from '../../shared/EditorTitleBar';
 import { HistorySlider } from '../../shared/HistorySlider';
@@ -185,6 +185,7 @@ export function SourceViewer({ docId, rest }: { docId?: string; rest?: string; p
   const [docName, setDocName] = useState('Document');
   const [peerStates, setPeerStates] = useState<Record<string, PeerState<PresenceState>>>({});
   const atLatest = useRef(true);
+  const titleFocusedRef = useRef(false);
   const broadcastRef = useRef<((key: keyof PresenceState, value: any) => void) | null>(null);
   const presenceCleanupRef = useRef<(() => void) | null>(null);
 
@@ -243,7 +244,7 @@ export function SourceViewer({ docId, rest }: { docId?: string; rest?: string; p
         if (!mounted) return;
         setCurrentDoc(result);
         if (result.name) {
-          setDocName(result.name);
+          if (!titleFocusedRef.current) setDocName(result.name);
           document.title = result.name + ' - Source Editor';
         }
         setStatus('');
@@ -404,18 +405,31 @@ export function SourceViewer({ docId, rest }: { docId?: string; rest?: string; p
       <EditorTitleBar
         icon="code"
         title={docName}
+        titleEditable={editable}
+        onTitleFocus={() => { titleFocusedRef.current = true; }}
+        onTitleChange={setDocName}
+        onTitleBlur={(value) => {
+          titleFocusedRef.current = false;
+          if (!docId || !editable) return;
+          const name = value.trim() || 'Document';
+          setDocName(name);
+          updateDoc(docId, (d: any) => { d.name = name; }, { name });
+          document.title = name + ' - Source Editor';
+        }}
         docId={docId}
         peers={peerList}
+        peerTitle={(peer) => `Peer ${peer.peerId.slice(0, 8)}${peer.value.focusedField ? ' (editing)' : ''}`}
         showSourceLink={false}
-      />
-
-      {snapshot && (
-        <div className="flex items-center gap-2 mb-2">
+        khDocId={docId ? getDocEntry(docId)?.khDocId : undefined}
+        sharingGroupId={docId ? getDocEntry(docId)?.sharingGroupId : undefined}
+        onSharingEnabled={(khDocId, groupId) => { if (docId) updateDocCache(docId, { khDocId, sharingGroupId: groupId }); }}
+      >
+        {snapshot && (
           <Button variant="outline" size="sm" onClick={handleDownloadJson}>
-            <span className="material-symbols-outlined">download</span> Download JSON
+            <span className="material-symbols-outlined" style={{ fontSize: 16 }}>download</span> JSON
           </Button>
-        </div>
-      )}
+        )}
+      </EditorTitleBar>
 
       {loadProgress !== null && (
         <Progress className="my-1" value={loadProgress} />
