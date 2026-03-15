@@ -77,6 +77,38 @@ function keyhiveWasmPlugin(): Plugin {
   };
 }
 
+// Same pattern as keyhiveWasmPlugin — vite-plugin-wasm doesn't handle .wasm
+// imports correctly in web workers for automerge-subduction's wasm-bindgen output.
+function subductionWasmPlugin(): Plugin {
+  return {
+    name: 'subduction-wasm',
+    load(id) {
+      if (id.includes('automerge-subduction') && id.endsWith('automerge_subduction_wasm.js')) {
+        return `
+          import wasmUrl from "./automerge_subduction_wasm_bg.wasm?url";
+          import * as bg from "./automerge_subduction_wasm_bg.js";
+          const imports = { "./automerge_subduction_wasm_bg.js": bg };
+          const wasmResponse = await fetch(wasmUrl);
+          const { instance } = await WebAssembly.instantiateStreaming(wasmResponse, imports);
+          bg.__wbg_set_wasm(instance.exports);
+          instance.exports.__wbindgen_start();
+          export {
+            AuthenticatedLongPoll, AuthenticatedWebSocket, BatchSyncRequest, BatchSyncResponse,
+            BlobMeta, Boundary, CallError, CommitWithBlob, ConnErrorPair, ConnectionId, Depth,
+            Digest, Fragment, FragmentRequested, FragmentState, FragmentStateStore, FragmentWithBlob,
+            FragmentsArray, HashMetric, LooseCommit, MemoryStorage, Message, Nonce,
+            PeerBatchSyncResult, PeerId, PeerResultMap, RequestId, Sedimentree,
+            SedimentreeAutomerge, SedimentreeId, SedimentreeIdsArray, SignedFragment,
+            SignedLooseCommit, Subduction, SubductionLongPoll, SubductionLongPollConnection,
+            SubductionWebSocket, SyncStats, WebCryptoSigner, digestOfBase58Id,
+            setSubductionLogLevel, set_panic_hook, start
+          } from "./automerge_subduction_wasm_bg.js";
+        `;
+      }
+    },
+  };
+}
+
 export default defineConfig(async () => {
   const istanbulPlugins = process.env.CYPRESS_COVERAGE
     ? [(await import('vite-plugin-istanbul')).default({
@@ -97,6 +129,7 @@ export default defineConfig(async () => {
     radixPreactPatchPlugin(),
     automergeWasmPlugin(),
     keyhiveWasmPlugin(),
+    subductionWasmPlugin(),
     ...istanbulPlugins,
     VitePWA({
       registerType: 'autoUpdate',
@@ -141,7 +174,7 @@ export default defineConfig(async () => {
   },
   worker: {
     format: 'es' as const,
-    plugins: () => [wasm(), keyhiveWasmPlugin()],
+    plugins: () => [wasm(), keyhiveWasmPlugin(), subductionWasmPlugin()],
   },
   resolve: {
     alias: {

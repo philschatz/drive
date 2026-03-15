@@ -1,6 +1,6 @@
 import type { ComponentChildren } from 'preact';
 import { useState, useEffect } from 'preact/hooks';
-import { useConnectionStatus, repo } from './automerge';
+import { useWsStatus, repo } from './automerge';
 import { peerColor } from './presence';
 import { AccessControl } from '../client/components/AccessControl';
 import { enableSharing, registerSharingGroup, registerDocMapping } from './keyhive-api';
@@ -52,7 +52,7 @@ export function EditorTitleBar<P extends PeerLike>({
   sharingGroupId?: string;
   children?: ComponentChildren;
 }) {
-  const connected = useConnectionStatus();
+  const connected = useWsStatus(docId);
   const [khDocId, setKhDocId] = useState(initialKhDocId);
   const [enabling, setEnabling] = useState(false);
   const { access } = useAccess(khDocId);

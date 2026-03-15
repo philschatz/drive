@@ -2,7 +2,7 @@ import { render, screen, fireEvent } from '@testing-library/preact';
 
 // Mock automerge module before importing EditorTitleBar
 jest.mock('../../src/shared/automerge', () => ({
-  useConnectionStatus: jest.fn(() => true),
+  useWsStatus: jest.fn(() => true),
   repo: { peerId: 'self-peer-id' },
 }));
 
@@ -27,9 +27,9 @@ jest.mock('../../src/client/components/AccessControl', () => ({
 }));
 
 import { EditorTitleBar } from '../../src/shared/EditorTitleBar';
-import { useConnectionStatus } from '../../src/shared/automerge';
+import { useWsStatus } from '../../src/shared/automerge';
 
-const mockUseConnectionStatus = useConnectionStatus as jest.Mock;
+const mockUseConnectionStatus = useWsStatus as jest.Mock;
 
 describe('EditorTitleBar', () => {
   beforeEach(() => {

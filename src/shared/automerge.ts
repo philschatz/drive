@@ -170,6 +170,12 @@ const connectionListeners = new Set<ConnectionListener>();
 let workerPeerCount = 0;
 let workerPeers: string[] = [];
 
+// Per-repo WebSocket connection state (independent of peers)
+type WsStatusListener = (repo: 'secure' | 'insecure', connected: boolean) => void;
+const wsStatusListeners = new Set<WsStatusListener>();
+let wsSecureConnected = false;
+let wsInsecureConnected = false;
+
 type PeerListListener = (peers: string[]) => void;
 const peerListListeners = new Set<PeerListListener>();
 
@@ -197,6 +203,10 @@ worker.onmessage = (e: MessageEvent<WorkerToMain>) => {
     const connected = workerPeerCount > 0;
     for (const fn of connectionListeners) fn(connected);
     for (const fn of peerListListeners) fn(workerPeers);
+  } else if (msg.type === 'ws-status') {
+    if (msg.repo === 'secure') wsSecureConnected = msg.connected;
+    else wsInsecureConnected = msg.connected;
+    for (const fn of wsStatusListeners) fn(msg.repo, msg.connected);
   } else if (msg.type === 'kh-result') {
     handleKeyhiveResponse(msg);
   } else {
@@ -245,6 +255,26 @@ export function useConnectionStatus(): boolean {
       }
     };
   }, []);
+
+  return connected;
+}
+
+/**
+ * Returns WebSocket connection status for a specific document's repo.
+ * Unlike useConnectionStatus (which tracks peers), this tracks the raw WS open/close state.
+ */
+export function useWsStatus(docId: string | undefined): boolean {
+  const encrypted = docId ? getDocEntry(docId)?.encrypted : undefined;
+  const [connected, setConnected] = useState(() => encrypted ? wsSecureConnected : wsInsecureConnected);
+
+  useEffect(() => {
+    const listener: WsStatusListener = (repo, isConnected) => {
+      const relevant = encrypted ? repo === 'secure' : repo === 'insecure';
+      if (relevant) setConnected(isConnected);
+    };
+    wsStatusListeners.add(listener);
+    return () => { wsStatusListeners.delete(listener); };
+  }, [encrypted]);
 
   return connected;
 }

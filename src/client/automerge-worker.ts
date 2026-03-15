@@ -46,6 +46,7 @@ export type WorkerToMain =
   | { type: 'error'; message: string }
   | { type: 'peer-connected'; peerCount: number; peers: string[] }
   | { type: 'peer-disconnected'; peerCount: number; peers: string[] }
+  | { type: 'ws-status'; repo: 'secure' | 'insecure'; connected: boolean }
   // New worker-owned doc API responses
   | { type: 'result'; id: number; result?: any; error?: string }
   | { type: 'sub-result'; subId: number; result: any; heads: string[]; lastModified?: number; error?: string }
@@ -141,9 +142,9 @@ async function pushToSubscriptions(docId: string) {
   if (!hasQuerySubs && !hasValidation) return;
 
   const handle = entry.handle;
+  const history = Automerge.getHistory(handle.doc());
   let activeDoc: any;
   if (entry.pinnedVersion !== null) {
-    const history = Automerge.getHistory(handle.doc());
     activeDoc = history[entry.pinnedVersion]?.snapshot ?? handle.doc();
   } else {
     activeDoc = handle.doc();
@@ -152,13 +153,10 @@ async function pushToSubscriptions(docId: string) {
 
   // Extract last-modified timestamp from the most recent change
   let lastModified: number | undefined;
-  try {
-    const history = Automerge.getHistory(handle.doc());
-    if (history.length > 0) {
-      const ts = history[history.length - 1].change.time;
-      if (ts) lastModified = ts;
-    }
-  } catch { /* ignore — not critical */ }
+  if (history.length > 0) {
+    const ts = history[history.length - 1].change.time;
+    if (ts) lastModified = ts;
+  }
 
   for (const [subId, filter] of entry.subscriptions) {
     try {
@@ -219,6 +217,11 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
       const insecureNs = insecureRepo.networkSubsystem;
       insecureNs.on('peer', postStatus);
       insecureNs.on('peer-disconnected', postStatus);
+      // Monitor WS open/close directly for connection status
+      const origInsecureOpen = insecureWs.onOpen;
+      const origInsecureClose = insecureWs.onClose;
+      insecureWs.onOpen = () => { origInsecureOpen(); (self as any).postMessage({ type: 'ws-status', repo: 'insecure', connected: true } satisfies WorkerToMain); };
+      insecureWs.onClose = () => { origInsecureClose(); (self as any).postMessage({ type: 'ws-status', repo: 'insecure', connected: false } satisfies WorkerToMain); };
       console.log('[worker] insecure repo created');
 
       // --- Create secure repo if available ---
@@ -282,6 +285,11 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
         const secureNs = secureRepo.networkSubsystem;
         secureNs.on('peer', postStatus);
         secureNs.on('peer-disconnected', postStatus);
+        // Monitor WS open/close directly for connection status
+        const origSecureOpen = secureWs.onOpen;
+        const origSecureClose = secureWs.onClose;
+        secureWs.onOpen = () => { origSecureOpen(); (self as any).postMessage({ type: 'ws-status', repo: 'secure', connected: true } satisfies WorkerToMain); };
+        secureWs.onClose = () => { origSecureClose(); (self as any).postMessage({ type: 'ws-status', repo: 'secure', connected: false } satisfies WorkerToMain); };
 
         console.log('[worker] secure repo created, peerId:', khIntegration.peerId);
         (self as any).postMessage({ type: 'kh-ready' } satisfies WorkerToMain);
