@@ -233,7 +233,11 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
         console.log('[worker] keyhive WASM initialized');
 
         const secureStorage = new IndexedDBStorageAdapter();
-        const secureWs = new BrowserWebSocketClientAdapter(`ws://${self.location?.hostname || 'localhost'}:${3000}`);
+        const secureWs = new BrowserWebSocketClientAdapter(
+          self.location?.protocol === 'https:'
+            ? 'wss://auto-relay-436046666a53.herokuapp.com'
+            : `ws://${self.location?.hostname || 'localhost'}:${3000}`
+        );
 
         khIntegration = await khBridge.initializeAutomergeRepoKeyhive({
           storage: secureStorage,
