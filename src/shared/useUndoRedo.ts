@@ -16,6 +16,7 @@ export function useUndoRedo(docId: string) {
   // Logical cursor: which version the doc currently represents.
   const cursorRef = useRef(-1);
   const restoringRef = useRef(false);
+  const seenFirstHeadsRef = useRef(false);
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
   const redoStackRef = useRef<number[]>([]);
@@ -40,6 +41,11 @@ export function useUndoRedo(docId: string) {
   const onHeadsUpdate = useCallback((_heads: string[]) => {
     if (restoringRef.current) {
       restoringRef.current = false;
+      return;
+    }
+    // The first callback is the initial subscription load, not a new edit
+    if (!seenFirstHeadsRef.current) {
+      seenFirstHeadsRef.current = true;
       return;
     }
     // A genuine new edit — advance cursor past wherever we were

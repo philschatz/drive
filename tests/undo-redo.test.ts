@@ -390,3 +390,146 @@ describe('undo/redo cycle', () => {
     expect((Automerge.toJS(doc) as any).tags).toEqual(['x', 'y', 'z']);
   });
 });
+
+// ── Cursor tracking (mirrors useUndoRedo hook logic) ────────────────────────
+
+/**
+ * Pure version of the hook's cursor bookkeeping for testing.
+ * Simulates the refs and state that useUndoRedo maintains.
+ */
+class UndoCursor {
+  cursor = -1;
+  restoring = false;
+  seenFirstHeads = false;
+  redoStack: number[] = [];
+  canUndo = false;
+  canRedo = false;
+
+  initFromHistory(historyLength: number) {
+    this.cursor = historyLength - 1;
+    this.canUndo = historyLength > 1;
+    this.canRedo = false;
+    this.redoStack = [];
+  }
+
+  onHeadsUpdate() {
+    if (this.restoring) {
+      this.restoring = false;
+      return;
+    }
+    if (!this.seenFirstHeads) {
+      this.seenFirstHeads = true;
+      return;
+    }
+    if (this.cursor >= 0) {
+      this.cursor++;
+      this.redoStack = [];
+      this.canUndo = true;
+      this.canRedo = false;
+    }
+  }
+
+  undo(historyLength: number): number | null {
+    if (this.cursor <= 0) return null;
+    const target = this.cursor - 1;
+    this.redoStack.push(this.cursor);
+    this.cursor = target;
+    this.restoring = true;
+    this.canUndo = target > 0;
+    this.canRedo = true;
+    return target;
+  }
+
+  redo(): number | null {
+    if (this.redoStack.length === 0) return null;
+    const target = this.redoStack.pop()!;
+    this.cursor = target;
+    this.restoring = true;
+    this.canUndo = true;
+    this.canRedo = this.redoStack.length > 0;
+    return target;
+  }
+}
+
+describe('undo cursor tracking', () => {
+  it('first undo targets the correct version (no off-by-one)', () => {
+    // Simulate: doc with 3 versions [v0, v1, v2]
+    const uc = new UndoCursor();
+
+    // Scenario: getDocHistory resolves BEFORE first subscription callback
+    uc.initFromHistory(3); // cursor = 2
+
+    // Initial subscription callback (not a new edit)
+    uc.onHeadsUpdate();
+    expect(uc.cursor).toBe(2); // should NOT increment
+
+    // User makes an edit → subscription fires
+    uc.onHeadsUpdate();
+    expect(uc.cursor).toBe(3); // history is now [v0,v1,v2,v3]
+
+    // First undo should target v2 (before the edit)
+    const target = uc.undo(4);
+    expect(target).toBe(2);
+  });
+
+  it('first undo works when getDocHistory resolves AFTER subscription', () => {
+    const uc = new UndoCursor();
+
+    // Initial subscription fires first (cursor still -1)
+    uc.onHeadsUpdate();
+    expect(uc.cursor).toBe(-1); // skipped because seenFirstHeads
+
+    // getDocHistory resolves
+    uc.initFromHistory(3); // cursor = 2
+
+    // User edits
+    uc.onHeadsUpdate();
+    expect(uc.cursor).toBe(3);
+
+    // Undo targets v2
+    const target = uc.undo(4);
+    expect(target).toBe(2);
+  });
+
+  it('undo after restore does not double-increment', () => {
+    const uc = new UndoCursor();
+    uc.initFromHistory(3); // cursor = 2
+    uc.onHeadsUpdate(); // initial subscription, skipped
+
+    // User edits → cursor = 3
+    uc.onHeadsUpdate();
+    expect(uc.cursor).toBe(3);
+
+    // Undo to v2
+    uc.undo(4);
+    expect(uc.cursor).toBe(2);
+
+    // Restore triggers subscription callback — should be skipped
+    uc.onHeadsUpdate();
+    expect(uc.cursor).toBe(2); // NOT incremented
+
+    // Another undo to v1
+    const target = uc.undo(5);
+    expect(target).toBe(1);
+  });
+
+  it('redo then undo round-trips correctly', () => {
+    const uc = new UndoCursor();
+    uc.initFromHistory(4); // cursor = 3
+    uc.onHeadsUpdate(); // initial, skipped
+
+    // Undo to v2
+    uc.undo(4);
+    expect(uc.cursor).toBe(2);
+    uc.onHeadsUpdate(); // restore callback, skipped
+
+    // Redo to v3
+    uc.redo();
+    expect(uc.cursor).toBe(3);
+    uc.onHeadsUpdate(); // restore callback, skipped
+
+    // Undo again to v2
+    const target = uc.undo(6);
+    expect(target).toBe(2);
+  });
+});

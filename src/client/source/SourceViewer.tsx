@@ -254,7 +254,15 @@ export function SourceViewer({ docId, rest }: { docId?: string; rest?: string; p
       const { broadcast, cleanup: presenceCleanup } = initPresence<PresenceState>(
         docId,
         () => ({ viewing: true, focusedField: null }),
-        (states) => { if (mounted) setPeerStates(states); },
+        (states) => {
+          if (!mounted) return;
+          // Log incoming presence changes
+          for (const [peerId, peer] of Object.entries(states)) {
+            const detail = JSON.stringify(peer.value);
+            addLogEntry('recv', 'presence', peerId, detail);
+          }
+          setPeerStates(states);
+        },
       );
       broadcastRef.current = broadcast;
       presenceCleanupRef.current = () => { unsubQuery(); presenceCleanup(); };
