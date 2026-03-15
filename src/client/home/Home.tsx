@@ -4,7 +4,7 @@ import { createDoc, subscribeQuery, HOME_SUMMARY_QUERY } from '../worker-api';
 import { peerColor } from '../../shared/presence';
 import { Button } from '@/components/ui/button';
 import { Alert } from '@/components/ui/alert';
-import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuSub, DropdownMenuSubTrigger, DropdownMenuSubContent } from '@/components/ui/dropdown-menu';
+import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator } from '@/components/ui/dropdown-menu';
 import { Progress } from '@/components/ui/progress';
 import dayjs from 'dayjs';
 import relativeTimePlugin from 'dayjs/plugin/relativeTime';
@@ -452,22 +452,15 @@ export function Home({ path }: { path?: string }) {
               <span className="material-symbols-outlined">grid_on</span> Spreadsheet
             </DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger>
-                <span className="material-symbols-outlined">upload_file</span> Import
-              </DropdownMenuSubTrigger>
-              <DropdownMenuSubContent>
-                <DropdownMenuItem onSelect={() => icsInputRef.current?.click()}>
-                  <span className="material-symbols-outlined">date_range</span> Import .ics
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => xlsInputRef.current?.click()}>
-                  <span className="material-symbols-outlined">grid_on</span> Import .xlsx
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => jsonInputRef.current?.click()}>
-                  <span className="material-symbols-outlined">code</span> Import .json
-                </DropdownMenuItem>
-              </DropdownMenuSubContent>
-            </DropdownMenuSub>
+            <DropdownMenuItem onSelect={() => icsInputRef.current?.click()}>
+              <span className="material-symbols-outlined">date_range</span> Import .ics
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => xlsInputRef.current?.click()}>
+              <span className="material-symbols-outlined">grid_on</span> Import .xlsx
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => jsonInputRef.current?.click()}>
+              <span className="material-symbols-outlined">code</span> Import .json
+            </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem
               onSelect={(e) => { e.preventDefault(); setCreateSecure(v => !v); }}

@@ -5,7 +5,6 @@ import '@cypress/code-coverage/support';
 // "unavailable" rejection before the test even starts. This is a background
 // sync error, not a test failure — ignore it globally.
 Cypress.on('uncaught:exception', (err) => {
-  console.log('[cypress] uncaught:exception err.message:', JSON.stringify(err.message));
   if (err.message.includes('is unavailable')) return false;
   // Preact internal error during component lifecycle (harmless race on navigation)
   if (err.message.includes("'__k'") || err.message.includes("'__c'")) return false;
