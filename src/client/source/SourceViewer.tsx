@@ -1,20 +1,16 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'preact/hooks';
-import { repo, Automerge } from '../../shared/automerge';
-import type { State } from '@automerge/automerge';
-import type { DocHandle, PeerState, Presence } from '../../shared/automerge';
-import { openDoc } from '../worker-api';
+import type { PeerState } from '../../shared/automerge';
+import { openDoc, subscribeQuery, updateDoc, getDocHistory, setDocVersion } from '../worker-api';
 import { getDocEntry } from '../doc-storage';
 import { peerColor, initPresence, type PresenceState } from '../../shared/presence';
 import { EditorTitleBar } from '../../shared/EditorTitleBar';
 import { HistorySlider } from '../../shared/HistorySlider';
 import type { DocumentHistory } from '../../shared/useDocumentHistory';
 import { usePresenceLog, PresenceLogTable } from '../../shared/PresenceLog';
-import type { CalendarDocument } from '../../shared/schemas';
 import { SourceTree } from './SourceTree';
 import { validateDocument } from '../../shared/schemas';
 import { ValidationPanel } from '../../shared/ValidationPanel';
 import { hashHistory } from '../hash-history';
-import type { Patch } from '@automerge/automerge';
 import { Progress } from '@/components/ui/progress';
 import { Button } from '@/components/ui/button';
 import { addDocId } from '@/doc-storage';
@@ -37,7 +33,7 @@ function formatPatchValue(value: unknown): string {
   return JSON.stringify(value);
 }
 
-function PatchTable({ patches }: { patches: Patch[] }) {
+function PatchTable({ patches }: { patches: any[] }) {
   const [collapsed, setCollapsed] = useState(false);
 
   return (
@@ -177,31 +173,18 @@ function ClipboardInspector() {
   );
 }
 
-function setAtPath(obj: any, path: Path, value: any) {
-  let current = obj;
-  for (let i = 0; i < path.length - 1; i++) current = current[path[i]];
-  current[path[path.length - 1]] = value;
-}
-
-function deleteAtPath(obj: any, path: Path) {
-  let current = obj;
-  for (let i = 0; i < path.length - 1; i++) current = current[path[i]];
-  delete current[path[path.length - 1]];
-}
-
 
 export function SourceViewer({ docId, rest }: { docId?: string; rest?: string; path?: string }) {
   const [status, setStatus] = useState('Loading document...');
   const [loadProgress, setLoadProgress] = useState<number | null>(null);
-  const [currentDoc, setCurrentDoc] = useState<CalendarDocument | null>(null);
-  const [history, setHistory] = useState<State<CalendarDocument>[]>([]);
+  const [currentDoc, setCurrentDoc] = useState<any>(null);
+  const [historyMeta, setHistoryMeta] = useState<Array<{ version: number; time: number }>>([]);
   const [changeCount, setChangeCount] = useState(0);
   const [version, setVersion] = useState(0);
+  const versionPatches: any[] = [];
   const [docName, setDocName] = useState('Document');
   const [peerStates, setPeerStates] = useState<Record<string, PeerState<PresenceState>>>({});
   const atLatest = useRef(true);
-  const historyStale = useRef(false);
-  const handleRef = useRef<DocHandle<CalendarDocument> | null>(null);
   const broadcastRef = useRef<((key: keyof PresenceState, value: any) => void) | null>(null);
   const presenceCleanupRef = useRef<(() => void) | null>(null);
 
@@ -224,25 +207,17 @@ export function SourceViewer({ docId, rest }: { docId?: string; rest?: string; p
     return result;
   }, [peerStates]);
 
+  // Load history metadata from worker
   const loadHistory = useCallback(() => {
-    const handle = handleRef.current;
-    if (!handle) return;
-    const d = handle.doc();
-    if (!d) return;
-    let h: State<CalendarDocument>[];
-    try {
-      h = Automerge.getHistory(d);
-    } catch (e) {
-      console.error('Automerge.getHistory failed:', e);
-      return;
-    }
-    historyStale.current = false;
-    setHistory(h);
-    setChangeCount(h.length);
-    if (atLatest.current) {
-      setVersion(h.length - 1);
-    }
-  }, []);
+    if (!docId) return;
+    getDocHistory(docId).then((h) => {
+      setHistoryMeta(h);
+      setChangeCount(h.length);
+      if (atLatest.current && h.length > 0) {
+        setVersion(h.length - 1);
+      }
+    }).catch(e => console.error('getDocHistory failed:', e));
+  }, [docId]);
 
   useEffect(() => {
     if (!docId) {
@@ -251,7 +226,6 @@ export function SourceViewer({ docId, rest }: { docId?: string; rest?: string; p
     }
 
     let mounted = true;
-    const mountedRef = { current: true };
 
     (async () => {
       setLoadProgress(0);
@@ -260,22 +234,26 @@ export function SourceViewer({ docId, rest }: { docId?: string; rest?: string; p
         secure: entry?.encrypted,
         onProgress: (pct) => { if (mounted) setLoadProgress(pct); },
       });
-      const handle = await repo.find<CalendarDocument>(docId as any);
-      setLoadProgress(null);
-      const doc = handle.doc();
       if (!mounted) return;
-      if (!doc) {
-        setStatus('Document not found. Check the URL.');
-        return;
-      }
+      setLoadProgress(null);
       addDocId(docId);
-      handleRef.current = handle;
 
-      // Show current doc immediately — no getHistory needed
-      setCurrentDoc(doc);
-      if (doc.name) setDocName(doc.name);
-      document.title = (doc.name || 'Document') + ' - Source Editor';
-      setStatus('');
+      // Subscribe to the full document via worker-api (routes through correct repo)
+      const unsubQuery = subscribeQuery(docId, '.', (result) => {
+        if (!mounted) return;
+        setCurrentDoc(result);
+        if (result.name) {
+          setDocName(result.name);
+          document.title = result.name + ' - Source Editor';
+        }
+        setStatus('');
+        // Track change count for history slider
+        setChangeCount(prev => {
+          const next = prev + (prev === 0 ? 0 : 1);
+          if (atLatest.current) setVersion(next > 0 ? next - 1 : 0);
+          return next;
+        });
+      });
 
       // Presence
       const { broadcast, cleanup: presenceCleanup } = initPresence<PresenceState>(
@@ -284,36 +262,15 @@ export function SourceViewer({ docId, rest }: { docId?: string; rest?: string; p
         (states) => { if (mounted) setPeerStates(states); },
       );
       broadcastRef.current = broadcast;
-      presenceCleanupRef.current = presenceCleanup;
+      presenceCleanupRef.current = () => { unsubQuery(); presenceCleanup(); };
 
-      // Load history in the background — doesn't block initial render
-      setTimeout(() => {
+      // Load history metadata in the background
+      getDocHistory(docId).then((h) => {
         if (!mounted) return;
-        try {
-          const h = Automerge.getHistory(doc);
-          setHistory(h);
-          setChangeCount(h.length);
-          setVersion(h.length - 1);
-        } catch (e) {
-          console.error('Automerge.getHistory failed:', e);
-        }
-      }, 0);
-
-      // On document changes, only update the live doc — never recompute history
-      handle.on('change', () => {
-        const d = handle.doc();
-        if (!d || !mounted) return;
-        setCurrentDoc(d);
-        if (d.name) {
-          setDocName(d.name);
-          document.title = d.name + ' - Source Editor';
-        }
-        historyStale.current = true;
-        if (atLatest.current) {
-          setChangeCount(prev => prev + 1);
-          setVersion(prev => prev + 1);
-        }
-      });
+        setHistoryMeta(h);
+        setChangeCount(h.length);
+        if (h.length > 0) setVersion(h.length - 1);
+      }).catch(e => console.error('getDocHistory failed:', e));
     })().catch((err) => {
       if (!mounted) return;
       const msg = err?.message || 'Failed to load document';
@@ -323,46 +280,19 @@ export function SourceViewer({ docId, rest }: { docId?: string; rest?: string; p
 
     return () => {
       mounted = false;
-      mountedRef.current = false;
       presenceCleanupRef.current?.();
       broadcastRef.current = null;
       presenceCleanupRef.current = null;
+      // Unpin version when leaving
+      if (docId) setDocVersion(docId, null);
     };
   }, [docId]);
 
   const isLatest = atLatest.current;
   const editable = isLatest;
 
-  // Resolve the snapshot: use currentDoc when at latest, history entry otherwise
-  const snapshot = useMemo(() => {
-    if (isLatest && currentDoc) return currentDoc;
-    const entry = history[version];
-    if (!entry) return currentDoc; // fallback to current doc while history loads
-    try {
-      return entry.snapshot;
-    } catch (e) {
-      console.error('Failed to resolve snapshot:', e);
-      return null;
-    }
-  }, [isLatest, currentDoc, history, version]);
-
-  const entry = history[version];
-
-  const versionPatches = useMemo(() => {
-    if (history.length === 0) return [];
-    const doc = currentDoc || history[history.length - 1]?.snapshot;
-    if (!doc) return [];
-    try {
-      const afterHeads = Automerge.getHeads(history[version]?.snapshot ?? doc);
-      const beforeHeads = version > 0
-        ? Automerge.getHeads(history[version - 1].snapshot)
-        : [];
-      return Automerge.diff(doc, beforeHeads, afterHeads);
-    } catch (e) {
-      console.error('Failed to compute patches:', e);
-      return [];
-    }
-  }, [version, history, currentDoc]);
+  // currentDoc is always the live or pinned doc from subscribeQuery
+  const snapshot = currentDoc;
 
   const validationErrors = useMemo(() => {
     if (!snapshot) return [];
@@ -391,27 +321,35 @@ export function SourceViewer({ docId, rest }: { docId?: string; rest?: string; p
   const jumpToLatest = () => {
     atLatest.current = true;
     setVersion(changeCount - 1);
+    setDocVersion(docId!, null);
   };
 
   const handleEdit = (path: Path, value: any) => {
-    if (!handleRef.current || !editable) return;
-    handleRef.current.change((doc: any) => {
-      setAtPath(doc, path, value);
-    });
+    if (!docId || !editable) return;
+    updateDoc(docId, (doc: any) => {
+      let current = doc;
+      for (let i = 0; i < path.length - 1; i++) current = current[path[i]];
+      current[path[path.length - 1]] = value;
+    }, { path, value });
   };
 
   const handleDelete = (path: Path) => {
-    if (!handleRef.current || !editable || path.length === 0) return;
-    handleRef.current.change((doc: any) => {
-      deleteAtPath(doc, path);
-    });
+    if (!docId || !editable || path.length === 0) return;
+    updateDoc(docId, (doc: any) => {
+      let current = doc;
+      for (let i = 0; i < path.length - 1; i++) current = current[path[i]];
+      delete current[path[path.length - 1]];
+    }, { path });
   };
 
   const handleAdd = (path: Path, key: string, value: any) => {
-    if (!handleRef.current || !editable) return;
-    handleRef.current.change((doc: any) => {
-      setAtPath(doc, [...path, key], value);
-    });
+    if (!docId || !editable) return;
+    const fullPath = [...path, key];
+    updateDoc(docId, (doc: any) => {
+      let current = doc;
+      for (let i = 0; i < fullPath.length - 1; i++) current = current[fullPath[i]];
+      current[fullPath[fullPath.length - 1]] = value;
+    }, { fullPath, value });
   };
 
   const peerList = Object.values(peerStates).filter(p => p.value.viewing);
@@ -428,19 +366,24 @@ export function SourceViewer({ docId, rest }: { docId?: string; rest?: string; p
     URL.revokeObjectURL(url);
   }, [snapshot, docName]);
 
+  const versionTime = historyMeta[version]?.time ?? null;
+
   const historyAdapter: DocumentHistory = {
     active: changeCount > 0,
     editable,
     isLatest,
     version,
     changeCount,
-    time: entry?.change.time ?? null,
+    time: versionTime,
     toggleHistory: () => {},
     onSliderChange: (v: number) => {
       const latest = v === changeCount - 1;
       atLatest.current = latest;
-      if (!latest && historyStale.current) loadHistory();
       setVersion(v);
+      // Pin/unpin the worker subscription to this version
+      if (docId) setDocVersion(docId, latest ? null : v);
+      // Refresh history metadata if stale
+      if (!latest) loadHistory();
     },
     jumpToLatest,
     undoToVersion: () => {},
@@ -470,7 +413,7 @@ export function SourceViewer({ docId, rest }: { docId?: string; rest?: string; p
       )}
       {status && <div className="viewer-status">{status}</div>}
 
-      {(currentDoc || history.length > 0) && (
+      {(currentDoc || changeCount > 0) && (
         <>
           <HistorySlider history={historyAdapter} dismissable={false} />
 

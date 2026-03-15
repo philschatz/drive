@@ -100,13 +100,14 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
     range: { minRow: number; maxRow: number; minCol: number; maxCol: number };
   } | null>(null);
 
-  const [addRowCount, setAddRowCount] = useState(10);
+  const [addRowCount, setAddRowCount] = useState<number | null>(10);
   const [mcResults, setMcResults] = useState<MCResults | null>(null);
   const mcCancelRef = useRef<(() => void) | null>(null);
 
   const [currentSheetId, setCurrentSheetId] = useState<string | null>(null);
 
   const addRows = () => {
+    if (addRowCount == null) return;
     const count = Math.max(1, Math.min(1000, addRowCount));
     if (!currentSheetId || !docId) return;
     const sid = currentSheetId;
@@ -1392,10 +1393,14 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
               <input
                 type="number"
                 className="add-rows-input"
-                value={addRowCount}
+                value={addRowCount ?? ''}
                 min={1}
                 max={1000}
-                onInput={(e: any) => setAddRowCount(parseInt(e.currentTarget.value, 10) || 10)}
+                onInput={(e: any) => {
+                  const v = e.currentTarget.value;
+                  setAddRowCount(v === '' ? null : (parseInt(v, 10) || 10));
+                }}
+                onFocus={(e: any) => e.currentTarget.select()}
                 onKeyDown={(e: any) => {
                   e.stopPropagation();
                   if (e.key === 'Enter') addRows();

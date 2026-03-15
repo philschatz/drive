@@ -197,8 +197,8 @@ export function AccessControl({ khDocId, docId, docType, sharingGroupId, onGroup
                 <span className="material-symbols-outlined text-muted-foreground" style={{ fontSize: 16 }}>
                   {member.isGroup ? 'group' : 'person'}
                 </span>
-                <span className="text-sm flex-1 truncate" title={member.displayId}>
-                  {member.displayId.slice(0, 12)}...
+                <span className="text-sm flex-1 truncate" title={member.agentId}>
+                  {member.agentId.slice(0, 8)}…
                   {member.isMe && (
                     <span className="text-xs text-muted-foreground ml-1">(you)</span>
                   )}
@@ -274,7 +274,7 @@ export function AccessControl({ khDocId, docId, docType, sharingGroupId, onGroup
                           <span className="material-symbols-outlined" style={{ fontSize: 14 }}>check_circle</span>
                           Accepted — key rotated
                           {acceptedBy && (
-                            <span className="text-muted-foreground ml-1">({acceptedBy.displayId.slice(0, 8)}…)</span>
+                            <span className="text-muted-foreground ml-1">({acceptedBy.agentId.slice(0, 8)}…)</span>
                           )}
                         </div>
                       ) : (
