@@ -5,7 +5,7 @@ import { peerColor } from './presence';
 import { AccessControl } from '../client/components/AccessControl';
 import { enableSharing, registerSharingGroup, registerDocMapping } from './keyhive-api';
 import { useAccess } from './useAccess';
-import { isSecureAvailable, getDocEntry } from '../client/doc-storage';
+import { getDocEntry } from '../client/doc-storage';
 
 interface PeerLike {
   peerId: string;
@@ -143,7 +143,7 @@ export function EditorTitleBar<P extends PeerLike>({
             sharingGroupId={sharingGroupId}
             onGroupIdChange={(gid) => onSharingEnabled?.(khDocId!, gid)}
           />
-        ) : isSecureAvailable() && docId && getDocEntry(docId)?.encrypted && (
+        ) : docId && getDocEntry(docId)?.encrypted && (
           <button
             className="inline-flex items-center justify-center h-9 w-9 rounded-md hover:bg-accent hover:text-accent-foreground"
             title="Enable sharing"

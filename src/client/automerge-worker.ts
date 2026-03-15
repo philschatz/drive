@@ -5,7 +5,7 @@ import { KeyhiveOps, errMsg } from './keyhive-ops';
 import { populateDocRepoMap, setDocRepo, repoFor as _repoFor } from './repo-routing';
 
 export type MainToWorker =
-  | { type: 'init'; secureAvailable: boolean; docList: Array<{ id: string; encrypted?: boolean }>; port?: MessagePort }
+  | { type: 'init'; docList: Array<{ id: string; encrypted?: boolean }>; port?: MessagePort }
   | { type: 'query'; id: number; docId: string; filter: string }
   // New worker-owned doc API
   | { type: 'create-doc'; id: number; initialJson: any; secure: boolean }
@@ -193,7 +193,7 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
 
   if (msg.type === 'init') {
     try {
-      console.log('[worker] init message received, secureAvailable:', msg.secureAvailable);
+      console.log('[worker] init message received');
 
       // --- Always create insecure repo ---
       const insecureStorage = new IndexedDBStorageAdapter('automerge-insecure');
@@ -225,8 +225,8 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
       insecureWs.onClose = () => { origInsecureClose(); (self as any).postMessage({ type: 'ws-status', repo: 'insecure', connected: false } satisfies WorkerToMain); };
       console.log('[worker] insecure repo created');
 
-      // --- Create secure repo if available ---
-      if (msg.secureAvailable) {
+      // --- Create secure repo ---
+      {
         if (!khBridge) throw new Error('Keyhive bridge not loaded');
 
         await khBridge.initKeyhiveWasm();

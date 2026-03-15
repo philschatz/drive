@@ -7,7 +7,7 @@ export type { DocHandle, DocumentId, PeerId } from '@automerge/automerge-repo';
 export type { PeerState, PresenceState } from '@automerge/automerge-repo';
 import type { WorkerToMain } from '../client/automerge-worker';
 import { initKeyhiveApi, handleKeyhiveResponse, getMyAccess, registerDocMapping } from './keyhive-api';
-import { getDocEntry, getDocList, isSecureAvailable } from '../client/doc-storage';
+import { getDocEntry, getDocList } from '../client/doc-storage';
 
 // --- Worker setup ---
 
@@ -48,12 +48,10 @@ export const repo = new Repo({
 // Initialize keyhive API with worker reference
 initKeyhiveApi(worker);
 
-// Send the other port to the worker along with secure availability and doc list
-const _secureAvailable = isSecureAvailable();
+// Send the other port to the worker along with doc list
 worker.postMessage(
   {
     type: 'init',
-    secureAvailable: _secureAvailable,
     docList: getDocList().map(e => ({ id: e.id, encrypted: e.encrypted })),
     port: channel.port2,
   },
@@ -72,10 +70,8 @@ ns.on('peer', (p: any) => { console.log('[automerge] workerReady: peer event, pe
 export function _worker(): Worker { return worker; }
 
 // Keyhive-specific ready promise — resolves when WASM + keyhive are fully initialized.
-// On HTTPS (no secure mode), resolve immediately since keyhive is never initialized.
 let resolveKeyhiveReady!: () => void;
 export const keyhiveReady = new Promise<void>(r => { resolveKeyhiveReady = r; });
-if (!_secureAvailable) resolveKeyhiveReady();
 
 // --- Worker peer ID ---
 // The actual peerId of the worker's primary repo (keyhive-derived or random).
