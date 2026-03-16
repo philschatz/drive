@@ -79,7 +79,7 @@ export function EditorTitleBar<P extends PeerLike>({
   };
 
   return (
-    <div className="flex items-center gap-1.5 px-1 min-h-10 max-w-screen-xl mx-auto w-full">
+    <div className="flex items-center gap-1.5 px-1 min-h-10 max-w-screen-xl mx-auto w-full overflow-hidden">
       {/* Left side */}
       <a
         href="#/"
@@ -108,7 +108,7 @@ export function EditorTitleBar<P extends PeerLike>({
       {children}
 
       {/* Right side */}
-      <div className="flex items-center gap-1.5 ml-auto shrink-0">
+      <div className="flex items-center gap-1 sm:gap-1.5 ml-auto shrink-0">
         {peers.filter(p => p.peerId !== getWorkerPeerId()).map(peer => (
           <div
             key={peer.peerId}
@@ -118,7 +118,7 @@ export function EditorTitleBar<P extends PeerLike>({
         ))}
 
         <span
-          className="text-xs text-muted-foreground whitespace-nowrap"
+          className="text-xs text-muted-foreground whitespace-nowrap hidden sm:inline"
           title={connected ? `Me: ${getWorkerPeerId()}` : 'Disconnected from server'}
         >
           {connected ? 'Connected' : 'Disconnected'}
@@ -169,7 +169,7 @@ export function EditorTitleBar<P extends PeerLike>({
         {showSourceLink && docId && (
           <a
             href={`#/source/${docId}`}
-            className="inline-flex items-center justify-center h-9 w-9 rounded-md hover:bg-accent hover:text-accent-foreground"
+            className="hidden sm:inline-flex items-center justify-center h-9 w-9 rounded-md hover:bg-accent hover:text-accent-foreground"
             title="Edit Source"
           >
             <span className="material-symbols-outlined" style={{ fontSize: 18 }}>code</span>
