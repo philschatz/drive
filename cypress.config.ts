@@ -20,6 +20,14 @@ export default defineConfig({
           return null;
         },
       });
+      on('before:browser:launch', (browser, launchOptions) => {
+        // The combined automerge + keyhive WASM modules exceed the default
+        // renderer heap limit (~4 GB). Raise it to prevent OOM crashes.
+        if (browser.family === 'chromium') {
+          launchOptions.args.push('--js-flags=--max-old-space-size=8192');
+        }
+        return launchOptions;
+      });
       return config;
     },
   },

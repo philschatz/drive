@@ -23,4 +23,11 @@ if grep -qi nixos /etc/os-release 2>/dev/null; then
   fi
 fi
 
+# For headless runs, default to Chromium — the combined automerge + keyhive
+# WASM modules exceed Electron's renderer heap limit (~4 GB), causing OOM.
+# The --browser flag in cypress.config.ts launch options raises the V8 heap.
+if [[ "$1" == "run" ]] && [[ "$*" != *"--browser"* ]]; then
+  exec npx cypress "$@" --browser chromium
+fi
+
 exec npx cypress "$@"
