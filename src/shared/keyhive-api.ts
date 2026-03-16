@@ -111,14 +111,14 @@ export function changeRole(agentId: string, docId: string, newRole: string): Pro
   return request('kh-change-role', { agentId, docId, newRole });
 }
 
-/** Generate an invite link for a document. Returns seed bytes + inviter archive for URL encoding. */
-export function generateInvite(docId: string, groupId: string, role: string): Promise<{ inviteKeyBytes: number[]; archiveBytes: number[]; groupId: string; inviteSignerAgentId: string }> {
+/** Generate an invite link for a document. Returns seed bytes for URL encoding. */
+export function generateInvite(docId: string, groupId: string, role: string): Promise<{ inviteKeyBytes: number[]; groupId: string; inviteSignerAgentId: string }> {
   return request('kh-generate-invite', { docId, groupId, role });
 }
 
-/** Claim an invite using the seed bytes and inviter archive from the invite URL. */
-export function claimInvite(inviteSeed: number[], archiveBytes: number[], automergeDocId: string): Promise<{ khDocId: string }> {
-  return request('kh-claim-invite', { inviteSeed, archiveBytes, automergeDocId });
+/** Claim an invite by syncing keys from the relay using the invite seed. */
+export function claimInvite(inviteSeed: number[], automergeDocId: string): Promise<{ khDocId: string }> {
+  return request('kh-claim-invite', { inviteSeed, automergeDocId });
 }
 
 /** Enable sharing on a document by creating a keyhive Document. */

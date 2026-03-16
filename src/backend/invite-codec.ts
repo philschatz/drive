@@ -1,10 +1,8 @@
 /**
  * Node.js port of src/client/invite/invite-codec.ts.
  *
- * Wire format: [4-byte seed length (big-endian)] [seed] [archive]
- * The payload is gzip-compressed then base64url-encoded.
+ * Format: the 32-byte seed, base64url-encoded (~43 chars).
  */
-import { gunzipSync, gzipSync } from 'zlib';
 
 function toBase64url(buf: Buffer): string {
   return buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
@@ -15,28 +13,16 @@ function fromBase64url(b64url: string): Buffer {
   return Buffer.from(b64, 'base64');
 }
 
-export function encodeInvitePayload(seed: Uint8Array, archive: Uint8Array): string {
-  const payload = Buffer.alloc(4 + seed.length + archive.length);
-  payload.writeUInt32BE(seed.length, 0);
-  payload.set(seed, 4);
-  payload.set(archive, 4 + seed.length);
-  const compressed = gzipSync(payload);
-  return toBase64url(compressed);
+export function encodeInvitePayload(seed: Uint8Array): string {
+  return toBase64url(Buffer.from(seed));
 }
 
-export function decodeInvitePayload(b64url: string): { seed: Uint8Array; archive: Uint8Array } {
-  const compressed = fromBase64url(b64url);
-  let bytes: Buffer;
-  try {
-    bytes = gunzipSync(compressed);
-  } catch {
-    // Fall back to uncompressed for old invite links
-    bytes = compressed;
+export function decodeInvitePayload(b64url: string): { seed: Uint8Array } {
+  const buf = fromBase64url(b64url);
+  if (buf.length !== 32) {
+    throw new Error(`Invalid invite payload: expected 32-byte seed, got ${buf.length} bytes`);
   }
-  const seedLen = bytes.readUInt32BE(0);
-  const seed = new Uint8Array(bytes.subarray(4, 4 + seedLen));
-  const archive = new Uint8Array(bytes.subarray(4 + seedLen));
-  return { seed, archive };
+  return { seed: new Uint8Array(buf) };
 }
 
 /**

@@ -83,7 +83,6 @@ export async function initCaldavKeyhive(
     Signer: { memorySignerFromBytes: (bytes: Uint8Array) => khBridge.Signer.memorySignerFromBytes(bytes) },
     CiphertextStore: { newInMemory: () => khBridge.CiphertextStore.newInMemory() },
     Keyhive: { init: (signer: any, store: any, cb: () => void) => khBridge.Keyhive.init(signer, store, cb) },
-    Archive: khBridge.Archive as any,
     Access: { tryFromString: (s: string) => khBridge.Access.tryFromString(s) },
     ContactCard: { fromJson: (json: string) => khBridge.ContactCard.fromJson(json) },
   };

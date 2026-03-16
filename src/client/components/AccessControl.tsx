@@ -128,10 +128,9 @@ export function AccessControl({ khDocId, docId, docType, sharingGroupId, onGroup
       if (result.groupId && result.groupId !== sharingGroupId) {
         onGroupIdChange?.(result.groupId);
       }
-      // Encode invite payload (compressed)
+      // Encode invite payload (seed only — claimer syncs from relay)
       const seed = new Uint8Array(result.inviteKeyBytes);
-      const archive = new Uint8Array(result.archiveBytes);
-      const payloadB64 = await encodeInvitePayload(seed, archive);
+      const payloadB64 = encodeInvitePayload(seed);
       const base = window.location.origin + window.location.pathname;
       const inviteUrl = `${base}#/invite/${docId}/${docType ?? 'unknown'}/${payloadB64}`;
 

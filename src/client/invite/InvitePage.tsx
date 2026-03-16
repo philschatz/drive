@@ -13,7 +13,7 @@
  * 4. Add document to local storage and redirect to it
  */
 
-import { useState, useEffect } from 'preact/hooks';
+import { useState, useCallback } from 'preact/hooks';
 import { Button } from '@/components/ui/button';
 import { addDocId, getDocEntry } from '@/doc-storage';
 import { claimInvite } from '../../shared/keyhive-api';
@@ -37,52 +37,52 @@ function docRoute(docId: string, type?: string): string {
 }
 
 export function InvitePage({ docId, docType, inviteKey }: InvitePageProps) {
-  const [status, setStatus] = useState('Preparing...');
+  const [status, setStatus] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
+  const [claiming, setClaiming] = useState(false);
 
-  useEffect(() => {
+  const doClaim = useCallback(async () => {
     if (!docId || !inviteKey) {
       setError('Invalid invite link — missing document ID or invite key.');
       return;
     }
+    setClaiming(true);
+    setError(null);
 
-    let cancelled = false;
+    try {
+      setStatus('Decoding invite...');
+      const { seed } = decodeInvitePayload(inviteKey);
 
-    (async () => {
-      try {
-        setStatus('Decoding invite...');
-        const { seed, archive } = await decodeInvitePayload(inviteKey);
+      setStatus('Syncing keys from relay...');
+      const result = await claimInvite(Array.from(seed), docId);
 
-        setStatus('Claiming access...');
-        const result = await claimInvite(Array.from(seed), Array.from(archive), docId);
+      setStatus('Adding document...');
+      const entry = getDocEntry(docId);
+      addDocId(docId, {
+        ...entry,
+        encrypted: true,
+        khDocId: result.khDocId,
+      });
 
-        if (cancelled) return;
+      setDone(true);
+      setStatus('Invite claimed! Redirecting...');
 
-        setStatus('Adding document...');
-        const entry = getDocEntry(docId);
-        addDocId(docId, {
-          ...entry,
-          encrypted: true,
-          khDocId: result.khDocId,
-        });
+      const type = docType ?? entry?.type;
+      setTimeout(() => {
+        window.location.hash = docRoute(docId, type);
+      }, 800);
+    } catch (err: any) {
+      setError(err.message || 'Failed to claim invite');
+    } finally {
+      setClaiming(false);
+    }
+  }, [docId, docType, inviteKey]);
 
-        setDone(true);
-        setStatus('Invite claimed! Redirecting...');
-
-        const type = docType ?? entry?.type;
-        setTimeout(() => {
-          window.location.hash = docRoute(docId, type);
-        }, 800);
-      } catch (err: any) {
-        if (!cancelled) {
-          setError(err.message || 'Failed to claim invite');
-        }
-      }
-    })();
-
-    return () => { cancelled = true; };
-  }, [docId, inviteKey]);
+  // Auto-start on first render
+  if (!status && !error && !done && !claiming) {
+    doClaim();
+  }
 
   return (
     <div className="max-w-md mx-auto p-8 text-center">
@@ -94,9 +94,14 @@ export function InvitePage({ docId, docType, inviteKey }: InvitePageProps) {
       {error ? (
         <div className="text-destructive mb-4">
           <p className="mb-2">{error}</p>
-          <Button variant="outline" onClick={() => { window.location.hash = '/'; }}>
-            Go home
-          </Button>
+          <div className="flex gap-2 justify-center">
+            <Button variant="default" onClick={doClaim} disabled={claiming}>
+              Retry
+            </Button>
+            <Button variant="outline" onClick={() => { window.location.hash = '/'; }}>
+              Go home
+            </Button>
+          </div>
         </div>
       ) : (
         <div>

@@ -34,7 +34,7 @@ export type MainToWorker =
   | { type: 'kh-enable-sharing'; id: number; automergeDocId: string }
   | { type: 'kh-register-doc-mapping'; automergeDocId: string; khDocId: string }
   | { type: 'kh-register-sharing-group'; id: number; khDocId: string; groupId: string }
-  | { type: 'kh-claim-invite'; id: number; inviteSeed: number[]; archiveBytes: number[]; automergeDocId: string }
+  | { type: 'kh-claim-invite'; id: number; inviteSeed: number[]; automergeDocId: string }
   | { type: 'open-doc'; id: number; docId: string; secure?: boolean }
   | { type: 'validate-subscribe'; docId: string }
   | { type: 'validate-unsubscribe'; docId: string };
@@ -687,8 +687,46 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
 
   if (msg.type === 'kh-claim-invite') {
     try {
-      if (!khOps) throw new Error('Keyhive not available');
-      const result = await khOps.claimInvite(msg.inviteSeed, msg.archiveBytes, msg.automergeDocId);
+      if (!khOps || !khBridge || !khIntegration) throw new Error('Keyhive not available');
+
+      // Seed-only invite: reconstruct invite keyhive using the main keyhive's
+      // archive (which has Alice's events from relay sync) and the invite seed.
+      const seed = new Uint8Array(msg.inviteSeed);
+      const inviteSigner = khBridge.Signer.memorySignerFromBytes(seed);
+
+      // Force an immediate keyhive sync to get latest events from peers
+      khIntegration.networkAdapter.syncKeyhive(undefined, true);
+
+      const MAX_WAIT_MS = 60000;
+      const POLL_INTERVAL_MS = 3000;
+      const start = Date.now();
+      let inviteKh: any = null;
+      let reachable: any[] = [];
+
+      while (Date.now() - start < MAX_WAIT_MS) {
+        const stats = await khIntegration.keyhive.stats();
+        const peerCount = (khIntegration.networkAdapter as any).peers?.size ?? '?';
+        const mainArchive = await khIntegration.keyhive.toArchive();
+        const tempStore = khBridge.CiphertextStore.newInMemory();
+        try {
+          inviteKh = await mainArchive.tryToKeyhive(tempStore, inviteSigner, () => {});
+          reachable = await inviteKh.reachableDocs();
+          console.log(`[kh-claim-invite] poll: totalOps=${stats.totalOps} peers=${peerCount} reachable=${reachable.length} elapsed=${Date.now() - start}ms`);
+          if (reachable.length > 0) break;
+        } catch (e) {
+          console.log(`[kh-claim-invite] poll: totalOps=${stats.totalOps} peers=${peerCount} tryToKeyhive error elapsed=${Date.now() - start}ms`);
+        }
+        // Force sync with contact card to ensure peer discovery
+        khIntegration.networkAdapter.syncKeyhive(undefined, true);
+        await new Promise(r => setTimeout(r, POLL_INTERVAL_MS));
+      }
+
+      if (!inviteKh || reachable.length === 0) {
+        const stats = await khIntegration.keyhive.stats();
+        throw new Error(`Invite signer membership not found after ${Math.round((Date.now() - start) / 1000)}s (totalOps=${stats.totalOps}). The invite may not have synced yet — try again.`);
+      }
+
+      const result = await khOps.claimInviteWithKeyhive(inviteKh, msg.automergeDocId);
       (self as any).postMessage({ type: 'kh-result', id: msg.id, result } satisfies WorkerToMain);
     } catch (err: any) {
       console.error('[kh-claim-invite] failed:', err);

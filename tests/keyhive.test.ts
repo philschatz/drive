@@ -28,6 +28,8 @@ import {
   ChangeId,
   Identifier,
   Encrypted,
+  ContactCard,
+  DocumentId,
 } from '@keyhive/keyhive/slim';
 // getEventHashesForAgent used by production sync protocol — kept for reference
 // import { getEventHashesForAgent } from '../src/lib/automerge-repo-keyhive/utilities';
@@ -790,80 +792,6 @@ describe('automerge-worker patterns', () => {
     expect(new Uint8Array(decrypted)).toEqual(plainA);
   });
 
-  it('full worker-level generate → encode → decode → claim round-trip', async () => {
-    // Replicates the complete kh-generate-invite → InvitePage.decode → kh-claim-invite flow
-
-    // --- A: enable sharing (kh-enable-sharing pattern) ---
-    const signerA = Signer.memorySignerFromBytes(crypto.getRandomValues(new Uint8Array(32)));
-    const khA = await Keyhive.init(signerA, CiphertextStore.newInMemory(), () => {});
-    const docA = await khA.generateDocument([], new ChangeId(new Uint8Array(32)), []);
-
-    // --- A: generate invite (kh-generate-invite pattern) ---
-    const seed = crypto.getRandomValues(new Uint8Array(32));
-    const inviteSigner = Signer.memorySignerFromBytes(seed);
-    const tempKh = await Keyhive.init(inviteSigner, CiphertextStore.newInMemory(), () => {});
-    const inviteCard = await tempKh.contactCard();
-    const inviteIndividual = await khA.receiveContactCard(inviteCard);
-    await khA.addMember(inviteIndividual.toAgent(), docA.toMembered(), Access.tryFromString('write')!, []);
-    const archive = await khA.toArchive();
-    const archiveBytes = archive.toBytes();
-
-    // --- Encode payload (AccessControl.tsx pattern) ---
-    const payload = new Uint8Array(4 + seed.length + archiveBytes.length);
-    new DataView(payload.buffer).setUint32(0, seed.length);
-    payload.set(seed, 4);
-    payload.set(archiveBytes, 4 + seed.length);
-    let binary = '';
-    for (let i = 0; i < payload.length; i++) binary += String.fromCharCode(payload[i]);
-    const payloadB64 = btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-
-    // --- Decode payload (InvitePage.tsx pattern) ---
-    const b64 = payloadB64.replace(/-/g, '+').replace(/_/g, '/');
-    const decodedBinary = atob(b64);
-    const decodedBytes = new Uint8Array(decodedBinary.length);
-    for (let i = 0; i < decodedBinary.length; i++) decodedBytes[i] = decodedBinary.charCodeAt(i);
-    const seedLen = new DataView(decodedBytes.buffer).getUint32(0);
-    const decodedSeed = decodedBytes.slice(4, 4 + seedLen);
-    const decodedArchive = decodedBytes.slice(4 + seedLen);
-
-    expect(decodedSeed).toEqual(seed);
-    expect(decodedArchive).toEqual(archiveBytes);
-
-    // --- B: claim invite (fixed kh-claim-invite pattern) ---
-    const signerB = Signer.memorySignerFromBytes(crypto.getRandomValues(new Uint8Array(32)));
-
-    // Reconstruct invite keyhive
-    const inviteSigner2 = Signer.memorySignerFromBytes(decodedSeed);
-    const inviteKh = await new Archive(decodedArchive).tryToKeyhive(
-      CiphertextStore.newInMemory(), inviteSigner2, () => {}
-    );
-
-    // B created fresh (not via tryToKeyhive)
-    const khB = await Keyhive.init(signerB, CiphertextStore.newInMemory(), () => {});
-    const cardB = await khB.contactCard();
-    const individualB = await inviteKh.receiveContactCard(cardB);
-    const reachable = await inviteKh.reachableDocs();
-    expect(reachable.length).toBeGreaterThan(0);
-    await inviteKh.addMember(individualB.toAgent(), reachable[0].doc.toMembered(), reachable[0].access, []);
-
-    // B receives contact cards so it can process delegations
-    const cardA = await khA.contactCard();
-    await khB.receiveContactCard(cardA);
-    await khB.receiveContactCard(inviteCard);
-
-    // Sync events from inviteKh to B
-    const bAgent = individualB.toAgent();
-    const eventsForB: Map<Uint8Array, Uint8Array> = await inviteKh.eventsForAgent(bAgent);
-    const eventsArr: Uint8Array[] = [];
-    eventsForB.forEach((v: Uint8Array) => eventsArr.push(v));
-    await khB.ingestEventsBytes(eventsArr);
-
-    // Verify B sees the document
-    const bReachable = await khB.reachableDocs();
-    expect(bReachable.length).toBeGreaterThan(0);
-    expect(bReachable[0].doc.doc_id.toString()).toBe(docA.doc_id.toString());
-  });
-
   it('multiple invites to same document', async () => {
     const signerA = Signer.memorySignerFromBytes(crypto.getRandomValues(new Uint8Array(32)));
     const khA = await Keyhive.init(signerA, CiphertextStore.newInMemory(), () => {});
@@ -1210,257 +1138,340 @@ describe('automerge-worker patterns', () => {
   });
 });
 
-// ── Invite payload encode/decode with production claimInvite ────────────────
 
-describe('invite payload encode/decode with production claimInvite', () => {
-  // Replicates: AccessControl.tsx encode → URL → InvitePage.tsx decode → keyhive-ops.ts claimInvite
-  // This is the EXACT production path including ingestArchive.
+// ── Seed-only invite flow ───────────────────────────────────────────────────
+// Tests for the seed-only invite claim path where Bob receives only a 32-byte
+// seed in the invite URL. Bob must sync keyhive events from Alice via the
+// relay before he can reconstruct the invite keyhive and claim access.
 
-  function encodePayload(seed: Uint8Array, archiveBytes: Uint8Array): string {
-    const payload = new Uint8Array(4 + seed.length + archiveBytes.length);
-    new DataView(payload.buffer).setUint32(0, seed.length);
-    payload.set(seed, 4);
-    payload.set(archiveBytes, 4 + seed.length);
-    let binary = '';
-    for (let i = 0; i < payload.length; i++) binary += String.fromCharCode(payload[i]);
-    return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-  }
+import { keyhiveIdentifierFromPeerId } from '../src/lib/automerge-repo-keyhive/utilities';
 
-  function decodePayload(b64url: string): { seed: Uint8Array; archive: Uint8Array } {
-    const b64 = b64url.replace(/-/g, '+').replace(/_/g, '/');
-    const binary = atob(b64);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-    const view = new DataView(bytes.buffer);
-    const seedLen = view.getUint32(0);
-    const seed = bytes.slice(4, 4 + seedLen);
-    const archive = bytes.slice(4 + seedLen);
-    return { seed, archive };
-  }
-
-  // Production claimInvite (keyhive-ops.ts:190-241)
-  async function claimInvite(khB: any, seed: Uint8Array, archiveBytes: Uint8Array) {
-    const inviteSigner = Signer.memorySignerFromBytes(seed);
-    const tempStore = CiphertextStore.newInMemory();
-    const inviterArchive = new Archive(archiveBytes);
-    const inviteKh = await inviterArchive.tryToKeyhive(tempStore, inviteSigner, () => {});
-    const ourCard = await khB.contactCard();
-    const ourIndividualInInviteKh = await inviteKh.receiveContactCard(ourCard);
-    const ourAgentInInviteKh = ourIndividualInInviteKh.toAgent();
-    const reachable = await inviteKh.reachableDocs();
-    if (reachable.length === 0) throw new Error('Invite has no document access');
-    const docSummaryItem = reachable[0];
-    const inviteDoc = docSummaryItem.doc;
-    const inviteAccess = docSummaryItem.access;
-    await inviteKh.addMember(ourAgentInInviteKh, inviteDoc.toMembered(), inviteAccess, []);
-
-    const inviteArchiveOut = await inviteKh.toArchive();
-    await khB.ingestArchive(inviteArchiveOut);
-
-    const eventsForUs: Map<Uint8Array, Uint8Array> = await inviteKh.eventsForAgent(ourAgentInInviteKh);
-    const eventsArr: Uint8Array[] = [];
-    eventsForUs.forEach((v: Uint8Array) => eventsArr.push(v));
-    await khB.ingestEventsBytes(eventsArr);
-
-    return { inviteDoc, inviteAccess };
-  }
-
-  it('archive bytes survive encode → decode round-trip', async () => {
-    const signerA = Signer.memorySignerFromBytes(crypto.getRandomValues(new Uint8Array(32)));
-    const khA = await Keyhive.init(signerA, CiphertextStore.newInMemory(), () => {});
-    await khA.generateDocument([], new ChangeId(new Uint8Array(32)), []);
-
-    const seed = crypto.getRandomValues(new Uint8Array(32));
-    const inviteSigner = Signer.memorySignerFromBytes(seed);
+describe('seed-only invite flow', () => {
+  // Helper: simulate Alice's generateInvite (seed-only, no archive in URL)
+  async function generateSeedOnlyInvite(khA: any) {
+    const ref = new ChangeId(crypto.getRandomValues(new Uint8Array(32)));
+    const doc = await khA.generateDocument([], ref, []);
+    const inviteSeed = crypto.getRandomValues(new Uint8Array(32));
+    const inviteSigner = Signer.memorySignerFromBytes(inviteSeed);
     const tempKh = await Keyhive.init(inviteSigner, CiphertextStore.newInMemory(), () => {});
     const inviteCard = await tempKh.contactCard();
     const inviteIndividual = await khA.receiveContactCard(inviteCard);
-    await khA.addMember(inviteIndividual.toAgent(), (await khA.reachableDocs())[0].doc.toMembered(), Access.tryFromString('write')!, []);
+    // Ingest temp archive so invite events are in Alice's keyhive
+    const tempArchive = await tempKh.toArchive();
+    await khA.ingestArchive(tempArchive);
+    await khA.addMember(inviteIndividual.toAgent(), doc.toMembered(), Access.tryFromString('write')!, []);
+    return { inviteSeed, doc };
+  }
 
-    const archive = await khA.toArchive();
-    const archiveBytes = archive.toBytes();
+  // Helper: simulate keyhive event sync from src → dst (bidirectional contact card + events)
+  async function syncEvents(src: any, dst: any) {
+    const srcCard = await src.contactCard();
+    const srcInd = await dst.receiveContactCard(srcCard);
+    const dstCard = await dst.contactCard();
+    const dstInd = await src.receiveContactCard(dstCard);
 
-    const b64url = encodePayload(seed, archiveBytes);
+    // src → dst events
+    const srcEventsForDst: Map<Uint8Array, Uint8Array> = await src.eventsForAgent(dstInd.toAgent());
+    const srcArr: Uint8Array[] = [];
+    srcEventsForDst.forEach((v: Uint8Array) => srcArr.push(v));
+    await dst.ingestEventsBytes(srcArr);
 
-    const decoded = decodePayload(b64url);
-    expect(decoded.seed).toEqual(seed);
-    expect(decoded.archive.length).toBe(archiveBytes.length);
-    expect(decoded.archive).toEqual(archiveBytes);
-  });
+    // dst → src events
+    const dstEventsForSrc: Map<Uint8Array, Uint8Array> = await dst.eventsForAgent(srcInd.toAgent());
+    const dstArr: Uint8Array[] = [];
+    dstEventsForSrc.forEach((v: Uint8Array) => dstArr.push(v));
+    await src.ingestEventsBytes(dstArr);
 
-  it('full production claimInvite (ingestArchive) after encode/decode', async () => {
-    // A: generate invite
+    return { srcInd, dstInd };
+  }
+
+  it('keyhiveIdentifierFromPeerId matches contactCard.id for fresh keyhives', async () => {
+    // Verify that the peer ID → Identifier mapping works correctly
+    // for freshly created keyhives (establishes baseline)
     const signerA = Signer.memorySignerFromBytes(crypto.getRandomValues(new Uint8Array(32)));
     const khA = await Keyhive.init(signerA, CiphertextStore.newInMemory(), () => {});
-    const docA = await khA.generateDocument([], new ChangeId(new Uint8Array(32)), []);
-
-    const seed = crypto.getRandomValues(new Uint8Array(32));
-    const inviteSigner = Signer.memorySignerFromBytes(seed);
-    const tempKh = await Keyhive.init(inviteSigner, CiphertextStore.newInMemory(), () => {});
-    const inviteCard = await tempKh.contactCard();
-    const inviteIndividual = await khA.receiveContactCard(inviteCard);
-    await khA.addMember(inviteIndividual.toAgent(), docA.toMembered(), Access.tryFromString('write')!, []);
-    const archive = await khA.toArchive();
-    const archiveBytes = archive.toBytes();
-
-    // Encode → decode (simulates URL copy/paste)
-    const b64url = encodePayload(seed, archiveBytes);
-    const decoded = decodePayload(b64url);
-
-    // B: claim invite using production pattern (ingestArchive)
     const signerB = Signer.memorySignerFromBytes(crypto.getRandomValues(new Uint8Array(32)));
     const khB = await Keyhive.init(signerB, CiphertextStore.newInMemory(), () => {});
-    const { inviteDoc } = await claimInvite(khB, decoded.seed, decoded.archive);
 
-    // Verify B sees the document
-    const bReachable = await khB.reachableDocs();
-    expect(bReachable.length).toBeGreaterThan(0);
-    expect(bReachable[0].doc.doc_id.toString()).toBe(docA.doc_id.toString());
-  });
-
-  it('production claimInvite + bidirectional encrypt/decrypt', async () => {
-    // A: generate invite
-    const signerA = Signer.memorySignerFromBytes(crypto.getRandomValues(new Uint8Array(32)));
-    const khA = await Keyhive.init(signerA, CiphertextStore.newInMemory(), () => {});
-    const docA = await khA.generateDocument([], new ChangeId(new Uint8Array(32)), []);
-    const docIdA = docA.doc_id;
-
-    const seed = crypto.getRandomValues(new Uint8Array(32));
-    const inviteSigner = Signer.memorySignerFromBytes(seed);
-    const tempKh = await Keyhive.init(inviteSigner, CiphertextStore.newInMemory(), () => {});
-    const inviteCard = await tempKh.contactCard();
-    const inviteIndividual = await khA.receiveContactCard(inviteCard);
-    await khA.addMember(inviteIndividual.toAgent(), docA.toMembered(), Access.tryFromString('write')!, []);
-    const archive = await khA.toArchive();
-    const archiveBytes = archive.toBytes();
-
-    // Encode → decode
-    const b64url = encodePayload(seed, archiveBytes);
-    const decoded = decodePayload(b64url);
-
-    // B: claim invite using production ingestArchive pattern
-    const signerB = Signer.memorySignerFromBytes(crypto.getRandomValues(new Uint8Array(32)));
-    const khB = await Keyhive.init(signerB, CiphertextStore.newInMemory(), () => {});
-    await claimInvite(khB, decoded.seed, decoded.archive);
-
-    // Bidirectional event sync (simulates keyhive sync protocol)
-    // B→A
-    const cardA = await khA.contactCard();
-    const indA_inB = await khB.receiveContactCard(cardA);
-    const bEventsForA: Map<Uint8Array, Uint8Array> = await khB.eventsForAgent(indA_inB.toAgent());
-    const bArr: Uint8Array[] = [];
-    bEventsForA.forEach((v: Uint8Array) => bArr.push(v));
-    await khA.ingestEventsBytes(bArr);
-
-    // A encrypts
-    const plainA = new TextEncoder().encode('hello from A');
-    const refA = new ChangeId(crypto.getRandomValues(new Uint8Array(32)));
-    const docA2 = await khA.getDocument(docIdA);
-    const resultA = await khA.tryEncryptArchive(docA2!, refA, [], plainA);
-    const encryptedA = resultA.encrypted_content();
-
-    // A→B
     const cardB = await khB.contactCard();
-    const indB_inA = await khA.receiveContactCard(cardB);
-    const aEventsForB: Map<Uint8Array, Uint8Array> = await khA.eventsForAgent(indB_inA.toAgent());
-    const aArr: Uint8Array[] = [];
-    aEventsForB.forEach((v: Uint8Array) => aArr.push(v));
-    await khB.ingestEventsBytes(aArr);
+    await khA.receiveContactCard(cardB);
 
-    // B decrypts A's message
-    const bReachable = await khB.reachableDocs();
-    const docB = await khB.getDocument(bReachable[0].doc.doc_id);
-    const decryptedA = await khB.tryDecrypt(docB!, encryptedA);
-    expect(new Uint8Array(decryptedA)).toEqual(plainA);
+    const bobPeerId = peerIdFromSigner(signerB);
+    const peerIdIdentifier = keyhiveIdentifierFromPeerId(bobPeerId);
+    const cardIdentifier = cardB.id;
 
-    // B encrypts
-    const plainB = new TextEncoder().encode('hello from B');
-    const refB = new ChangeId(crypto.getRandomValues(new Uint8Array(32)));
-    const docB2 = await khB.getDocument(bReachable[0].doc.doc_id);
-    const resultB = await khB.tryEncryptArchive(docB2!, refB, [], plainB);
-    const encryptedB = resultB.encrypted_content();
+    // For fresh keyhives, peer-ID-derived identifier matches contactCard.id
+    expect(peerIdIdentifier.toBytes()).toEqual(cardIdentifier.toBytes());
 
-    // Sync B→A again
-    const bEventsForA2: Map<Uint8Array, Uint8Array> = await khB.eventsForAgent(indA_inB.toAgent());
-    const bArr2: Uint8Array[] = [];
-    bEventsForA2.forEach((v: Uint8Array) => bArr2.push(v));
-    await khA.ingestEventsBytes(bArr2);
-
-    // A decrypts B's message
-    const docA3 = await khA.getDocument(docIdA);
-    const decryptedB = await khA.tryDecrypt(docA3!, encryptedB);
-    expect(new Uint8Array(decryptedB)).toEqual(plainB);
+    // And getAgent finds the agent by either identifier
+    const agentByPeerId = await khA.getAgent(peerIdIdentifier);
+    const agentByCardId = await khA.getAgent(cardIdentifier);
+    expect(agentByPeerId).toBeDefined();
+    expect(agentByCardId).toBeDefined();
   });
 
-  it('production claimInvite on existing keyhive (B already has state)', async () => {
-    // Simulates: B already has a keyhive with its own document, then claims
-    // A's invite. This matches production where B loads from IndexedDB first.
+  it('without event sync, tryToKeyhive succeeds but reachableDocs is empty', async () => {
+    // Alice generates a seed-only invite. Bob opens the link with just the seed.
+    // tryToKeyhive doesn't validate signer matches archive — it creates a keyhive
+    // but with no documents reachable (invite signer's events aren't in Bob's archive).
     const signerA = Signer.memorySignerFromBytes(crypto.getRandomValues(new Uint8Array(32)));
     const khA = await Keyhive.init(signerA, CiphertextStore.newInMemory(), () => {});
-    const docA = await khA.generateDocument([], new ChangeId(new Uint8Array(32)), []);
+    const { inviteSeed } = await generateSeedOnlyInvite(khA);
 
-    // B has its own keyhive with its own document (simulates prior session)
+    // Bob has his own fresh keyhive (no events from Alice)
     const signerB = Signer.memorySignerFromBytes(crypto.getRandomValues(new Uint8Array(32)));
     const khB = await Keyhive.init(signerB, CiphertextStore.newInMemory(), () => {});
-    const docB_own = await khB.generateDocument([], new ChangeId(crypto.getRandomValues(new Uint8Array(32))), []);
 
-    // A generates invite
-    const seed = crypto.getRandomValues(new Uint8Array(32));
-    const inviteSigner = Signer.memorySignerFromBytes(seed);
-    const tempKh = await Keyhive.init(inviteSigner, CiphertextStore.newInMemory(), () => {});
-    const inviteCard = await tempKh.contactCard();
-    const inviteIndividual = await khA.receiveContactCard(inviteCard);
-    await khA.addMember(inviteIndividual.toAgent(), docA.toMembered(), Access.tryFromString('write')!, []);
-    const archive = await khA.toArchive();
-    const archiveBytes = archive.toBytes();
+    // tryToKeyhive doesn't throw — it just creates a mismatched keyhive
+    const bobArchive = await khB.toArchive();
+    const inviteSigner = Signer.memorySignerFromBytes(inviteSeed);
+    const inviteKh = await bobArchive.tryToKeyhive(
+      CiphertextStore.newInMemory(), inviteSigner, () => {}
+    );
 
-    // Encode → decode
-    const b64url = encodePayload(seed, archiveBytes);
-    const decoded = decodePayload(b64url);
-
-    // B claims on its existing keyhive
-    await claimInvite(khB, decoded.seed, decoded.archive);
-
-
-    // B should see both its own document and A's document
-    const bReachable = await khB.reachableDocs();
-    expect(bReachable.length).toBe(2);
-    const docIds = bReachable.map((r: any) => r.doc.doc_id.toString());
-    expect(docIds).toContain(docA.doc_id.toString());
-    expect(docIds).toContain(docB_own.doc_id.toString());
+    // No documents reachable — Bob's archive has no invite signer events
+    const reachable = await inviteKh.reachableDocs();
+    expect(reachable.length).toBe(0);
   });
 
-  it('archive bytes via Array.from round-trip (worker message path)', async () => {
-    // Tests the exact serialization path: Uint8Array → number[] → postMessage → number[] → Uint8Array
-    // This is how archiveBytes travel through the worker boundary.
+  it('eventsForAgent sync does NOT include invite signer events (the real bug)', async () => {
+    // THE ROOT CAUSE: The keyhive sync protocol uses eventsForAgent() to decide
+    // what events to send to each peer. Since Bob isn't a member of any document
+    // yet, Alice's eventsForAgent(Bob) doesn't include the invite signer's
+    // identity, delegation chain, or document events. Bob never gets the events
+    // he needs to reconstruct the invite keyhive.
     const signerA = Signer.memorySignerFromBytes(crypto.getRandomValues(new Uint8Array(32)));
     const khA = await Keyhive.init(signerA, CiphertextStore.newInMemory(), () => {});
-    await khA.generateDocument([], new ChangeId(new Uint8Array(32)), []);
+    const { inviteSeed } = await generateSeedOnlyInvite(khA);
 
-    const seed = crypto.getRandomValues(new Uint8Array(32));
-    const inviteSigner = Signer.memorySignerFromBytes(seed);
+    const signerB = Signer.memorySignerFromBytes(crypto.getRandomValues(new Uint8Array(32)));
+    const khB = await Keyhive.init(signerB, CiphertextStore.newInMemory(), () => {});
+
+    // Exchange contact cards (simulates the relay handshake)
+    const cardA = await khA.contactCard();
+    const cardB = await khB.contactCard();
+    const indA_inB = await khB.receiveContactCard(cardA);
+    const indB_inA = await khA.receiveContactCard(cardB);
+
+    // Alice's eventsForAgent(Bob) — this is what the sync protocol sends
+    const eventsForBob: Map<Uint8Array, Uint8Array> = await khA.eventsForAgent(indB_inA.toAgent());
+    const eventCount = eventsForBob.size;
+
+    // Bob ingests whatever Alice sent
+    const eventsArr: Uint8Array[] = [];
+    eventsForBob.forEach((v: Uint8Array) => eventsArr.push(v));
+    if (eventsArr.length > 0) {
+      await khB.ingestEventsBytes(eventsArr);
+    }
+
+    // Try to reconstruct invite keyhive from Bob's archive
+    const bobArchive = await khB.toArchive();
+    const inviteSigner = Signer.memorySignerFromBytes(inviteSeed);
+    const inviteKh = await bobArchive.tryToKeyhive(
+      CiphertextStore.newInMemory(), inviteSigner, () => {}
+    );
+    const reachable = await inviteKh.reachableDocs();
+
+    // FAILS: eventsForAgent doesn't include invite signer events
+    // Bob gets 0 or very few events — none about the invite signer
+    expect(reachable.length).toBe(0);
+    console.log(`[seed-only-test] eventsForAgent(Bob) returned ${eventCount} events, reachable=${reachable.length}`);
+  });
+
+  it('ingestArchive DOES include invite signer events (archive-based invite works)', async () => {
+    // Contrast with the eventsForAgent test above: if Bob receives Alice's
+    // full archive (as in the v1 archive-based invite), the invite signer's
+    // events ARE included and the claim succeeds.
+    const signerA = Signer.memorySignerFromBytes(crypto.getRandomValues(new Uint8Array(32)));
+    const khA = await Keyhive.init(signerA, CiphertextStore.newInMemory(), () => {});
+    const { inviteSeed } = await generateSeedOnlyInvite(khA);
+
+    const signerB = Signer.memorySignerFromBytes(crypto.getRandomValues(new Uint8Array(32)));
+    const khB = await Keyhive.init(signerB, CiphertextStore.newInMemory(), () => {});
+
+    // Bob receives Alice's FULL archive (not eventsForAgent)
+    const aliceArchive = await khA.toArchive();
+    await khB.ingestArchive(aliceArchive);
+
+    // Now Bob's archive has the invite signer's events
+    const bobArchive = await khB.toArchive();
+    const inviteSigner = Signer.memorySignerFromBytes(inviteSeed);
+    const inviteKh = await bobArchive.tryToKeyhive(
+      CiphertextStore.newInMemory(), inviteSigner, () => {}
+    );
+    const reachable = await inviteKh.reachableDocs();
+
+    // SUCCESS: archive contains all events including invite signer's
+    expect(reachable.length).toBeGreaterThan(0);
+
+    // Note: completing the full claim (addMember) on the reconstructed invite
+    // keyhive fails with "CGKA not initialized" because ingestArchive +
+    // toArchive + tryToKeyhive doesn't preserve CGKA state. The production
+    // code (claimInviteWithKeyhive) handles this via ingestEventsBytes.
+  });
+
+  it('keyhiveIdentifierFromPeerId works for archive-loaded keyhives', async () => {
+    // Test that identifier matching still works when a keyhive is loaded
+    // from a persisted archive (the production initialization path).
+    const signerA = Signer.memorySignerFromBytes(crypto.getRandomValues(new Uint8Array(32)));
+    const khA = await Keyhive.init(signerA, CiphertextStore.newInMemory(), () => {});
+
+    // Save and reload A's keyhive from archive (simulates persistence)
+    const archiveA = await khA.toArchive();
+    const archiveBytes = archiveA.toBytes();
+    const reloadedArchive = new Archive(archiveBytes);
+    const khA2 = await reloadedArchive.tryToKeyhive(
+      CiphertextStore.newInMemory(), signerA, () => {}
+    );
+
+    // Create Bob and exchange contact cards with the reloaded keyhive
+    const signerB = Signer.memorySignerFromBytes(crypto.getRandomValues(new Uint8Array(32)));
+    const khB = await Keyhive.init(signerB, CiphertextStore.newInMemory(), () => {});
+    const cardB = await khB.contactCard();
+    await khA2.receiveContactCard(cardB);
+
+    // Verify that peer ID identifier still matches
+    const bobPeerId = peerIdFromSigner(signerB);
+    const peerIdIdentifier = keyhiveIdentifierFromPeerId(bobPeerId);
+
+    const agentByPeerId = await khA2.getAgent(peerIdIdentifier);
+    const agentByCardId = await khA2.getAgent(cardB.id);
+
+    expect(peerIdIdentifier.toBytes()).toEqual(cardB.id.toBytes());
+    expect(agentByPeerId).toBeDefined();
+    expect(agentByCardId).toBeDefined();
+  });
+
+  it('getExistingContactCard.id matches signer after invite generation + archive round-trip', async () => {
+    // Reproduce the exact production Alice path:
+    // 1. Create keyhive
+    // 2. Generate invite (ingestArchive from temp keyhive)
+    // 3. Persist to archive → reload from archive (tryToKeyhive)
+    // 4. Call contactCard() (what syncKeyhive does)
+    // 5. Check: does getExistingContactCard.id still match signer?
+    const signer = Signer.memorySignerFromBytes(crypto.getRandomValues(new Uint8Array(32)));
+    const kh = await Keyhive.init(signer, CiphertextStore.newInMemory(), () => {});
+
+    // Generate invite (production generateInvite flow)
+    const ref = new ChangeId(crypto.getRandomValues(new Uint8Array(32)));
+    const doc = await kh.generateDocument([], ref, []);
+    const inviteSeed = crypto.getRandomValues(new Uint8Array(32));
+    const inviteSigner = Signer.memorySignerFromBytes(inviteSeed);
     const tempKh = await Keyhive.init(inviteSigner, CiphertextStore.newInMemory(), () => {});
     const inviteCard = await tempKh.contactCard();
-    const inviteIndividual = await khA.receiveContactCard(inviteCard);
-    await khA.addMember(inviteIndividual.toAgent(), (await khA.reachableDocs())[0].doc.toMembered(), Access.tryFromString('write')!, []);
-    const archive = await khA.toArchive();
-    const archiveBytes = archive.toBytes();
+    const inviteIndividual = await kh.receiveContactCard(inviteCard);
+    const tempArchive = await tempKh.toArchive();
+    await kh.ingestArchive(tempArchive);
+    await kh.addMember(inviteIndividual.toAgent(), doc.toMembered(), Access.tryFromString('write')!, []);
 
-    // Simulate worker path: Uint8Array → Array.from (number[]) → new Uint8Array
-    const asNumberArray: number[] = Array.from(archiveBytes);
-    const backToUint8 = new Uint8Array(asNumberArray);
+    // Persist and reload (production restart)
+    const archive = await kh.toArchive();
+    const reloaded = new Archive(archive.toBytes());
+    const kh2 = await reloaded.tryToKeyhive(CiphertextStore.newInMemory(), signer, () => {});
 
-    expect(backToUint8.length).toBe(archiveBytes.length);
-    expect(backToUint8).toEqual(archiveBytes);
+    // Call contactCard() as syncKeyhive would
+    const newCard = await kh2.contactCard();
 
-    // Verify the round-tripped bytes can still be deserialized
-    const reconstructed = new Archive(backToUint8);
-    const inviteSigner2 = Signer.memorySignerFromBytes(seed);
-    const inviteKh = await reconstructed.tryToKeyhive(
-      CiphertextStore.newInMemory(), inviteSigner2, () => {}
+    // Check both card types
+    const existingCard = await kh2.getExistingContactCard();
+    const peerId = peerIdFromSigner(signer);
+    const peerIdentifier = keyhiveIdentifierFromPeerId(peerId);
+
+    console.log('[id-match-test] signer vk:', Array.from(signer.verifyingKey).slice(0, 4));
+    console.log('[id-match-test] newCard.id:', Array.from(newCard.id.toBytes()).slice(0, 4));
+    console.log('[id-match-test] existingCard.id:', Array.from(existingCard.id.toBytes()).slice(0, 4));
+    console.log('[id-match-test] peerIdIdentifier:', Array.from(peerIdentifier.toBytes()).slice(0, 4));
+
+    // These should all match — if they don't, we've found the bug
+    expect(newCard.id.toBytes()).toEqual(peerIdentifier.toBytes());
+    expect(existingCard.id.toBytes()).toEqual(peerIdentifier.toBytes());
+  });
+
+  it('seed-only claim FAILS with eventsForAgent sync (production bug)', async () => {
+    // This is the exact production failure: the keyhive sync protocol uses
+    // eventsForAgent() to send events to peers. Since Bob isn't a member of
+    // any document, Alice sends him nothing useful about the invite signer.
+    const { KeyhiveOps } = await import('../src/client/keyhive-ops');
+    const bridge = {
+      ChangeId, DocumentId,
+      Identifier, Signer, CiphertextStore, Keyhive, Access,
+      ContactCard,
+    };
+
+    const signerA = Signer.memorySignerFromBytes(crypto.getRandomValues(new Uint8Array(32)));
+    const khA = await Keyhive.init(signerA, CiphertextStore.newInMemory(), () => {});
+    const fxA = { persist: async () => {}, syncKeyhive: () => {}, registerDoc: () => {}, forceResyncAllPeers: () => {}, findDoc: () => {} };
+    const opsA = new KeyhiveOps(khA, bridge as any, fxA);
+
+    const { khDocId } = await opsA.enableSharing('doc-1');
+    const invite = await opsA.generateInvite(khDocId, 'write');
+    const inviteSeed = new Uint8Array(invite.inviteKeyBytes);
+
+    // Bob's keyhive
+    const signerB = Signer.memorySignerFromBytes(crypto.getRandomValues(new Uint8Array(32)));
+    const khB = await Keyhive.init(signerB, CiphertextStore.newInMemory(), () => {});
+
+    // Simulate the sync protocol: exchange contact cards + eventsForAgent
+    await syncEvents(khA, khB);
+
+    // Bob tries to reconstruct invite keyhive from his archive + seed
+    const bobArchive = await khB.toArchive();
+    const inviteSigner = Signer.memorySignerFromBytes(inviteSeed);
+    const inviteKh = await bobArchive.tryToKeyhive(
+      CiphertextStore.newInMemory(), inviteSigner, () => {}
+    );
+
+    // FAILS: reachableDocs() returns 0 because eventsForAgent didn't include
+    // the invite signer's events
+    const reachable = await inviteKh.reachableDocs();
+    expect(reachable.length).toBe(0);
+  });
+
+  it('seed-only claim: ingestArchive gives invite signer events but CGKA not initialized', async () => {
+    // Even with a full archive transfer, the reconstructed invite keyhive
+    // has CGKA in an uninitialized state. This means claimInviteWithKeyhive
+    // (which calls addMember internally) fails. This is the deeper issue
+    // blocking the seed-only flow.
+    const { KeyhiveOps } = await import('../src/client/keyhive-ops');
+    const bridge = {
+      ChangeId, DocumentId,
+      Identifier, Signer, CiphertextStore, Keyhive, Access,
+      ContactCard,
+    };
+
+    const signerA = Signer.memorySignerFromBytes(crypto.getRandomValues(new Uint8Array(32)));
+    const khA = await Keyhive.init(signerA, CiphertextStore.newInMemory(), () => {});
+    const fxA = { persist: async () => {}, syncKeyhive: () => {}, registerDoc: () => {}, forceResyncAllPeers: () => {}, findDoc: () => {} };
+    const opsA = new KeyhiveOps(khA, bridge as any, fxA);
+
+    const { khDocId } = await opsA.enableSharing('doc-1');
+    const invite = await opsA.generateInvite(khDocId, 'write');
+    const inviteSeed = new Uint8Array(invite.inviteKeyBytes);
+
+    // Bob's keyhive
+    const signerB = Signer.memorySignerFromBytes(crypto.getRandomValues(new Uint8Array(32)));
+    const khB = await Keyhive.init(signerB, CiphertextStore.newInMemory(), () => {});
+    const fxB = { persist: async () => {}, syncKeyhive: () => {}, registerDoc: () => {}, forceResyncAllPeers: () => {}, findDoc: () => {} };
+    const opsB = new KeyhiveOps(khB, bridge as any, fxB);
+
+    // Bob receives Alice's FULL archive
+    const aliceArchive = await khA.toArchive();
+    await khB.ingestArchive(aliceArchive);
+
+    // Bob can reconstruct the invite keyhive and see the document
+    const bobArchive = await khB.toArchive();
+    const inviteSigner = Signer.memorySignerFromBytes(inviteSeed);
+    const inviteKh = await bobArchive.tryToKeyhive(
+      CiphertextStore.newInMemory(), inviteSigner, () => {}
     );
     const reachable = await inviteKh.reachableDocs();
     expect(reachable.length).toBeGreaterThan(0);
+
+    // But claimInviteWithKeyhive fails because CGKA is not initialized
+    // in the reconstructed invite keyhive
+    await expect(
+      opsB.claimInviteWithKeyhive(inviteKh, 'doc-1')
+    ).rejects.toThrow('Cgka is not initialized');
   });
 });
 

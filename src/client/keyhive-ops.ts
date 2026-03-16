@@ -36,7 +36,6 @@ export interface KeyhiveBridge {
   Signer: { memorySignerFromBytes(bytes: Uint8Array): any };
   CiphertextStore: { newInMemory(): any };
   Keyhive: { init(signer: any, store: any, cb: () => void): Promise<any> };
-  Archive: new (bytes: Uint8Array) => any;
   Access: { tryFromString(s: string): any | undefined };
   ContactCard: { fromJson(json: string): any };
 }
@@ -156,7 +155,7 @@ export class KeyhiveOps {
   async generateInvite(
     docId: string,
     role: string,
-  ): Promise<{ inviteKeyBytes: number[]; archiveBytes: number[]; groupId: string; inviteSignerAgentId: string }> {
+  ): Promise<{ inviteKeyBytes: number[]; groupId: string; inviteSignerAgentId: string }> {
     const doc = this.khDocuments.get(docId);
     if (!doc) throw new Error('Document not found. Re-enable sharing.');
     const seed = crypto.getRandomValues(new Uint8Array(32));
@@ -165,28 +164,25 @@ export class KeyhiveOps {
     const tempKh = await this.bridge.Keyhive.init(inviteSigner, store, () => {});
     const inviteCard = await tempKh.contactCard();
     const inviteIndividual = await this.kh.receiveContactCard(inviteCard);
+    // Ingest the temp keyhive's archive so its events (prekeys, identity ops)
+    // are part of our keyhive and get synced to other peers.
+    const tempArchive = await tempKh.toArchive();
+    await this.kh.ingestArchive(tempArchive);
     const inviteSignerAgentId = bytesToBase64(inviteIndividual.id.toBytes());
     const inviteAgent = inviteIndividual.toAgent();
     const access = this.bridge.Access.tryFromString(role);
     if (!access) throw new Error(`Invalid role: ${role}`);
     await this.kh.addMember(inviteAgent, doc.toMembered(), access, []);
-    const archive = await this.kh.toArchive();
-    const archiveBytes: number[] = Array.from(archive.toBytes());
     await this.fx.persist();
     this.fx.syncKeyhive();
-    return { inviteKeyBytes: Array.from(seed) as number[], archiveBytes, groupId: '', inviteSignerAgentId };
+    return { inviteKeyBytes: Array.from(seed) as number[], groupId: '', inviteSignerAgentId };
   }
 
-  async claimInvite(
-    inviteSeed: number[],
-    archiveBytes: number[],
+  /** Claim an invite using an already-initialized invite keyhive (from relay sync). */
+  async claimInviteWithKeyhive(
+    inviteKh: any,
     automergeDocId?: string,
   ): Promise<{ khDocId: string }> {
-    const seed = new Uint8Array(inviteSeed);
-    const inviteSigner = this.bridge.Signer.memorySignerFromBytes(seed);
-    const tempStore = this.bridge.CiphertextStore.newInMemory();
-    const inviterArchive = new this.bridge.Archive(new Uint8Array(archiveBytes));
-    const inviteKh = await inviterArchive.tryToKeyhive(tempStore, inviteSigner, () => {});
     const ourCard = await this.kh.contactCard();
     const ourIndividualInInviteKh = await inviteKh.receiveContactCard(ourCard);
     const ourAgentInInviteKh = ourIndividualInInviteKh.toAgent();

@@ -53,12 +53,13 @@ export function createAdminRoutes(getCaldavKeyhive: () => CaldavKeyhive | null):
         return;
       }
 
-      const { seed, archive } = decodeInvitePayload(invitePayload);
-      const result = await kh.khOps.claimInvite(
-        Array.from(seed),
-        Array.from(archive),
-        docId,
-      );
+      const { seed } = decodeInvitePayload(invitePayload);
+      // Seed-only claim: build invite keyhive from main archive + invite seed
+      const inviteSigner = kh.khOps.bridge.Signer.memorySignerFromBytes(seed);
+      const mainArchive = await kh.khOps.kh.toArchive();
+      const tempStore = kh.khOps.bridge.CiphertextStore.newInMemory();
+      const inviteKh = await mainArchive.tryToKeyhive(tempStore, inviteSigner, () => {});
+      const result = await kh.khOps.claimInviteWithKeyhive(inviteKh, docId);
 
       console.log(`[admin] Invite claimed for doc ${docId}, khDocId: ${result.khDocId}`);
       res.json({ success: true, khDocId: result.khDocId, docId });
