@@ -10,8 +10,6 @@ interface DocEntry {
   khDocId?: string;
   /** Keyhive sharing group ID (base64-encoded). Needed to restore after reload. */
   sharingGroupId?: string;
-  /** For migration: the original unencrypted doc ID that was migrated. */
-  legacyDocId?: string;
 }
 
 const DOC_STORAGE_KEY = 'automerge-doc-ids';
@@ -20,12 +18,6 @@ export function getDocList(): DocEntry[] {
   try {
     const raw = JSON.parse(localStorage.getItem(DOC_STORAGE_KEY) || '[]');
     if (!Array.isArray(raw)) return [];
-    // Handle legacy string[] format
-    if (raw.length > 0 && typeof raw[0] === 'string') {
-      const entries: DocEntry[] = raw.map((id: string) => ({ id }));
-      saveDocList(entries);
-      return entries;
-    }
     return raw;
   } catch { return []; }
 }

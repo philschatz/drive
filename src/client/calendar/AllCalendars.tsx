@@ -51,8 +51,7 @@ function getSavedIds(): string[] {
   try {
     const raw = JSON.parse(localStorage.getItem('automerge-doc-ids') || '[]');
     if (!Array.isArray(raw)) return [];
-    // Handle both legacy string[] and new DocEntry[] formats
-    return raw.map((entry: any) => typeof entry === 'string' ? entry : entry.id).filter(Boolean);
+    return raw.map((entry: any) => entry.id).filter(Boolean);
   } catch { return []; }
 }
 
