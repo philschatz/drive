@@ -24,6 +24,7 @@ import {
   type InviteRecord,
 } from '../invite-storage';
 import { encodeInvitePayload } from '../invite/invite-codec';
+import QRCode from 'qrcode';
 
 /** Copy or share a URL, with fallbacks for mobile browsers (e.g. Firefox Android). */
 async function shareOrCopy(url: string): Promise<boolean> {
@@ -57,6 +58,15 @@ async function shareOrCopy(url: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+function InviteQR({ url }: { url: string }) {
+  const [svg, setSvg] = useState('');
+  useEffect(() => {
+    QRCode.toString(url, { type: 'svg', margin: 1, width: 160 }).then(setSvg).catch(() => {});
+  }, [url]);
+  if (!svg) return null;
+  return <div className="mt-2 flex justify-center" dangerouslySetInnerHTML={{ __html: svg }} />;
 }
 
 interface AccessControlProps {
@@ -356,6 +366,7 @@ export function AccessControl({ khDocId, docId, docType, sharingGroupId, onGroup
                               </Tooltip>
                             </TooltipProvider>
                           </div>
+                          <InviteQR url={record.inviteUrl} />
                         </>
                       )}
                     </div>
