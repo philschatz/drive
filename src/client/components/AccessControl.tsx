@@ -247,6 +247,7 @@ export function AccessControl({ khDocId, docId, docType, sharingGroupId, onGroup
                   <SelectContent>
                     <SelectItem value="read">Read</SelectItem>
                     <SelectItem value="write">Write</SelectItem>
+                    <SelectItem value="admin">Admin</SelectItem>
                   </SelectContent>
                 </Select>
                 <Button size="sm" onClick={handleGenerateInvite} disabled={loading}>

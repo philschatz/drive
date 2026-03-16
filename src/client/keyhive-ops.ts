@@ -1,3 +1,4 @@
+import { Keyhive } from "@keyhive/keyhive/slim";
 
 // Re-export these so the worker can use them without duplicating
 export function bytesToBase64(bytes: Uint8Array): string {
@@ -50,14 +51,14 @@ export interface MemberInfo {
 }
 
 export class KeyhiveOps {
-  kh: any; // Keyhive instance
+  kh: Keyhive; // Keyhive instance
   bridge: KeyhiveBridge;
   khDocuments = new Map<string, any>();
   inviteAccessOverrides = new Map<string, string>();
   private fx: KeyhiveOpsSideEffects;
 
   constructor(
-    kh: any,
+    kh: Keyhive,
     bridge: KeyhiveBridge,
     sideEffects: KeyhiveOpsSideEffects,
   ) {
