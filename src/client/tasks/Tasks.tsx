@@ -7,7 +7,6 @@ import { EditorTitleBar } from '../../shared/EditorTitleBar';
 import { useDocumentHistory } from '../../shared/useDocumentHistory';
 import { useAccess } from '../../shared/useAccess';
 import { HistorySlider } from '../../shared/HistorySlider';
-import { usePresenceLog, PresenceLogTable } from '../../shared/PresenceLog';
 import { getDocEntry, updateDocCache } from '../doc-storage';
 import type { TaskDocument, Task } from './schema';
 import { TaskEditor } from './TaskEditor';
@@ -74,7 +73,6 @@ export function Tasks({ docId, readOnly }: { docId?: string; readOnly?: boolean;
   canEditRef.current = canEdit;
   const broadcastRef = useRef<((key: keyof PresenceState, value: any) => void) | null>(null);
   const presenceCleanupRef = useRef<(() => void) | null>(null);
-  const { entries: presenceLog, clear: clearLog } = usePresenceLog();
   const editorStateRef = useRef(editorState);
   editorStateRef.current = editorState;
   const titleFocusedRef = useRef(false);
@@ -341,7 +339,6 @@ export function Tasks({ docId, readOnly }: { docId?: string; readOnly?: boolean;
         peerFocusedFields={peerFocusedFields}
       />
 
-      <PresenceLogTable entries={presenceLog} onClear={clearLog} />
     </>
     </DocLoader>
   );
