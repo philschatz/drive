@@ -497,6 +497,84 @@ describe('KeyhiveOps', () => {
       const decrypted = await khA.tryDecrypt(docA!, encResult.encrypted_content());
       expect(new Uint8Array(decrypted)).toEqual(plaintext);
     });
+
+    it('inviter can revoke temp invite member after claim', async () => {
+      const { ops: opsA, kh: khA } = await createOps();
+      const { ops: opsB, kh: khB } = await createOps();
+
+      const { khDocId } = await opsA.enableSharing('doc-1');
+      const invite = await opsA.generateInvite(khDocId, 'write');
+
+      // Before claim: temp invite member should be in the member list
+      const membersBefore = await opsA.getDocMembers(khDocId);
+      const tempMemberBefore = membersBefore.find(m => m.agentId === invite.inviteSignerAgentId);
+      expect(tempMemberBefore).toBeDefined();
+
+      // B claims via archive
+      const result = await claimViaArchive(opsA, opsB, invite.inviteKeyBytes, 'doc-1');
+
+      // Temp member is still present on B's side (claimer can't revoke)
+      const membersOnB = await opsB.getDocMembers(result.khDocId);
+      expect(membersOnB.find(m => m.agentId === invite.inviteSignerAgentId)).toBeDefined();
+
+      // Alice (inviter/owner) revokes the temp invite member
+      await opsA.revokeMember(invite.inviteSignerAgentId, khDocId);
+
+      // After revocation: temp member is gone from Alice's member list
+      const membersAfterA = await opsA.getDocMembers(khDocId);
+      expect(membersAfterA.find(m => m.agentId === invite.inviteSignerAgentId)).toBeUndefined();
+
+      // B should still be a member (on A's side)
+      // Sync B's archive to A so A knows about B
+      const bArchive = await khB.toArchive();
+      await khA.ingestArchive(bArchive);
+      const bCard = await khB.contactCard();
+      await khA.receiveContactCard(bCard);
+      const membersAfterSync = await opsA.getDocMembers(khDocId);
+      const bOnA = membersAfterSync.find(m => !m.isMe && m.agentId !== invite.inviteSignerAgentId);
+      expect(bOnA).toBeDefined();
+      expect(bOnA!.role).toBe('Write');
+    });
+
+    it('cross-peer encryption works after temp member revocation', async () => {
+      const { ops: opsA, kh: khA } = await createOps();
+      const { ops: opsB, kh: khB } = await createOps();
+
+      const { khDocId } = await opsA.enableSharing('doc-1');
+      const invite = await opsA.generateInvite(khDocId, 'write');
+      await claimViaArchive(opsA, opsB, invite.inviteKeyBytes, 'doc-1');
+
+      // Sync: A ingests B's archive so A knows about B
+      const bArchive = await khB.toArchive();
+      await khA.ingestArchive(bArchive);
+      const bCard = await khB.contactCard();
+      const indB_inA = await khA.receiveContactCard(bCard);
+      const bEventsForA: Map<Uint8Array, Uint8Array> = await khB.eventsForAgent(indB_inA.toAgent());
+      const syncArr: Uint8Array[] = [];
+      bEventsForA.forEach((v: Uint8Array) => syncArr.push(v));
+      await khA.ingestEventsBytes(syncArr);
+
+      // A encrypts after claim + revocation
+      const docA = await khA.getDocument(opsA.khDocuments.values().next().value!.doc_id);
+      const plaintext = new TextEncoder().encode('post-revocation message');
+      const ref = new ChangeId(crypto.getRandomValues(new Uint8Array(32)));
+      const encResult = await khA.tryEncryptArchive(docA!, ref, [], plaintext);
+      expect(encResult.encrypted_content()).toBeDefined();
+
+      // B ingests A's events and decrypts
+      const aArchive = await khA.toArchive();
+      await khB.ingestArchive(aArchive);
+      const aCard = await khA.contactCard();
+      const indA_inB = await khB.receiveContactCard(aCard);
+      const aEventsForB: Map<Uint8Array, Uint8Array> = await khA.eventsForAgent(indA_inB.toAgent());
+      const arr: Uint8Array[] = [];
+      aEventsForB.forEach((v: Uint8Array) => arr.push(v));
+      await khB.ingestEventsBytes(arr);
+
+      const docB = await khB.getDocument(opsB.khDocuments.values().next().value!.doc_id);
+      const decrypted = await khB.tryDecrypt(docB!, encResult.encrypted_content());
+      expect(new Uint8Array(decrypted)).toEqual(plaintext);
+    });
   });
 
   describe('accessForDoc cross-peer (insufficient access bug)', () => {

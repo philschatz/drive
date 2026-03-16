@@ -69,6 +69,18 @@ export function AccessControl({ khDocId, docId, docType, sharingGroupId, onGroup
       return { record: r, accepted: newMembers.length > 0, acceptedBy: newMembers[0] };
     });
     setInviteStatuses(statuses);
+
+    // Auto-revoke temp invite members once the invite has been claimed.
+    // Only the inviter (admin) has the authority to revoke.
+    for (const s of statuses) {
+      if (!s.accepted) continue;
+      const tempStillPresent = current.some(m => m.agentId === s.record.inviteSignerAgentId);
+      if (tempStillPresent) {
+        revokeMember(s.record.inviteSignerAgentId, khDocId).catch(err =>
+          console.warn('[AccessControl] Failed to auto-revoke temp invite member:', err)
+        );
+      }
+    }
   }, [khDocId]);
 
   const refresh = useCallback(async () => {

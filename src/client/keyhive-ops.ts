@@ -194,11 +194,6 @@ export class KeyhiveOps {
     const inviteAccessStr = inviteAccess.toString();
     await inviteKh.addMember(ourAgentInInviteKh, inviteDoc.toMembered(), inviteAccess, []);
 
-    // Ingest the invite archive into our existing keyhive. This adds the
-    // individuals, delegation chain, and document structure — but NOT CGKA state.
-    const inviteArchiveOut = await inviteKh.toArchive();
-    await this.kh.ingestArchive(inviteArchiveOut);
-
     // Ingest CGKA events from inviteKh. When our keyhive processes the
     // CGKA Add op for us, receive_cgka_op detects active_id == added_id and
     // calls merge_cgka_invite_op, which properly sets CGKA owner_id and
@@ -206,6 +201,10 @@ export class KeyhiveOps {
     const eventsForUs: Map<Uint8Array, Uint8Array> = await inviteKh.eventsForAgent(ourAgentInInviteKh);
     const eventsArr: Uint8Array[] = [];
     eventsForUs.forEach((v: Uint8Array) => eventsArr.push(v));
+
+    // Ingest the invite archive into our existing keyhive.
+    const inviteArchiveOut = await inviteKh.toArchive();
+    await this.kh.ingestArchive(inviteArchiveOut);
     await this.kh.ingestEventsBytes(eventsArr);
 
     const khDocId = bytesToBase64(inviteDoc.id.toBytes());
@@ -214,6 +213,11 @@ export class KeyhiveOps {
     if (docFromOurKh) {
       this.khDocuments.set(khDocId, docFromOurKh);
     }
+
+    // Revoke the temporary invite identity now that we have the full
+    // delegation chain in our main keyhive. This rotates the key.
+    // Note: the claimer can't revoke the temp invite member (insufficient authority).
+    // The inviter auto-revokes it when detecting the claim via revokeClaimedInviteMembers().
     if (automergeDocId) {
       this.fx.registerDoc(automergeDocId, inviteDoc.doc_id);
     }
