@@ -143,10 +143,6 @@ export function Tasks({ docId, readOnly }: { docId?: string; readOnly?: boolean;
   }, []);
 
   useEffect(() => {
-    quickAddRef.current?.focus();
-  }, []);
-
-  useEffect(() => {
     if (!editorState) broadcastRef.current?.('focusedField', null);
   }, [editorState]);
 
@@ -276,6 +272,7 @@ export function Tasks({ docId, readOnly }: { docId?: string; readOnly?: boolean;
       <div className="flex items-center gap-2 mb-3">
         <Input
           ref={quickAddRef}
+          autoFocus
           placeholder="Add a task..."
           value={quickAddText}
           onInput={(e: any) => setQuickAddText(e.currentTarget.value)}
