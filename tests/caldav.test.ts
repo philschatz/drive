@@ -1,5 +1,5 @@
 import request from 'supertest';
-import app, { ready } from '../src/backend/server';
+import app, { ready } from '../src/backend/caldav-server';
 
 let calId: string;
 

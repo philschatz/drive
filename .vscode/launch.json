@@ -5,8 +5,16 @@
       "name": "Dev Server",
       "type": "node",
       "request": "launch",
-      "runtimeArgs": ["-r", "ts-node/register"],
-      "args": ["src/backend/server.ts"],
+      "runtimeArgs": ["--inspect", "node_modules/.bin/vite", "dev", "--port", "3000"],
+      "console": "integratedTerminal",
+      "skipFiles": ["<node_internals>/**"]
+    },
+    {
+      "name": "CalDAV Server",
+      "type": "node",
+      "request": "launch",
+      "runtimeArgs": ["-r", "ts-node/register", "-r", "tsconfig-paths/register"],
+      "args": ["src/backend/caldav-server.ts"],
       "console": "integratedTerminal",
       "skipFiles": ["<node_internals>/**"]
     },

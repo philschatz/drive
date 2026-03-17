@@ -4,6 +4,7 @@ import tailwindcss from '@tailwindcss/vite';
 import wasm from 'vite-plugin-wasm';
 import { VitePWA } from 'vite-plugin-pwa';
 import { resolve } from 'path';
+import { relayPlugin } from './src/backend/relay-plugin';
 
 const automergeEntry = resolve(__dirname, 'node_modules/@automerge/automerge/dist/mjs/entrypoints/fullfat_base64.js');
 
@@ -101,6 +102,7 @@ export default defineConfig(async () => {
     wasm(),
     preact(),
     tailwindcss(),
+    relayPlugin(),
     radixPreactPatchPlugin(),
     automergeWasmPlugin(),
     keyhiveWasmPlugin(),
@@ -162,6 +164,9 @@ export default defineConfig(async () => {
   server: {
     fs: {
       allow: [resolve(__dirname)],
+    },
+    hmr: {
+      port: Number(process.env.PORT || 3000) + 1,
     },
   },
   optimizeDeps: {
