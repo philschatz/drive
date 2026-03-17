@@ -143,12 +143,14 @@ async function pushToSubscriptions(docId: string) {
   if (!hasQuerySubs && !hasValidation) return;
 
   const handle = entry.handle;
-  const history = Automerge.getHistory(handle.doc());
+  const rawDoc = handle.doc();
+  if (!rawDoc) return; // doc not yet loaded/decrypted — wait for change event
+  const history = Automerge.getHistory(rawDoc);
   let activeDoc: any;
   if (entry.pinnedVersion !== null) {
-    activeDoc = history[entry.pinnedVersion]?.snapshot ?? handle.doc();
+    activeDoc = history[entry.pinnedVersion]?.snapshot ?? rawDoc;
   } else {
-    activeDoc = handle.doc();
+    activeDoc = rawDoc;
   }
   const heads: string[] = handle.heads ? handle.heads() : [];
 
@@ -385,8 +387,12 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
       entry.subscriptions.set(msg.subId, msg.filter);
       subIdToDocId.set(msg.subId, msg.docId);
 
-      // Push immediately
-      await pushToSubscriptions(msg.docId);
+      // Push immediately if doc is ready, otherwise wait for it
+      if (handle.doc()) {
+        await pushToSubscriptions(msg.docId);
+      } else if (handle.whenReady) {
+        handle.whenReady().then(() => pushToSubscriptions(msg.docId));
+      }
     } catch (err: any) {
       (self as any).postMessage({ type: 'sub-result', subId: msg.subId, result: null, heads: [], error: errMsg(err) } satisfies WorkerToMain);
     }
