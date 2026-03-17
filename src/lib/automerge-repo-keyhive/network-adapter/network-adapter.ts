@@ -324,6 +324,11 @@ export class KeyhiveNetworkAdapter extends NetworkAdapter {
   private lastChangeIdByDoc: Map<string, ChangeId> = new Map();
   // Messages that failed decryption (key not yet available) — retried after keyhive sync
   private pendingDecrypt: { message: Message; rawPayload: Uint8Array; automergeDocId: string; retries: number }[] = [];
+  // Maps peer IDs to their keyhive Identifier (from contact card exchange).
+  // keyhiveIdentifierFromPeerId derives Identifier from the signer's verifying key,
+  // but contactCard.id may differ (e.g. after archive reload). This map stores the
+  // authoritative Identifier from the actual contact card.
+  private peerContactCardIds: Map<string, Identifier> = new Map();
 
   // Periodic op cache (only used when cacheHashes=true)
   private opCache: OpCache | null = null;
@@ -428,9 +433,23 @@ export class KeyhiveNetworkAdapter extends NetworkAdapter {
     try { return Array.from(id.toBytes() as Uint8Array).map((b: number) => b.toString(16).padStart(2, '0')).join(''); } catch { return '??'; }
   }
 
-  /** Get the keyhive Identifier for a peer from the verifying key in its peer ID. */
-  private identifierForPeer(peerId: PeerId): Identifier {
-    return keyhiveIdentifierFromPeerId(peerId);
+  /** Get all known keyhive Identifiers for a peer (contact card + verifying key derived). */
+  private identifiersForPeer(peerId: PeerId): Identifier[] {
+    const fromPeerId = keyhiveIdentifierFromPeerId(peerId);
+    const fromContactCard = this.peerContactCardIds.get(peerId);
+    if (!fromContactCard) return [fromPeerId];
+    // Deduplicate if they happen to match
+    if (fromContactCard.toBytes().toString() === fromPeerId.toBytes().toString()) return [fromPeerId];
+    return [fromContactCard, fromPeerId];
+  }
+
+  /** Try to find a keyhive agent for a peer, checking all known identifiers. */
+  private async getAgentForPeer(peerId: PeerId): Promise<any | null> {
+    for (const id of this.identifiersForPeer(peerId)) {
+      const agent = await this.keyhive.getAgent(id);
+      if (agent) return agent;
+    }
+    return null;
   }
 
   connect(peerId: PeerId, peerMetadata?: PeerMetadata): void {
@@ -675,15 +694,19 @@ export class KeyhiveNetworkAdapter extends NetworkAdapter {
       return true;
     }
     try {
-      const senderIdentifier = this.identifierForPeer(senderId);
-      const access = await this.keyhive.accessForDoc(senderIdentifier, khDocId);
+      const senderIdentifiers = this.identifiersForPeer(senderId);
+      let access: any = undefined;
+      for (const id of senderIdentifiers) {
+        access = await this.keyhive.accessForDoc(id, khDocId);
+        if (access) break;
+      }
       if (!access) {
         // Dump members for debugging
         try {
           const members = await this.keyhive.docMemberCapabilities(khDocId);
-          const idHex = KeyhiveNetworkAdapter._idHex(senderIdentifier);
+          const idHexes = senderIdentifiers.map(id => KeyhiveNetworkAdapter._idHex(id)).join(', ');
           console.warn(`[AMRepoKeyhive] No access for peer ${senderId} on doc ${automergeDocId} — blocking sync`);
-          console.warn(`[AMRepoKeyhive]   senderIdentifier=${idHex}`);
+          console.warn(`[AMRepoKeyhive]   senderIdentifiers=${idHexes}`);
           for (const m of members) {
             const mIdHex = m.who.id ? KeyhiveNetworkAdapter._idHex(m.who.id) : '??';
             console.warn(`[AMRepoKeyhive]   member: ${mIdHex} ${m.can.toString()} (${m.who.isIndividual() ? 'individual' : 'group'})`);
@@ -859,6 +882,10 @@ export class KeyhiveNetworkAdapter extends NetworkAdapter {
           keyhiveMessageData.contactCard,
           this.keyhiveStorage
         );
+        // Store the authoritative mapping: peer ID → contact card Identifier.
+        // keyhiveIdentifierFromPeerId (derived from signer.verifyingKey) may not
+        // match contactCard.id after archive reload.
+        this.peerContactCardIds.set(message.senderId, keyhiveMessageData.contactCard.id);
       } catch (err) {
         console.error("[AMRepoKeyhive] receiveContactCard failed:", err);
       }
@@ -954,8 +981,7 @@ export class KeyhiveNetworkAdapter extends NetworkAdapter {
         }
 
         // Check if we know the target agent (WASM keyhive is authoritative)
-        const targetKeyhiveId = this.identifierForPeer(targetId);
-        const targetAgent = await this.keyhive.getAgent(targetKeyhiveId);
+        const targetAgent = await this.getAgentForPeer(targetId);
         if (!targetAgent) {
           if (!maybeContactCard) {
             maybeContactCard = this.contactCard;
@@ -1061,8 +1087,7 @@ export class KeyhiveNetworkAdapter extends NetworkAdapter {
       }
 
       // Check if we know the sender agent (WASM keyhive is authoritative)
-      const senderKeyhiveId = this.identifierForPeer(message.senderId);
-      const senderAgent = await this.keyhive.getAgent(senderKeyhiveId);
+      const senderAgent = await this.getAgentForPeer(message.senderId);
       if (!senderAgent) {
         const response = {
           type: "keyhive-sync-request-contact-card",
@@ -1763,12 +1788,13 @@ export class KeyhiveNetworkAdapter extends NetworkAdapter {
   // Get event hashes for a peer. Returns null if the peer agent is unknown.
   private async getHashesForPeer(peerId: PeerId, metrics?: Metrics): Promise<PeerHashes | null> {
     if (this.opCache) {
-      const keyhiveId = this.identifierForPeer(peerId);
-      const agentIdStr = keyhiveId.toBytes().toString();
-      const cached = this.opCache.getHashesForAgent(agentIdStr);
-      if (cached) {
-        metrics?.recordCacheHit();
-        return cached;
+      for (const keyhiveId of this.identifiersForPeer(peerId)) {
+        const agentIdStr = keyhiveId.toBytes().toString();
+        const cached = this.opCache.getHashesForAgent(agentIdStr);
+        if (cached) {
+          metrics?.recordCacheHit();
+          return cached;
+        }
       }
       // Agent not in cache — might be unknown or cache stale
       metrics?.recordCacheMiss();
@@ -1784,8 +1810,7 @@ export class KeyhiveNetworkAdapter extends NetworkAdapter {
       metrics?.recordCacheMiss();
     }
 
-    const keyhiveId = this.identifierForPeer(peerId);
-    const agent = await this.keyhive.getAgent(keyhiveId);
+    const agent = await this.getAgentForPeer(peerId);
     if (!agent) {
       return null;
     }
@@ -1866,8 +1891,7 @@ export class KeyhiveNetworkAdapter extends NetworkAdapter {
     }
 
     // Fetch from WASM for misses
-    const keyhiveId = this.identifierForPeer(peerId);
-    const agent = await this.keyhive.getAgent(keyhiveId);
+    const agent = await this.getAgentForPeer(peerId);
 
     const wasmEvents = new Map<Uint8Array, any>();
 

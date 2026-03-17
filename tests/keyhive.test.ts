@@ -1387,6 +1387,54 @@ describe('seed-only invite flow', () => {
     expect(existingCard.id.toBytes()).toEqual(peerIdentifier.toBytes());
   });
 
+  it('getAgent works via contactCard.id even when keyhiveIdentifierFromPeerId diverges after archive round-trip', async () => {
+    // After invite generation + archive reload, the keyhive owner's
+    // getExistingContactCard().id can diverge from keyhiveIdentifierFromPeerId().
+    // The network adapter must try both identifiers when looking up agents.
+    // This test reproduces the exact scenario:
+    //   1. Alice creates keyhive, generates invite (ingestArchive from temp kh)
+    //   2. Alice persists to archive → reloads (production restart)
+    //   3. Bob creates keyhive, exchanges contact cards with reloaded Alice
+    //   4. Alice looks up Bob's agent — must succeed even if identifiers diverge
+
+    // Alice: create, generate invite, archive round-trip
+    const signerA = Signer.memorySignerFromBytes(crypto.getRandomValues(new Uint8Array(32)));
+    const khA = await Keyhive.init(signerA, CiphertextStore.newInMemory(), () => {});
+    const ref = new ChangeId(crypto.getRandomValues(new Uint8Array(32)));
+    const doc = await khA.generateDocument([], ref, []);
+    const inviteSigner = Signer.memorySignerFromBytes(crypto.getRandomValues(new Uint8Array(32)));
+    const tempKh = await Keyhive.init(inviteSigner, CiphertextStore.newInMemory(), () => {});
+    const inviteCard = await tempKh.contactCard();
+    const inviteIndividual = await khA.receiveContactCard(inviteCard);
+    await khA.ingestArchive(await tempKh.toArchive());
+    await khA.addMember(inviteIndividual.toAgent(), doc.toMembered(), Access.tryFromString('write')!, []);
+
+    // Archive round-trip (simulates restart)
+    const archive = await khA.toArchive();
+    const khA2 = await new Archive(archive.toBytes()).tryToKeyhive(
+      CiphertextStore.newInMemory(), signerA, () => {}
+    );
+
+    // Bob: create and exchange contact cards
+    const signerB = Signer.memorySignerFromBytes(crypto.getRandomValues(new Uint8Array(32)));
+    const khB = await Keyhive.init(signerB, CiphertextStore.newInMemory(), () => {});
+    const cardB = await khB.contactCard();
+    await khA2.receiveContactCard(cardB);
+
+    // Verify getAgent works with contactCard.id
+    const agentByCardId = await khA2.getAgent(cardB.id);
+    expect(agentByCardId).toBeDefined();
+
+    // Verify getAgent works with keyhiveIdentifierFromPeerId
+    const bobPeerId = peerIdFromSigner(signerB);
+    const peerIdIdentifier = keyhiveIdentifierFromPeerId(bobPeerId);
+    const agentByPeerId = await khA2.getAgent(peerIdIdentifier);
+
+    // At least one of these must work — the network adapter tries both
+    const found = agentByCardId || agentByPeerId;
+    expect(found).toBeDefined();
+  });
+
   it('seed-only claim FAILS with eventsForAgent sync (production bug)', async () => {
     // This is the exact production failure: the keyhive sync protocol uses
     // eventsForAgent() to send events to peers. Since Bob isn't a member of

@@ -18,6 +18,12 @@ export function getDocList(): DocEntry[] {
   try {
     const raw = JSON.parse(localStorage.getItem(DOC_STORAGE_KEY) || '[]');
     if (!Array.isArray(raw)) return [];
+    // Handle legacy string[] format
+    if (raw.length > 0 && typeof raw[0] === 'string') {
+      const entries: DocEntry[] = raw.map((id: string) => ({ id }));
+      saveDocList(entries);
+      return entries;
+    }
     return raw;
   } catch { return []; }
 }
