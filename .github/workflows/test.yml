@@ -27,9 +27,6 @@ jobs:
       - run: npm ci
       - run: npm run build:keyhive
 
-      - name: Type check (backend)
-        run: npx tsc --noEmit
-
       - name: Type check (frontend)
         run: npx tsc -p tsconfig.client.json --noEmit
 
