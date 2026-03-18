@@ -71,6 +71,7 @@ let toDocumentId: (sedimentreeId: any) => string;
 let khBridge: typeof import('../lib/automerge-repo-keyhive/index') | null = null;
 try {
   console.log('[worker] importing modules...');
+  await import('@automerge/automerge-subduction'); // Initialize subduction WASM before Repo construction
   const repoModule: any = await import('@automerge/automerge-repo');
   Repo = repoModule.Repo;
   toDocumentId = repoModule.toDocumentId;

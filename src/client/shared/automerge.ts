@@ -1,3 +1,4 @@
+import '@automerge/automerge-subduction'; // Initialize subduction WASM before Repo construction
 import { useState, useEffect, useRef } from 'preact/hooks';
 import { Repo } from '@automerge/automerge-repo';
 import { MessageChannelNetworkAdapter } from '@automerge/automerge-repo-network-messagechannel';
