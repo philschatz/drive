@@ -188,6 +188,7 @@ export default defineConfig(async () => {
       '@/': resolve(__dirname, 'src/client') + '/',
       '@automerge/automerge/slim': automergeEntry,
       '@automerge/automerge': automergeEntry,
+      '@automerge/automerge-subduction/slim': resolve(__dirname, 'node_modules/@automerge/automerge-subduction/dist/esm/slim.js'),
       '@automerge/automerge-subduction': subductionEntry,
     },
     dedupe: ['preact', '@preact/signals', '@preact/signals-core'],

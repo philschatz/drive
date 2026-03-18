@@ -88,7 +88,7 @@
   "devDependencies": {
     "@cypress/code-coverage": "^4.0.1",
     "@lhci/cli": "^0.15.1",
-    "@preact/preset-vite": "^2.10.3",
+    "@preact/preset-vite": "2.10.3",
     "@testing-library/preact": "^3.2.4",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
