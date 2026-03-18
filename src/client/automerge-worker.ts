@@ -209,6 +209,7 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
         disconnectAll() {},
         disconnectFromPeer() {},
         syncAll() { return Promise.resolve({ entries() { return []; } }); },
+        syncWithAllPeers() { return Promise.resolve(new Map()); },
         getBlobs() { return Promise.resolve([]); },
         addCommit() { return Promise.resolve(undefined); },
         addFragment() { return Promise.resolve(undefined); },
@@ -261,6 +262,7 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
           disconnectAll() {},
           disconnectFromPeer() {},
           syncAll() { return Promise.resolve({ entries() { return []; } }); },
+          syncWithAllPeers() { return Promise.resolve(new Map()); },
           getBlobs(sedimentreeId: any) {
             if (!secureRepo?.storageSubsystem) return Promise.resolve([]);
             try {
