@@ -63,14 +63,14 @@ function SheetContent({ side = "right", className, children }: SheetContentProps
   return (
     <>
       <div
-        className="overlay fixed inset-0 z-50 bg-black/80"
+        className="overlay fixed inset-0 z-[200] bg-black/80"
         onClick={onClose}
       />
       <div
         ref={contentRef}
         tabIndex={-1}
         className={cn(
-          "fixed z-50 gap-4 bg-background p-6 shadow-lg overflow-y-auto outline-none",
+          "fixed z-[200] gap-4 bg-background p-6 shadow-lg overflow-y-auto outline-none",
           sideClasses[side],
           className,
         )}
