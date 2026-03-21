@@ -35,12 +35,7 @@ function bytesToB64url(bytes: Uint8Array): string {
 }
 
 function decodeCardFromUrl(b64url: string): string {
-  const bytes = b64urlToBytes(b64url);
-  try {
-    return new TextDecoder().decode(inflate(bytes));
-  } catch {
-    return new TextDecoder().decode(bytes);
-  }
+  return new TextDecoder().decode(inflate(b64urlToBytes(b64url)));
 }
 
 export function encodeCardForUrl(cardJson: string): string {
