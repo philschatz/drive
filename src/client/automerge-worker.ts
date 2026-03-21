@@ -251,7 +251,7 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
         await khBridge.initKeyhiveWasm();
         console.log('[worker] keyhive WASM initialized');
 
-        const secureStorage = new IndexedDBStorageAdapter();
+        const secureStorage = new IndexedDBStorageAdapter('automerge-secure');
         const secureWs = new BrowserWebSocketClientAdapter(
           self.location?.protocol === 'https:'
             ? 'wss://auto-relay-436046666a53.herokuapp.com'
