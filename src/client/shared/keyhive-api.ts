@@ -102,6 +102,11 @@ export function listDevices(): Promise<DeviceInfo[]> {
   return request('kh-list-devices');
 }
 
+/** Remove a linked device by agent ID. */
+export function removeDevice(agentId: string): Promise<void> {
+  return request('kh-remove-device', { agentId });
+}
+
 /** Add a member to a document with a specific role. */
 export function addMember(agentId: string, docId: string, role: string): Promise<void> {
   return request('kh-add-member', { agentId, docId, role });

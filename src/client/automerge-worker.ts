@@ -37,6 +37,7 @@ export type MainToWorker =
   | { type: 'kh-change-role'; id: number; agentId: string; docId: string; newRole: string }
   | { type: 'kh-generate-invite'; id: number; docId: string; groupId: string; role: string; automergeDocId: string; docType: string }
   | { type: 'kh-list-devices'; id: number }
+  | { type: 'kh-remove-device'; id: number; agentId: string }
   | { type: 'kh-enable-sharing'; id: number; automergeDocId: string }
   | { type: 'kh-register-doc-mapping'; automergeDocId: string; khDocId: string }
   | { type: 'kh-register-sharing-group'; id: number; khDocId: string; groupId: string }
@@ -745,6 +746,19 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
         devices.push({ agentId: id, role: 'linked', isMe: false });
       }
       (self as any).postMessage({ type: 'kh-result', id: msg.id, result: devices } satisfies WorkerToMain);
+    } catch (err: any) {
+      (self as any).postMessage({ type: 'kh-result', id: msg.id, error: errMsg(err) } satisfies WorkerToMain);
+    }
+  }
+
+  if (msg.type === 'kh-remove-device') {
+    try {
+      if (!khOps) throw new Error('Keyhive not available');
+      const { idbGet, idbSet } = await import('./idb-storage');
+      const devices = (await idbGet<string[]>('linked-devices')) ?? [];
+      const updated = devices.filter(id => id !== msg.agentId);
+      await idbSet('linked-devices', updated);
+      (self as any).postMessage({ type: 'kh-result', id: msg.id, result: undefined } satisfies WorkerToMain);
     } catch (err: any) {
       (self as any).postMessage({ type: 'kh-result', id: msg.id, error: errMsg(err) } satisfies WorkerToMain);
     }

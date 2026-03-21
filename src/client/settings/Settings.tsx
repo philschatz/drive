@@ -10,6 +10,7 @@ import {
   getContactCard,
   receiveContactCard,
   listDevices,
+  removeDevice,
   type IdentityInfo,
   type DeviceInfo,
 } from '../shared/keyhive-api';
@@ -77,6 +78,16 @@ export function Settings({ path }: { path?: string }) {
       setError('Failed to link device: ' + err.message);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleRemoveDevice = async (agentId: string) => {
+    try {
+      await removeDevice(agentId);
+      setMessage('Device removed.');
+      await refresh();
+    } catch (err: any) {
+      setError('Failed to remove device: ' + err.message);
     }
   };
 
@@ -209,6 +220,15 @@ export function Settings({ path }: { path?: string }) {
                 </span>
                 <span className="text-xs text-muted-foreground capitalize">{dev.role}</span>
                 {dev.isMe && <span className="text-xs bg-primary/10 text-primary px-1 rounded">This device</span>}
+                {!dev.isMe && (
+                  <button
+                    className="text-muted-foreground hover:text-destructive p-0.5 rounded"
+                    title="Remove device"
+                    onClick={() => handleRemoveDevice(dev.agentId)}
+                  >
+                    <span className="material-symbols-outlined" style={{ fontSize: 16 }}>delete</span>
+                  </button>
+                )}
               </div>
             ))}
           </div>
