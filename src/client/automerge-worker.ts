@@ -295,6 +295,7 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
           storage: secureStorage,
           subduction: noopSubduction,
           peerId: khIntegration.peerId,
+          idFactory: khIntegration.idFactory,
         } as any);
 
         khIntegration.linkRepo(secureRepo);
@@ -358,9 +359,12 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
       let handle: any;
       let khDocId: string | undefined;
       if (msg.secure) {
-        if (!secureRepo || !khOps) throw new Error('Secure repo not available');
+        if (!secureRepo || !khOps || !khBridge) throw new Error('Secure repo not available');
         handle = secureRepo.create(msg.initialJson);
-        const sharing = await khOps.enableSharing(handle.documentId);
+        // The idFactory already created a keyhive doc — pass its ID bytes
+        // so enableSharing reuses it instead of creating a duplicate.
+        const khDocIdObj = khBridge.docIdFromAutomergeUrl(`automerge:${handle.documentId}` as any);
+        const sharing = await khOps.enableSharing(handle.documentId, khDocIdObj.toBytes());
         khDocId = sharing.khDocId;
       } else {
         if (!insecureRepo) throw new Error('Insecure repo not available');
@@ -390,7 +394,7 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
           const khDocId = khBridge.docIdFromAutomergeUrl(automergeUrl as any);
           const doc = await khOps.kh.getDocument(khDocId);
           if (doc) {
-            const khDocIdB64 = bytesToBase64(doc.doc_id.toBytes());
+            const khDocIdB64 = bytesToBase64(doc.id.toBytes());
             khOps.khDocuments.set(khDocIdB64, doc);
             khIntegration.networkAdapter.registerDoc(msg.docId, khDocId);
             setDocRepo(msg.docId, 'secure');

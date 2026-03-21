@@ -17,7 +17,7 @@ import {
   ContactCard,
   Encrypted,
 } from '@keyhive/keyhive/slim';
-import { KeyhiveOps, KeyhiveBridge, KeyhiveOpsSideEffects } from './keyhive-ops';
+import { KeyhiveOps, KeyhiveBridge, KeyhiveOpsSideEffects, bytesToBase64 } from './keyhive-ops';
 
 initKeyhiveWasm();
 
@@ -1233,6 +1233,132 @@ describe('KeyhiveOps', () => {
       const docA = await khA.getDocument(opsA.khDocuments.values().next().value!.doc_id);
       const decrypted = await khA.tryDecrypt(docA!, enc.encrypted_content());
       expect(new Uint8Array(decrypted)).toEqual(plaintext);
+    });
+  });
+
+  describe('direct add member (no invite link)', () => {
+    /**
+     * Simulate the idFactory: generate a keyhive document and use its doc_id
+     * bytes as the "automerge document ID". This mirrors what keyhiveIdFactory
+     * does when the secure repo creates a document.
+     */
+    async function createDocWithIdFactory(kh: any): Promise<{ automergeDocIdBytes: Uint8Array }> {
+      const ref = new ChangeId(crypto.getRandomValues(new Uint8Array(32)));
+      const g = await kh.generateGroup([]);
+      const doc = await kh.generateDocument([g.toPeer()], ref, []);
+      return { automergeDocIdBytes: doc.doc_id.toBytes() };
+    }
+
+    /**
+     * Simulate the "add friend then add member" flow with idFactory:
+     * 1. Alice creates a document (idFactory makes automerge docId = keyhive docId)
+     * 2. Alice enables sharing (reuses the existing keyhive doc)
+     * 3. Alice and Bob exchange contact cards (add friend)
+     * 4. Alice adds Bob as a member via addMember (not invite link)
+     * 5. Alice syncs keyhive to Bob (archive + events)
+     */
+    async function addFriendAndMember(opts: {
+      opsA: KeyhiveOps; khA: any;
+      opsB: KeyhiveOps; khB: any;
+      automergeDocId: string;
+      automergeDocIdBytes: Uint8Array;
+      role?: string;
+    }) {
+      const { opsA, khA, opsB, khB, automergeDocId, automergeDocIdBytes, role = 'write' } = opts;
+
+      // Alice enables sharing — pass existing doc bytes so it reuses the
+      // keyhive doc created by the idFactory instead of generating a duplicate.
+      const { khDocId } = await opsA.enableSharing(automergeDocId, automergeDocIdBytes);
+
+      // Bidirectional contact card exchange (add friend)
+      const cardA = await khA.contactCard();
+      const cardB = await khB.contactCard();
+      const indBonA = await khA.receiveContactCard(cardB);
+      await khB.receiveContactCard(cardA);
+
+      // Alice adds Bob as member via the direct addMember path
+      const bobAgentId = bytesToBase64(indBonA.id.toBytes());
+      await opsA.addMember(bobAgentId, khDocId, role);
+
+      // Sync keyhive state from Alice → Bob (simulates network sync)
+      const archiveA = await khA.toArchive();
+      await khB.ingestArchive(archiveA);
+
+      const indAonB = await khB.receiveContactCard(cardA);
+      const aEventsForB: Map<Uint8Array, Uint8Array> = await khA.eventsForAgent(indAonB.toAgent());
+      const arr: Uint8Array[] = [];
+      aEventsForB.forEach((v: Uint8Array) => arr.push(v));
+      await khB.ingestEventsBytes(arr);
+
+      return { khDocId, bobAgentId };
+    }
+
+    it('after sync, Bob can discover the document via reachableDocs', async () => {
+      const { ops: opsA, kh: khA } = await createOps();
+      const { ops: opsB, kh: khB } = await createOps();
+
+      const { automergeDocIdBytes } = await createDocWithIdFactory(khA);
+      await addFriendAndMember({
+        opsA, khA, opsB, khB,
+        automergeDocId: 'am-doc-1',
+        automergeDocIdBytes,
+      });
+
+      const bDocs = await khB.reachableDocs();
+      expect(bDocs.length).toBeGreaterThan(0);
+    });
+
+    it('enableSharing reuses existing keyhive doc from idFactory', async () => {
+      const { ops, kh } = await createOps();
+
+      // Simulate idFactory creating a keyhive doc
+      const { automergeDocIdBytes } = await createDocWithIdFactory(kh);
+
+      // enableSharing should find the existing doc, not create a new one
+      const docsBefore = await kh.reachableDocs();
+      const { khDocId } = await ops.enableSharing('am-doc-1', automergeDocIdBytes);
+      const docsAfter = await kh.reachableDocs();
+
+      // Should not have created an additional document
+      expect(docsAfter.length).toBe(docsBefore.length);
+
+      // khDocuments should contain the doc
+      expect(ops.khDocuments.has(khDocId)).toBe(true);
+    });
+
+    it('Bob can find the keyhive doc from automerge docId when IDs match', async () => {
+      // This is the fix: when the idFactory is used, automerge docId bytes =
+      // keyhive doc_id bytes. Bob can look up the keyhive doc directly.
+      const { ops: opsA, kh: khA } = await createOps();
+      const { ops: opsB, kh: khB } = await createOps();
+
+      const { automergeDocIdBytes } = await createDocWithIdFactory(khA);
+      await addFriendAndMember({
+        opsA, khA, opsB, khB,
+        automergeDocId: 'am-doc-1',
+        automergeDocIdBytes,
+      });
+
+      // Bob's keyhive knows about the document (via reachableDocs)
+      const bDocs = await khB.reachableDocs();
+      expect(bDocs.length).toBeGreaterThan(0);
+
+      // Bob can look up the keyhive doc using the automerge doc ID bytes
+      // (this is what the open-doc handler does via docIdFromAutomergeUrl)
+      const khDocId = new DocumentId(automergeDocIdBytes);
+      const doc = await khB.getDocument(khDocId);
+      expect(doc).toBeDefined();
+
+      // Bob can now register the mapping and access the document
+      const khDocIdB64 = bytesToBase64(doc!.id.toBytes());
+      opsB.khDocuments.set(khDocIdB64, doc);
+      expect(opsB.khDocuments.size).toBe(1);
+
+      // And check access
+      const bobId = new Identifier(khB.id.bytes);
+      const access = await khB.accessForDoc(bobId, doc!.doc_id);
+      expect(access).toBeDefined();
+      expect(access!.toString()).toBe('Write');
     });
   });
 });

@@ -159,9 +159,21 @@ export class KeyhiveOps {
     return true;
   }
 
-  async enableSharing(automergeDocId: string): Promise<{ khDocId: string; groupId: string }> {
-    const ref = new this.bridge.ChangeId(new Uint8Array(32));
-    const doc = await this.kh.generateDocument([], ref, []);
+  async enableSharing(automergeDocId: string, existingDocIdBytes?: Uint8Array): Promise<{ khDocId: string; groupId: string }> {
+    let doc: any;
+    if (existingDocIdBytes) {
+      // The secure repo's idFactory already created a keyhive document whose
+      // doc_id equals the automerge binary document ID.  Look it up instead of
+      // generating a duplicate.
+      const docId = new this.bridge.DocumentId(existingDocIdBytes);
+      doc = await this.kh.getDocument(docId);
+    }
+    if (!doc) {
+      // Fallback: insecure-repo doc being upgraded, or idFactory not used —
+      // create a fresh keyhive document.
+      const ref = new this.bridge.ChangeId(new Uint8Array(32));
+      doc = await this.kh.generateDocument([], ref, []);
+    }
     const khDocId = bytesToBase64(doc.id.toBytes());
     this.khDocuments.set(khDocId, doc);
     this.fx.registerDoc(automergeDocId, doc.doc_id);
