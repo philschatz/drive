@@ -1,7 +1,7 @@
 import { deepAssign } from '../shared/deep-assign';
 import { syncToTarget } from '../shared/sync-to-target';
 import { validateDocument } from '../shared/schemas';
-import { KeyhiveOps, errMsg } from './keyhive-ops';
+import { KeyhiveOps, bytesToBase64, errMsg } from './keyhive-ops';
 import { populateDocRepoMap, setDocRepo, repoFor as _repoFor } from './repo-routing';
 
 export type MainToWorker =
@@ -382,6 +382,21 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
       // Record secure hint in docRepoMap if provided
       if (msg.secure !== undefined) {
         setDocRepo(msg.docId, msg.secure ? 'secure' : 'insecure');
+      } else if (khOps && khBridge && khIntegration) {
+        // No local entry — check if our keyhive already knows about this doc
+        // (e.g. we were added as a member by someone else)
+        try {
+          const khDocId = khBridge.docIdFromAutomergeUrl(msg.docId as any);
+          const doc = await khOps.kh.getDocument(khDocId);
+          if (doc) {
+            const khDocIdB64 = bytesToBase64(doc.doc_id.toBytes());
+            khOps.khDocuments.set(khDocIdB64, doc);
+            khIntegration.networkAdapter.registerDoc(msg.docId, khDocId);
+            setDocRepo(msg.docId, 'secure');
+          }
+        } catch {
+          // Not a keyhive-known doc — fall through to insecure
+        }
       }
       progress(10, 'Finding document\u2026');
       const handle = await getOrLoadHandle(msg.docId);
