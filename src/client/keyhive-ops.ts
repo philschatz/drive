@@ -67,7 +67,7 @@ export class KeyhiveOps {
   }
 
   getIdentity(): { deviceId: string } {
-    return { deviceId: this.kh.idString };
+    return { deviceId: String(this.kh.idString) };
   }
 
   async getContactCard(): Promise<string> {
