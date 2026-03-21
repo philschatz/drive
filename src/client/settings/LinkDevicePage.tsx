@@ -116,6 +116,17 @@ export function LinkDevicePage({ cardData }: LinkDevicePageProps) {
                     Scan this from the other device to link yours to theirs:
                   </p>
                   <div className="flex justify-center" dangerouslySetInnerHTML={{ __html: myQrSvg }} />
+                  <div className="mt-2 flex items-center gap-2">
+                    <input
+                      className="flex-1 text-xs p-2 rounded border border-border font-mono bg-muted"
+                      value={myCardUrl}
+                      readOnly
+                      onClick={(e: any) => e.currentTarget.select()}
+                    />
+                    <Button size="sm" variant="outline" onClick={() => navigator.clipboard.writeText(myCardUrl)}>
+                      Copy
+                    </Button>
+                  </div>
                 </div>
               )}
               <Button variant="outline" onClick={() => { window.location.hash = '/settings'; }}>
