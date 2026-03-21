@@ -6,7 +6,7 @@ import type { WorkerToMain } from '../automerge-worker';
 import { initKeyhiveApi, handleKeyhiveResponse, registerDocMapping } from './keyhive-api';
 import { getDocEntry, getDocList, setDocListDispatch, applyDocListFromWorker } from '../doc-storage';
 import { setContactNamesDispatch, applyContactNamesFromWorker } from '../contact-names';
-import { idbSet } from '../idb-storage';
+
 
 // --- Worker setup ---
 
@@ -34,35 +34,10 @@ setContactNamesDispatch((type, agentId, name) => {
   worker.postMessage({ type, agentId, ...(name !== undefined ? { name } : {}) });
 });
 
-// --- Seed IDB from localStorage, then send init to worker ---
-// Must await IDB writes so the worker sees the data when it reads IDB on init.
-(async () => {
-  try {
-    // Migrate contact names
-    const raw = localStorage.getItem('contact-names');
-    if (raw) {
-      const names = JSON.parse(raw) as Record<string, string>;
-      if (names && typeof names === 'object' && Object.keys(names).length > 0) {
-        await idbSet('contact-names', names);
-      }
-      localStorage.removeItem('contact-names');
-    }
-  } catch { /* ignore */ }
-
-  try {
-    // Seed doc list
-    const docList = getDocList();
-    if (docList.length > 0) {
-      await idbSet('automerge-doc-ids', docList);
-    }
-  } catch { /* ignore */ }
-
-  // Send the init message to the worker (IDB is now populated)
-  worker.postMessage({
-    type: 'init',
-    appBaseUrl: window.location.origin + window.location.pathname,
-  });
-})();
+worker.postMessage({
+  type: 'init',
+  appBaseUrl: window.location.origin + window.location.pathname,
+});
 
 // --- Worker ready promise ---
 // Resolves when the worker sends the 'ready' message after repo initialization.

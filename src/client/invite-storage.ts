@@ -12,30 +12,9 @@ export interface InviteRecord {
 }
 
 const IDB_KEY = 'automerge-invites';
-const LS_KEY = 'automerge-invites';
 
-let migrated = false;
-
-/** Lazy migration: on first IDB read, pull any existing localStorage records into IDB. */
 async function loadAll(): Promise<InviteRecord[]> {
-  let records = await idbGet<InviteRecord[]>(IDB_KEY);
-  if (!migrated) {
-    migrated = true;
-    if (!records || records.length === 0) {
-      // Migrate from localStorage
-      try {
-        const raw = JSON.parse(localStorage.getItem(LS_KEY) || '[]');
-        if (Array.isArray(raw) && raw.length > 0) {
-          records = raw;
-          await idbSet(IDB_KEY, records);
-          localStorage.removeItem(LS_KEY);
-        }
-      } catch { /* ignore */ }
-    } else {
-      // Already in IDB — clear localStorage copy if present
-      localStorage.removeItem(LS_KEY);
-    }
-  }
+  const records = await idbGet<InviteRecord[]>(IDB_KEY);
   return Array.isArray(records) ? records : [];
 }
 
