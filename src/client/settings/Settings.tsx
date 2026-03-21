@@ -13,6 +13,7 @@ import {
   type IdentityInfo,
   type DeviceInfo,
 } from '../shared/keyhive-api';
+import { idbGet, idbSet } from '../idb-storage';
 export function Settings({ path }: { path?: string }) {
   const [identity, setIdentity] = useState<IdentityInfo | null>(null);
   const [devices, setDevices] = useState<DeviceInfo[]>([]);
@@ -66,6 +67,56 @@ export function Settings({ path }: { path?: string }) {
 
   const copyContactCard = () => {
     if (contactCard) navigator.clipboard.writeText(contactCard);
+  };
+
+  const handleExport = async () => {
+    try {
+      const [docList, contactNames, invites] = await Promise.all([
+        idbGet<unknown[]>('automerge-doc-ids').then(v => v ?? []),
+        idbGet<Record<string, string>>('contact-names').then(v => v ?? {}),
+        idbGet<unknown[]>('automerge-invites').then(v => v ?? []),
+      ]);
+      const payload = { version: 1, exportedAt: new Date().toISOString(), docList, contactNames, invites };
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `drive-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      setMessage('Data exported successfully.');
+    } catch (err: any) {
+      setError('Export failed: ' + err.message);
+    }
+  };
+
+  const handleImport = () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json';
+    input.onchange = async () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      try {
+        const text = await file.text();
+        const payload = JSON.parse(text);
+        if (!payload || payload.version !== 1) throw new Error('Invalid backup file (wrong version).');
+        if (!Array.isArray(payload.docList)) throw new Error('Invalid backup: docList must be an array.');
+        if (typeof payload.contactNames !== 'object' || Array.isArray(payload.contactNames))
+          throw new Error('Invalid backup: contactNames must be an object.');
+        if (!Array.isArray(payload.invites)) throw new Error('Invalid backup: invites must be an array.');
+        await Promise.all([
+          idbSet('automerge-doc-ids', payload.docList),
+          idbSet('contact-names', payload.contactNames),
+          idbSet('automerge-invites', payload.invites),
+        ]);
+        localStorage.setItem('automerge-doc-ids', JSON.stringify(payload.docList));
+        window.location.reload();
+      } catch (err: any) {
+        setError('Import failed: ' + err.message);
+      }
+    };
+    input.click();
   };
 
   const handleNavigateUrl = () => {
@@ -211,6 +262,19 @@ export function Settings({ path }: { path?: string }) {
               Link
             </Button>
           </div>
+        </div>
+      </section>
+
+      {/* Data Backup */}
+      <section className="mb-6">
+        <h2 className="text-lg font-semibold mb-2">Data Backup</h2>
+        <p className="text-xs text-muted-foreground mb-2">
+          Export or import your document list, contacts, and invite data.
+          This does not include document contents (those sync via Automerge).
+        </p>
+        <div className="flex items-center gap-2">
+          <Button size="sm" variant="outline" onClick={handleExport}>Export</Button>
+          <Button size="sm" variant="outline" onClick={handleImport}>Import</Button>
         </div>
       </section>
     </div>
