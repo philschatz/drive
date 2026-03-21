@@ -1105,6 +1105,16 @@ describe('KeyhiveOps', () => {
       const individualAonB = await khB.receiveContactCard(cardA);
       const individualBonA = await khA.receiveContactCard(cardB);
 
+      // Grant B access to all of A's documents (and vice-versa)
+      const aDocs = await khA.reachableDocs();
+      for (const item of aDocs) {
+        await khA.addMember(individualBonA.toAgent(), item.doc.toMembered(), item.access, []);
+      }
+      const bDocs = await khB.reachableDocs();
+      for (const item of bDocs) {
+        await khB.addMember(individualAonB.toAgent(), item.doc.toMembered(), item.access, []);
+      }
+
       // Full archive sync so both sides have the complete picture
       const archiveA = await khA.toArchive();
       const archiveB = await khB.toArchive();
@@ -1161,8 +1171,18 @@ describe('KeyhiveOps', () => {
       // Link first
       await linkDevices(khA, khB);
 
-      // Then device A creates a document
+      // Then device A creates a document and grants B access
       await opsA.enableSharing('automerge-doc-1');
+      const cardB = await khB.contactCard();
+      const individualBonA = await khA.receiveContactCard(cardB);
+      const aDocs2 = await khA.reachableDocs();
+      for (const item of aDocs2) {
+        const bId = new Identifier(individualBonA.id.toBytes());
+        const existing = await khA.accessForDoc(bId, item.doc.doc_id);
+        if (!existing) {
+          await khA.addMember(individualBonA.toAgent(), item.doc.toMembered(), item.access, []);
+        }
+      }
 
       // Re-sync so B learns about the new doc
       const archiveA = await khA.toArchive();

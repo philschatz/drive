@@ -1,3 +1,0 @@
-[submodule "vendor/keyhive"]
-	path = vendor/keyhive
-	url = https://github.com/philschatz/keyhive

@@ -56,7 +56,7 @@ function keyhiveWasmPlugin(): Plugin {
   return {
     name: 'keyhive-wasm',
     load(id) {
-      if (id.includes('@keyhive/keyhive') && id.endsWith('keyhive_wasm.js')) {
+      if (id.includes('@keyhive/keyhive/pkg/') && id.endsWith('keyhive_wasm.js')) {
         return `
           import wasmUrl from "./keyhive_wasm_bg.wasm?url";
           import * as bg from "./keyhive_wasm_bg.js";

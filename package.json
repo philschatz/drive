@@ -22,8 +22,7 @@
     "cy:open": "./run-cypress.sh open",
     "cy:run": "./run-cypress.sh run",
     "stop": "pkill -f 'ts-node.*serve' || true",
-    "syncthing": "node syncthing-automerge/merge.js ./.data",
-    "build:keyhive": "cd vendor/keyhive/keyhive_wasm && PATH=\"$HOME/.cargo/bin:$PATH\" RUSTFLAGS=\"--allow warnings\" npm run build-slim"
+    "syncthing": "node syncthing-automerge/merge.js ./.data"
   },
   "engines": {
     "node": "22.x"
@@ -45,7 +44,7 @@
     "@codemirror/state": "^6.5.4",
     "@codemirror/view": "^6.39.15",
     "@glideapps/glide-data-grid": "^6.0.3",
-    "@keyhive/keyhive": "file:vendor/keyhive/keyhive_wasm",
+    "@keyhive/keyhive": "https://github.com/philschatz/keyhive/releases/download/drive-5412f81/keyhive-drive-5412f81.tgz",
     "@preact/signals": "^2.8.1",
     "@radix-ui/react-checkbox": "^1.3.3",
     "@radix-ui/react-context-menu": "^2.2.16",
