@@ -4,6 +4,8 @@ import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert';
+import * as fs from 'fs';
+import * as path from 'path';
 
 // ---------------------------------------------------------------------------
 // Button
@@ -204,5 +206,39 @@ describe('Alert', () => {
     render(<Alert className="my-alert">Test</Alert>);
     const alert = screen.getByRole('alert');
     expect(alert.className).toContain('my-alert');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Z-index layering: portaled components must render above the Sheet (z-[200])
+// ---------------------------------------------------------------------------
+
+describe('z-index layering', () => {
+  const uiDir = path.resolve(__dirname);
+
+  function extractZIndices(filename: string): number[] {
+    const src = fs.readFileSync(path.join(uiDir, filename), 'utf-8');
+    const indices: number[] = [];
+    // Match z-50, z-[200], z-[250], etc.
+    for (const m of src.matchAll(/\bz-(\d+|\[\d+\])/g)) {
+      const raw = m[1];
+      indices.push(raw.startsWith('[') ? parseInt(raw.slice(1, -1)) : parseInt(raw));
+    }
+    return indices;
+  }
+
+  it('sheet.tsx z-index is documented as 200', () => {
+    const zValues = extractZIndices('sheet.tsx');
+    expect(zValues.length).toBeGreaterThan(0);
+    // All Sheet z-indices should be 200
+    for (const z of zValues) expect(z).toBe(200);
+  });
+
+  it.each(['select.tsx', 'tooltip.tsx'])('%s portaled content renders above sheet (z > 200)', (file) => {
+    const zValues = extractZIndices(file);
+    expect(zValues.length).toBeGreaterThan(0);
+    for (const z of zValues) {
+      expect(z).toBeGreaterThan(200);
+    }
   });
 });

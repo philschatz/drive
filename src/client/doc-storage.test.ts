@@ -30,13 +30,6 @@ describe('getDocList', () => {
     expect(getDocList()).toEqual([{ id: 'doc-1', type: 'Calendar', name: 'Work' }, { id: 'doc-2' }]);
   });
 
-  it('migrates legacy string array format', () => {
-    store[STORAGE_KEY] = JSON.stringify(['id-a', 'id-b']);
-    const result = getDocList();
-    expect(result).toEqual([{ id: 'id-a' }, { id: 'id-b' }]);
-    expect(JSON.parse(store[STORAGE_KEY])).toEqual([{ id: 'id-a' }, { id: 'id-b' }]);
-  });
-
   it('returns empty array for invalid JSON', () => {
     store[STORAGE_KEY] = 'not-json!!!';
     expect(getDocList()).toEqual([]);

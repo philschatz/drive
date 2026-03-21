@@ -46,3 +46,9 @@ export async function removeInviteRecordsForDoc(khDocId: string): Promise<void> 
   const all = await loadAll();
   await saveAll(all.filter(r => r.khDocId !== khDocId));
 }
+
+export async function pruneInvitesNotIn(knownKhDocIds: Set<string>): Promise<void> {
+  const all = await loadAll();
+  const filtered = all.filter(r => knownKhDocIds.has(r.khDocId));
+  if (filtered.length < all.length) await saveAll(filtered);
+}

@@ -4,6 +4,7 @@
  */
 
 import { keyhiveReady } from './automerge';
+import type { InviteRecord } from '../invite-storage';
 
 // The worker reference — we grab it from automerge.ts's module scope.
 // Since this module is imported after automerge.ts sets up the worker,
@@ -86,8 +87,8 @@ export function getKnownContacts(excludeDocId?: string): Promise<MemberInfo[]> {
   return request('kh-get-known-contacts', { excludeDocId });
 }
 
-/** Get all members and roles for a document. Each member has an `isMe` flag. */
-export function getDocMembers(khDocId: string): Promise<MemberInfo[]> {
+/** Get all members, roles, and invite records for a document. Each member has an `isMe` flag. */
+export function getDocMembers(khDocId: string): Promise<{ members: MemberInfo[]; invites: InviteRecord[] }> {
   return request('kh-get-doc-members', { khDocId });
 }
 
@@ -119,6 +120,11 @@ export function changeRole(agentId: string, docId: string, newRole: string): Pro
 /** Generate an invite link for a document. The worker builds the URL and stores the invite record. */
 export function generateInvite(docId: string, groupId: string, role: string, automergeDocId: string, docType: string): Promise<{ inviteKeyBytes: number[]; groupId: string; inviteSignerAgentId: string; inviteUrl: string }> {
   return request('kh-generate-invite', { docId, groupId, role, automergeDocId, docType });
+}
+
+/** Dismiss (delete) an invite record by ID. Returns the remaining invites for the doc. */
+export function dismissInvite(inviteId: string, khDocId: string): Promise<{ invites: InviteRecord[] }> {
+  return request('kh-dismiss-invite', { inviteId, khDocId });
 }
 
 /** Claim an invite by syncing keys from the relay using the invite seed. */

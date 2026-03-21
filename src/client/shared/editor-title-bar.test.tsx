@@ -14,7 +14,7 @@ jest.mock('./presence', () => ({
 jest.mock('./keyhive-api', () => ({
   initKeyhiveApi: jest.fn(),
   handleKeyhiveResponse: jest.fn(),
-  getDocMembers: jest.fn(() => Promise.resolve([])),
+  getDocMembers: jest.fn(() => Promise.resolve({ members: [], invites: [] })),
   getMyAccess: jest.fn(() => Promise.resolve(null)),
   changeRole: jest.fn(),
   revokeMember: jest.fn(),

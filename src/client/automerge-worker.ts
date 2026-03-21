@@ -42,6 +42,7 @@ export type MainToWorker =
   | { type: 'kh-register-sharing-group'; id: number; khDocId: string; groupId: string }
   | { type: 'kh-get-known-contacts'; id: number; excludeDocId?: string }
   | { type: 'kh-claim-invite'; id: number; inviteSeed: number[]; automergeDocId: string }
+  | { type: 'kh-dismiss-invite'; id: number; inviteId: string; khDocId: string }
   | { type: 'open-doc'; id: number; docId: string; secure?: boolean }
   | { type: 'validate-subscribe'; docId: string }
   | { type: 'validate-unsubscribe'; docId: string };
@@ -327,6 +328,11 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
       populateDocRepoMap(docList);
       (self as any).postMessage({ type: 'doc-list-updated', list: docList } satisfies WorkerToMain);
 
+      // Prune invite records for docs no longer in the list
+      const { pruneInvitesNotIn } = await import('./invite-storage');
+      const knownKhDocIds = new Set(docList.map(d => d.khDocId).filter(Boolean) as string[]);
+      await pruneInvitesNotIn(knownKhDocIds);
+
       // --- Load and push contact names from IDB ---
       const contactNames = (await idbGet<Record<string, string>>('contact-names')) ?? {};
       (self as any).postMessage({ type: 'contact-names-updated', names: contactNames } satisfies WorkerToMain);
@@ -607,6 +613,7 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
       const { idbGet, idbSet } = await import('./idb-storage');
       type StoredDocEntry = { id: string; [key: string]: any };
       const list = (await idbGet<StoredDocEntry[]>('automerge-doc-ids')) ?? [];
+      const removedEntry = list.find(e => e.id === msg.docId);
       const filtered = list.filter(e => e.id !== msg.docId);
       await idbSet('automerge-doc-ids', filtered);
       // Clean up active subscriptions for removed doc
@@ -615,6 +622,11 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
         for (const subId of entry.subscriptions.keys()) subIdToDocId.delete(subId);
         if (entry.presence) entry.presence.stop();
         docRegistry.delete(msg.docId);
+      }
+      // Remove invite records for the deleted doc
+      if (removedEntry?.khDocId) {
+        const { removeInviteRecordsForDoc } = await import('./invite-storage');
+        await removeInviteRecordsForDoc(removedEntry.khDocId);
       }
       (self as any).postMessage({ type: 'doc-list-updated', list: filtered } satisfies WorkerToMain);
     } catch (err: any) {
@@ -683,8 +695,10 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
   if (msg.type === 'kh-get-doc-members') {
     try {
       if (!khOps) throw new Error('Keyhive not available');
-      const result = await khOps.getDocMembers(msg.khDocId);
-      (self as any).postMessage({ type: 'kh-result', id: msg.id, result } satisfies WorkerToMain);
+      const members = await khOps.getDocMembers(msg.khDocId);
+      const { getInviteRecords } = await import('./invite-storage');
+      const invites = await getInviteRecords(msg.khDocId);
+      (self as any).postMessage({ type: 'kh-result', id: msg.id, result: { members, invites } } satisfies WorkerToMain);
     } catch (err: any) {
       (self as any).postMessage({ type: 'kh-result', id: msg.id, error: errMsg(err) } satisfies WorkerToMain);
     }
@@ -876,6 +890,17 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
       (self as any).postMessage({ type: 'kh-result', id: msg.id, result } satisfies WorkerToMain);
     } catch (err: any) {
       console.error('[kh-claim-invite] failed:', err);
+      (self as any).postMessage({ type: 'kh-result', id: msg.id, error: errMsg(err) } satisfies WorkerToMain);
+    }
+  }
+
+  if (msg.type === 'kh-dismiss-invite') {
+    try {
+      const { removeInviteRecord, getInviteRecords } = await import('./invite-storage');
+      await removeInviteRecord(msg.inviteId);
+      const invites = await getInviteRecords(msg.khDocId);
+      (self as any).postMessage({ type: 'kh-result', id: msg.id, result: { invites } } satisfies WorkerToMain);
+    } catch (err: any) {
       (self as any).postMessage({ type: 'kh-result', id: msg.id, error: errMsg(err) } satisfies WorkerToMain);
     }
   }

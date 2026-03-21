@@ -11,11 +11,10 @@ import relativeTimePlugin from 'dayjs/plugin/relativeTime';
 
 dayjs.extend(relativeTimePlugin);
 import { a1ToInternal } from '@/datagrid/helpers';
-import { getDocList, addDocId, removeDocId, updateDocCache, getDocEntry, onDocListUpdated } from '@/doc-storage';
+import { getDocList, addDocId, removeDocId, updateDocCache, onDocListUpdated } from '@/doc-storage';
 
 declare const __APP_VERSION__: string;
 declare const __BUILD_TIME__: string;
-import { getAllInviteRecords, removeInviteRecord, removeInviteRecordsForDoc } from '@/invite-storage';
 
 type DocType = 'Calendar' | 'TaskList' | 'DataGrid' | 'unknown';
 
@@ -120,16 +119,6 @@ export function Home({ path }: { path?: string }) {
     return () => unsubs.forEach(u => u());
   }, [docIdKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Clean up invite records for documents no longer stored locally
-  useEffect(() => {
-    (async () => {
-      const docList = getDocList();
-      const knownKhDocIds = new Set(docList.map(d => d.khDocId).filter(Boolean));
-      for (const r of await getAllInviteRecords()) {
-        if (!knownKhDocIds.has(r.khDocId)) await removeInviteRecord(r.id);
-      }
-    })();
-  }, []);
 
   const reloadEntries = useCallback(() => {
     const docList = getDocList();
@@ -333,8 +322,6 @@ export function Home({ path }: { path?: string }) {
   const handleDelete = async (entry: DocEntry) => {
     const label = entry.type === 'Calendar' ? 'calendar' : entry.type === 'TaskList' ? 'task list' : entry.type === 'DataGrid' ? 'spreadsheet' : 'document';
     if (!confirm(`Delete "${entry.name || 'Untitled'}" ${label}?`)) return;
-    const storedEntry = getDocEntry(entry.documentId);
-    if (storedEntry?.khDocId) await removeInviteRecordsForDoc(storedEntry.khDocId);
     removeDocId(entry.documentId);
     setMessage(`${label.charAt(0).toUpperCase() + label.slice(1)} deleted`);
     setError('');

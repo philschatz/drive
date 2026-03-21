@@ -17,13 +17,10 @@ import {
   generateInvite,
   getKnownContacts,
   addMember,
+  dismissInvite,
   type MemberInfo,
 } from '../shared/keyhive-api';
-import {
-  getInviteRecords,
-  removeInviteRecord,
-  type InviteRecord,
-} from '../invite-storage';
+import type { InviteRecord } from '../invite-storage';
 import { getContactName, setContactName } from '../contact-names';
 import QRCode from 'qrcode';
 
@@ -162,11 +159,14 @@ export function AccessControl({ khDocId, docId, docType, sharingGroupId, onGroup
 
   const isAdmin = myAccess?.toLowerCase() === 'admin';
 
-  const checkInvites = useCallback(async (currentMembers?: MemberInfo[]) => {
+  const checkInvites = useCallback(async (currentMembers?: MemberInfo[], currentInvites?: InviteRecord[]) => {
     if (!khDocId) return;
-    const records = await getInviteRecords(khDocId);
+    const resolved = currentMembers && currentInvites
+      ? { members: currentMembers, invites: currentInvites }
+      : await getDocMembers(khDocId);
+    const records = currentInvites ?? resolved.invites;
     if (records.length === 0) { setInviteStatuses([]); return; }
-    const current = currentMembers ?? await getDocMembers(khDocId);
+    const current = currentMembers ?? resolved.members;
     const statuses = records.map(r => {
       const baseline = new Set(r.baselineAgentIds);
       const newMembers = current.filter(
@@ -192,7 +192,7 @@ export function AccessControl({ khDocId, docId, docType, sharingGroupId, onGroup
   const refresh = useCallback(async () => {
     if (!khDocId) return;
     try {
-      const [m, a, c] = await Promise.all([
+      const [{ members: m, invites }, a, c] = await Promise.all([
         getDocMembers(khDocId),
         getMyAccess(khDocId),
         getKnownContacts(khDocId),
@@ -207,7 +207,7 @@ export function AccessControl({ khDocId, docId, docType, sharingGroupId, onGroup
         if (prev === '__new__') return prev;
         return c.some(ct => ct.agentId === prev) ? prev : (c.length > 0 ? c[0].agentId : '__new__');
       });
-      await checkInvites(normalized);
+      await checkInvites(normalized, invites);
     } catch (err: any) {
       setError(err.message);
     }
@@ -285,8 +285,9 @@ export function AccessControl({ khDocId, docId, docType, sharingGroupId, onGroup
   };
 
   const handleDismissInvite = async (id: string) => {
-    await removeInviteRecord(id);
-    await checkInvites();
+    if (!khDocId) return;
+    const { invites } = await dismissInvite(id, khDocId);
+    await checkInvites(undefined, invites);
   };
 
   if (!khDocId) {
