@@ -1326,6 +1326,32 @@ describe('KeyhiveOps', () => {
       expect(ops.khDocuments.has(khDocId)).toBe(true);
     });
 
+    it('enableSharing falls back to creating a new doc when bytes do not match', async () => {
+      const { ops, kh } = await createOps();
+
+      // Pass random bytes that don't correspond to any keyhive document
+      // (simulates an insecure-repo doc being upgraded to shared)
+      const fakeBytes = crypto.getRandomValues(new Uint8Array(32));
+      const docsBefore = await kh.reachableDocs();
+      const { khDocId } = await ops.enableSharing('am-doc-1', fakeBytes);
+      const docsAfter = await kh.reachableDocs();
+
+      // Should have created a new document
+      expect(docsAfter.length).toBe(docsBefore.length + 1);
+      expect(ops.khDocuments.has(khDocId)).toBe(true);
+    });
+
+    it('enableSharing without existingDocIdBytes creates a new doc (legacy path)', async () => {
+      const { ops, kh } = await createOps();
+
+      const docsBefore = await kh.reachableDocs();
+      const { khDocId } = await ops.enableSharing('am-doc-1');
+      const docsAfter = await kh.reachableDocs();
+
+      expect(docsAfter.length).toBe(docsBefore.length + 1);
+      expect(ops.khDocuments.has(khDocId)).toBe(true);
+    });
+
     it('Bob can find the keyhive doc from automerge docId when IDs match', async () => {
       // This is the fix: when the idFactory is used, automerge docId bytes =
       // keyhive doc_id bytes. Bob can look up the keyhive doc directly.

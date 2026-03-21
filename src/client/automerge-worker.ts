@@ -360,7 +360,9 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
       let khDocId: string | undefined;
       if (msg.secure) {
         if (!secureRepo || !khOps || !khBridge) throw new Error('Secure repo not available');
-        handle = secureRepo.create(msg.initialJson);
+        // create2 uses the async idFactory (keyhiveIdFactory) so that
+        // the automerge doc ID = keyhive doc ID.
+        handle = await secureRepo.create2(msg.initialJson);
         // The idFactory already created a keyhive doc — pass its ID bytes
         // so enableSharing reuses it instead of creating a duplicate.
         const khDocIdObj = khBridge.docIdFromAutomergeUrl(`automerge:${handle.documentId}` as any);
