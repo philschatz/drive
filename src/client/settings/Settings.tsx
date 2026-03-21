@@ -23,6 +23,8 @@ export function Settings({ path }: { path?: string }) {
   const [contactCard, setContactCard] = useState<string | null>(null);
   const [qrSvg, setQrSvg] = useState('');
   const [friendQrSvg, setFriendQrSvg] = useState('');
+  const [friendQrUrl, setFriendQrUrl] = useState('');
+  const [linkDeviceUrl, setLinkDeviceUrl] = useState('');
   const [linkInput, setLinkInput] = useState('');
   const [inviteUrl, setInviteUrl] = useState('');
   const [message, setMessage] = useState('');
@@ -51,6 +53,7 @@ export function Settings({ path }: { path?: string }) {
       const card = await getContactCard();
       setContactCard(card);
       const url = buildLinkDeviceUrl(card);
+      setLinkDeviceUrl(url);
       const svg = await QRCode.toString(url, { type: 'svg', margin: 1, width: 200 });
       setQrSvg(svg);
     } catch (err: any) {
@@ -62,6 +65,7 @@ export function Settings({ path }: { path?: string }) {
     try {
       const card = await getContactCard();
       const url = buildAddFriendUrl(card);
+      setFriendQrUrl(url);
       const svg = await QRCode.toString(url, { type: 'svg', margin: 1, width: 200 });
       setFriendQrSvg(svg);
     } catch (err: any) {
@@ -229,7 +233,18 @@ export function Settings({ path }: { path?: string }) {
           Show QR code
         </Button>
         {friendQrSvg && (
-          <div className="mt-2 flex justify-center" dangerouslySetInnerHTML={{ __html: friendQrSvg }} />
+          <div className="mt-2 space-y-2">
+            <div className="flex justify-center" dangerouslySetInnerHTML={{ __html: friendQrSvg }} />
+            <div className="flex items-center gap-2">
+              <input
+                className="flex-1 text-xs p-2 rounded border border-border font-mono bg-muted"
+                value={friendQrUrl}
+                readOnly
+                onClick={(e: any) => e.currentTarget.select()}
+              />
+              <Button size="sm" variant="outline" onClick={() => navigator.clipboard.writeText(friendQrUrl)}>Copy</Button>
+            </div>
+          </div>
         )}
       </section>
 
@@ -266,7 +281,20 @@ export function Settings({ path }: { path?: string }) {
           </Button>
           {contactCard && (
             <div className="mt-2 space-y-2">
-              {qrSvg && <div className="flex justify-center" dangerouslySetInnerHTML={{ __html: qrSvg }} />}
+              {qrSvg && (
+                <div className="space-y-2">
+                  <div className="flex justify-center" dangerouslySetInnerHTML={{ __html: qrSvg }} />
+                  <div className="flex items-center gap-2">
+                    <input
+                      className="flex-1 text-xs p-2 rounded border border-border font-mono bg-muted"
+                      value={linkDeviceUrl}
+                      readOnly
+                      onClick={(e: any) => e.currentTarget.select()}
+                    />
+                    <Button size="sm" variant="outline" onClick={() => navigator.clipboard.writeText(linkDeviceUrl)}>Copy</Button>
+                  </div>
+                </div>
+              )}
               <div className="flex items-start gap-2">
                 <textarea
                   className="flex-1 text-xs bg-muted p-2 rounded border border-border font-mono resize-none"
