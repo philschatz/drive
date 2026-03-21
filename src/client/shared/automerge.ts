@@ -50,7 +50,9 @@ export function _worker(): Worker { return worker; }
 
 // Keyhive-specific ready promise — resolves when WASM + keyhive are fully initialized.
 let resolveKeyhiveReady!: () => void;
-export const keyhiveReady = new Promise<void>(r => { resolveKeyhiveReady = r; });
+let rejectKeyhiveReady!: (err: Error) => void;
+export const keyhiveReady = new Promise<void>((resolve, reject) => { resolveKeyhiveReady = resolve; rejectKeyhiveReady = reject; });
+keyhiveReady.catch(() => {}); // prevent unhandled rejection — callers handle the error
 
 // --- Worker peer ID ---
 // The actual peerId of the worker's primary repo (keyhive-derived or random).
@@ -89,6 +91,9 @@ worker.onmessage = (e: MessageEvent<WorkerToMain>) => {
       }
     }
     resolveKeyhiveReady();
+  } else if (msg.type === 'kh-error') {
+    console.error('Keyhive init failed:', msg.message);
+    rejectKeyhiveReady(new Error(msg.message));
   } else if (msg.type === 'error') {
     console.error('Automerge worker error:', msg.message);
   } else if (msg.type === 'peer-connected' || msg.type === 'peer-disconnected') {

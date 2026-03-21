@@ -53,6 +53,7 @@ export type ValidationError = { path: (string | number)[]; message: string; kind
 export type WorkerToMain =
   | { type: 'ready'; peerId: string }
   | { type: 'kh-ready' }
+  | { type: 'kh-error'; message: string }
   | { type: 'error'; message: string }
   | { type: 'peer-connected'; peerCount: number; peers: string[] }
   | { type: 'peer-disconnected'; peerCount: number; peers: string[] }
@@ -244,7 +245,7 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
       console.log('[worker] insecure repo created');
 
       // --- Create secure repo ---
-      {
+      try {
         if (!khBridge) throw new Error('Keyhive bridge not loaded');
 
         await khBridge.initKeyhiveWasm();
@@ -317,6 +318,9 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
 
         console.log('[worker] secure repo created, peerId:', khIntegration.peerId);
         (self as any).postMessage({ type: 'kh-ready' } satisfies WorkerToMain);
+      } catch (khErr: any) {
+        console.error('[worker] keyhive init failed (continuing without encryption):', khErr);
+        (self as any).postMessage({ type: 'kh-error', message: errMsg(khErr) } satisfies WorkerToMain);
       }
 
       // --- Store appBaseUrl ---
