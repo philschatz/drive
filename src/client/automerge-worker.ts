@@ -730,7 +730,10 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
   if (msg.type === 'kh-get-known-contacts') {
     try {
       if (!khOps) throw new Error('Keyhive not available');
-      const result = await khOps.getKnownContacts(msg.excludeDocId);
+      const { idbGet } = await import('./idb-storage');
+      const contactNames = (await idbGet<Record<string, string>>('contact-names')) ?? {};
+      const contactAgentIds = Object.keys(contactNames);
+      const result = await khOps.getKnownContacts(msg.excludeDocId, contactAgentIds);
       (self as any).postMessage({ type: 'kh-result', id: msg.id, result } satisfies WorkerToMain);
     } catch (err: any) {
       (self as any).postMessage({ type: 'kh-result', id: msg.id, error: errMsg(err) } satisfies WorkerToMain);

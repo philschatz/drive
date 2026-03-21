@@ -264,9 +264,10 @@ export class KeyhiveOps {
     return true;
   }
 
-  async getKnownContacts(excludeDocId?: string): Promise<MemberInfo[]> {
+  async getKnownContacts(excludeDocId?: string, contactAgentIds?: string[]): Promise<MemberInfo[]> {
     const me = await this.kh.individual;
     const myAgentStr = me.toAgent().toString();
+    const myAgentId = bytesToBase64(me.id.toBytes());
     const seen = new Map<string, MemberInfo>();
 
     const excludeSet = new Set<string>();
@@ -295,6 +296,32 @@ export class KeyhiveOps {
         }
       }
     }
+
+    // Also include contacts from the friend list who aren't yet members of any document
+    if (contactAgentIds) {
+      for (const agentId of contactAgentIds) {
+        if (agentId === myAgentId) continue;
+        if (excludeSet.has(agentId)) continue;
+        if (seen.has(agentId)) continue;
+        try {
+          const id = new this.bridge.Identifier(base64ToBytes(agentId));
+          const agent = await this.kh.getAgent(id);
+          if (agent && agent.isIndividual()) {
+            seen.set(agentId, {
+              agentId,
+              displayId: agent.toString(),
+              role: '',
+              isIndividual: true,
+              isGroup: false,
+              isMe: false,
+            });
+          }
+        } catch {
+          // Agent not found in keyhive — skip
+        }
+      }
+    }
+
     return [...seen.values()];
   }
 
