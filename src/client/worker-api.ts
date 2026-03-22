@@ -104,12 +104,12 @@ export function createDoc(initialJson: any, secure = true): Promise<{ docId: str
 export function openDoc(
   docId: string,
   opts?: { secure?: boolean; onProgress?: (pct: number, message: string) => void },
-): Promise<{ docId: string }> {
+): Promise<{ docId: string; secure?: boolean }> {
   const { secure, onProgress } = opts ?? {};
   return workerReady.then(() => {
     const id = ++idCounter;
     if (onProgress) openDocProgressCallbacks.set(id, onProgress);
-    return new Promise<{ docId: string }>((resolve, reject) => {
+    return new Promise<{ docId: string; secure?: boolean }>((resolve, reject) => {
       pendingRequests.set(id, {
         resolve: (v) => { openDocProgressCallbacks.delete(id); resolve(v); },
         reject: (e) => { openDocProgressCallbacks.delete(id); reject(e); },

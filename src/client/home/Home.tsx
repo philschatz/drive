@@ -78,7 +78,8 @@ export function Home({ path }: { path?: string }) {
   const [error, setError] = useState('');
   const connected = useConnectionStatus();
   const repoPeers = usePeerList();
-  const [createSecure, setCreateSecure] = useState(true);
+  const showUnencrypted = localStorage.getItem('showUnencrypted') !== 'false';
+  const createSecure = !showUnencrypted;
 
   // Subscribe to worker-pushed doc list updates (IDB → localStorage cache)
   useEffect(() => {
@@ -479,12 +480,17 @@ export function Home({ path }: { path?: string }) {
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem
-              onSelect={(e) => { e.preventDefault(); setCreateSecure(v => !v); }}
-              title="Create encrypted documents with keyhive"
+              onSelect={(e) => {
+                e.preventDefault();
+                const next = !showUnencrypted;
+                localStorage.setItem('showUnencrypted', String(next));
+                location.reload();
+              }}
+              title="Enable unencrypted documents and the insecure sync server"
             >
-              <span className="material-symbols-outlined">{createSecure ? 'check_box' : 'check_box_outline_blank'}</span>
-              <span className="material-symbols-outlined" style={{ fontSize: '1rem' }}>{createSecure ? 'lock' : 'visibility'}</span>
-              Encrypted
+              <span className="material-symbols-outlined">{showUnencrypted ? 'check_box' : 'check_box_outline_blank'}</span>
+              <span className="material-symbols-outlined" style={{ fontSize: '1rem' }}>{showUnencrypted ? 'visibility' : 'lock'}</span>
+              Unencrypted
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
@@ -495,12 +501,13 @@ export function Home({ path }: { path?: string }) {
 
       <div className="flex flex-col">
         {sortedEntries.map(entry => {
+          const disabled = !showUnencrypted && !entry.encrypted;
           const viewPath = viewPathForType(entry.type, entry.documentId);
           const icon = iconForType(entry.type);
           return (
             <div
               key={entry.documentId}
-              className="flex items-center gap-2 py-1 px-1 flex-nowrap border-b border-border"
+              className={`flex items-center gap-2 py-1 px-1 flex-nowrap border-b border-border${disabled ? ' opacity-40 pointer-events-none' : ''}`}
             >
               <span className="material-symbols-outlined" style={{ width: '1rem', textAlign: 'center', color: '#999', fontSize: '0.9rem' }} title={entry.encrypted ? 'Encrypted' : 'Unencrypted'}>
                 {entry.encrypted ? 'lock' : 'visibility'}

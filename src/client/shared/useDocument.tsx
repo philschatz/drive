@@ -29,11 +29,11 @@ export function useDocument(docId: string | undefined) {
       secure: entry?.encrypted,
       onProgress: (pct, msg) => { if (!cancelled) { setProgress(pct); setMessage(msg); } },
     })
-      .then(() => {
+      .then((result) => {
         if (!cancelled) {
           setProgress(100); setMessage('Ready'); setStatus('ready');
           // Ensure the doc appears in the home page doc list (e.g. when visiting a shared URL)
-          addDocId(docId, { encrypted: entry?.encrypted });
+          addDocId(docId, { encrypted: result.secure });
         }
       })
       .catch((err) => { if (!cancelled) { setStatus('error'); setError(err.message); } });

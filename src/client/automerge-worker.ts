@@ -2,10 +2,10 @@ import { deepAssign } from '../shared/deep-assign';
 import { syncToTarget } from '../shared/sync-to-target';
 import { validateDocument } from '../shared/schemas';
 import { KeyhiveOps, bytesToBase64, errMsg } from './keyhive-ops';
-import { populateDocRepoMap, setDocRepo, repoFor as _repoFor } from './repo-routing';
+import { populateDocRepoMap, setDocRepo, getDocRepo, repoFor as _repoFor } from './repo-routing';
 
 export type MainToWorker =
-  | { type: 'init'; appBaseUrl: string }
+  | { type: 'init'; appBaseUrl: string; enableInsecureRepo: boolean }
   | { type: 'query'; id: number; docId: string; filter: string }
   // New worker-owned doc API
   | { type: 'create-doc'; id: number; initialJson: any; secure: boolean }
@@ -214,36 +214,40 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
     try {
       console.log('[worker] init message received');
 
-      // --- Always create insecure repo ---
-      const insecureStorage = new IndexedDBStorageAdapter('automerge-insecure');
-      const insecureWs = new BrowserWebSocketClientAdapter('wss://sync.automerge.org');
-      const insecureSubduction = {
-        storage: {},
-        removeSedimentree() {},
-        connectDiscover() {},
-        disconnectAll() {},
-        disconnectFromPeer() {},
-        syncAll() { return Promise.resolve({ entries() { return []; } }); },
-        syncWithAllPeers() { return Promise.resolve(new Map()); },
-        getBlobs() { return Promise.resolve([]); },
-        addCommit() { return Promise.resolve(undefined); },
-        addFragment() { return Promise.resolve(undefined); },
-      };
-      insecureRepo = new Repo({
-        network: [insecureWs],
-        storage: insecureStorage,
-        subduction: insecureSubduction,
-        peerId: crypto.randomUUID() as any,
-      } as any);
-      const insecureNs = insecureRepo.networkSubsystem;
-      insecureNs.on('peer', postStatus);
-      insecureNs.on('peer-disconnected', postStatus);
-      // Monitor WS open/close directly for connection status
-      const origInsecureOpen = insecureWs.onOpen;
-      const origInsecureClose = insecureWs.onClose;
-      insecureWs.onOpen = () => { origInsecureOpen(); (self as any).postMessage({ type: 'ws-status', repo: 'insecure', connected: true } satisfies WorkerToMain); };
-      insecureWs.onClose = () => { origInsecureClose(); (self as any).postMessage({ type: 'ws-status', repo: 'insecure', connected: false } satisfies WorkerToMain); };
-      console.log('[worker] insecure repo created');
+      // --- Optionally create insecure repo ---
+      if (msg.enableInsecureRepo) {
+        const insecureStorage = new IndexedDBStorageAdapter('automerge-insecure');
+        const insecureWs = new BrowserWebSocketClientAdapter('wss://sync.automerge.org');
+        const insecureSubduction = {
+          storage: {},
+          removeSedimentree() {},
+          connectDiscover() {},
+          disconnectAll() {},
+          disconnectFromPeer() {},
+          syncAll() { return Promise.resolve({ entries() { return []; } }); },
+          syncWithAllPeers() { return Promise.resolve(new Map()); },
+          getBlobs() { return Promise.resolve([]); },
+          addCommit() { return Promise.resolve(undefined); },
+          addFragment() { return Promise.resolve(undefined); },
+        };
+        insecureRepo = new Repo({
+          network: [insecureWs],
+          storage: insecureStorage,
+          subduction: insecureSubduction,
+          peerId: crypto.randomUUID() as any,
+        } as any);
+        const insecureNs = insecureRepo.networkSubsystem;
+        insecureNs.on('peer', postStatus);
+        insecureNs.on('peer-disconnected', postStatus);
+        // Monitor WS open/close directly for connection status
+        const origInsecureOpen = insecureWs.onOpen;
+        const origInsecureClose = insecureWs.onClose;
+        insecureWs.onOpen = () => { origInsecureOpen(); (self as any).postMessage({ type: 'ws-status', repo: 'insecure', connected: true } satisfies WorkerToMain); };
+        insecureWs.onClose = () => { origInsecureClose(); (self as any).postMessage({ type: 'ws-status', repo: 'insecure', connected: false } satisfies WorkerToMain); };
+        console.log('[worker] insecure repo created');
+      } else {
+        console.log('[worker] insecure repo disabled by user setting');
+      }
 
       // --- Create secure repo ---
       try {
@@ -421,14 +425,15 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
       getOrCreateEntry(msg.docId, handle);
       progress(50, 'Loading document data\u2026');
       const isReady = handle.isReady ? handle.isReady() : false;
+      const secure = getDocRepo(msg.docId) === 'secure';
       if (isReady) {
         progress(100, 'Ready');
-        post.postMessage({ type: 'result', id: msg.id, result: { docId: msg.docId } } satisfies WorkerToMain);
+        post.postMessage({ type: 'result', id: msg.id, result: { docId: msg.docId, secure } } satisfies WorkerToMain);
       } else {
         // Wait for doc data to arrive
         handle.whenReady().then(() => {
           progress(100, 'Ready');
-          post.postMessage({ type: 'result', id: msg.id, result: { docId: msg.docId } } satisfies WorkerToMain);
+          post.postMessage({ type: 'result', id: msg.id, result: { docId: msg.docId, secure } } satisfies WorkerToMain);
         });
       }
     } catch (err: any) {

@@ -37,6 +37,7 @@ setContactNamesDispatch((type, agentId, name) => {
 worker.postMessage({
   type: 'init',
   appBaseUrl: window.location.origin + window.location.pathname,
+  enableInsecureRepo: localStorage.getItem('showUnencrypted') !== 'false',
 });
 
 // --- Worker ready promise ---
