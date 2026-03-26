@@ -158,16 +158,18 @@ export function buildSheetData(
   );
 }
 
-/** Get computed display value for a cell from HyperFormula. */
-export function getDisplayValue(hf: { getCellValue(addr: { sheet: number; col: number; row: number }): any } | null, rawValue: string, col: number, row: number, sheetIndex = 0): string {
+/**
+ * Get computed display value for a cell.
+ * Looks up pre-computed formula results from the provided map (keyed by "sheetId:rowId:colId").
+ * Falls back to rawValue for non-formula cells.
+ */
+export function getDisplayValue(computedValues: Map<string, string | number> | null, rawValue: string, sheetId: string, rowId: string, colId: string): string {
   if (!rawValue) return '';
-  if (rawValue.startsWith('=') && hf) {
-    const computed = hf.getCellValue({ sheet: sheetIndex, col, row });
+  if (rawValue.startsWith('=') && computedValues) {
+    const key = `${sheetId}:${rowId}:${colId}`;
+    const computed = computedValues.get(key);
     if (computed == null) return '';
-    if (typeof computed !== 'object') return String(computed);
-    // HyperFormula DetailedCellError — show the error value (e.g. #VALUE!, #REF!, #NAME?)
-    if ('value' in computed && typeof computed.value === 'string') return computed.value;
-    return rawValue;
+    return String(computed);
   }
   return rawValue;
 }

@@ -207,31 +207,26 @@ describe('buildSheetData', () => {
 
 describe('getDisplayValue', () => {
   it('returns empty string for falsy values', () => {
-    expect(getDisplayValue(null, '', 0, 0)).toBe('');
+    expect(getDisplayValue(null, '', 's1', 'r1', 'c1')).toBe('');
   });
 
   it('returns raw value for non-formula strings', () => {
-    expect(getDisplayValue(null, 'hello', 0, 0)).toBe('hello');
-    expect(getDisplayValue(null, '42', 0, 0)).toBe('42');
+    expect(getDisplayValue(null, 'hello', 's1', 'r1', 'c1')).toBe('hello');
+    expect(getDisplayValue(null, '42', 's1', 'r1', 'c1')).toBe('42');
   });
 
-  it('returns raw formula when no hf engine', () => {
-    expect(getDisplayValue(null, '=A1+B2', 0, 0)).toBe('=A1+B2');
+  it('returns raw formula when no computed values', () => {
+    expect(getDisplayValue(null, '=A1+B2', 's1', 'r1', 'c1')).toBe('=A1+B2');
   });
 
-  it('returns computed value from hf engine', () => {
-    const mockHf = {
-      getCellValue: jest.fn().mockReturnValue(42),
-    };
-    expect(getDisplayValue(mockHf, '=A1+B2', 0, 0)).toBe('42');
-    expect(mockHf.getCellValue).toHaveBeenCalledWith({ sheet: 0, col: 0, row: 0 });
+  it('returns computed value from lookup map', () => {
+    const map = new Map<string, string | number>([['s1:r1:c1', 42]]);
+    expect(getDisplayValue(map, '=A1+B2', 's1', 'r1', 'c1')).toBe('42');
   });
 
-  it('returns raw formula when hf returns object (error)', () => {
-    const mockHf = {
-      getCellValue: jest.fn().mockReturnValue({ type: 'ERROR' }),
-    };
-    expect(getDisplayValue(mockHf, '=A1+B2', 0, 0)).toBe('=A1+B2');
+  it('returns empty string when formula has no computed value', () => {
+    const map = new Map<string, string | number>();
+    expect(getDisplayValue(map, '=A1+B2', 's1', 'r1', 'c1')).toBe('');
   });
 });
 

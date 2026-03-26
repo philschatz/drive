@@ -8,11 +8,10 @@ import type { DataGridDocument } from './schema';
 import { useGridCommands, commitReorder, commitAutofill, type GridCommandState, type GridCommandContext } from './commands';
 import { CommandMenuBar, CommandToolbar, CommandContextMenuContent } from './CommandBar';
 import { ContextMenu, ContextMenuTrigger } from '@/components/ui/context-menu';
-import HyperFormula from 'hyperformula';
 import {
   sortedEntries, colIndexToLetter, shortId,
   a1ToInternal, internalToA1,
-  buildSheetData, getDisplayValue, cellToHfValue,
+  getDisplayValue,
   rewriteFormulasForSheetDeletion,
 } from './helpers';
 import { FormulaEditor, type FormulaHighlight, isRange } from './FormulaEditor';
@@ -24,16 +23,22 @@ import { HistorySlider } from '../shared/HistorySlider';
 import { useDocumentValidation } from '../shared/useDocumentValidation';
 import { ValidationPanel } from '../shared/ValidationPanel';
 import { DocLoader } from '../shared/useDocument';
-import { registerCustomFunctions, getDistributionRegistry, clearDistributionRegistry } from './hf-functions';
-import { runMonteCarloAsync, type MCResults } from './monte-carlo';
+import { createHfBridge, type HfBridge, type MCResults } from './hf-bridge';
+import { sendHfPort } from '../worker-api';
 import { DistributionPanel } from './DistributionPanel';
 import { formatDistValue } from './helpers';
 import { addDocId, getDocEntry } from '@/doc-storage';
 import './datagrid.css';
 
-registerCustomFunctions();
-
 const DATAGRID_QUERY = '{ "@type": .["@type"], name: (.name // "Spreadsheet"), sheets: .sheets }';
+
+// Custom function names from hf-functions.ts (for autocomplete).
+// HyperFormula built-in names are loaded lazily to avoid importing HF on the main thread.
+const CUSTOM_FN_NAMES = [
+  'BERNOULLI', 'BETA', 'BINOMIAL', 'CAUCHY', 'CONCAT', 'EXPONENTIAL',
+  'GAMMA', 'LOGNORMAL', 'NORMAL', 'PERT', 'POISSON', 'SORT',
+  'TRIANGULAR', 'UNIFORM', 'UNIQUE', 'WEIBULL',
+];
 
 export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId?: string; readOnly?: boolean; path?: string }) {
   // Read initial sheet from URL — prefer router-provided sheetId, fall back to parsing hash
@@ -75,10 +80,9 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
   const noAccess = dgEncrypted && accessLoaded && dgAccess === null;
   const canEditRef = useRef(canEdit);
   canEditRef.current = canEdit;
-  const hfRef = useRef<HyperFormula | null>(null);
+  const hfBridgeRef = useRef<HfBridge | null>(null);
+  const computedValuesRef = useRef<Map<string, string | number>>(new Map());
   const [syncing, setSyncing] = useState(false);
-  const syncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const dirtySheetsRef = useRef<Set<number>>(new Set());
   const titleFocusedRef = useRef(false);
   const editFromBarRef = useRef(false);
   const tableRef = useRef<HTMLDivElement>(null);
@@ -103,7 +107,6 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
 
   const [addRowCount, setAddRowCount] = useState<number | null>(10);
   const [mcResults, setMcResults] = useState<MCResults | null>(null);
-  const mcCancelRef = useRef<(() => void) | null>(null);
 
   const [currentSheetId, setCurrentSheetId] = useState<string | null>(null);
 
@@ -156,12 +159,6 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
     return sortedEntries(docState.sheets).map(([id, s]) => ({ id, name: s.name, hidden: s.hidden }));
   }, [docState?.sheets]);
 
-  const hfSheetIndex = useMemo(() => {
-    if (!effectiveSheetId) return 0;
-    const idx = sheetOrder.findIndex(s => s.id === effectiveSheetId);
-    return idx >= 0 ? idx : 0;
-  }, [effectiveSheetId, sheetOrder]);
-
   const sheetNameLookup = useCallback((sheetId: string) => {
     return docState?.sheets?.[sheetId]?.name;
   }, [docState?.sheets]);
@@ -184,114 +181,15 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
     };
   }, [docState?.sheets]);
 
-  // Rebuild HyperFormula from all sheets. Called when sheet structure changes.
-  const rebuildHyperFormula = useCallback(() => {
-    const d = docRef.current;
-    if (!d?.sheets) return;
-    hfRef.current?.destroy();
-    const order = sortedEntries(d.sheets);
-    const sheetsData: Record<string, (string | number | boolean | null)[][]> = {};
-    const sheetNameLookupFn = (id: string) => d.sheets[id]?.name;
-    const sheetRowColFn = (id: string) => {
-      const s = d.sheets[id];
-      if (!s) return undefined;
-      return { rowIds: sortedEntries(s.rows).map(([r]) => r), colIds: sortedEntries(s.columns).map(([c]) => c) };
-    };
-    for (const [, sheet] of order) {
-      const rIds = sortedEntries(sheet.rows).map(([rid]) => rid);
-      const cIds = sortedEntries(sheet.columns).map(([cid]) => cid);
-      sheetsData[sheet.name] = buildSheetData(sheet.cells, rIds, cIds, sheetNameLookupFn, sheetRowColFn);
-    }
-    hfRef.current = HyperFormula.buildFromSheets(sheetsData, { licenseKey: 'gpl-v3' });
-    setTick(t => t + 1);
-  }, []);
-
-  // Sync a single HyperFormula sheet by index.
-  const syncHfSheet = useCallback((hf: HyperFormula, sheetIdx: number) => {
-    const d = docRef.current;
-    if (!d?.sheets) return;
-    const order = sortedEntries(d.sheets);
-    if (sheetIdx < 0 || sheetIdx >= order.length) return;
-    const [, sheet] = order[sheetIdx];
-    const sheetNameLookupFn = (id: string) => d.sheets[id]?.name;
-    const sheetRowColFn = (id: string) => {
-      const s = d.sheets[id];
-      if (!s) return undefined;
-      return { rowIds: sortedEntries(s.rows).map(([r]) => r), colIds: sortedEntries(s.columns).map(([c]) => c) };
-    };
-    const rIds = sortedEntries(sheet.rows).map(([rid]) => rid);
-    const cIds = sortedEntries(sheet.columns).map(([cid]) => cid);
-    const data = buildSheetData(sheet.cells, rIds, cIds, sheetNameLookupFn, sheetRowColFn);
-    hf.setSheetContent(sheetIdx, data);
-  }, []);
-
-  // Schedule MC simulation after HF sync
-  const scheduleMC = useCallback(() => {
-    if (mcCancelRef.current) { mcCancelRef.current(); mcCancelRef.current = null; }
-    const hf = hfRef.current;
-    const registry = getDistributionRegistry();
-    if (!hf || registry.size === 0) {
-      setMcResults(null);
-      return;
-    }
-    // Deep-copy registry since it may get cleared
-    const regCopy = new Map(registry);
-    mcCancelRef.current = runMonteCarloAsync(hf, regCopy, (results) => {
-      mcCancelRef.current = null;
-      setMcResults(results);
-    });
-  }, []);
-
-  // Sync HyperFormula when doc changes (remote edits, structural changes).
-  // Only syncs the current sheet; marks all others dirty for lazy re-sync on switch.
-  const syncHyperFormula = useCallback(() => {
-    const d = docRef.current;
-    const hf = hfRef.current;
-    if (!d?.sheets) return;
-    if (!hf) { rebuildHyperFormula(); setSyncing(false); return; }
-    const order = sortedEntries(d.sheets);
-    // If sheet count changed, do a full rebuild
-    if (hf.countSheets() !== order.length) {
-      rebuildHyperFormula();
-      setSyncing(false);
-      clearDistributionRegistry();
-      return;
-    }
-    // Find the current sheet's HF index
-    const curIdx = currentSheetId ? order.findIndex(([id]) => id === currentSheetId) : 0;
-    const activeIdx = curIdx >= 0 ? curIdx : 0;
-    // Sync only the active sheet; mark all others dirty
-    clearDistributionRegistry();
-    syncHfSheet(hf, activeIdx);
-    dirtySheetsRef.current.clear();
-    for (let i = 0; i < order.length; i++) {
-      if (i !== activeIdx) dirtySheetsRef.current.add(i);
-    }
-    setSyncing(false);
-    setTick(t => t + 1);
-    scheduleMC();
-  }, [rebuildHyperFormula, syncHfSheet, currentSheetId, scheduleMC]);
-
-  // Debounced async wrapper — shows progress bar, then runs sync after a short delay.
-  const scheduleSyncHyperFormula = useCallback((delay = 50) => {
-    if (syncTimerRef.current) clearTimeout(syncTimerRef.current);
-    setSyncing(true);
-    syncTimerRef.current = setTimeout(() => {
-      syncTimerRef.current = null;
-      syncHyperFormula();
-    }, delay);
-  }, [syncHyperFormula]);
-
   // Single gateway for all document mutations.
-  const mutate = useCallback((fn: (d: any, ...args: any[]) => void, args: unknown[], noHfSync = false) => {
+  // HF worker is notified of changes via its automerge subscription — no explicit sync needed.
+  const mutate = useCallback((fn: (d: any, ...args: any[]) => void, args: unknown[]) => {
     if (!canEditRef.current || !docId) return;
     updateDoc(docId, fn, ...args);
-    if (!noHfSync) scheduleSyncHyperFormula();
-    else setTick(t => t + 1);
-  }, [scheduleSyncHyperFormula, docId]);
+    setTick(t => t + 1);
+  }, [docId]);
 
-  // Write a cell value to the Automerge doc and update HyperFormula incrementally.
-  // Bypasses scheduleSyncHyperFormula() to avoid a full sheet rebuild on every keystroke.
+  // Write a cell value to the Automerge doc and send to HF worker for immediate evaluation.
   const commitCellValue = useCallback((col: number, row: number, value: string) => {
     if (!canEditRef.current || !docId) return;
     if (col >= sortedColIds.length || row >= sortedRowIds.length || !currentSheetId) return;
@@ -308,15 +206,10 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
       else if (!existing) { d.sheets[sid].cells[cellKey] = { value: stored }; }
       else if (existing.value !== stored) { existing.value = stored; }
     }, sid, cellKey, stored);
-    const hf = hfRef.current;
-    if (hf) {
-      const hfValue = cellToHfValue(stored || undefined, row, col, sortedRowIds, sortedColIds, sheetNameLookup, sheetRowColLookup);
-      if (hfSheetIndex < hf.countSheets()) {
-        hf.setCellContents({ sheet: hfSheetIndex, col, row }, [[hfValue]]);
-      }
-    }
+    // Send to HF worker for immediate formula re-evaluation
+    hfBridgeRef.current?.setCellContents(sid, rowId, colId, stored);
     setTick(t => t + 1);
-  }, [sortedColIds, sortedRowIds, currentSheetId, sheetIdLookup, sheetRowColLookup, sheetNameLookup, hfSheetIndex, docId]);
+  }, [sortedColIds, sortedRowIds, currentSheetId, sheetIdLookup, sheetRowColLookup, docId]);
 
   // Start editing a cell
   const startEditing = useCallback((col: number, row: number) => {
@@ -526,7 +419,7 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
       if (ci < sortedColIds.length && currentSheetId) {
         const colId = sortedColIds[ci];
         const sid = currentSheetId;
-        mutate((d, sid, colId, finalWidth) => { d.sheets[sid].columns[colId].width = finalWidth; }, [sid, colId, finalWidth], true);
+        mutate((d, sid, colId, finalWidth) => { d.sheets[sid].columns[colId].width = finalWidth; }, [sid, colId, finalWidth]);
       }
     };
 
@@ -553,7 +446,7 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
     });
     const colId = sortedColIds[ci];
     const sid = currentSheetId;
-    mutate((d, sid, colId, width) => { d.sheets[sid].columns[colId].width = width; }, [sid, colId, Math.ceil(maxWidth)], true);
+    mutate((d, sid, colId, width) => { d.sheets[sid].columns[colId].width = width; }, [sid, colId, Math.ceil(maxWidth)]);
   }, [sortedColIds, mutate, currentSheetId]);
 
   // -- Sheet management handlers --
@@ -561,13 +454,7 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
   const handleSelectSheet = useCallback((id: string) => {
     if (id === currentSheetId) return;
     if (editingCell) commitEdit();
-    // Sync target sheet if it was dirtied by a remote peer edit while we were on another sheet
-    const newIdx = sheetOrder.findIndex(s => s.id === id);
-    const hf = hfRef.current;
-    if (hf && newIdx >= 0 && dirtySheetsRef.current.has(newIdx)) {
-      syncHfSheet(hf, newIdx);
-      dirtySheetsRef.current.delete(newIdx);
-    }
+    hfBridgeRef.current?.switchSheet(id);
     setCurrentSheetId(id);
     setSelectedCell(null);
     setSelectionAnchor(null);
@@ -582,7 +469,7 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
       const base = window.location.href.split('#')[0];
       window.history.replaceState(null, '', `${base}#/datagrids/${docId}/sheets/${id}`);
     }
-  }, [currentSheetId, editingCell, commitEdit, sheetOrder, syncHfSheet, docId]);
+  }, [currentSheetId, editingCell, commitEdit, docId]);
 
   const handleAddSheet = useCallback(() => {
     const docSnap = docRef.current;
@@ -596,12 +483,11 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
     for (let i = 0; i < 10; i++) rows[shortId()] = { index: i + 1 };
     const newSheet = { '@type': 'Sheet', name: `Sheet ${sheetCount + 1}`, index: maxIndex + 1, columns: cols, rows, cells: {} };
     updateDoc(docId, (d, sid, newSheet) => { d.sheets[sid] = newSheet as any; }, sid, newSheet);
-    rebuildHyperFormula();
     handleSelectSheet(sid);
-  }, [docId, handleSelectSheet, rebuildHyperFormula]);
+  }, [docId, handleSelectSheet]);
 
   const handleRenameSheet = useCallback((id: string, name: string) => {
-    mutate((d, id, name) => { d.sheets[id].name = name; }, [id, name], true);
+    mutate((d, id, name) => { d.sheets[id].name = name; }, [id, name]);
   }, [mutate]);
 
   const handleDeleteSheet = useCallback((id: string) => {
@@ -618,20 +504,21 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
       }
       delete d.sheets[id];
     }, id, rewrites);
-    rebuildHyperFormula();
     if (id === currentSheetId) {
-      setCurrentSheetId(remaining.length > 0 ? remaining[0][0] : null);
+      const nextId = remaining.length > 0 ? remaining[0][0] : null;
+      setCurrentSheetId(nextId);
+      if (nextId) hfBridgeRef.current?.switchSheet(nextId);
       setSelectedCell(null); setSelectionAnchor(null); setEditingCell(null);
       setSelectedRows(new Set()); setSelectedCols(new Set()); setClipboardSource(null);
     }
-  }, [docId, currentSheetId, rebuildHyperFormula]);
+  }, [docId, currentSheetId]);
 
   const handleHideSheet = useCallback((id: string) => {
     const docSnap = docRef.current;
     if (!docSnap) return;
     const visibleCount = Object.values(docSnap.sheets).filter(s => !s.hidden).length;
     if (visibleCount <= 1) return;
-    mutate((d, id) => { d.sheets[id].hidden = true; }, [id], true);
+    mutate((d, id) => { d.sheets[id].hidden = true; }, [id]);
     if (id === currentSheetId) {
       const order = sortedEntries(docSnap.sheets);
       const firstVisible = order.find(([, s]) => !s.hidden);
@@ -654,7 +541,7 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
     } else {
       newIdx = (filtered[dropIndex - 1][1].index + filtered[dropIndex][1].index) / 2;
     }
-    mutate((d, draggedId, newIdx) => { d.sheets[draggedId].index = newIdx; }, [draggedId, newIdx], true);
+    mutate((d, draggedId, newIdx) => { d.sheets[draggedId].index = newIdx; }, [draggedId, newIdx]);
   }, [mutate]);
 
   // -- Context menu handlers --
@@ -874,23 +761,36 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
     return map;
   }, [peerStates, sortedColIds, sortedRowIds, currentSheetId]);
 
-  // Load document and init presence
+  // Load document, init presence, and set up HF bridge
   useEffect(() => {
     if (!docId) return;
 
     let mounted = true;
+
+    // Set up HF bridge for formula evaluation
+    const bridge = createHfBridge(sendHfPort);
+    hfBridgeRef.current = bridge;
+    const unsubValues = bridge.onComputedValues((values) => {
+      computedValuesRef.current = values;
+      if (mounted) setTick(t => t + 1);
+    });
+    const unsubMC = bridge.onMCResults((results) => {
+      if (mounted) setMcResults(results);
+    });
 
     const unsubscribe = subscribeQuery(docId, DATAGRID_QUERY, (result, heads) => {
       if (!mounted || !result) return;
       const d = result as DataGridDocument;
 
       if (!docRef.current) {
-        // First load
+        // First load — start watching the doc in the HF worker
         addDocId(docId, { type: 'DataGrid', name: result.name });
         const order = sortedEntries(d.sheets);
         const firstSheetId = order.length > 0 ? order[0][0] : null;
         const validInitial = initialSheetId && d.sheets[initialSheetId] ? initialSheetId : null;
-        setCurrentSheetId(validInitial ?? firstSheetId);
+        const activeSheet = validInitial ?? firstSheetId;
+        setCurrentSheetId(activeSheet);
+        if (activeSheet) bridge.watch(docId, activeSheet);
       }
 
       setRawDoc(result);
@@ -899,7 +799,6 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
       document.title = (d.name || 'Spreadsheet') + ' - Spreadsheet';
       history.onNewHeads(heads);
       onHeadsUpdate(heads);
-      scheduleSyncHyperFormula();
     });
 
     const { broadcast, cleanup: presenceCleanup } = initPresence<PresenceState>(
@@ -914,10 +813,10 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
       broadcastRef.current = null;
       presenceCleanup();
       unsubscribe();
-      if (syncTimerRef.current) clearTimeout(syncTimerRef.current);
-      if (mcCancelRef.current) { mcCancelRef.current(); mcCancelRef.current = null; }
-      hfRef.current?.destroy();
-      hfRef.current = null;
+      unsubValues();
+      unsubMC();
+      bridge.destroy();
+      hfBridgeRef.current = null;
     };
   }, [docId]);
 
@@ -954,10 +853,7 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
     return `${colIndexToLetter(col)}${row + 1}`;
   }, [selectedCell, selectedRows, selectedCols, selectionRange, isMultiSelect]);
 
-  const formulaNames = useMemo(() => {
-    try { return HyperFormula.getRegisteredFunctionNames('enGB').sort(); }
-    catch { return []; }
-  }, []);
+  const formulaNames = CUSTOM_FN_NAMES;
 
   // Build a map of cell positions → formula ref highlight info (for coloring grid cells)
   // All refs get a colored dashed border; only the cursor-active ref also gets a background fill.
@@ -990,7 +886,7 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
 
   const peerList = Object.values(peerStates).filter(p => p.value?.viewing);
   const doc2 = docRef.current;
-  const hf = hfRef.current;
+  const computedValues = computedValuesRef.current;
 
   const currentRowIndices = useMemo(() => {
     if (selectedRows.size > 0) return [...selectedRows].sort((a, b) => a - b);
@@ -1017,9 +913,8 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
   };
   const commandCtx: GridCommandContext = {
     doc: doc2 ?? null,
-    hf: hfRef.current,
+    computedValues: computedValuesRef.current,
     currentSheetId: currentSheetId ?? '',
-    hfSheetIndex,
     sortedRowIds,
     sortedColIds,
     selectedCell,
@@ -1095,7 +990,6 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
       />
       <HistorySlider history={history} />
       <div style={noAccess ? { opacity: 0.4, pointerEvents: 'none' } : undefined}>
-      <ValidationPanel errors={validationErrors} docId={docId} />
 
       {columnDefs.length > 0 && doc2 && (
         <>
@@ -1166,7 +1060,7 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
           {/* Distribution stats panel */}
           {(() => {
             if (!mcResults || !selectedCell) return null;
-            const cellKey = `${hfSheetIndex}:${selectedCell[0]}:${selectedCell[1]}`;
+            const cellKey = `${effectiveSheetId}:${sortedRowIds[selectedCell[1]]}:${sortedColIds[selectedCell[0]]}`;
             const stats = mcResults.cells.get(cellKey);
             if (!stats) return null;
             return <DistributionPanel stats={stats} isSource={mcResults.sources.has(cellKey)} />;
@@ -1244,9 +1138,8 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
                         const peers = peerCellMap[`${ci}:${ri}`];
                         const refInfo = refHighlightMap.get(`${ci}:${ri}`);
                         const rawValue = currentSheet?.cells[`${rowId}:${colId}`]?.value || '';
-                        const safeHfIdx = hf && hfSheetIndex < hf.countSheets() ? hfSheetIndex : undefined;
-                        let display = getDisplayValue(safeHfIdx !== undefined ? hf : null, rawValue, ci, ri, safeHfIdx ?? 0);
-                        const mcKey = `${hfSheetIndex}:${ci}:${ri}`;
+                        let display = getDisplayValue(computedValues, rawValue, effectiveSheetId ?? '', rowId, colId);
+                        const mcKey = `${effectiveSheetId}:${rowId}:${colId}`;
                         const mcStats = mcResults?.cells.get(mcKey);
                         const isMcSource = mcResults?.sources.has(mcKey);
                         if (mcStats && !display.startsWith('#')) {
@@ -1339,17 +1232,11 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
                                   className="cell-editor-cm"
                                 />
                                 {(() => {
-                                  if (!editValue.startsWith('=') || !hf) return null;
-                                  let result: string;
-                                  try {
-                                    const val = hf.calculateFormula(editValue, 0);
-                                    if (val != null && typeof val === 'object' && 'value' in val) result = val.value;
-                                    else if (val != null && typeof val !== 'object') result = String(val);
-                                    else result = editValue;
-                                  } catch {
-                                    result = editValue;
-                                  }
-                                  return result !== editValue ? <div className="cell-eval-tooltip">{result}</div> : null;
+                                  // Formula preview — show last computed value from worker
+                                  if (!editValue.startsWith('=') || !effectiveSheetId) return null;
+                                  const previewKey = `${effectiveSheetId}:${sortedRowIds[editingCell![1]]}:${sortedColIds[editingCell![0]]}`;
+                                  const cached = computedValues.get(previewKey);
+                                  return cached != null ? <div className="cell-eval-tooltip">{String(cached)}</div> : null;
                                 })()}
                               </>
                             ) : (
@@ -1441,6 +1328,7 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
 
       </div>
 
+      <ValidationPanel errors={validationErrors} docId={docId} />
     </div>
     </DocLoader>
   );

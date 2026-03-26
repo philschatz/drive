@@ -541,3 +541,12 @@ export function dismissInvite(inviteId: string, docId: string): Promise<{ invite
 export function claimInvite(inviteSeed: number[], docId: string): Promise<void> {
   return khRequest('kh-claim-invite', { inviteSeed, docId });
 }
+
+// ── HyperFormula worker port ─────────────────────────────────────────────────
+
+/** Transfer a MessagePort to the automerge worker for direct HF worker communication. */
+export function sendHfPort(port: MessagePort): void {
+  workerReady.then(() => {
+    worker.postMessage({ type: 'hf-port', port }, [port]);
+  });
+}

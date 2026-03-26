@@ -43,7 +43,8 @@ export type MainToWorker =
   | { type: 'kh-dismiss-invite'; id: number; inviteId: string; docId: string }
   | { type: 'open-doc'; id: number; docId: string; secure?: boolean }
   | { type: 'subscribe-validation'; docId: string }
-  | { type: 'unsubscribe-validation'; docId: string };
+  | { type: 'unsubscribe-validation'; docId: string }
+  | { type: 'hf-port'; port: MessagePort };
 
 export type ValidationError = { path: (string | number)[]; message: string; kind?: 'schema' | 'dependency' | 'warning' };
 
@@ -130,10 +131,15 @@ function getRepo(docId: string): InstanceType<typeof Repo> {
 
 // --- Doc registry for worker-owned subscriptions ---
 
+interface SubInfo {
+  filter: string;
+  post: (msg: any) => void; // where to send results (self.postMessage or port.postMessage)
+}
+
 interface DocEntry {
   handle: any;
   pinnedVersion: number | null; // null = live view
-  subscriptions: Map<number, string>; // subId → jq filter
+  subscriptions: Map<number, SubInfo>; // subId → filter + poster
   presence: any | null; // PresenceClass instance
   validationSubscribed: boolean;
   changeListenerRegistered: boolean;
@@ -166,6 +172,35 @@ async function runQuery(filter: string, doc: any): Promise<any> {
   return one(filter, doc);
 }
 
+/** Subscribe to a jq query, routing results to the given poster. Shared by main-thread and port subscriptions. */
+async function handleSubscribeQuery(docId: string, subId: number, filter: string, post: (m: any) => void) {
+  const handle = await getOrLoadHandle(docId);
+  const entry = getOrCreateEntry(docId, handle);
+  if (!entry.changeListenerRegistered) {
+    entry.changeListenerRegistered = true;
+    handle.on('change', () => { pushToSubscriptions(docId); });
+  }
+  entry.subscriptions.set(subId, { filter, post });
+  subIdToDocId.set(subId, docId);
+  const isReady = handle.isReady ? handle.isReady() : false;
+  if (isReady) {
+    await pushToSubscriptions(docId);
+  } else {
+    handle.whenReady().then(() => pushToSubscriptions(docId)).catch((err: any) => {
+      post({ type: 'sub-result', subId, result: null, heads: [], error: errMsg(err) });
+    });
+  }
+}
+
+function handleUnsubscribeQuery(subId: number) {
+  const docId = subIdToDocId.get(subId);
+  if (docId) {
+    subIdToDocId.delete(subId);
+    const entry = docRegistry.get(docId);
+    if (entry) entry.subscriptions.delete(subId);
+  }
+}
+
 async function pushToSubscriptions(docId: string) {
   const entry = docRegistry.get(docId);
   if (!entry) return;
@@ -194,12 +229,12 @@ async function pushToSubscriptions(docId: string) {
     if (ts) lastModified = ts;
   }
 
-  for (const [subId, filter] of entry.subscriptions) {
+  for (const [subId, sub] of entry.subscriptions) {
     try {
-      const result = await runQuery(filter, activeDoc);
-      (self as any).postMessage({ type: 'sub-result', subId, result, heads, lastModified } satisfies WorkerToMain);
+      const result = await runQuery(sub.filter, activeDoc);
+      sub.post({ type: 'sub-result', subId, result, heads, lastModified });
     } catch (err: any) {
-      (self as any).postMessage({ type: 'sub-result', subId, result: null, heads, error: errMsg(err) } satisfies WorkerToMain);
+      sub.post({ type: 'sub-result', subId, result: null, heads, error: errMsg(err) });
     }
   }
 
@@ -749,39 +784,14 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
 
   if (msg.type === 'subscribe-query') {
     try {
-      const handle = await getOrLoadHandle(msg.docId);
-      const entry = getOrCreateEntry(msg.docId, handle);
-
-      // Register change listener if not already registered
-      if (!entry.changeListenerRegistered) {
-        entry.changeListenerRegistered = true;
-        handle.on('change', () => { pushToSubscriptions(msg.docId); });
-      }
-
-      entry.subscriptions.set(msg.subId, msg.filter);
-      subIdToDocId.set(msg.subId, msg.docId);
-
-      // Push immediately if doc is ready, otherwise wait for it
-      const isReady = handle.isReady ? handle.isReady() : false;
-      if (isReady) {
-        await pushToSubscriptions(msg.docId);
-      } else {
-        handle.whenReady().then(() => pushToSubscriptions(msg.docId)).catch((err: any) => {
-          (self as any).postMessage({ type: 'sub-result', subId: msg.subId, result: null, heads: [], error: errMsg(err) } satisfies WorkerToMain);
-        });
-      }
+      await handleSubscribeQuery(msg.docId, msg.subId, msg.filter, (m) => (self as any).postMessage(m));
     } catch (err: any) {
       (self as any).postMessage({ type: 'sub-result', subId: msg.subId, result: null, heads: [], error: errMsg(err) } satisfies WorkerToMain);
     }
   }
 
   if (msg.type === 'unsubscribe-query') {
-    const docId = subIdToDocId.get(msg.subId);
-    if (docId) {
-      subIdToDocId.delete(msg.subId);
-      const entry = docRegistry.get(docId);
-      if (entry) entry.subscriptions.delete(msg.subId);
-    }
+    handleUnsubscribeQuery(msg.subId);
   }
 
   if (msg.type === 'subscribe-validation') {
@@ -1278,6 +1288,25 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
       console.error('[worker] query failed for', msg.docId, err);
       (self as any).postMessage({ type: 'result', id: msg.id, error: errMsg(err) } satisfies WorkerToMain);
     }
+  }
+
+  // --- HyperFormula worker port ---
+
+  if (msg.type === 'hf-port') {
+    const hfPort = (msg as any).port as MessagePort;
+    const post = (m: any) => hfPort.postMessage(m);
+    hfPort.onmessage = async (pe: MessageEvent) => {
+      const pm = pe.data;
+      if (pm.type === 'subscribe-query') {
+        try {
+          await handleSubscribeQuery(pm.docId, pm.subId, pm.filter, post);
+        } catch (err: any) {
+          post({ type: 'sub-result', subId: pm.subId, result: null, heads: [], error: errMsg(err) });
+        }
+      } else if (pm.type === 'unsubscribe-query') {
+        handleUnsubscribeQuery(pm.subId);
+      }
+    };
   }
 }
 

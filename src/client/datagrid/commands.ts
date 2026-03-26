@@ -7,7 +7,6 @@ import {
   getEffectiveRange, type ClipboardEntry, type CellRange,
 } from './clipboard';
 import type { DataGridDocument, DataGridCell } from './schema';
-import type HyperFormula from 'hyperformula';
 
 // ============================================================
 // Shortcut — canonical keyboard shortcut definition
@@ -62,10 +61,8 @@ export interface GridCommandState {
 export interface GridCommandContext {
   /** Immutable snapshot of the current document. */
   doc: DataGridDocument | null;
-  hf: HyperFormula | null;
+  computedValues: Map<string, string | number> | null;
   currentSheetId: string;
-  /** HyperFormula sheet index for the current sheet. */
-  hfSheetIndex: number;
   sortedRowIds: string[];
   sortedColIds: string[];
   selectedCell: [number, number] | null;
@@ -264,7 +261,7 @@ const clipboardPlugin: GridPlugin = {
         const range = getEffectiveRange(ctx.selectedCell, ctx.selectionAnchor);
         if (!range || !ctx.doc) return;
         const sh = ctxSheet(ctx.doc, ctx);
-        const data = buildClipboardData(sh.cells, ctx.hf, range, ctx.sortedRowIds, ctx.sortedColIds, ctx.hfSheetIndex);
+        const data = buildClipboardData(sh.cells, ctx.computedValues, range, ctx.sortedRowIds, ctx.sortedColIds, ctx.currentSheetId);
         if (!data) return;
         ctx.clipboardRef.current = { values: data.values, mode: 'copy', range };
         ctx.setClipboardSource(range);
@@ -281,7 +278,7 @@ const clipboardPlugin: GridPlugin = {
         const range = getEffectiveRange(ctx.selectedCell, ctx.selectionAnchor);
         if (!range || !ctx.doc) return;
         const sh = ctxSheet(ctx.doc, ctx);
-        const data = buildClipboardData(sh.cells, ctx.hf, range, ctx.sortedRowIds, ctx.sortedColIds, ctx.hfSheetIndex);
+        const data = buildClipboardData(sh.cells, ctx.computedValues, range, ctx.sortedRowIds, ctx.sortedColIds, ctx.currentSheetId);
         if (!data) return;
         ctx.clipboardRef.current = { values: data.values, mode: 'cut', range };
         ctx.setClipboardSource(range);

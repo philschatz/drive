@@ -1,5 +1,4 @@
 import { internalToR1C1, getDisplayValue } from './helpers';
-import type HyperFormula from 'hyperformula';
 import type { DataGridCell } from './schema';
 
 // ============================================================
@@ -60,11 +59,11 @@ export function getEffectiveRange(
 /** Build clipboard payload from a sheet's cells. Returns values (R1C1 formulas), TSV text, and HTML. */
 export function buildClipboardData(
   cells: Record<string, DataGridCell> | null,
-  hf: HyperFormula | null,
+  computedValues: Map<string, string | number> | null,
   range: CellRange,
   sortedRowIds: string[],
   sortedColIds: string[],
-  hfSheetIndex = 0,
+  sheetId: string,
 ): { values: string[][]; tsv: string; html: string } | null {
   if (!cells) return null;
 
@@ -84,7 +83,7 @@ export function buildClipboardData(
         : raw;
       row.push(clipVal);
       tsvCols.push(clipVal);
-      const display = escHtml(getDisplayValue(hf, raw, c, r, hfSheetIndex));
+      const display = escHtml(getDisplayValue(computedValues, raw, sheetId, sortedRowIds[r], sortedColIds[c]));
       if (raw.startsWith('=')) {
         htmlTds.push(`<td data-sheets-formula="${escHtml(clipVal)}">${display}</td>`);
       } else {
