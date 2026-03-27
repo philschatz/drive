@@ -14,10 +14,11 @@ const localStorageMock = {
 };
 Object.defineProperty(global, 'localStorage', { value: localStorageMock });
 
-import { getDocList, addDocId, removeDocId, updateDocCache, applyDocListFromWorker, onDocListUpdated, setDocListDispatch } from './doc-storage';
+import { getDocList, addDocId, removeDocId, updateDocCache, applyDocListFromWorker, onDocListUpdated, setDocListDispatch, _resetPendingForTesting } from './doc-storage';
 
 beforeEach(() => {
   store = {};
+  _resetPendingForTesting();
 });
 
 describe('getDocList', () => {

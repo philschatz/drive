@@ -21,6 +21,11 @@ export function setDocListDispatch(fn: DocListDispatch): void {
   dispatch = fn;
 }
 
+// --- Pending-add tracking ---
+// Docs added locally but not yet confirmed by the worker's IDB list.
+// Protects against stale doc-list-updated messages overwriting recent adds.
+const pendingAdds = new Map<string, DocEntry>();
+
 // --- Listener mechanism ---
 
 type DocListListener = (list: DocEntry[]) => void;
@@ -31,10 +36,23 @@ export function onDocListUpdated(fn: DocListListener): () => void {
   return () => { listeners.delete(fn); };
 }
 
-/** Called by automerge.ts when the worker pushes a new doc list. */
+/** Called by worker-api.ts when the worker pushes a new doc list. */
 export function applyDocListFromWorker(list: DocEntry[]): void {
-  saveDocList(list);
-  for (const fn of listeners) fn(list);
+  const workerIds = new Set(list.map(e => e.id));
+
+  // Clear confirmed entries from pending
+  for (const id of pendingAdds.keys()) {
+    if (workerIds.has(id)) pendingAdds.delete(id);
+  }
+
+  // Merge still-pending entries the worker's stale list may have omitted
+  const merged = [...list];
+  for (const [id, entry] of pendingAdds) {
+    if (!workerIds.has(id)) merged.unshift(entry);
+  }
+
+  saveDocList(merged);
+  for (const fn of listeners) fn(merged);
 }
 
 // --- Core storage (reads/writes localStorage as sync cache) ---
@@ -62,10 +80,12 @@ export function addDocId(id: string, cache?: Omit<DocEntry, 'id'>) {
     list.unshift({ id, ...cache });
   }
   saveDocList(list);
+  pendingAdds.set(id, list[0]);
   dispatch?.('add-doc-to-list', id, cache);
 }
 
 export function removeDocId(id: string) {
+  pendingAdds.delete(id);
   const list = getDocList().filter(e => e.id !== id);
   saveDocList(list);
   dispatch?.('remove-doc-from-list', id);
@@ -75,6 +95,9 @@ export function getDocEntry(id: string): DocEntry | undefined {
   return getDocList().find(e => e.id === id);
 }
 
+
+/** @internal Clear pending-add state (for tests only). */
+export function _resetPendingForTesting() { pendingAdds.clear(); }
 
 export function updateDocCache(id: string, cache: Omit<DocEntry, 'id'>) {
   const list = getDocList();

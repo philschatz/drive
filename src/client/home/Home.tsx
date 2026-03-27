@@ -152,6 +152,7 @@ export function Home({ path }: { path?: string }) {
           lastUpdated: null,
           loading: true,
           peers: [],
+          encrypted: e.encrypted,
         }));
       return newEntries.length > 0 ? [...prev, ...newEntries] : prev;
     });

@@ -686,10 +686,29 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
         const { docIdBytes } = await khOps.createKeyhiveDoc();
         setNextDocId(docIdBytes);
         handle = await secureRepo.create2(msg.initialJson);
+        // Add to IDB BEFORE enableSharing so checkForNewKeyhiveDocs (triggered
+        // by keyhive sync during enableSharing) sees it as already known.
+        {
+          const { idbGet: idbGetList, idbSet: idbSetList } = await import('./idb-storage');
+          type S = { id: string; [k: string]: any };
+          const earlyList = (await idbGetList<S[]>('automerge-doc-ids')) ?? [];
+          earlyList.unshift({ id: handle.documentId, encrypted: true });
+          await idbSetList('automerge-doc-ids', earlyList);
+          (self as any).postMessage({ type: 'doc-list-updated', list: earlyList } satisfies WorkerToMain);
+        }
         await khOps.enableSharing(handle.documentId, docIdBytes);
       } else {
         if (!insecureRepo) throw new Error('Insecure repo not available');
         handle = insecureRepo.create(msg.initialJson);
+        // Add to IDB immediately so the doc is visible on the home page
+        {
+          const { idbGet: idbGetList, idbSet: idbSetList } = await import('./idb-storage');
+          type S = { id: string; [k: string]: any };
+          const earlyList = (await idbGetList<S[]>('automerge-doc-ids')) ?? [];
+          earlyList.unshift({ id: handle.documentId, encrypted: false });
+          await idbSetList('automerge-doc-ids', earlyList);
+          (self as any).postMessage({ type: 'doc-list-updated', list: earlyList } satisfies WorkerToMain);
+        }
       }
       const docId = handle.documentId;
       setDocRepo(docId, msg.secure ? 'secure' : 'insecure');
