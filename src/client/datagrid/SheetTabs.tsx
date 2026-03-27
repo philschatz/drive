@@ -137,7 +137,7 @@ export function SheetTabs({ sheets, currentSheetId, onSelect, onAdd, onRename, o
         );
       })}
       <button className="sheet-tab-add" onClick={onAdd} title="Add sheet">
-        <span className="material-symbols-outlined" style={{ fontSize: '16px' }}>add</span>
+        <span className="material-symbols-outlined" style={{ fontSize: '20px' }}>add</span>
       </button>
     </div>
   );

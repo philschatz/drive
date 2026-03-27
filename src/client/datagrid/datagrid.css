@@ -328,23 +328,24 @@
 /* Sheet tabs */
 .sheet-tabs-bar {
   display: flex;
-  align-items: center;
-  border: 1px solid #dee2e6;
-  border-top: none;
+  align-items: end;
+  border-top: 1px solid #dee2e6;
   background: #f8f9fa;
   padding: 0 4px;
-  min-height: 32px;
+  min-height: 40px;
   overflow-x: auto;
   flex-shrink: 0;
 }
 
 .sheet-tab {
-  padding: 4px 12px;
-  font-size: 0.8rem;
+  padding: 6px 20px;
+  font-size: 0.85rem;
   cursor: pointer;
   border: none;
   background: transparent;
-  border-bottom: 2px solid transparent;
+  border-bottom: 3px solid transparent;
+  border-radius: 0 0 6px 6px;
+  margin: 0 1px;
   white-space: nowrap;
   user-select: none;
   position: relative;
@@ -358,6 +359,7 @@
   font-weight: 600;
   border-bottom-color: #228be6;
   background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
 }
 
 .sheet-tab.drop-left::before {
@@ -384,24 +386,26 @@
   border: 1px solid #228be6;
   border-radius: 2px;
   padding: 0 4px;
-  font-size: 0.8rem;
-  width: 80px;
+  font-size: 0.85rem;
+  width: 100px;
   outline: none;
 }
 
 .sheet-tab-add {
-  padding: 4px 8px;
-  font-size: 0.75rem;
+  padding: 6px 10px;
   cursor: pointer;
   border: none;
   background: transparent;
   color: #868e96;
   display: flex;
   align-items: center;
+  border-radius: 50%;
+  margin-left: 2px;
 }
 
 .sheet-tab-add:hover {
   color: #228be6;
+  background: #e9ecef;
 }
 
 /* HyperFormula sync progress bar */
