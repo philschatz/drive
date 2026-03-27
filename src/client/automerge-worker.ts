@@ -4,6 +4,7 @@ import { validateDocument } from '../shared/schemas';
 import { KeyhiveOps, bytesToBase64, errMsg } from './keyhive-ops';
 import { populateDocRepoMap, setDocRepo, getDocRepo, repoFor as _repoFor, findInRepos } from './repo-routing';
 import { isDiscoverable } from './doc-discovery';
+import { LRU } from './lru-cache';
 
 export type MainToWorker =
   | { type: 'init'; appBaseUrl: string; enableInsecureRepo: boolean }
@@ -140,11 +141,12 @@ interface DocEntry {
   subscriptions: Map<number, SubInfo>; // subId → filter + poster
   presence: any | null; // PresenceClass instance
   validationSubscribed: boolean;
-  changeListenerRegistered: boolean;
 }
 const docRegistry = new Map<string, DocEntry>();
 // Maps subId → docId for O(1) unsubscribe lookup
 const subIdToDocId = new Map<number, string>();
+// Subscriptions registered before the doc is opened (drained in getOrCreateEntry)
+const pendingSubs = new Map<string, Map<number, SubInfo>>();
 
 async function getOrLoadHandle(docId: string): Promise<any> {
   const existing = docRegistry.get(docId);
@@ -159,34 +161,93 @@ async function getOrLoadHandle(docId: string): Promise<any> {
 function getOrCreateEntry(docId: string, handle: any): DocEntry {
   let entry = docRegistry.get(docId);
   if (!entry) {
-    entry = { handle, pinnedVersion: null, subscriptions: new Map(), presence: null, validationSubscribed: false, changeListenerRegistered: false };
+    entry = { handle, pinnedVersion: null, subscriptions: new Map(), presence: null, validationSubscribed: false };
     docRegistry.set(docId, entry);
+    handle.on('change', () => { pushToSubscriptions(docId); });
+    // Drain subscriptions that were registered before the doc was opened
+    const pending = pendingSubs.get(docId);
+    if (pending) {
+      for (const [subId, sub] of pending) entry.subscriptions.set(subId, sub);
+      pendingSubs.delete(docId);
+    }
   }
   return entry;
 }
 
+// --- Query caching ---
+
+const jqCache = new LRU<string, (input: any) => any>(64);
+
 async function runQuery(filter: string, doc: any): Promise<any> {
-  const { one } = await import('../shared/jq');
-  return one(filter, doc);
+  let fn = jqCache.get(filter);
+  if (!fn) {
+    const { compile } = await import('../shared/jq');
+    const compiled = compile(filter);
+    fn = (input: any) => { const r = compiled(input); return r.length > 0 ? r[0] : null; };
+    jqCache.set(filter, fn);
+  }
+  return fn(doc);
+}
+
+function hashStr(s: string): string {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+  return (h >>> 0).toString(36);
+}
+
+interface QueryCacheEntry { result: any; json: string; lastModified?: number; heads: string[] }
+
+/** In-memory LRU mirror of IDB query cache. */
+const queryResultCache = new LRU<string, QueryCacheEntry>(256);
+
+/** Run a query, check cache, persist if changed. */
+async function runCachedQuery(
+  docId: string, filter: string, doc: any, heads: string[], lastModified?: number,
+): Promise<{ result: any; heads: string[]; lastModified?: number; changed: boolean }> {
+  const cacheKey = `qc:${docId}:${hashStr(filter)}`;
+  const result = await runQuery(filter, doc);
+  const json = JSON.stringify(result);
+
+  const cached = queryResultCache.get(cacheKey);
+  if (cached && cached.json === json) {
+    return { result, heads, lastModified, changed: false };
+  }
+
+  const entry: QueryCacheEntry = { result, json, lastModified, heads };
+  queryResultCache.set(cacheKey, entry);
+  const { idbSet } = await import('./idb-storage');
+  idbSet(cacheKey, entry);
+  return { result, heads, lastModified, changed: true };
 }
 
 /** Subscribe to a jq query, routing results to the given poster. Shared by main-thread and port subscriptions. */
 async function handleSubscribeQuery(docId: string, subId: number, filter: string, post: (m: any) => void) {
-  const handle = await getOrLoadHandle(docId);
-  const entry = getOrCreateEntry(docId, handle);
-  if (!entry.changeListenerRegistered) {
-    entry.changeListenerRegistered = true;
-    handle.on('change', () => { pushToSubscriptions(docId); });
-  }
-  entry.subscriptions.set(subId, { filter, post });
   subIdToDocId.set(subId, docId);
-  const isReady = handle.isReady ? handle.isReady() : false;
-  if (isReady) {
+
+  // Serve from cache if available
+  const cacheKey = `qc:${docId}:${hashStr(filter)}`;
+  const memoryCached = queryResultCache.get(cacheKey);
+  if (memoryCached) {
+    post({ type: 'sub-result', subId, result: memoryCached.result, heads: memoryCached.heads, lastModified: memoryCached.lastModified });
+  } else {
+    const { idbGet } = await import('./idb-storage');
+    const idbCached = await idbGet<QueryCacheEntry>(cacheKey);
+    if (idbCached) {
+      queryResultCache.set(cacheKey, idbCached);
+      post({ type: 'sub-result', subId, result: idbCached.result, heads: idbCached.heads, lastModified: idbCached.lastModified });
+    }
+  }
+
+  // Register the subscription — if the doc is already open, attach directly;
+  // otherwise store as pending (drained when the doc is opened via open-doc).
+  const entry = docRegistry.get(docId);
+  if (entry) {
+    entry.subscriptions.set(subId, { filter, post });
     await pushToSubscriptions(docId);
   } else {
-    handle.whenReady().then(() => pushToSubscriptions(docId)).catch((err: any) => {
-      post({ type: 'sub-result', subId, result: null, heads: [], error: errMsg(err) });
-    });
+    let pending = pendingSubs.get(docId);
+    if (!pending) { pending = new Map(); pendingSubs.set(docId, pending); }
+    pending.set(subId, { filter, post });
   }
 }
 
@@ -196,6 +257,11 @@ function handleUnsubscribeQuery(subId: number) {
     subIdToDocId.delete(subId);
     const entry = docRegistry.get(docId);
     if (entry) entry.subscriptions.delete(subId);
+    const pending = pendingSubs.get(docId);
+    if (pending) {
+      pending.delete(subId);
+      if (pending.size === 0) pendingSubs.delete(docId);
+    }
   }
 }
 
@@ -227,12 +293,27 @@ async function pushToSubscriptions(docId: string) {
     if (ts) lastModified = ts;
   }
 
+  // Collect active filter hashes so we can evict stale cache entries below
+  const activeHashes = new Set<string>();
   for (const [subId, sub] of entry.subscriptions) {
+    activeHashes.add(hashStr(sub.filter));
     try {
-      const result = await runQuery(sub.filter, activeDoc);
+      const { result, changed } = await runCachedQuery(docId, sub.filter, activeDoc, heads, lastModified);
+      if (!changed) continue;
       sub.post({ type: 'sub-result', subId, result, heads, lastModified });
     } catch (err: any) {
       sub.post({ type: 'sub-result', subId, result: null, heads, error: errMsg(err) });
+    }
+  }
+
+  // Evict stale cache entries for this doc that no longer have an active subscription
+  // (e.g. a calendarQuery for a previous date range). Entries with active subscriptions
+  // were already updated by runCachedQuery above.
+  const prefix = `qc:${docId}:`;
+  for (const key of queryResultCache.keys()) {
+    if (key.startsWith(prefix) && !activeHashes.has(key.slice(prefix.length))) {
+      queryResultCache.delete(key);
+      import('./idb-storage').then(({ idbDel }) => idbDel(key));
     }
   }
 
@@ -803,11 +884,6 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
       const handle = await getOrLoadHandle(msg.docId);
       const entry = getOrCreateEntry(msg.docId, handle);
       entry.validationSubscribed = true;
-      // Register change listener if not already registered
-      if (!entry.changeListenerRegistered) {
-        entry.changeListenerRegistered = true;
-        handle.on('change', () => { pushToSubscriptions(msg.docId); });
-      }
       // Push immediately
       await pushToSubscriptions(msg.docId);
     } catch (err: any) {
@@ -987,13 +1063,16 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
       const removedEntry = list.find(e => e.id === msg.docId);
       const filtered = list.filter(e => e.id !== msg.docId);
       await idbSet('automerge-doc-ids', filtered);
-      // Clean up active subscriptions for removed doc
+      // Clean up active subscriptions and query cache for removed doc
       const entry = docRegistry.get(msg.docId);
       if (entry) {
         for (const subId of entry.subscriptions.keys()) subIdToDocId.delete(subId);
         if (entry.presence) entry.presence.stop();
         docRegistry.delete(msg.docId);
       }
+      queryResultCache.deletePrefix(`qc:${msg.docId}:`);
+      const { idbDelPrefix } = await import('./idb-storage');
+      idbDelPrefix(`qc:${msg.docId}:`);
       // Remove invite records for the deleted doc
       {
         const { removeInviteRecordsForDoc } = await import('./invite-storage');

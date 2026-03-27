@@ -58,6 +58,41 @@ export async function idbSet(key: string, value: unknown): Promise<void> {
   }
 }
 
+export async function idbDel(key: string): Promise<void> {
+  try {
+    const db = await getDb();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_NAME, 'readwrite');
+      const req = tx.objectStore(STORE_NAME).delete(key);
+      req.onsuccess = () => resolve();
+      req.onerror = () => reject(req.error);
+    });
+  } catch {
+    // silently no-op
+  }
+}
+
+/** Delete all entries whose key starts with the given prefix. */
+export async function idbDelPrefix(prefix: string): Promise<void> {
+  try {
+    const db = await getDb();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE_NAME, 'readwrite');
+      const store = tx.objectStore(STORE_NAME);
+      const req = store.openCursor();
+      req.onsuccess = () => {
+        const cursor = req.result;
+        if (!cursor) { resolve(); return; }
+        if (typeof cursor.key === 'string' && cursor.key.startsWith(prefix)) cursor.delete();
+        cursor.continue();
+      };
+      req.onerror = () => reject(req.error);
+    });
+  } catch {
+    // silently no-op
+  }
+}
+
 /** Reset the cached connection (for tests). */
 export function _resetConnectionForTest(): void {
   dbPromise = null;
