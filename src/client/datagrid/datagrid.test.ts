@@ -203,6 +203,48 @@ describe('buildSheetData', () => {
     const result = buildSheetData(cells, ['r0', 'r1'], ['c0', 'c1']);
     expect(result[1][0]).toBe('=A1'); // canonical {R[r0]C[c0]} at row 1, col 0 → A1
   });
+
+  it('converts cross-sheet references when lookups are provided', () => {
+    const cells = {
+      'r0:c0': { value: '={R{rA}C{cX}S{sheet2}}' }, // absolute ref to sheet2 rA:cX
+    };
+    const sheetNameLookup = (id: string) => id === 'sheet2' ? 'Prices' : undefined;
+    const sheetRowColLookup = (id: string) =>
+      id === 'sheet2' ? { rowIds: ['rA', 'rB'], colIds: ['cX', 'cY'] } : undefined;
+    const result = buildSheetData(cells, ['r0'], ['c0'], sheetNameLookup, sheetRowColLookup);
+    expect(result[0][0]).toBe('=Prices!$A$1');
+  });
+
+  it('returns #REF! for cross-sheet refs when lookups are missing', () => {
+    const cells = {
+      'r0:c0': { value: '={R{rA}C{cX}S{sheet2}}' },
+    };
+    // No lookups provided — sheet2 is unknown
+    const result = buildSheetData(cells, ['r0'], ['c0']);
+    expect(result[0][0]).toBe('=#REF!');
+  });
+
+  it('converts cross-sheet range references', () => {
+    const cells = {
+      'r0:c0': { value: '=SUM({R{rA}C{cX}S{sheet2}}:{R{rB}C{cY}S{sheet2}})' },
+    };
+    const sheetNameLookup = (id: string) => id === 'sheet2' ? 'Data' : undefined;
+    const sheetRowColLookup = (id: string) =>
+      id === 'sheet2' ? { rowIds: ['rA', 'rB'], colIds: ['cX', 'cY'] } : undefined;
+    const result = buildSheetData(cells, ['r0'], ['c0'], sheetNameLookup, sheetRowColLookup);
+    expect(result[0][0]).toBe('=SUM(Data!$A$1:$B$2)');
+  });
+
+  it('quotes sheet names with spaces in cross-sheet refs', () => {
+    const cells = {
+      'r0:c0': { value: '={R{rA}C{cX}S{s2}}' },
+    };
+    const sheetNameLookup = (id: string) => id === 's2' ? 'My Sheet' : undefined;
+    const sheetRowColLookup = (id: string) =>
+      id === 's2' ? { rowIds: ['rA'], colIds: ['cX'] } : undefined;
+    const result = buildSheetData(cells, ['r0'], ['c0'], sheetNameLookup, sheetRowColLookup);
+    expect(result[0][0]).toBe("='My Sheet'!$A$1");
+  });
 });
 
 describe('getDisplayValue', () => {

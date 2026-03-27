@@ -81,7 +81,7 @@ const peerListListeners = new Set<PeerListListener>();
 // ── Request/response plumbing ────────────────────────────────────────────────
 
 let nextId = 0;
-const pending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void }>();
+const pending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void; sent: number; type: string }>();
 
 const subscriptionCallbacks = new Map<number, (result: any, heads: string[], lastModified?: number) => void>();
 const presenceCallbacks = new Map<string, (peers: Record<string, PeerState<PresenceState>>) => void>();
@@ -94,7 +94,7 @@ function request<T>(type: string, payload: Record<string, any> = {}): Promise<T>
   return workerReady.then(() => {
     const id = ++nextId;
     return new Promise<T>((resolve, reject) => {
-      pending.set(id, { resolve, reject });
+      pending.set(id, { resolve, reject, sent: performance.now(), type });
       const msg = { type, id, ...payload };
       console.log('[main] → send', msg.type, msg);
       worker.postMessage(msg);
@@ -180,6 +180,8 @@ worker.onmessage = (e: MessageEvent<WorkerToMain>) => {
       const p = pending.get(msg.id);
       if (p) {
         pending.delete(msg.id);
+        const elapsed = performance.now() - p.sent;
+        if (elapsed > 100) console.log(`[main] ⏱ ${p.type} took ${Math.round(elapsed).toLocaleString()}ms`);
         if (msg.error) p.reject(new Error(msg.error));
         else p.resolve(msg.result);
       }
@@ -314,6 +316,7 @@ export function openDoc(
       pending.set(id, {
         resolve: (v) => { openDocProgressCallbacks.delete(id); resolve(v); },
         reject: (e) => { openDocProgressCallbacks.delete(id); reject(e); },
+        sent: performance.now(), type: 'open-doc',
       });
       const msg = { type: 'open-doc' as const, id, docId, secure };
       console.log('[main] → send', msg.type, msg);
@@ -394,7 +397,7 @@ export function queryDoc(
   return workerReady.then(() => {
     const id = ++nextId;
     return new Promise((resolve, reject) => {
-      pending.set(id, { resolve, reject });
+      pending.set(id, { resolve, reject, sent: performance.now(), type: 'query' });
       const msg = { type: 'query' as const, id, docId, filter };
       console.log('[main] → send', msg.type, msg);
       worker.postMessage(msg);

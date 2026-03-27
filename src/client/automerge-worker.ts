@@ -686,8 +686,8 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
           console.warn('[worker] keyhive dump failed:', dumpErr);
         }
 
-        // Pre-register encrypted docs with keyhive BEFORE kh-ready
-        // so queries arriving immediately after keyhiveReady resolves can work.
+        // Pre-register encrypted docs with keyhive and push doc list + contact names
+        // BEFORE kh-ready so code awaiting keyhiveReady can read them immediately.
         {
           const { idbGet: idbGetDocs } = await import('./idb-storage');
           type StoredDocEntry = { id: string; encrypted?: boolean; [key: string]: any };
@@ -703,12 +703,9 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
               }
             }
           }
-        }
-
-        // Push contact names BEFORE kh-ready so code awaiting keyhiveReady sees them
-        {
-          const { idbGet: idbGetNames } = await import('./idb-storage');
-          const earlyNames = (await idbGetNames<Record<string, string>>('contact-names')) ?? {};
+          populateDocRepoMap(earlyList);
+          (self as any).postMessage({ type: 'doc-list-updated', list: earlyList } satisfies WorkerToMain);
+          const earlyNames = (await idbGetDocs<Record<string, string>>('contact-names')) ?? {};
           (self as any).postMessage({ type: 'contact-names-updated', names: earlyNames } satisfies WorkerToMain);
         }
         (self as any).postMessage({ type: 'kh-ready' } satisfies WorkerToMain);
@@ -720,23 +717,16 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
       // --- Store appBaseUrl ---
       appBaseUrl = msg.appBaseUrl;
 
-      // --- Load doc list from IDB ---
+      // Doc list and contact names already pushed before kh-ready above.
+      // Re-read for invite pruning and keyhive GC below.
       const { idbGet } = await import('./idb-storage');
       type StoredDocEntry = { id: string; type?: string; name?: string; encrypted?: boolean; sharingGroupId?: string };
       const docList = (await idbGet<StoredDocEntry[]>('automerge-doc-ids')) ?? [];
-      populateDocRepoMap(docList);
-
-      // Doc mappings and khDocuments were already populated
-      // in the pre-kh-ready block above.
-
-      (self as any).postMessage({ type: 'doc-list-updated', list: docList } satisfies WorkerToMain);
 
       // Prune invite records for docs no longer in the list
       const { pruneInvitesNotIn } = await import('./invite-storage');
       const knownDocIds = new Set(docList.map(d => d.id));
       await pruneInvitesNotIn(knownDocIds);
-
-      // Contact names already pushed before kh-ready above
 
       // GC: self-revoke from keyhive docs no longer in our list
       if (khOps) {

@@ -28,8 +28,8 @@ import { formatDistValue } from './helpers';
 import { addDocId, getDocEntry } from '@/doc-storage';
 import './datagrid.css';
 
-// Lightweight metadata query — returns doc name and each sheet's name/index/hidden (no cell data)
-const META_QUERY = '{ "@type": .["@type"], name: (.name // "Spreadsheet"), sheets: (.sheets | to_entries | map({ key: .key, value: { name: .value.name, index: .value.index, hidden: .value.hidden } }) | from_entries) }';
+// Lightweight metadata query — returns doc name and each sheet's name/index/hidden plus row/col ordering (no cell data)
+const META_QUERY = '{ "@type": .["@type"], name: (.name // "Spreadsheet"), sheets: (.sheets | to_entries | map({ key: .key, value: { name: .value.name, index: .value.index, hidden: .value.hidden, rows: (.value.rows | to_entries | sort_by(.value.index) | map(.key)), cols: (.value.columns | to_entries | sort_by(.value.index) | map(.key)) } }) | from_entries) }';
 
 // Active sheet query template — returns the full sheet object for the current sheet
 function sheetQuery(sheetId: string): string {
@@ -74,7 +74,7 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
   const OVERSCAN = 15;
   const [rawDoc, setRawDoc] = useState<any>(null);
   // Lightweight metadata: doc name + per-sheet { name, index, hidden }
-  const docMetaRef = useRef<{ '@type': string; name: string; sheets: Record<string, { name: string; index: number; hidden?: boolean }> } | null>(null);
+  const docMetaRef = useRef<{ '@type': string; name: string; sheets: Record<string, { name: string; index: number; hidden?: boolean; rows?: string[]; cols?: string[] }> } | null>(null);
   // Full data for the currently active sheet only
   const activeSheetRef = useRef<any>(null);
   const broadcastRef = useRef<((key: keyof PresenceState, value: any) => void) | null>(null);
@@ -181,14 +181,23 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
     return undefined;
   }, [meta?.sheets]);
 
-  // Only provides row/col data for the active sheet — cross-sheet refs return undefined
+  // Provides row/col ordering for any sheet using metadata (for cross-sheet ref display)
   const sheetRowColLookup = useCallback((sheetId: string) => {
-    if (sheetId !== effectiveSheetId || !currentSheet) return undefined;
-    return {
-      rowIds: sortedEntries(currentSheet.rows).map(([rid]: [string, any]) => rid),
-      colIds: sortedEntries(currentSheet.columns).map(([cid]: [string, any]) => cid),
-    };
-  }, [effectiveSheetId, currentSheet]);
+    const sheet = meta?.sheets?.[sheetId];
+    if (!sheet) return undefined;
+    // For the active sheet, use the full currentSheet data (most up-to-date)
+    if (sheetId === effectiveSheetId && currentSheet) {
+      return {
+        rowIds: sortedEntries(currentSheet.rows).map(([rid]: [string, any]) => rid),
+        colIds: sortedEntries(currentSheet.columns).map(([cid]: [string, any]) => cid),
+      };
+    }
+    // For other sheets, use row/col ordering from metadata
+    if (sheet.rows && sheet.cols) {
+      return { rowIds: sheet.rows, colIds: sheet.cols };
+    }
+    return undefined;
+  }, [meta?.sheets, effectiveSheetId, currentSheet]);
 
   // Single gateway for all document mutations.
   // HF worker is notified of changes via its automerge subscription — no explicit sync needed.
@@ -648,6 +657,8 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
 
   // Track scroll position and viewport height for row virtualization.
   // The container scrolls (not the page), so we listen on the container element.
+  // Depends on gridMounted because the datagrid-container div is conditionally
+  // rendered, so tableRef.current may be null on first render.
   useEffect(() => {
     const el = tableRef.current;
     if (!el) return;
@@ -665,7 +676,7 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
       el.removeEventListener('scroll', handleScroll);
       ro.disconnect();
     };
-  }, []);
+  }, [!!rawDoc && columnDefs.length > 0]);
 
   // Mouse drag for cell range selection
   useEffect(() => {
