@@ -11,7 +11,7 @@ export default defineConfig({
     defaultCommandTimeout: 10000,
     experimentalMemoryManagement: true,
     numTestsKeptInMemory: 0,
-    specPattern: ['cypress/e2e/tasks.cy.ts', 'cypress/e2e/calendar.cy.ts'],
+    specPattern: ['cypress/e2e/tasks.cy.ts', 'cypress/e2e/calendar.cy.ts', 'cypress/e2e/datagrid.cy.ts'],
     setupNodeEvents(on, config) {
       codeCoverageTask(on, config);
       on('task', {

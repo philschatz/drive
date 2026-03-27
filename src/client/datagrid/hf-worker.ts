@@ -43,47 +43,74 @@ let formulaSubId = 0;
 let depsSubId = 0;
 let nextSubId = 1;
 
-// Cached sheet data received from automerge worker
-const sheetData = new Map<string, SheetInfo>();
+// Cached data from subscription 1 (formula cells on active sheet)
+let formulaData: SheetInfo | null = null;
 
-// Set of cross-sheet dependency cell keys we're currently subscribed to,
+// Cached data from subscription 2 (dependency cells, any sheet)
+const depsData = new Map<string, SheetInfo>();
+
+// Set of dependency cell keys we're currently subscribed to,
 // grouped by sheetId: Map<sheetId, Set<"rowId:colId">>
 const depCells = new Map<string, Set<string>>();
 
+/** Merge formula cells and dep cells into a unified view per sheet. */
+function getMergedSheetData(): Map<string, SheetInfo> {
+  const merged = new Map<string, SheetInfo>();
+
+  // Start with formula data for the active sheet
+  if (formulaData) {
+    merged.set(activeSheetId, { ...formulaData, cells: { ...formulaData.cells } });
+  }
+
+  // Overlay dep cells
+  for (const [sid, depInfo] of depsData) {
+    const existing = merged.get(sid);
+    if (existing) {
+      // Merge dep cells into existing sheet (formula cells + dep cells)
+      for (const [key, cell] of Object.entries(depInfo.cells)) {
+        if (cell) existing.cells[key] = cell;
+      }
+    } else {
+      merged.set(sid, { ...depInfo, cells: { ...depInfo.cells } });
+    }
+  }
+
+  return merged;
+}
+
 // --- Helpers ---
 
-/** Extract cross-sheet refs and same-sheet cell refs from an internal-format formula. */
+/** Extract all cell refs from an internal-format formula, grouped by sheet ID. */
 function extractRefs(formula: string, currentSheetId: string): Map<string, Set<string>> {
   const refs = new Map<string, Set<string>>();
 
-  // Match all cell references: {R{rowId}C{colId}} or {R{rowId}C{colId}S{sheetId}}
-  // Also handles relative refs: {R[id]C[id]} etc.
+  // Match cell references: {R{rowId}C{colId}}, {R[rowId]C[colId]}, {R{id}C{id}S{sheetId}}, etc.
+  // Both absolute {id} and relative [id] contain actual row/col IDs in the internal format.
   const refPattern = /\{R[\{[]([^\}\]]+)[\}\]]C[\{[]([^\}\]]+)[\}\]](?:S\{([^}]+)\})?\}/g;
   let m;
   while ((m = refPattern.exec(formula)) !== null) {
     const rowId = m[1];
     const colId = m[2];
     const sheetId = m[3] || currentSheetId;
-    // Skip relative refs (they reference the same sheet's grid which we already have)
-    if (m[0].includes('R[') || m[0].includes('C[')) continue;
     if (!refs.has(sheetId)) refs.set(sheetId, new Set());
     refs.get(sheetId)!.add(`${rowId}:${colId}`);
   }
   return refs;
 }
 
-/** Build the jq query for active sheet formula cells. */
+/** Build the jq query for all cells on the active sheet. */
 function buildFormulaQuery(sheetId: string): string {
-  // Extract: sheet name, sorted row IDs, sorted col IDs, and only cells whose value starts with "="
-  return `.sheets["${sheetId}"] | { name, rows: (.rows | to_entries | sort_by(.value.index) | map(.key)), cols: (.columns | to_entries | sort_by(.value.index) | map(.key)), cells: (.cells | to_entries | [.[] | select(.value.value | startswith("="))] | from_entries) }`;
+  // Returns all cells (not just formulas) because HyperFormula needs input values
+  // that formulas reference. Cross-sheet deps are handled by subscription 2.
+  return `.sheets["${sheetId}"] | { name, rows: (.rows | to_entries | sort_by(.value.index) | map(.key)), cols: (.columns | to_entries | sort_by(.value.index) | map(.key)), cells }`;
 }
 
-/** Build the jq query for cross-sheet dependency cells. */
+/** Build a jq query for cross-sheet dependency cells. */
 function buildDepsQuery(deps: Map<string, Set<string>>): string | null {
   if (deps.size === 0) return null;
   const parts: string[] = [];
   for (const [sheetId, cellKeys] of deps) {
-    if (sheetId === activeSheetId) continue; // active sheet is handled by subscription 1
+    if (sheetId === activeSheetId) continue; // active sheet cells are in subscription 1
     const cellSelectors = [...cellKeys].map(k => `"${k}": .cells["${k}"]`).join(', ');
     parts.push(`"${sheetId}": (.sheets["${sheetId}"] | { name, rows: (.rows | to_entries | sort_by(.value.index) | map(.key)), cols: (.columns | to_entries | sort_by(.value.index) | map(.key)), cells: { ${cellSelectors} } })`);
   }
@@ -106,21 +133,24 @@ function unsubscribe(subId: number) {
 
 /** Rebuild HyperFormula from all collected sheet data and evaluate. */
 function rebuildAndEvaluate() {
-  if (sheetData.size === 0) return;
+  if (!formulaData && depsData.size === 0) return;
+  const merged = getMergedSheetData();
+  if (merged.size === 0) return;
 
   // Build sheets data for HyperFormula
   const sheetsHfData: Record<string, (string | number | boolean | null)[][]> = {};
   const sheetOrder: string[] = []; // track sheet IDs in order
 
+  const sheetNameLookup = (id: string) => merged.get(id)?.name;
+  const sheetRowColLookup = (id: string) => {
+    const s = merged.get(id);
+    if (!s) return undefined;
+    return { rowIds: s.rows, colIds: s.cols };
+  };
+
   // Active sheet first, then deps
-  const activeInfo = sheetData.get(activeSheetId);
+  const activeInfo = merged.get(activeSheetId);
   if (activeInfo) {
-    const sheetNameLookup = (id: string) => sheetData.get(id)?.name;
-    const sheetRowColLookup = (id: string) => {
-      const s = sheetData.get(id);
-      if (!s) return undefined;
-      return { rowIds: s.rows, colIds: s.cols };
-    };
     sheetsHfData[activeInfo.name] = buildSheetData(
       activeInfo.cells, activeInfo.rows, activeInfo.cols,
       sheetNameLookup, sheetRowColLookup,
@@ -128,14 +158,8 @@ function rebuildAndEvaluate() {
     sheetOrder.push(activeSheetId);
   }
 
-  for (const [sid, info] of sheetData) {
+  for (const [sid, info] of merged) {
     if (sid === activeSheetId) continue;
-    const sheetNameLookup = (id: string) => sheetData.get(id)?.name;
-    const sheetRowColLookup = (id: string) => {
-      const s = sheetData.get(id);
-      if (!s) return undefined;
-      return { rowIds: s.rows, colIds: s.cols };
-    };
     sheetsHfData[info.name] = buildSheetData(
       info.cells, info.rows, info.cols,
       sheetNameLookup, sheetRowColLookup,
@@ -152,7 +176,7 @@ function rebuildAndEvaluate() {
   const values: Record<string, string | number> = {};
   for (let si = 0; si < sheetOrder.length; si++) {
     const sid = sheetOrder[si];
-    const info = sheetData.get(sid)!;
+    const info = merged.get(sid)!;
     for (let row = 0; row < info.rows.length; row++) {
       for (let col = 0; col < info.cols.length; col++) {
         const cellKey = `${info.rows[row]}:${info.cols[col]}`;
@@ -176,11 +200,11 @@ function rebuildAndEvaluate() {
   // Auto-run Monte Carlo if distributions were detected
   const registry = getDistributionRegistry();
   if (registry.size > 0) {
-    runMCInWorker(sheetOrder, registry);
+    runMCInWorker(sheetOrder, merged, registry);
   }
 }
 
-function runMCInWorker(sheetOrder: string[], registry: Map<string, DistributionInfo>) {
+function runMCInWorker(sheetOrder: string[], mergedData: Map<string, SheetInfo>, registry: Map<string, DistributionInfo>) {
   if (!hf || registry.size === 0) return;
 
   const MC_SAMPLES = 500;
@@ -242,7 +266,7 @@ function runMCInWorker(sheetOrder: string[], registry: Map<string, DistributionI
       // Convert numeric key "si:c:r" to "sheetId:rowId:colId"
       const [si, c, r] = key.split(':').map(Number);
       const sid = sheetOrder[si];
-      const info = sid ? sheetData.get(sid) : undefined;
+      const info = sid ? mergedData.get(sid) : undefined;
       if (info && r < info.rows.length && c < info.cols.length) {
         const idKey = `${sid}:${info.rows[r]}:${info.cols[c]}`;
         cells.push([idKey, stats]);
@@ -258,10 +282,11 @@ function runMCInWorker(sheetOrder: string[], registry: Map<string, DistributionI
 function resolveDeps() {
   const newDeps = new Map<string, Set<string>>();
 
-  // Scan all formula cells in all loaded sheets for cross-sheet refs
-  for (const [sid, info] of sheetData) {
-    for (const [cellKey, cell] of Object.entries(info.cells)) {
-      if (cell.value.startsWith('=')) {
+  // Scan all formula cells in all loaded sheets for refs
+  const merged = getMergedSheetData();
+  for (const [sid, info] of merged) {
+    for (const [, cell] of Object.entries(info.cells)) {
+      if (cell?.value?.startsWith('=')) {
         const refs = extractRefs(cell.value, sid);
         for (const [refSheet, refCells] of refs) {
           if (!newDeps.has(refSheet)) newDeps.set(refSheet, new Set());
@@ -271,7 +296,7 @@ function resolveDeps() {
     }
   }
 
-  // Check if deps changed
+  // Check if cross-sheet deps changed
   let changed = false;
   for (const [sid, cells] of newDeps) {
     if (sid === activeSheetId) continue;
@@ -280,17 +305,17 @@ function resolveDeps() {
     for (const c of cells) { if (!existing.has(c)) { changed = true; break; } }
     if (changed) break;
   }
-  // Also check if we had deps that are no longer needed
   if (!changed) {
     for (const sid of depCells.keys()) {
-      if (sid !== activeSheetId && !newDeps.has(sid)) { changed = true; break; }
+      if (!newDeps.has(sid)) { changed = true; break; }
     }
   }
 
   if (changed) {
     depCells.clear();
     for (const [sid, cells] of newDeps) {
-      if (sid !== activeSheetId) depCells.set(sid, cells);
+      if (sid === activeSheetId) continue;
+      depCells.set(sid, cells);
     }
     // Resubscribe
     unsubscribe(depsSubId);
@@ -311,19 +336,17 @@ function handlePortMessage(e: MessageEvent) {
   if (msg.subId === formulaSubId) {
     // Active sheet formula cells
     if (msg.error || !msg.result) return;
-    const result = msg.result as SheetInfo;
-    sheetData.set(activeSheetId, result);
+    formulaData = msg.result as SheetInfo;
     resolveDeps();
     rebuildAndEvaluate();
   } else if (msg.subId === depsSubId) {
-    // Cross-sheet dependency cells
+    // Dependency cells (any sheet, including active)
     if (msg.error || !msg.result) return;
     const sheets = msg.result as Record<string, SheetInfo>;
     let newRefsFound = false;
     for (const [sid, info] of Object.entries(sheets)) {
-      const prev = sheetData.get(sid);
-      sheetData.set(sid, info);
-      // Check if any newly received cells are formulas we haven't seen
+      const prev = depsData.get(sid);
+      depsData.set(sid, info);
       if (!prev) newRefsFound = true;
     }
     if (newRefsFound) resolveDeps();
@@ -338,7 +361,8 @@ function unsubscribeAll() {
   unsubscribe(depsSubId);
   formulaSubId = 0;
   depsSubId = 0;
-  sheetData.clear();
+  formulaData = null;
+  depsData.clear();
   depCells.clear();
   hf?.destroy();
   hf = null;
@@ -372,8 +396,8 @@ self.onmessage = (e: MessageEvent<MainToHf>) => {
   }
 
   if (msg.type === 'set-cell') {
-    // Incremental local edit — update cached sheet data and re-evaluate
-    const info = sheetData.get(msg.sheetId);
+    // Incremental local edit — update cached formula/dep data and re-evaluate
+    const info = msg.sheetId === activeSheetId ? formulaData : depsData.get(msg.sheetId);
     if (info) {
       const cellKey = `${msg.rowId}:${msg.colId}`;
       if (msg.value === '') {

@@ -59,8 +59,10 @@ export interface GridCommandState {
 // ============================================================
 
 export interface GridCommandContext {
-  /** Immutable snapshot of the current document. */
-  doc: DataGridDocument | null;
+  /** Immutable snapshot of the active sheet. */
+  sheet: any | null;
+  /** Lightweight metadata for all sheets (name, index, hidden). */
+  sheetsMeta: Record<string, { name: string; index: number; hidden?: boolean }> | null;
   computedValues: Map<string, string | number> | null;
   currentSheetId: string;
   sortedRowIds: string[];
@@ -74,7 +76,7 @@ export interface GridCommandContext {
   clipboardRef: { current: ClipboardEntry | null };
   setClipboardSource: (r: CellRange | null) => void;
   /** Apply a mutation to the document. */
-  mutate: (fn: (doc: DataGridDocument, ...args: any[]) => void, args: unknown[], noHfSync?: boolean) => void;
+  mutate: (fn: (doc: DataGridDocument, ...args: any[]) => void, args: unknown[]) => void;
   setSelectionAnchor: (anchor: [number, number] | null) => void;
   setSelectedCell: (cell: [number, number]) => void;
   setContextMenu: (m: null) => void;
@@ -203,9 +205,9 @@ export function setCell(cells: Record<string, DataGridCell>, key: string, stored
   }
 }
 
-/** Get the current sheet from the document using the context's currentSheetId. */
-function ctxSheet(doc: DataGridDocument, ctx: GridCommandContext) {
-  return doc.sheets[ctx.currentSheetId];
+/** Get the active sheet from the context. */
+function ctxSheet(_doc: any, ctx: GridCommandContext) {
+  return ctx.sheet;
 }
 
 // ============================================================
@@ -259,8 +261,8 @@ const clipboardPlugin: GridPlugin = {
       isEnabled: s => s.hasSelection,
       execute: (_, ctx) => {
         const range = getEffectiveRange(ctx.selectedCell, ctx.selectionAnchor);
-        if (!range || !ctx.doc) return;
-        const sh = ctxSheet(ctx.doc, ctx);
+        if (!range || !ctx.sheet) return;
+        const sh = ctxSheet(ctx.sheet, ctx);
         const data = buildClipboardData(sh.cells, ctx.computedValues, range, ctx.sortedRowIds, ctx.sortedColIds, ctx.currentSheetId);
         if (!data) return;
         ctx.clipboardRef.current = { values: data.values, mode: 'copy', range };
@@ -276,8 +278,8 @@ const clipboardPlugin: GridPlugin = {
       isEnabled: s => s.hasSelection,
       execute: (_, ctx) => {
         const range = getEffectiveRange(ctx.selectedCell, ctx.selectionAnchor);
-        if (!range || !ctx.doc) return;
-        const sh = ctxSheet(ctx.doc, ctx);
+        if (!range || !ctx.sheet) return;
+        const sh = ctxSheet(ctx.sheet, ctx);
         const data = buildClipboardData(sh.cells, ctx.computedValues, range, ctx.sortedRowIds, ctx.sortedColIds, ctx.currentSheetId);
         if (!data) return;
         ctx.clipboardRef.current = { values: data.values, mode: 'cut', range };
@@ -300,7 +302,7 @@ const clipboardPlugin: GridPlugin = {
         if (clipboardRef.current) {
           // Internal paste: pre-compute everything outside mutate
           const { values, mode, range: srcRange } = clipboardRef.current;
-          const { doc } = ctx;
+          const { sheet: doc } = ctx;
           if (!doc) return;
           const sh = ctxSheet(doc, ctx);
           const freshRowIds = sortedEntries(sh.rows).map(([id]) => id);
@@ -371,8 +373,8 @@ const clipboardPlugin: GridPlugin = {
           const doPaste = (rows: string[][]) => {
 
             const finalRows = rows;
-            // Pre-compute everything outside mutate using ctx.doc snapshot
-            const extDoc = ctx.doc;
+            // Pre-compute everything outside mutate using ctx.sheet snapshot
+            const extDoc = ctx.sheet;
             if (!extDoc) return;
             const extSh = extDoc.sheets[currentSheetId];
             const extFreshRowIds = sortedEntries(extSh.rows).map(([id]) => id);
@@ -469,7 +471,7 @@ const clipboardPlugin: GridPlugin = {
       shortcuts: [{ key: 'Delete' }, { key: 'Backspace' }],
       isEnabled: s => s.hasSelection,
       execute: (_, ctx) => {
-        const { doc, selectedCell, selectionAnchor, sortedRowIds, sortedColIds, currentSheetId } = ctx;
+        const { sheet: doc, selectedCell, selectionAnchor, sortedRowIds, sortedColIds, currentSheetId } = ctx;
         if (!selectedCell || !doc) return;
         const [col, row] = selectedCell;
         const anchor = selectionAnchor;
@@ -534,7 +536,7 @@ const rowPlugin: GridPlugin = {
       icon: 'keyboard_arrow_up',
       isEnabled: s => rowIndices(s).length > 0,
       execute: (s, ctx) => {
-        const { doc, setContextMenu, currentSheetId } = ctx;
+        const { sheet: doc, setContextMenu, currentSheetId } = ctx;
         if (!doc) return;
         const sh = ctxSheet(doc, ctx);
         const indices = rowIndices(s);
@@ -563,7 +565,7 @@ const rowPlugin: GridPlugin = {
       icon: 'keyboard_arrow_down',
       isEnabled: s => rowIndices(s).length > 0,
       execute: (s, ctx) => {
-        const { doc, setContextMenu, currentSheetId } = ctx;
+        const { sheet: doc, setContextMenu, currentSheetId } = ctx;
         if (!doc) return;
         const sh = ctxSheet(doc, ctx);
         const indices = rowIndices(s);
@@ -588,7 +590,7 @@ const rowPlugin: GridPlugin = {
       defaultLabel: 'Move up',
       isEnabled: s => s.currentRowIndices.length > 0,
       execute: (_, ctx) => {
-        const { doc, selectedRows, setSelectedRows, setContextMenu, currentSheetId } = ctx;
+        const { sheet: doc, selectedRows, setSelectedRows, setContextMenu, currentSheetId } = ctx;
         if (!doc) return;
         const sh = ctxSheet(doc, ctx);
         const entries = sortedEntries(sh.rows);
@@ -610,7 +612,7 @@ const rowPlugin: GridPlugin = {
       defaultLabel: 'Move down',
       isEnabled: s => s.currentRowIndices.length > 0,
       execute: (_, ctx) => {
-        const { doc, selectedRows, setSelectedRows, setContextMenu, currentSheetId } = ctx;
+        const { sheet: doc, selectedRows, setSelectedRows, setContextMenu, currentSheetId } = ctx;
         if (!doc) return;
         const sh = ctxSheet(doc, ctx);
         const entries = sortedEntries(sh.rows);
@@ -637,7 +639,7 @@ const rowPlugin: GridPlugin = {
       icon: 'delete',
       isEnabled: s => rowIndices(s).length > 0,
       execute: (s, ctx) => {
-        const { doc, setSelectedRows, setContextMenu, currentSheetId } = ctx;
+        const { sheet: doc, setSelectedRows, setContextMenu, currentSheetId } = ctx;
         if (!doc) return;
         const sh = ctxSheet(doc, ctx);
         const indices = rowIndices(s);
@@ -702,7 +704,7 @@ const columnPlugin: GridPlugin = {
       icon: 'keyboard_arrow_left',
       isEnabled: s => colIndices(s).length > 0,
       execute: (s, ctx) => {
-        const { doc, setContextMenu, currentSheetId } = ctx;
+        const { sheet: doc, setContextMenu, currentSheetId } = ctx;
         if (!doc) return;
         const sh = ctxSheet(doc, ctx);
         const indices = colIndices(s);
@@ -731,7 +733,7 @@ const columnPlugin: GridPlugin = {
       icon: 'keyboard_arrow_right',
       isEnabled: s => colIndices(s).length > 0,
       execute: (s, ctx) => {
-        const { doc, setContextMenu, currentSheetId } = ctx;
+        const { sheet: doc, setContextMenu, currentSheetId } = ctx;
         if (!doc) return;
         const sh = ctxSheet(doc, ctx);
         const indices = colIndices(s);
@@ -756,7 +758,7 @@ const columnPlugin: GridPlugin = {
       defaultLabel: 'Move left',
       isEnabled: s => s.currentColIndices.length > 0,
       execute: (_, ctx) => {
-        const { doc, selectedCols, setSelectedCols, setContextMenu, currentSheetId } = ctx;
+        const { sheet: doc, selectedCols, setSelectedCols, setContextMenu, currentSheetId } = ctx;
         if (!doc) return;
         const sh = ctxSheet(doc, ctx);
         const entries = sortedEntries(sh.columns);
@@ -778,7 +780,7 @@ const columnPlugin: GridPlugin = {
       defaultLabel: 'Move right',
       isEnabled: s => s.currentColIndices.length > 0,
       execute: (_, ctx) => {
-        const { doc, selectedCols, setSelectedCols, setContextMenu, currentSheetId } = ctx;
+        const { sheet: doc, selectedCols, setSelectedCols, setContextMenu, currentSheetId } = ctx;
         if (!doc) return;
         const sh = ctxSheet(doc, ctx);
         const entries = sortedEntries(sh.columns);
@@ -805,7 +807,7 @@ const columnPlugin: GridPlugin = {
       icon: 'delete',
       isEnabled: s => colIndices(s).length > 0,
       execute: (s, ctx) => {
-        const { doc, setSelectedCols, setContextMenu, currentSheetId } = ctx;
+        const { sheet: doc, setSelectedCols, setContextMenu, currentSheetId } = ctx;
         if (!doc) return;
         const sh = ctxSheet(doc, ctx);
         const indices = colIndices(s);
@@ -874,10 +876,10 @@ const sheetPlugin: GridPlugin = {
       icon: 'add',
       isEnabled: () => true,
       execute: (_, ctx) => {
-        const { doc, mutate } = ctx;
-        if (!doc) return;
-        const maxIndex = Object.values(doc.sheets).reduce((max, s) => Math.max(max, s.index), 0);
-        const sheetCount = Object.keys(doc.sheets).length;
+        const { sheetsMeta, mutate } = ctx;
+        if (!sheetsMeta) return;
+        const maxIndex = Object.values(sheetsMeta).reduce((max, s) => Math.max(max, s.index), 0);
+        const sheetCount = Object.keys(sheetsMeta).length;
         const sid = shortId();
         const cols: Record<string, { index: number; name: string }> = {};
         for (let i = 0; i < 3; i++) cols[shortId()] = { index: i + 1, name: '' };
@@ -982,7 +984,7 @@ export function commitReorder(
   draggedIndices: number[],
   dropIndex: number,
 ): void {
-  const { doc, mutate, setSelectedRows, setSelectedCols, currentSheetId } = ctx;
+  const { sheet: doc, mutate, setSelectedRows, setSelectedCols, currentSheetId } = ctx;
   if (!doc) return;
   const sh = ctxSheet(doc, ctx);
 
@@ -1042,7 +1044,7 @@ export function commitAutofill(
   sourceRange: CellRange,
   fillRange: CellRange,
 ): void {
-  const { doc, mutate, setSelectionAnchor, setSelectedCell, currentSheetId } = ctx;
+  const { sheet: doc, mutate, setSelectionAnchor, setSelectedCell, currentSheetId } = ctx;
   if (!doc) return;
   const sh = ctxSheet(doc, ctx);
 

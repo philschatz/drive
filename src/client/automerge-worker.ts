@@ -555,9 +555,9 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
 
             docs.push({
               docId: bytesToBase64(doc.id.toBytes()),
+              memberCount: members.length,
               summaryAccess: access.toString(),
               myAccess,
-              memberCount: members.length,
               members,
             });
           }
@@ -600,7 +600,7 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
           if (publicEventInfo) {
             console.log('[worker] publicAgent events:', publicEventInfo);
           }
-          console.log('[worker] reachableDocs (' + docs.length + '):', JSON.stringify(docs, null, 2));
+          console.log('[worker] reachableDocs (' + docs.length + '):', docs);
           console.log('[worker] === END KEYHIVE DUMP ===');
         } catch (dumpErr) {
           console.warn('[worker] keyhive dump failed:', dumpErr);

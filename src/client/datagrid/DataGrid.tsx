@@ -4,7 +4,6 @@ import type { PeerState } from '../shared/automerge';
 import { peerColor, initPresence, type PresenceState } from '../shared/presence';
 import { EditorTitleBar } from '../shared/EditorTitleBar';
 import type { PeerFieldInfo } from '../shared/presence';
-import type { DataGridDocument } from './schema';
 import { useGridCommands, commitReorder, commitAutofill, type GridCommandState, type GridCommandContext } from './commands';
 import { CommandMenuBar, CommandToolbar, CommandContextMenuContent } from './CommandBar';
 import { ContextMenu, ContextMenuTrigger } from '@/components/ui/context-menu';
@@ -12,7 +11,6 @@ import {
   sortedEntries, colIndexToLetter, shortId,
   a1ToInternal, internalToA1,
   getDisplayValue,
-  rewriteFormulasForSheetDeletion,
 } from './helpers';
 import { FormulaEditor, type FormulaHighlight, isRange } from './FormulaEditor';
 import { SheetTabs } from './SheetTabs';
@@ -30,7 +28,13 @@ import { formatDistValue } from './helpers';
 import { addDocId, getDocEntry } from '@/doc-storage';
 import './datagrid.css';
 
-const DATAGRID_QUERY = '{ "@type": .["@type"], name: (.name // "Spreadsheet"), sheets: .sheets }';
+// Lightweight metadata query — returns doc name and each sheet's name/index/hidden (no cell data)
+const META_QUERY = '{ "@type": .["@type"], name: (.name // "Spreadsheet"), sheets: (.sheets | to_entries | map({ key: .key, value: { name: .value.name, index: .value.index, hidden: .value.hidden } }) | from_entries) }';
+
+// Active sheet query template — returns the full sheet object for the current sheet
+function sheetQuery(sheetId: string): string {
+  return `.sheets["${sheetId}"]`;
+}
 
 // Custom function names from hf-functions.ts (for autocomplete).
 // HyperFormula built-in names are loaded lazily to avoid importing HF on the main thread.
@@ -69,7 +73,10 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
   const ROW_HEIGHT = 28;
   const OVERSCAN = 15;
   const [rawDoc, setRawDoc] = useState<any>(null);
-  const docRef = useRef<DataGridDocument | null>(null);
+  // Lightweight metadata: doc name + per-sheet { name, index, hidden }
+  const docMetaRef = useRef<{ '@type': string; name: string; sheets: Record<string, { name: string; index: number; hidden?: boolean }> } | null>(null);
+  // Full data for the currently active sheet only
+  const activeSheetRef = useRef<any>(null);
   const broadcastRef = useRef<((key: keyof PresenceState, value: any) => void) | null>(null);
   const validationErrors = useDocumentValidation(docId);
   const { undo, redo, canUndo, canRedo, onHeadsUpdate } = useUndoRedo(docId!);
@@ -82,6 +89,7 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
   canEditRef.current = canEdit;
   const hfBridgeRef = useRef<HfBridge | null>(null);
   const computedValuesRef = useRef<Map<string, string | number>>(new Map());
+  const activeSheetUnsubRef = useRef<(() => void) | null>(null);
   const [syncing, setSyncing] = useState(false);
   const titleFocusedRef = useRef(false);
   const editFromBarRef = useRef(false);
@@ -115,9 +123,9 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
     const count = Math.max(1, Math.min(1000, addRowCount));
     if (!currentSheetId || !docId) return;
     const sid = currentSheetId;
-    const docSnap = docRef.current;
-    if (!docSnap) return;
-    const rowEntries = sortedEntries(docSnap.sheets[sid].rows);
+    const sheet = activeSheetRef.current;
+    if (!sheet) return;
+    const rowEntries = sortedEntries(sheet.rows);
     const lastIdx = rowEntries.length > 0 ? rowEntries[rowEntries.length - 1][1].index : 0;
     const newRowEntries: Array<[string, { index: number }]> = [];
     for (let i = 0; i < count; i++) {
@@ -130,56 +138,56 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
     }, [sid, newRowEntries]);
   };
 
-  // Memoize sorted IDs from the current sheet
-  const docState = docRef.current;
-  // Fall back to first sheet if currentSheetId doesn't exist in this doc version
-  const effectiveSheetId = docState?.sheets && currentSheetId && !docState.sheets[currentSheetId]
-    ? Object.keys(docState.sheets)[0] ?? currentSheetId
+  // Memoize sorted IDs from the active sheet
+  const meta = docMetaRef.current;
+  const currentSheet = activeSheetRef.current;
+  // Fall back to first sheet if currentSheetId doesn't exist in metadata
+  const effectiveSheetId = meta?.sheets && currentSheetId && !meta.sheets[currentSheetId]
+    ? Object.keys(meta.sheets)[0] ?? currentSheetId
     : currentSheetId;
-  const currentSheet = docState && effectiveSheetId ? docState.sheets?.[effectiveSheetId] ?? null : null;
 
   const sortedColIds = useMemo(() => {
     if (!currentSheet?.columns) return [];
-    return sortedEntries(currentSheet.columns).map(([id]) => id);
+    return sortedEntries(currentSheet.columns).map(([id]: [string, any]) => id);
   }, [currentSheet?.columns]);
 
   const sortedRowIds = useMemo(() => {
     if (!currentSheet?.rows) return [];
-    return sortedEntries(currentSheet.rows).map(([id]) => id);
+    return sortedEntries(currentSheet.rows).map(([id]: [string, any]) => id);
   }, [currentSheet?.rows]);
 
   const columnDefs = useMemo(() => {
     if (!currentSheet?.columns) return [];
-    return sortedEntries(currentSheet.columns).map(([id, col]) => ({ id, ...col }));
+    return sortedEntries(currentSheet.columns).map(([id, col]: [string, any]) => ({ id, ...col }));
   }, [currentSheet?.columns]);
 
-  // Sheet ordering for HyperFormula and tabs
+  // Sheet ordering for tabs — derived from lightweight metadata
   const sheetOrder = useMemo(() => {
-    if (!docState?.sheets) return [];
-    return sortedEntries(docState.sheets).map(([id, s]) => ({ id, name: s.name, hidden: s.hidden }));
-  }, [docState?.sheets]);
+    if (!meta?.sheets) return [];
+    return sortedEntries(meta.sheets).map(([id, s]: [string, any]) => ({ id, name: s.name, hidden: s.hidden }));
+  }, [meta?.sheets]);
 
   const sheetNameLookup = useCallback((sheetId: string) => {
-    return docState?.sheets?.[sheetId]?.name;
-  }, [docState?.sheets]);
+    return meta?.sheets?.[sheetId]?.name;
+  }, [meta?.sheets]);
 
   const sheetIdLookup = useCallback((name: string) => {
-    if (!docState?.sheets) return undefined;
+    if (!meta?.sheets) return undefined;
     const lower = name.toLowerCase();
-    for (const [id, s] of Object.entries(docState.sheets)) {
+    for (const [id, s] of Object.entries(meta.sheets)) {
       if (s.name.toLowerCase() === lower) return id;
     }
     return undefined;
-  }, [docState?.sheets]);
+  }, [meta?.sheets]);
 
+  // Only provides row/col data for the active sheet — cross-sheet refs return undefined
   const sheetRowColLookup = useCallback((sheetId: string) => {
-    const sheet = docState?.sheets?.[sheetId];
-    if (!sheet) return undefined;
+    if (sheetId !== effectiveSheetId || !currentSheet) return undefined;
     return {
-      rowIds: sortedEntries(sheet.rows).map(([rid]) => rid),
-      colIds: sortedEntries(sheet.columns).map(([cid]) => cid),
+      rowIds: sortedEntries(currentSheet.rows).map(([rid]: [string, any]) => rid),
+      colIds: sortedEntries(currentSheet.columns).map(([cid]: [string, any]) => cid),
     };
-  }, [docState?.sheets]);
+  }, [effectiveSheetId, currentSheet]);
 
   // Single gateway for all document mutations.
   // HF worker is notified of changes via its automerge subscription — no explicit sync needed.
@@ -214,10 +222,8 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
   // Start editing a cell
   const startEditing = useCallback((col: number, row: number) => {
     if (!canEditRef.current) return;
-    const d = docRef.current;
-    if (!d || !currentSheetId) return;
-    const sh = d.sheets[currentSheetId];
-    if (!sh) return;
+    const sh = activeSheetRef.current;
+    if (!sh || !currentSheetId) return;
     const rowId = sortedRowIds[row];
     const colId = sortedColIds[col];
     const raw = sh.cells[`${rowId}:${colId}`]?.value || '';
@@ -455,6 +461,15 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
     if (id === currentSheetId) return;
     if (editingCell) commitEdit();
     hfBridgeRef.current?.switchSheet(id);
+    // Swap the active sheet subscription
+    if (docId) {
+      activeSheetUnsubRef.current?.();
+      activeSheetRef.current = null;
+      activeSheetUnsubRef.current = subscribeQuery(docId, sheetQuery(id), (sheetResult) => {
+        activeSheetRef.current = sheetResult;
+        setTick(t => t + 1);
+      });
+    }
     setCurrentSheetId(id);
     setSelectedCell(null);
     setSelectionAnchor(null);
@@ -472,10 +487,10 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
   }, [currentSheetId, editingCell, commitEdit, docId]);
 
   const handleAddSheet = useCallback(() => {
-    const docSnap = docRef.current;
-    if (!docSnap || !docId) return;
-    const maxIndex = Object.values(docSnap.sheets).reduce((max, s) => Math.max(max, s.index), 0);
-    const sheetCount = Object.keys(docSnap.sheets).length;
+    const m = docMetaRef.current;
+    if (!m || !docId) return;
+    const maxIndex = Object.values(m.sheets).reduce((max, s) => Math.max(max, s.index), 0);
+    const sheetCount = Object.keys(m.sheets).length;
     const sid = shortId();
     const cols: Record<string, { index: number; name: string }> = {};
     for (let i = 0; i < 3; i++) cols[shortId()] = { index: i + 1, name: '' };
@@ -491,19 +506,23 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
   }, [mutate]);
 
   const handleDeleteSheet = useCallback((id: string) => {
-    const docSnap = docRef.current;
-    if (!docSnap || !docId) return;
-    if (Object.keys(docSnap.sheets).length <= 1) return;
-    const rewrites = rewriteFormulasForSheetDeletion(docSnap.sheets as any, id);
-    const remaining = sortedEntries(docSnap.sheets).filter(([sid]) => sid !== id);
-    updateDoc(docId, (d, id, rewrites) => {
-      for (const [sheetId, cellUpdates] of Object.entries(rewrites)) {
-        for (const [cellKey, newFormula] of Object.entries(cellUpdates as any)) {
-          if (d.sheets[sheetId]?.cells?.[cellKey]) d.sheets[sheetId].cells[cellKey].value = newFormula;
+    const m = docMetaRef.current;
+    if (!m || !docId) return;
+    if (Object.keys(m.sheets).length <= 1) return;
+    const remaining = sortedEntries(m.sheets).filter(([sid]: [string, any]) => sid !== id);
+    // Rewrite cross-sheet formula refs + delete runs in the worker where full doc is available
+    updateDoc(docId, (d, deletedId) => {
+      const pattern = new RegExp(`S\\{${deletedId}\\}`, 'g');
+      for (const [sheetId, sheet] of Object.entries(d.sheets)) {
+        if (sheetId === deletedId) continue;
+        for (const [, cell] of Object.entries((sheet as any).cells || {})) {
+          if ((cell as any).value?.includes(`S{${deletedId}}`)) {
+            (cell as any).value = (cell as any).value.replace(pattern, 'S{#REF!}');
+          }
         }
       }
-      delete d.sheets[id];
-    }, id, rewrites);
+      delete d.sheets[deletedId];
+    }, id);
     if (id === currentSheetId) {
       const nextId = remaining.length > 0 ? remaining[0][0] : null;
       setCurrentSheetId(nextId);
@@ -514,22 +533,22 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
   }, [docId, currentSheetId]);
 
   const handleHideSheet = useCallback((id: string) => {
-    const docSnap = docRef.current;
-    if (!docSnap) return;
-    const visibleCount = Object.values(docSnap.sheets).filter(s => !s.hidden).length;
+    const m = docMetaRef.current;
+    if (!m) return;
+    const visibleCount = Object.values(m.sheets).filter(s => !s.hidden).length;
     if (visibleCount <= 1) return;
     mutate((d, id) => { d.sheets[id].hidden = true; }, [id]);
     if (id === currentSheetId) {
-      const order = sortedEntries(docSnap.sheets);
-      const firstVisible = order.find(([, s]) => !s.hidden);
+      const order = sortedEntries(m.sheets);
+      const firstVisible = order.find(([, s]: [string, any]) => !s.hidden);
       if (firstVisible) handleSelectSheet(firstVisible[0]);
     }
   }, [mutate, currentSheetId, handleSelectSheet]);
 
   const handleReorderSheet = useCallback((draggedId: string, dropIndex: number) => {
-    const docSnap = docRef.current;
-    if (!docSnap) return;
-    const order = sortedEntries(docSnap.sheets);
+    const m = docMetaRef.current;
+    if (!m) return;
+    const order = sortedEntries(m.sheets);
     // Remove dragged from order for calculating neighbors
     const filtered = order.filter(([id]) => id !== draggedId);
     let newIdx: number;
@@ -778,27 +797,42 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
       if (mounted) setMcResults(results);
     });
 
-    const unsubscribe = subscribeQuery(docId, DATAGRID_QUERY, (result, heads) => {
-      if (!mounted || !result) return;
-      const d = result as DataGridDocument;
+    // Helper to subscribe to a sheet's full data
+    const subscribeToSheet = (sid: string) => {
+      activeSheetUnsubRef.current?.();
+      activeSheetRef.current = null;
+      activeSheetUnsubRef.current = subscribeQuery(docId, sheetQuery(sid), (sheetResult) => {
+        if (!mounted) return;
+        activeSheetRef.current = sheetResult;
+        setTick(t => t + 1);
+      });
+    };
 
-      if (!docRef.current) {
-        // First load — start watching the doc in the HF worker
+    // Subscription 1: lightweight metadata (doc name + sheet list)
+    const unsubMeta = subscribeQuery(docId, META_QUERY, (result, heads) => {
+      if (!mounted || !result) return;
+
+      if (!docMetaRef.current) {
+        // First load — determine which sheet to show and subscribe to it
         addDocId(docId, { type: 'DataGrid', name: result.name });
-        const order = sortedEntries(d.sheets);
+        const order = sortedEntries(result.sheets);
         const firstSheetId = order.length > 0 ? order[0][0] : null;
-        const validInitial = initialSheetId && d.sheets[initialSheetId] ? initialSheetId : null;
+        const validInitial = initialSheetId && result.sheets[initialSheetId] ? initialSheetId : null;
         const activeSheet = validInitial ?? firstSheetId;
         setCurrentSheetId(activeSheet);
-        if (activeSheet) bridge.watch(docId, activeSheet);
+        if (activeSheet) {
+          bridge.watch(docId, activeSheet);
+          subscribeToSheet(activeSheet);
+        }
       }
 
       setRawDoc(result);
-      docRef.current = d;
-      if (!titleFocusedRef.current && d.name) setGridName(d.name);
-      document.title = (d.name || 'Spreadsheet') + ' - Spreadsheet';
+      docMetaRef.current = result;
+      if (!titleFocusedRef.current && result.name) setGridName(result.name);
+      document.title = (result.name || 'Spreadsheet') + ' - Spreadsheet';
       history.onNewHeads(heads);
       onHeadsUpdate(heads);
+      setTick(t => t + 1);
     });
 
     const { broadcast, cleanup: presenceCleanup } = initPresence<PresenceState>(
@@ -812,7 +846,9 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
       mounted = false;
       broadcastRef.current = null;
       presenceCleanup();
-      unsubscribe();
+      unsubMeta();
+      activeSheetUnsubRef.current?.();
+      activeSheetUnsubRef.current = null;
       unsubValues();
       unsubMC();
       bridge.destroy();
@@ -885,7 +921,7 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
   }, [formulaRefHighlights, editingCell]);
 
   const peerList = Object.values(peerStates).filter(p => p.value?.viewing);
-  const doc2 = docRef.current;
+  const doc2 = activeSheetRef.current;
   const computedValues = computedValuesRef.current;
 
   const currentRowIndices = useMemo(() => {
@@ -912,7 +948,8 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
       : null,
   };
   const commandCtx: GridCommandContext = {
-    doc: doc2 ?? null,
+    sheet: doc2 ?? null,
+    sheetsMeta: meta?.sheets ?? null,
     computedValues: computedValuesRef.current,
     currentSheetId: currentSheetId ?? '',
     sortedRowIds,
@@ -990,6 +1027,7 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
       />
       <HistorySlider history={history} />
       <div style={noAccess ? { opacity: 0.4, pointerEvents: 'none' } : undefined}>
+      <ValidationPanel errors={validationErrors} docId={docId} />
 
       {columnDefs.length > 0 && doc2 && (
         <>
@@ -1327,8 +1365,6 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
       )}
 
       </div>
-
-      <ValidationPanel errors={validationErrors} docId={docId} />
     </div>
     </DocLoader>
   );
