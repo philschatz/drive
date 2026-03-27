@@ -45,8 +45,14 @@ export function applyDocListFromWorker(list: DocEntry[]): void {
     if (workerIds.has(id)) pendingAdds.delete(id);
   }
 
+  // Preserve locally cached fields (type, name) that the worker doesn't store
+  const local = new Map(getDocList().map(e => [e.id, e]));
+  const merged = list.map(e => {
+    const cached = local.get(e.id);
+    return cached ? { ...cached, ...e } : e;
+  });
+
   // Merge still-pending entries the worker's stale list may have omitted
-  const merged = [...list];
   for (const [id, entry] of pendingAdds) {
     if (!workerIds.has(id)) merged.unshift(entry);
   }
@@ -105,5 +111,4 @@ export function updateDocCache(id: string, cache: Omit<DocEntry, 'id'>) {
   if (!entry) return;
   Object.assign(entry, cache);
   saveDocList(list);
-  dispatch?.('add-doc-to-list', id, cache);
 }

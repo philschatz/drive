@@ -306,6 +306,9 @@ async function pushToSubscriptions(docId: string) {
     }
   }
 
+  // Protect validation cache from eviction
+  activeHashes.add('validation');
+
   // Evict stale cache entries for this doc that no longer have an active subscription
   // (e.g. a calendarQuery for a previous date range). Entries with active subscriptions
   // were already updated by runCachedQuery above.
@@ -325,6 +328,16 @@ async function pushToSubscriptions(docId: string) {
 function pushValidation(docId: string, doc: any) {
   const allErrors = validateDocument(doc);
   const errors = allErrors.slice(0, 100);
+  const json = JSON.stringify(errors);
+  const cacheKey = `qc:${docId}:validation`;
+
+  const cached = queryResultCache.get(cacheKey);
+  if (cached && cached.json === json) return; // unchanged
+
+  const entry: QueryCacheEntry = { result: errors, json, heads: [] };
+  queryResultCache.set(cacheKey, entry);
+  import('./idb-storage').then(({ idbSet }) => idbSet(cacheKey, entry));
+
   (self as any).postMessage({ type: 'update-validation', docId, errors } satisfies WorkerToMain);
 }
 
@@ -880,11 +893,24 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
   }
 
   if (msg.type === 'subscribe-validation') {
+    // Serve from cache immediately (same pattern as query subscriptions)
+    const valCacheKey = `qc:${msg.docId}:validation`;
+    const valMemCached = queryResultCache.get(valCacheKey);
+    if (valMemCached) {
+      (self as any).postMessage({ type: 'update-validation', docId: msg.docId, errors: valMemCached.result } satisfies WorkerToMain);
+    } else {
+      const { idbGet } = await import('./idb-storage');
+      const valIdbCached = await idbGet<QueryCacheEntry>(valCacheKey);
+      if (valIdbCached) {
+        queryResultCache.set(valCacheKey, valIdbCached);
+        (self as any).postMessage({ type: 'update-validation', docId: msg.docId, errors: valIdbCached.result } satisfies WorkerToMain);
+      }
+    }
     try {
       const handle = await getOrLoadHandle(msg.docId);
       const entry = getOrCreateEntry(msg.docId, handle);
       entry.validationSubscribed = true;
-      // Push immediately
+      // Push immediately (will be skipped if cache is fresh)
       await pushToSubscriptions(msg.docId);
     } catch (err: any) {
       (self as any).postMessage({ type: 'update-validation', docId: msg.docId, errors: [] } satisfies WorkerToMain);

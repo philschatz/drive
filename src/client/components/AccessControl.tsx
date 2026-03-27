@@ -88,7 +88,8 @@ function accessIcon(access: string | null | undefined): string {
 export function AccessControl({ docId, docType, access: accessProp }: AccessControlProps) {
   const [open, setOpen] = useState(false);
   const [members, setMembers] = useState<MemberInfo[]>([]);
-  const [myAccess, setMyAccess] = useState<string | null>(null);
+  const [myAccess, setMyAccess] = useState<string | null>(accessProp ?? null);
+  const [loaded, setLoaded] = useState(false);
   const [contacts, setContacts] = useState<MemberInfo[]>([]);
   const [selectedContact, setSelectedContact] = useState<string>('__new__');
   const [inviteRole, setInviteRole] = useState<string>('read');
@@ -146,8 +147,10 @@ export function AccessControl({ docId, docType, access: accessProp }: AccessCont
         return c.some(ct => ct.agentId === prev) ? prev : (c.length > 0 ? c[0].agentId : '__new__');
       });
       await checkInvites(normalized, invites);
+      setLoaded(true);
     } catch (err: any) {
       setError(err.message);
+      setLoaded(true);
     }
   }, [docId, checkInvites]);
 
@@ -241,7 +244,7 @@ export function AccessControl({ docId, docType, access: accessProp }: AccessCont
             </div>
           )}
 
-          {myAccess === null && members.length === 0 && (
+          {loaded && myAccess === null && members.length === 0 && (
             <div className="mt-4 flex items-center gap-2 p-3 bg-muted rounded text-sm text-muted-foreground">
               <span className="material-symbols-outlined" style={{ fontSize: 18 }}>lock</span>
               You no longer have access to this document

@@ -1,0 +1,127 @@
+import { render, screen, waitFor } from '@testing-library/preact';
+
+let mockGetDocMembers: jest.Mock;
+let mockGetMyAccess: jest.Mock;
+let mockGetKnownContacts: jest.Mock;
+
+jest.mock('../shared/keyhive-api', () => ({
+  getDocMembers: (...args: any[]) => mockGetDocMembers(...args),
+  getMyAccess: (...args: any[]) => mockGetMyAccess(...args),
+  getKnownContacts: (...args: any[]) => mockGetKnownContacts(...args),
+  changeRole: jest.fn(),
+  revokeMember: jest.fn(),
+  generateInvite: jest.fn(),
+  addMember: jest.fn(),
+  dismissInvite: jest.fn(),
+}));
+
+jest.mock('../contact-names', () => ({
+  getContactName: () => undefined,
+}));
+
+jest.mock('../invite-storage', () => ({}));
+
+jest.mock('@/components/ui/sheet', () => ({
+  Sheet: ({ children, open }: any) => open ? <div data-testid="sheet">{children}</div> : null,
+  SheetContent: ({ children }: any) => <div>{children}</div>,
+  SheetHeader: ({ children }: any) => <div>{children}</div>,
+  SheetTitle: ({ children }: any) => <div>{children}</div>,
+}));
+
+jest.mock('@/components/ui/button', () => ({
+  Button: ({ children, ...props }: any) => <button {...props}>{children}</button>,
+}));
+
+jest.mock('@/components/ui/select', () => ({
+  Select: ({ children }: any) => <div>{children}</div>,
+  SelectContent: ({ children }: any) => <div>{children}</div>,
+  SelectItem: ({ children }: any) => <div>{children}</div>,
+  SelectSeparator: () => null,
+  SelectTrigger: ({ children }: any) => <div>{children}</div>,
+  SelectValue: () => null,
+}));
+
+jest.mock('@/components/ui/tooltip', () => ({
+  Tooltip: ({ children }: any) => <div>{children}</div>,
+  TooltipTrigger: ({ children }: any) => <div>{children}</div>,
+  TooltipContent: ({ children }: any) => <div>{children}</div>,
+  TooltipProvider: ({ children }: any) => <div>{children}</div>,
+}));
+
+jest.mock('@/components/ui/qr-code', () => ({
+  QRCodeDisplay: () => null,
+}));
+
+jest.mock('./EditableName', () => ({
+  EditableName: ({ value }: any) => <span>{value}</span>,
+}));
+
+import { AccessControl } from './AccessControl';
+
+beforeEach(() => {
+  mockGetDocMembers = jest.fn(() => Promise.resolve({ members: [], invites: [] }));
+  mockGetMyAccess = jest.fn(() => Promise.resolve(null));
+  mockGetKnownContacts = jest.fn(() => Promise.resolve([]));
+});
+
+describe('AccessControl', () => {
+  it('does not show "no access" message before data loads', async () => {
+    // API calls that never resolve — simulates slow network
+    mockGetDocMembers.mockReturnValue(new Promise(() => {}));
+    mockGetMyAccess.mockReturnValue(new Promise(() => {}));
+    mockGetKnownContacts.mockReturnValue(new Promise(() => {}));
+
+    render(<AccessControl docId="doc-1" docType="Calendar" access="admin" />);
+    // Open the sheet
+    screen.getByTitle('admin · Share & permissions').click();
+
+    // The "no access" message should NOT be visible while loading
+    expect(screen.queryByText('You no longer have access to this document')).toBeNull();
+  });
+
+  it('shows "no access" message after refresh returns null access and empty members', async () => {
+    mockGetMyAccess.mockResolvedValue(null);
+    mockGetDocMembers.mockResolvedValue({ members: [], invites: [] });
+    mockGetKnownContacts.mockResolvedValue([]);
+
+    render(<AccessControl docId="doc-1" docType="Calendar" access={null} />);
+    screen.getByTitle('Share & permissions').click();
+
+    await waitFor(() => {
+      expect(screen.getByText('You no longer have access to this document')).toBeDefined();
+    });
+  });
+
+  it('does not show "no access" when API calls hang (never resolve)', async () => {
+    mockGetDocMembers.mockReturnValue(new Promise(() => {}));
+    mockGetMyAccess.mockReturnValue(new Promise(() => {}));
+    mockGetKnownContacts.mockReturnValue(new Promise(() => {}));
+
+    render(<AccessControl docId="doc-1" docType="Calendar" access={null} />);
+    screen.getByTitle('Share & permissions').click();
+
+    // Wait a tick — message should still not appear
+    await new Promise(r => setTimeout(r, 50));
+    expect(screen.queryByText('You no longer have access to this document')).toBeNull();
+    // Members should show placeholder, not the "no access" block
+    expect(screen.getByText('No members found.')).toBeDefined();
+  });
+
+  it('does not show "no access" message when access is granted', async () => {
+    mockGetMyAccess.mockResolvedValue('Admin');
+    mockGetDocMembers.mockResolvedValue({
+      members: [{ agentId: 'a1', displayId: 'a1', role: 'Admin', isIndividual: true, isGroup: false, isMe: true }],
+      invites: [],
+    });
+    mockGetKnownContacts.mockResolvedValue([]);
+
+    render(<AccessControl docId="doc-1" docType="Calendar" access="admin" />);
+    screen.getByTitle('admin · Share & permissions').click();
+
+    await waitFor(() => {
+      expect(mockGetMyAccess).toHaveBeenCalled();
+    });
+
+    expect(screen.queryByText('You no longer have access to this document')).toBeNull();
+  });
+});
