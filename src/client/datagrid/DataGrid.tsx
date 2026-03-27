@@ -115,6 +115,7 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
 
   const [addRowCount, setAddRowCount] = useState<number | null>(10);
   const [mcResults, setMcResults] = useState<MCResults | null>(null);
+  const [showValidation, setShowValidation] = useState(false);
 
   const [currentSheetId, setCurrentSheetId] = useState<string | null>(null);
 
@@ -1022,12 +1023,15 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
         peers={peerList}
         onToggleHistory={history.toggleHistory}
         historyActive={history.active}
+        onToggleValidation={() => setShowValidation(v => !v)}
+        validationActive={showValidation}
+        validationCount={validationErrors.length}
         docType="DataGrid"
 
       />
       <HistorySlider history={history} />
-      <div style={noAccess ? { opacity: 0.4, pointerEvents: 'none' } : undefined}>
-      <ValidationPanel errors={validationErrors} docId={docId} />
+      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', ...(noAccess ? { opacity: 0.4, pointerEvents: 'none' as const } : {}) }}>
+      {showValidation && <ValidationPanel errors={validationErrors} docId={docId} />}
 
       {columnDefs.length > 0 && doc2 && (
         <>

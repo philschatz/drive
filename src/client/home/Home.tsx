@@ -574,7 +574,7 @@ export function Home({ path }: { path?: string }) {
                 <span className="material-symbols-outlined">code</span>
               </a>
               <button
-                className="inline-flex items-center justify-center h-8 w-8 rounded-md text-destructive hover:bg-destructive/10"
+                className="inline-flex items-center justify-center h-8 w-8 rounded-md text-destructive hover:bg-destructive/10 cursor-pointer"
                 title="Delete"
                 onClick={() => handleDelete(entry)}
               >

@@ -22,6 +22,9 @@ export function EditorTitleBar<P extends PeerLike>({
   showSourceLink = true,
   onToggleHistory,
   historyActive = false,
+  onToggleValidation,
+  validationActive = false,
+  validationCount = 0,
   docType,
   children,
 }: {
@@ -37,6 +40,9 @@ export function EditorTitleBar<P extends PeerLike>({
   showSourceLink?: boolean;
   onToggleHistory?: () => void;
   historyActive?: boolean;
+  onToggleValidation?: () => void;
+  validationActive?: boolean;
+  validationCount?: number;
   /** Document type (Calendar/TaskList/DataGrid) — embedded in invite URL for correct redirect. */
   docType?: string;
   children?: ComponentChildren;
@@ -108,6 +114,17 @@ export function EditorTitleBar<P extends PeerLike>({
         )}
 
         {/* History & source — inline on sm+, collapsed into dropdown on mobile */}
+        {onToggleValidation && validationCount! > 0 && (
+          <button
+            className={`inline-flex items-center justify-center h-9 rounded-md hover:bg-accent hover:text-accent-foreground gap-0.5 px-1.5${validationActive ? ' bg-accent text-accent-foreground' : ''}`}
+            onClick={onToggleValidation}
+            title={validationActive ? 'Hide validation errors' : `${validationCount} validation error${validationCount !== 1 ? 's' : ''}`}
+          >
+            <span className="material-symbols-outlined text-amber-500" style={{ fontSize: 18 }}>warning</span>
+            <span className="text-xs text-amber-600 font-medium">{validationCount! > 99 ? '99+' : validationCount}</span>
+          </button>
+        )}
+
         {onToggleHistory && (
           <button
             className={`inline-flex items-center justify-center h-9 w-9 rounded-md hover:bg-accent hover:text-accent-foreground${historyActive ? ' bg-accent text-accent-foreground' : ''}`}

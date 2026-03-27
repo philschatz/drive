@@ -3,6 +3,7 @@ import { syncToTarget } from '../shared/sync-to-target';
 import { validateDocument } from '../shared/schemas';
 import { KeyhiveOps, bytesToBase64, errMsg } from './keyhive-ops';
 import { populateDocRepoMap, setDocRepo, getDocRepo, repoFor as _repoFor, findInRepos } from './repo-routing';
+import { isDiscoverable } from './doc-discovery';
 
 export type MainToWorker =
   | { type: 'init'; appBaseUrl: string; enableInsecureRepo: boolean }
@@ -65,7 +66,7 @@ export type WorkerToMain =
   // Validation
   | { type: 'update-validation'; docId: string; errors: ValidationError[] }
   // Doc list / contact names push
-  | { type: 'doc-list-updated'; list: Array<{ id: string; type?: string; name?: string; encrypted?: boolean; khDocId?: string; sharingGroupId?: string }> }
+  | { type: 'doc-list-updated'; list: Array<{ id: string; type?: string; name?: string; encrypted?: boolean; sharingGroupId?: string }> }
   | { type: 'contact-names-updated'; names: Record<string, string> }
   // Keyhive state changed (membership/access may have changed)
   | { type: 'kh-state-changed' };
@@ -105,14 +106,11 @@ let khOps: KeyhiveOps | null = null;
 let setNextDocId: ((bytes: Uint8Array) => void) | null = null;
 let appBaseUrl = '';
 
-// In-memory map from automerge docId → keyhive docId (base64).
-// Populated during init, create-doc, enable-sharing, claim-invite, and doc discovery.
-const docIdToKhDocId = new Map<string, string>();
-
+/** Derive the keyhive doc-ID (base64) from an automerge doc-ID.
+ *  Works because the automerge binary doc-ID bytes ARE the keyhive doc_id bytes. */
 function resolveKhDocId(automergeDocId: string): string {
-  const khDocId = docIdToKhDocId.get(automergeDocId);
-  if (!khDocId) throw new Error(`No khDocId for doc ${automergeDocId}`);
-  return khDocId;
+  const khDocIdObj = khBridge!.docIdFromAutomergeUrl(`automerge:${automergeDocId}` as any);
+  return bytesToBase64(khDocIdObj.toBytes());
 }
 
 /**
@@ -259,31 +257,23 @@ function pushValidation(docId: string, doc: any) {
  * visible in the keyhive graph (including docs on the same relay that
  * haven't been explicitly shared with this user).
  */
+
 async function checkForNewKeyhiveDocs() {
   if (!khOps || !khBridge || !khIntegration) return;
   try {
     const { idbGet, idbSet } = await import('./idb-storage');
-    type StoredDocEntry = { id: string; type?: string; name?: string; encrypted?: boolean; khDocId?: string; sharingGroupId?: string };
+    type StoredDocEntry = { id: string; type?: string; name?: string; encrypted?: boolean; sharingGroupId?: string };
     const list = (await idbGet<StoredDocEntry[]>('automerge-doc-ids')) ?? [];
     const dismissed = new Set((await idbGet<string[]>('dismissed-doc-ids')) ?? []);
     const knownIds = new Set(list.map(e => e.id));
     let changed = false;
-    let dismissedChanged = false;
-
     const addDoc = (amDocId: string, khDocIdObj: any): boolean => {
-      if (knownIds.has(amDocId)) return false;
-      if (dismissed.has(amDocId)) {
-        // Previously dismissed but re-invited — un-dismiss so the doc reappears
-        console.log(`[worker] checkForNewKeyhiveDocs: un-dismissing re-invited doc ${amDocId}`);
-        dismissed.delete(amDocId);
-        dismissedChanged = true;
-      }
+      if (!isDiscoverable(amDocId, knownIds, dismissed)) return false;
       const khDocIdB64 = bytesToBase64(khDocIdObj.toBytes());
       console.log(`[worker] checkForNewKeyhiveDocs: discovered new doc ${amDocId} (kh=${khDocIdB64})`);
       khIntegration!.networkAdapter.registerDoc(amDocId, khDocIdObj);
       setDocRepo(amDocId, 'secure');
-      docIdToKhDocId.set(amDocId, khDocIdB64);
-      list.unshift({ id: amDocId, encrypted: true, khDocId: khDocIdB64 });
+      list.unshift({ id: amDocId, encrypted: true });
       knownIds.add(amDocId);
       changed = true;
       return true;
@@ -312,10 +302,6 @@ async function checkForNewKeyhiveDocs() {
       } catch {
         // Not a keyhive-formatted docId — skip
       }
-    }
-
-    if (dismissedChanged) {
-      await idbSet('dismissed-doc-ids', [...dismissed]);
     }
 
     if (changed) {
@@ -606,18 +592,18 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
           console.warn('[worker] keyhive dump failed:', dumpErr);
         }
 
-        // Populate in-memory docId→khDocId map AND khDocuments BEFORE kh-ready
+        // Pre-register encrypted docs with keyhive BEFORE kh-ready
         // so queries arriving immediately after keyhiveReady resolves can work.
         {
           const { idbGet: idbGetDocs } = await import('./idb-storage');
-          type StoredDocEntry = { id: string; khDocId?: string; encrypted?: boolean; [key: string]: any };
+          type StoredDocEntry = { id: string; encrypted?: boolean; [key: string]: any };
           const earlyList = (await idbGetDocs<StoredDocEntry[]>('automerge-doc-ids')) ?? [];
           for (const entry of earlyList) {
-            if (entry.encrypted && entry.khDocId) {
-              docIdToKhDocId.set(entry.id, entry.khDocId);
+            if (entry.encrypted) {
+              const khDocId = resolveKhDocId(entry.id);
               try {
-                khOps!.registerDocMapping(entry.id, entry.khDocId);
-                await khOps!.registerSharingGroup(entry.khDocId);
+                khOps!.registerDocMapping(entry.id, khDocId);
+                await khOps!.registerSharingGroup(khDocId);
               } catch (err) {
                 console.warn(`[worker] Failed to pre-register doc ${entry.id}:`, errMsg(err));
               }
@@ -642,11 +628,11 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
 
       // --- Load doc list from IDB ---
       const { idbGet } = await import('./idb-storage');
-      type StoredDocEntry = { id: string; type?: string; name?: string; encrypted?: boolean; khDocId?: string; sharingGroupId?: string };
+      type StoredDocEntry = { id: string; type?: string; name?: string; encrypted?: boolean; sharingGroupId?: string };
       const docList = (await idbGet<StoredDocEntry[]>('automerge-doc-ids')) ?? [];
       populateDocRepoMap(docList);
 
-      // Doc mappings, khDocuments, and docIdToKhDocId were already populated
+      // Doc mappings and khDocuments were already populated
       // in the pre-kh-ready block above.
 
       (self as any).postMessage({ type: 'doc-list-updated', list: docList } satisfies WorkerToMain);
@@ -662,7 +648,7 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
       if (khOps) {
         try {
           const reachable = await khOps.kh.reachableDocs();
-          const myKhDocIds = new Set(docList.map(d => d.khDocId).filter(Boolean));
+          const myKhDocIds = new Set(docList.filter(d => d.encrypted).map(d => resolveKhDocId(d.id)));
           for (const summary of reachable) {
             const khDocId = bytesToBase64(summary.doc.id.toBytes());
             if (myKhDocIds.has(khDocId)) continue;
@@ -700,8 +686,7 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
         const { docIdBytes } = await khOps.createKeyhiveDoc();
         setNextDocId(docIdBytes);
         handle = await secureRepo.create2(msg.initialJson);
-        const sharing = await khOps.enableSharing(handle.documentId, docIdBytes);
-        docIdToKhDocId.set(handle.documentId, sharing.khDocId);
+        await khOps.enableSharing(handle.documentId, docIdBytes);
       } else {
         if (!insecureRepo) throw new Error('Insecure repo not available');
         handle = insecureRepo.create(msg.initialJson);
@@ -955,6 +940,9 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
   if (msg.type === 'add-doc-to-list') {
     try {
       const { idbGet, idbSet } = await import('./idb-storage');
+      // Don't re-add a doc the user explicitly deleted
+      const dismissed = new Set((await idbGet<string[]>('dismissed-doc-ids')) ?? []);
+      if (dismissed.has(msg.docId)) return;
       type StoredDocEntry = { id: string; [key: string]: any };
       const list = (await idbGet<StoredDocEntry[]>('automerge-doc-ids')) ?? [];
       const metadata = msg.metadata ?? {};
@@ -992,21 +980,22 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
         const { removeInviteRecordsForDoc } = await import('./invite-storage');
         await removeInviteRecordsForDoc(msg.docId);
       }
+      // Mark as dismissed BEFORE leaveDoc, so checkForNewKeyhiveDocs
+      // won't re-add it if triggered during leaveDoc's syncKeyhive()
+      const dismissed = (await idbGet<string[]>('dismissed-doc-ids')) ?? [];
+      if (!dismissed.includes(msg.docId)) {
+        dismissed.push(msg.docId);
+        await idbSet('dismissed-doc-ids', dismissed);
+      }
       // Self-revoke from keyhive ACL
-      const removedKhDocId = removedEntry?.khDocId ?? docIdToKhDocId.get(msg.docId);
+      const removedKhDocId = removedEntry?.encrypted ? resolveKhDocId(msg.docId) : null;
       if (removedKhDocId && khOps) {
-        docIdToKhDocId.delete(msg.docId);
         try {
           await khOps.leaveDoc(removedKhDocId);
         } catch (err: any) {
           console.warn('[worker] leaveDoc failed on delete:', errMsg(err));
         }
-      }
-      // Remember this doc was explicitly removed so auto-discovery doesn't re-add it
-      const dismissed = (await idbGet<string[]>('dismissed-doc-ids')) ?? [];
-      if (!dismissed.includes(msg.docId)) {
-        dismissed.push(msg.docId);
-        await idbSet('dismissed-doc-ids', dismissed);
+        khOps.khDocuments.delete(removedKhDocId);
       }
       (self as any).postMessage({ type: 'doc-list-updated', list: filtered } satisfies WorkerToMain);
     } catch (err: any) {
@@ -1110,7 +1099,7 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
       const { idbGet } = await import('./idb-storage');
       const contactNames = (await idbGet<Record<string, string>>('contact-names')) ?? {};
       const contactAgentIds = Object.keys(contactNames);
-      const excludeKhDocId = msg.excludeDocId ? docIdToKhDocId.get(msg.excludeDocId) : undefined;
+      const excludeKhDocId = msg.excludeDocId ? resolveKhDocId(msg.excludeDocId) : undefined;
       const result = await khOps.getKnownContacts(excludeKhDocId, contactAgentIds);
       (self as any).postMessage({ type: 'result', id: msg.id, result } satisfies WorkerToMain);
     } catch (err: any) {
@@ -1252,7 +1241,7 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
       }
 
       const result = await khOps.claimInviteWithKeyhive(inviteKh, msg.docId);
-      if (result.khDocId) docIdToKhDocId.set(msg.docId, result.khDocId);
+      // khDocId is derived on-demand via resolveKhDocId.
       (self as any).postMessage({ type: 'result', id: msg.id, result } satisfies WorkerToMain);
     } catch (err: any) {
       console.error('[kh-claim-invite] failed:', err);

@@ -37,6 +37,7 @@ function CalendarInner({ docId, readOnly }: { docId: string; readOnly?: boolean 
   const [calDesc, setCalDesc] = useState('');
   const [calColor, setCalColor] = useState('#039be5');
   const [peerStates, setPeerStates] = useState<Record<string, PeerState<PresenceState>>>({});
+  const [showValidation, setShowValidation] = useState(false);
   const history = useDocumentHistory(docId);
   const validationErrors = useDocumentValidation(docId);
   const encrypted = !!getDocEntry(docId)?.encrypted;
@@ -194,6 +195,9 @@ function CalendarInner({ docId, readOnly }: { docId: string; readOnly?: boolean 
         peerTitle={(peer) => `${peerDisplayName(peer.peerId)}${peer.value?.focusedField ? ' (editing)' : ''}`}
         onToggleHistory={history.toggleHistory}
         historyActive={history.active}
+        onToggleValidation={() => setShowValidation(v => !v)}
+        validationActive={showValidation}
+        validationCount={validationErrors.length}
         docType="Calendar"
 
       >
@@ -235,7 +239,7 @@ function CalendarInner({ docId, readOnly }: { docId: string; readOnly?: boolean 
         }}
         onKeyDown={(e: any) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
       />
-      <ValidationPanel errors={validationErrors} docId={docId} />
+      {showValidation && <ValidationPanel errors={validationErrors} docId={docId} />}
       <div id="sx-cal" />
       <EventEditor
         uid={editorState?.uid || ''}

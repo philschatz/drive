@@ -64,6 +64,7 @@ export function Tasks({ docId, readOnly }: { docId?: string; readOnly?: boolean;
   const [editorState, setEditorState] = useState<EditorState | null>(null);
   const [peerStates, setPeerStates] = useState<Record<string, PeerState<PresenceState>>>({});
   const [quickAddText, setQuickAddText] = useState('');
+  const [showValidation, setShowValidation] = useState(false);
 
   const history = useDocumentHistory(docId!);
   const validationErrors = useDocumentValidation(docId);
@@ -249,6 +250,9 @@ export function Tasks({ docId, readOnly }: { docId?: string; readOnly?: boolean;
         peerTitle={(peer) => `${peerDisplayName(peer.peerId)}${peer.value?.focusedField ? ' (editing)' : ''}`}
         onToggleHistory={history.toggleHistory}
         historyActive={history.active}
+        onToggleValidation={() => setShowValidation(v => !v)}
+        validationActive={showValidation}
+        validationCount={validationErrors.length}
         docType="TaskList"
 
       />
@@ -270,7 +274,7 @@ export function Tasks({ docId, readOnly }: { docId?: string; readOnly?: boolean;
         }}
         onKeyDown={(e: any) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
       />
-      <ValidationPanel errors={validationErrors} docId={docId} />
+      {showValidation && <ValidationPanel errors={validationErrors} docId={docId} />}
       {canEdit && (
       <div className="flex items-center gap-2 mb-3">
         <Input
