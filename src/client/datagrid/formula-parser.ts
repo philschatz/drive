@@ -488,7 +488,14 @@ export function parseInternal(formula: string): FormulaAST {
 
     if (t.type === 'ERROR') {
       advance();
-      return { type: 'error', errorType: t.value, start: t.start, end: t.end };
+      const errorNode: FormulaNode = { type: 'error', errorType: t.value, start: t.start, end: t.end };
+      // Consume #REF!:... range so the colon doesn't break the surrounding expression
+      if (peek().type === 'COLON') {
+        advance();
+        if (peek().type === 'CELL_REF') advance();
+        else if (peek().type === 'ERROR') advance();
+      }
+      return errorNode;
     }
 
     if (t.type === 'FUNCTION_NAME') {
@@ -511,9 +518,15 @@ export function parseInternal(formula: string): FormulaAST {
       const ref = parseCellRefToken(t);
       if (peek().type === 'COLON') {
         advance();
-        const t2 = expect('CELL_REF');
-        const ref2 = parseCellRefToken(t2);
-        return { type: 'range', from: ref, to: ref2, start: ref.start, end: ref2.end };
+        const t2 = peek();
+        if (t2.type === 'CELL_REF') {
+          advance();
+          const ref2 = parseCellRefToken(t2);
+          return { type: 'range', from: ref, to: ref2, start: ref.start, end: ref2.end };
+        }
+        // Range with degraded endpoint (#REF!) — consume and return error
+        if (t2.type === 'ERROR') advance();
+        return { type: 'error', errorType: '#REF!', start: ref.start, end: t2.end };
       }
       return ref;
     }

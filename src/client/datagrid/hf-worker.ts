@@ -105,14 +105,15 @@ function buildFormulaQuery(sheetId: string): string {
   return `.sheets["${sheetId}"] | { name, rows: (.rows | to_entries | sort_by(.value.index) | map(.key)), cols: (.columns | to_entries | sort_by(.value.index) | map(.key)), cells }`;
 }
 
-/** Build a jq query for cross-sheet dependency cells. */
+/** Build a jq query for cross-sheet dependency cells.
+ *  Fetches ALL cells for each dependency sheet because extractRefs only captures
+ *  range endpoints, but HyperFormula needs every cell within a range (e.g. SUMIFS). */
 function buildDepsQuery(deps: Map<string, Set<string>>): string | null {
   if (deps.size === 0) return null;
   const parts: string[] = [];
-  for (const [sheetId, cellKeys] of deps) {
+  for (const [sheetId] of deps) {
     if (sheetId === activeSheetId) continue; // active sheet cells are in subscription 1
-    const cellSelectors = [...cellKeys].map(k => `"${k}": .cells["${k}"]`).join(', ');
-    parts.push(`"${sheetId}": (.sheets["${sheetId}"] | { name, rows: (.rows | to_entries | sort_by(.value.index) | map(.key)), cols: (.columns | to_entries | sort_by(.value.index) | map(.key)), cells: { ${cellSelectors} } })`);
+    parts.push(`"${sheetId}": (.sheets["${sheetId}"] | { name, rows: (.rows | to_entries | sort_by(.value.index) | map(.key)), cols: (.columns | to_entries | sort_by(.value.index) | map(.key)), cells })`);
   }
   if (parts.length === 0) return null;
   return `{ ${parts.join(', ')} }`;
@@ -280,43 +281,32 @@ function runMCInWorker(sheetOrder: string[], mergedData: Map<string, SheetInfo>,
 
 /** Resolve transitive cross-sheet dependencies and update subscription 2. */
 function resolveDeps() {
-  const newDeps = new Map<string, Set<string>>();
+  const newDepSheets = new Set<string>();
 
-  // Scan all formula cells in all loaded sheets for refs
+  // Scan all formula cells in all loaded sheets for cross-sheet refs
   const merged = getMergedSheetData();
   for (const [sid, info] of merged) {
     for (const [, cell] of Object.entries(info.cells)) {
       if (cell?.value?.startsWith('=')) {
         const refs = extractRefs(cell.value, sid);
-        for (const [refSheet, refCells] of refs) {
-          if (!newDeps.has(refSheet)) newDeps.set(refSheet, new Set());
-          for (const ck of refCells) newDeps.get(refSheet)!.add(ck);
+        for (const refSheet of refs.keys()) {
+          if (refSheet !== activeSheetId) newDepSheets.add(refSheet);
         }
       }
     }
   }
 
-  // Check if cross-sheet deps changed
-  let changed = false;
-  for (const [sid, cells] of newDeps) {
-    if (sid === activeSheetId) continue;
-    const existing = depCells.get(sid);
-    if (!existing || existing.size !== cells.size) { changed = true; break; }
-    for (const c of cells) { if (!existing.has(c)) { changed = true; break; } }
-    if (changed) break;
-  }
+  // Check if set of dependency sheets changed
+  let changed = newDepSheets.size !== depCells.size;
   if (!changed) {
-    for (const sid of depCells.keys()) {
-      if (!newDeps.has(sid)) { changed = true; break; }
+    for (const sid of newDepSheets) {
+      if (!depCells.has(sid)) { changed = true; break; }
     }
   }
 
   if (changed) {
     depCells.clear();
-    for (const [sid, cells] of newDeps) {
-      if (sid === activeSheetId) continue;
-      depCells.set(sid, cells);
-    }
+    for (const sid of newDepSheets) depCells.set(sid, new Set());
     // Resubscribe
     unsubscribe(depsSubId);
     depsSubId = 0;
@@ -331,7 +321,7 @@ function resolveDeps() {
 
 function handlePortMessage(e: MessageEvent) {
   const msg = e.data;
-  if (msg.type !== 'sub-result') return;
+  if (msg.type !== 'query-result') return;
 
   if (msg.subId === formulaSubId) {
     // Active sheet formula cells

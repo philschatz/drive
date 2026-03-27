@@ -562,6 +562,116 @@ describe('parseFormula', () => {
       });
     });
   });
+
+  describe('cross-sheet references', () => {
+    const sheetRowIds = ['sr0', 'sr1', 'sr2', 'sr3', 'sr4', 'sr5', 'sr6'];
+    const sheetColIds = ['sc0', 'sc1', 'sc2', 'sc3', 'sc4', 'sc5', 'sc6', 'sc7', 'sc8', 'sc9', 'sc10', 'sc11', 'sc12'];
+    const lookupSheetId = (name: string) => name === 'Joint Transactions' ? 'jt-id' : undefined;
+    const lookupSheetRowColIds = (id: string) =>
+      id === 'jt-id' ? {
+        rowId: (idx: number) => sheetRowIds[idx] ?? `?row${idx}`,
+        colId: (idx: number) => sheetColIds[idx] ?? `?col${idx}`,
+      } : undefined;
+
+    it('parses quoted sheet name with cell range', () => {
+      const ast = parseFormula(
+        "=SUM('Joint Transactions'!E$2:E4)",
+        0, 0, lookupRow, lookupCol, lookupSheetId, lookupSheetRowColIds,
+      );
+      expect(ast.body).toMatchObject({ type: 'function', name: 'SUM' });
+    });
+
+    it('fails when lookupSheetId is not provided for quoted sheet refs', () => {
+      // Without lookupSheetId, the single-quote is not recognized as a sheet prefix
+      expect(() => parseFormula(
+        "='Sheet1'!A1",
+        0, 0, lookupRow, lookupCol,
+        // no lookupSheetId
+      )).toThrow();
+    });
+
+    it('parses SUMIFS with mixed absolute/relative cross-sheet ranges and string args', () => {
+      const ast = parseFormula(
+        "=-SUMIFS('Joint Transactions'!E$2:E7,'Joint Transactions'!M$2:M7,\"<>IGNORED\",'Joint Transactions'!E$2:E7,\"< 0\",'Joint Transactions'!B$2:B7,\">=\"&H2,'Joint Transactions'!B$2:B7,\"<=\"&I2)",
+        1, 7, lookupRow, lookupCol, lookupSheetId, lookupSheetRowColIds,
+      );
+      expect(ast.body).toMatchObject({ type: 'unary', operator: '-' });
+    });
+
+    it('parses quoted cross-sheet ref when sheet is NOT found (emits #REF!)', () => {
+      const noSheet = (_name: string) => undefined;
+      const ast = parseFormula(
+        "=SUM('Unknown Sheet'!A1:B2)",
+        0, 0, lookupRow, lookupCol, noSheet,
+      );
+      // Should produce SUM(#REF!) since the sheet isn't found
+      expect(ast.body).toMatchObject({ type: 'function', name: 'SUM' });
+    });
+
+    it('parses SUMIFS with $row on both range endpoints', () => {
+      const ast = parseFormula(
+        "=-SUMIFS('Joint Transactions'!E$2:E$7,'Joint Transactions'!M$2:M$7,\"<>IGNORED\",'Joint Transactions'!E$2:E$7,\"< 0\",'Joint Transactions'!B$2:B$7,\">=\"&H2,'Joint Transactions'!B$2:B$7,\"<=\"&I2)",
+        1, 7, lookupRow, lookupCol, lookupSheetId, lookupSheetRowColIds,
+      );
+      expect(ast.body).toMatchObject({ type: 'unary', operator: '-' });
+      const fn = (ast.body as any).operand;
+      expect(fn).toMatchObject({ type: 'function', name: 'SUMIFS' });
+    });
+
+    it('parses cross-sheet SUMIFS without lookupSheetRowColIds (falls back to local IDs)', () => {
+      const ast = parseFormula(
+        "=-SUMIFS('Joint Transactions'!E$2:E$7,'Joint Transactions'!M$2:M$7,\"<>IGNORED\",'Joint Transactions'!E$2:E$7,\"< 0\",'Joint Transactions'!B$2:B$7,\">=\"&H2,'Joint Transactions'!B$2:B$7,\"<=\"&I2)",
+        1, 7, lookupRow, lookupCol, lookupSheetId,
+      );
+      expect(ast.body).toMatchObject({ type: 'unary', operator: '-' });
+    });
+
+    it('parses cross-sheet SUMIFS when sheet is not found (emits #REF!)', () => {
+      const noSheet = (_name: string) => undefined;
+      const ast = parseFormula(
+        "=-SUMIFS('Joint Transactions'!E$2:E$7,'Joint Transactions'!M$2:M$7,\"<>IGNORED\",'Joint Transactions'!E$2:E$7,\"< 0\",'Joint Transactions'!B$2:B$7,\">=\"&H2,'Joint Transactions'!B$2:B$7,\"<=\"&I2)",
+        1, 7, lookupRow, lookupCol, noSheet,
+      );
+      expect(ast.body).toMatchObject({ type: 'unary', operator: '-' });
+    });
+
+    it('canonical output round-trips through parseInternal for cross-sheet SUMIFS', () => {
+      const ast = parseFormula(
+        "=-SUMIFS('Joint Transactions'!E$2:E$7,'Joint Transactions'!M$2:M$7,\"<>IGNORED\",'Joint Transactions'!E$2:E$7,\"< 0\",'Joint Transactions'!B$2:B$7,\">=\"&H2,'Joint Transactions'!B$2:B$7,\"<=\"&I2)",
+        1, 7, lookupRow, lookupCol, lookupSheetId, lookupSheetRowColIds,
+      );
+      const canonical = serialize(ast);
+      const ast2 = parseInternal(canonical);
+      expect(ast2.body).toMatchObject({ type: 'unary', operator: '-' });
+    });
+
+    it('parseInternal handles #REF!:cellref range (degraded cross-sheet ref)', () => {
+      // This pattern occurs when a stored formula has #REF! as a range endpoint
+      const ast = parseInternal('=SUM(#REF!:{R{r0}C{c0}})');
+      expect(ast.body).toMatchObject({ type: 'function', name: 'SUM' });
+    });
+
+    it('parseInternal handles cellref:#REF! range', () => {
+      const ast = parseInternal('=SUM({R{r0}C{c0}}:#REF!)');
+      expect(ast.body).toMatchObject({ type: 'function', name: 'SUM' });
+    });
+
+    it('parseInternal handles #REF!:#REF! range', () => {
+      const ast = parseInternal('=SUM(#REF!:#REF!)');
+      expect(ast.body).toMatchObject({ type: 'function', name: 'SUM' });
+    });
+
+    it('parses SUMIFS with multiple quoted cross-sheet ranges', () => {
+      const ast = parseFormula(
+        '=-SUMIFS(\'Sample Sheet\'!E$2:E7,\'Sample Sheet\'!M$2:M7,"<>IGNORED",\'Sample Sheet\'!E$2:E7,"< 0",\'Sample Sheet\'!B$2:B7,">="&H2,\'Sample Sheet\'!B$2:B7,"<="&I2)',
+        0, 0, lookupRow, lookupCol, lookupSheetId, lookupSheetRowColIds,
+      );
+      // Should parse as unary minus of SUMIFS function call
+      expect(ast.body).toMatchObject({ type: 'unary', operator: '-' });
+      const fn = (ast.body as any).operand;
+      expect(fn).toMatchObject({ type: 'function', name: 'SUMIFS' });
+    });
+  });
 });
 
 // ─── serializeA1 ─────────────────────────────────────────────────────────────
