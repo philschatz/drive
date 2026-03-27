@@ -45,23 +45,13 @@ export function useDocument(docId: string | undefined) {
 }
 
 /**
- * Wrapper component that shows a progress bar while a document loads,
- * an error message on failure, and renders children once ready.
+ * Wrapper component that fires openDoc and renders children immediately
+ * so their subscribeQuery effects can serve cached data while the doc syncs.
+ * Shows a thin fixed progress bar at the top during loading.
  */
 export function DocLoader({ docId, children }: { docId: string | undefined; children: ComponentChildren }) {
-  const { status, progress, message, error } = useDocument(docId);
+  const { status, progress, error } = useDocument(docId);
 
-  if (status === 'loading') return (
-    <div className="p-6 max-w-sm mx-auto mt-12 flex items-center gap-3">
-      <a href="#/" className="text-muted-foreground hover:text-foreground shrink-0">
-        <span className="material-symbols-outlined" style={{ fontSize: 20 }}>arrow_back</span>
-      </a>
-      <div className="flex-1">
-        <Progress value={progress} />
-        <p className="text-sm text-muted-foreground mt-2 text-center">{message}</p>
-      </div>
-    </div>
-  );
   if (status === 'error') return (
     <div className="p-6 max-w-sm mx-auto mt-12 flex items-start gap-3">
       <a href="#/" className="text-muted-foreground hover:text-foreground shrink-0">
@@ -71,5 +61,14 @@ export function DocLoader({ docId, children }: { docId: string | undefined; chil
     </div>
   );
 
-  return <>{children}</>;
+  return (
+    <>
+      {status === 'loading' && (
+        <div className="fixed top-0 left-0 right-0 z-50">
+          <Progress value={progress} />
+        </div>
+      )}
+      {children}
+    </>
+  );
 }

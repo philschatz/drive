@@ -121,6 +121,48 @@ describe('a1ToInternal', () => {
     const result = a1ToInternal('=SUM(A1:A4)', 0, 0, rowIds, colIds);
     expect(result).toBe('=SUM({R[r0]C[c0]}:{R[r3]C[c0]})');
   });
+
+  it('converts cross-sheet references using target sheet row/col IDs', () => {
+    // Current sheet needs enough cols for local refs H2, I2 (indices 7, 8)
+    const localRows = ['lr0', 'lr1', 'lr2', 'lr3', 'lr4', 'lr5', 'lr6', 'lr7'];
+    const localCols = ['lc0', 'lc1', 'lc2', 'lc3', 'lc4', 'lc5', 'lc6', 'lc7', 'lc8'];
+    // Target "Joint Transactions" sheet has its own IDs
+    const jtRowIds = ['jr0', 'jr1', 'jr2', 'jr3', 'jr4', 'jr5', 'jr6'];
+    const jtColIds = ['jcA', 'jcB', 'jcC', 'jcD', 'jcE', 'jcF', 'jcG', 'jcH', 'jcI', 'jcJ', 'jcK', 'jcL', 'jcM'];
+    const lookupSheetId = (name: string) => name === 'Joint Transactions' ? 'jt-sheet' : undefined;
+    const lookupSheetRowColIds = (sheetId: string) =>
+      sheetId === 'jt-sheet' ? { rowIds: jtRowIds, colIds: jtColIds } : undefined;
+
+    const result = a1ToInternal(
+      "=-SUMIFS('Joint Transactions'!E$2:E$7,'Joint Transactions'!M$2:M$7,\"<>IGNORED\",'Joint Transactions'!E$2:E$7,\"< 0\",'Joint Transactions'!B$2:B$7,\">=\"&H2,'Joint Transactions'!B$2:B$7,\"<=\"&I2)",
+      0, 0, localRows, localCols, lookupSheetId, lookupSheetRowColIds,
+    );
+    // Cross-sheet refs must use the target sheet's IDs (jr*, jc*), not the local sheet's (lr*, lc*)
+    expect(result).toContain('jcE');   // column E from Joint Transactions
+    expect(result).toContain('jr1');   // row $2 (0-indexed: 1) from Joint Transactions
+    expect(result).toContain('jr6');   // row $7 (0-indexed: 6) from Joint Transactions
+    expect(result).toContain('jcM');   // column M from Joint Transactions
+    expect(result).toContain('jcB');   // column B from Joint Transactions
+    // Local refs H2 and I2 should use current sheet IDs
+    expect(result).toContain('lc7');   // H is col index 7 on local sheet
+    expect(result).toContain('lc8');   // I is col index 8 on local sheet
+  });
+
+  it('round-trips cross-sheet SUMIFS through a1ToInternal → internalToA1', () => {
+    const localRows = ['lr0', 'lr1', 'lr2', 'lr3', 'lr4', 'lr5', 'lr6', 'lr7'];
+    const localCols = ['lc0', 'lc1', 'lc2', 'lc3', 'lc4', 'lc5', 'lc6', 'lc7', 'lc8'];
+    const jtRowIds = ['jr0', 'jr1', 'jr2', 'jr3', 'jr4', 'jr5', 'jr6'];
+    const jtColIds = ['jcA', 'jcB', 'jcC', 'jcD', 'jcE', 'jcF', 'jcG', 'jcH', 'jcI', 'jcJ', 'jcK', 'jcL', 'jcM'];
+    const lookupSheetId = (name: string) => name === 'Joint Transactions' ? 'jt-sheet' : undefined;
+    const lookupSheetRowColIds = (sheetId: string) =>
+      sheetId === 'jt-sheet' ? { rowIds: jtRowIds, colIds: jtColIds } : undefined;
+    const sheetNameLookup = (id: string) => id === 'jt-sheet' ? 'Joint Transactions' : undefined;
+
+    const formula = "=-SUMIFS('Joint Transactions'!E$2:E$7,'Joint Transactions'!M$2:M$7,\"<>IGNORED\",'Joint Transactions'!E$2:E$7,\"< 0\",'Joint Transactions'!B$2:B$7,\">=\"&H2,'Joint Transactions'!B$2:B$7,\"<=\"&I2)";
+    const internal = a1ToInternal(formula, 0, 0, localRows, localCols, lookupSheetId, lookupSheetRowColIds);
+    const back = internalToA1(internal, 0, 0, localRows, localCols, sheetNameLookup, lookupSheetRowColIds);
+    expect(back).toBe(formula);
+  });
 });
 
 describe('internalToA1', () => {

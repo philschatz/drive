@@ -41,7 +41,7 @@ describe('DocHandle.doc() throws when not ready', () => {
 
     // The old code did: if (handle.doc()) { pushToSubscriptions(); }
     // This throws instead of returning falsy, so the catch handler sends
-    // an error sub-result. The Home page callback ignores errors, so
+    // an error query-result. The Home page callback ignores errors, so
     // loading stays true forever.
     expect(() => handle.doc()).toThrow('DocHandle is not ready');
   });
@@ -70,15 +70,15 @@ describe('subscribe-query readiness pattern', () => {
     try {
       // Old code: if (handle.doc()) { push immediately }
       if (handle.doc()) {
-        messages.push({ type: 'sub-result', result: 'data' });
+        messages.push({ type: 'query-result', result: 'data' });
       }
     } catch (err: any) {
       // Error caught — sends error result, callback ignores it
-      messages.push({ type: 'sub-result', error: err.message });
+      messages.push({ type: 'query-result', error: err.message });
     }
 
     // The error result means the callback never fires, loading stays true
-    expect(messages).toEqual([{ type: 'sub-result', error: 'DocHandle is not ready' }]);
+    expect(messages).toEqual([{ type: 'query-result', error: 'DocHandle is not ready' }]);
   });
 
   it('FIX: new pattern (isReady check) does not throw, waits for whenReady', async () => {
@@ -89,10 +89,10 @@ describe('subscribe-query readiness pattern', () => {
     // Fixed subscribe-query handler pattern
     const isReady = handle.isReady();
     if (isReady) {
-      messages.push({ type: 'sub-result', result: handle.doc() });
+      messages.push({ type: 'query-result', result: handle.doc() });
     } else {
       handle.whenReady().then(() => {
-        messages.push({ type: 'sub-result', result: handle.doc() });
+        messages.push({ type: 'query-result', result: handle.doc() });
       });
     }
 
@@ -104,7 +104,7 @@ describe('subscribe-query readiness pattern', () => {
     await new Promise(r => setTimeout(r, 0));
 
     // Now the whenReady callback fired and pushed the result
-    expect(messages).toEqual([{ type: 'sub-result', result: doc }]);
+    expect(messages).toEqual([{ type: 'query-result', result: doc }]);
   });
 
   it('FIX: ready handle pushes immediately without whenReady', () => {
@@ -113,10 +113,10 @@ describe('subscribe-query readiness pattern', () => {
     const messages: any[] = [];
 
     if (handle.isReady()) {
-      messages.push({ type: 'sub-result', result: handle.doc() });
+      messages.push({ type: 'query-result', result: handle.doc() });
     }
 
-    expect(messages).toEqual([{ type: 'sub-result', result: doc }]);
+    expect(messages).toEqual([{ type: 'query-result', result: doc }]);
   });
 
   it('BUG: old pushToSubscriptions pattern throws on not-ready handle', () => {

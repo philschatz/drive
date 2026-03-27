@@ -97,3 +97,14 @@ export async function idbDelPrefix(prefix: string): Promise<void> {
 export function _resetConnectionForTest(): void {
   dbPromise = null;
 }
+
+// ── Shared utilities (used by both worker and main thread) ──────────────────
+
+/** djb2 string hash → base-36. Used for query cache keys. */
+export function hashStr(s: string): string {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+  return (h >>> 0).toString(36);
+}
+
+export interface QueryCacheEntry { result: any; json: string; lastModified?: number; heads: string[] }

@@ -10,6 +10,7 @@ import type { ValidationError } from './automerge-worker';
 import type { PresenceState, PeerState } from '@automerge/automerge-repo';
 import type { InviteRecord } from './invite-storage';
 import { deepAssign } from '../shared/deep-assign';
+import { idbGet, hashStr, type QueryCacheEntry } from './idb-storage';
 import { getDocEntry, setDocListDispatch, applyDocListFromWorker } from './doc-storage';
 import { setContactNamesDispatch, applyContactNamesFromWorker } from './contact-names';
 
@@ -187,10 +188,10 @@ worker.onmessage = (e: MessageEvent<WorkerToMain>) => {
       }
       break;
     }
-    case 'sub-result': {
+    case 'query-result': {
       const cb = subscriptionCallbacks.get(msg.subId);
       if (cb) {
-        if (msg.error) console.warn('[worker-api] sub-result error subId=%d:', msg.subId, msg.error);
+        if (msg.error) console.warn('[worker-api] query-result error subId=%d:', msg.subId, msg.error);
         else cb(msg.result, msg.heads, msg.lastModified);
       }
       break;
@@ -360,8 +361,23 @@ export function subscribeQuery(
   onResult: (result: any, heads: string[], lastModified?: number) => void,
 ): () => void {
   const subId = ++nextSubId;
-  subscriptionCallbacks.set(subId, onResult);
+  let workerResponded = false;
+
+  subscriptionCallbacks.set(subId, (result, heads, lastModified) => {
+    workerResponded = true;
+    onResult(result, heads, lastModified);
+  });
   fire('subscribe-query', { subId, docId, filter });
+
+  // Fast path: read from IDB on main thread while worker may be blocked
+  // parsing a large document's WASM binary.
+  const cacheKey = `qc:${docId}:${hashStr(filter)}`;
+  idbGet<QueryCacheEntry>(cacheKey).then(cached => {
+    if (cached && !workerResponded && subscriptionCallbacks.has(subId)) {
+      onResult(cached.result, cached.heads, cached.lastModified);
+    }
+  });
+
   return () => {
     subscriptionCallbacks.delete(subId);
     fire('unsubscribe-query', { subId });

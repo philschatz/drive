@@ -5,6 +5,14 @@ import { KeyhiveOps, bytesToBase64, errMsg } from './keyhive-ops';
 import { populateDocRepoMap, setDocRepo, getDocRepo, repoFor as _repoFor, findInRepos } from './repo-routing';
 import { isDiscoverable } from './doc-discovery';
 import { LRU } from './lru-cache';
+// hashStr and QueryCacheEntry are also exported from idb-storage for main-thread use.
+// Defined inline here to avoid adding a static import that may affect worker module loading.
+function hashStr(s: string): string {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+  return (h >>> 0).toString(36);
+}
+interface QueryCacheEntry { result: any; json: string; lastModified?: number; heads: string[] }
 
 export type MainToWorker =
   | { type: 'init'; appBaseUrl: string; enableInsecureRepo: boolean }
@@ -60,7 +68,7 @@ export type WorkerToMain =
   | { type: 'ws-status'; repo: 'secure' | 'insecure'; connected: boolean }
   // New worker-owned doc API responses
   | { type: 'result'; id: number; result?: any; error?: string }
-  | { type: 'sub-result'; subId: number; result: any; heads: string[]; lastModified?: number; error?: string }
+  | { type: 'query-result'; subId: number; result: any; heads: string[]; lastModified?: number; error?: string }
   | { type: 'update-presence'; docId: string; peers: Record<string, any> }
   // Document loading progress
   | { type: 'open-doc-progress'; id: number; pct: number; message: string }
@@ -169,6 +177,7 @@ function getOrCreateEntry(docId: string, handle: any): DocEntry {
     if (pending) {
       for (const [subId, sub] of pending) entry.subscriptions.set(subId, sub);
       pendingSubs.delete(docId);
+      void pushToSubscriptions(docId);
     }
   }
   return entry;
@@ -189,13 +198,6 @@ async function runQuery(filter: string, doc: any): Promise<any> {
   return fn(doc);
 }
 
-function hashStr(s: string): string {
-  let h = 5381;
-  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
-  return (h >>> 0).toString(36);
-}
-
-interface QueryCacheEntry { result: any; json: string; lastModified?: number; heads: string[] }
 
 /** In-memory LRU mirror of IDB query cache. */
 const queryResultCache = new LRU<string, QueryCacheEntry>(256);
@@ -228,13 +230,13 @@ async function handleSubscribeQuery(docId: string, subId: number, filter: string
   const cacheKey = `qc:${docId}:${hashStr(filter)}`;
   const memoryCached = queryResultCache.get(cacheKey);
   if (memoryCached) {
-    post({ type: 'sub-result', subId, result: memoryCached.result, heads: memoryCached.heads, lastModified: memoryCached.lastModified });
+    post({ type: 'query-result', subId, result: memoryCached.result, heads: memoryCached.heads, lastModified: memoryCached.lastModified });
   } else {
     const { idbGet } = await import('./idb-storage');
     const idbCached = await idbGet<QueryCacheEntry>(cacheKey);
     if (idbCached) {
       queryResultCache.set(cacheKey, idbCached);
-      post({ type: 'sub-result', subId, result: idbCached.result, heads: idbCached.heads, lastModified: idbCached.lastModified });
+      post({ type: 'query-result', subId, result: idbCached.result, heads: idbCached.heads, lastModified: idbCached.lastModified });
     }
   }
 
@@ -300,9 +302,9 @@ async function pushToSubscriptions(docId: string) {
     try {
       const { result, changed } = await runCachedQuery(docId, sub.filter, activeDoc, heads, lastModified);
       if (!changed) continue;
-      sub.post({ type: 'sub-result', subId, result, heads, lastModified });
+      sub.post({ type: 'query-result', subId, result, heads, lastModified });
     } catch (err: any) {
-      sub.post({ type: 'sub-result', subId, result: null, heads, error: errMsg(err) });
+      sub.post({ type: 'query-result', subId, result: null, heads, error: errMsg(err) });
     }
   }
 
@@ -315,6 +317,7 @@ async function pushToSubscriptions(docId: string) {
   const prefix = `qc:${docId}:`;
   for (const key of queryResultCache.keys()) {
     if (key.startsWith(prefix) && !activeHashes.has(key.slice(prefix.length))) {
+      console.log(`[worker] deleting possibly stale key ${key}`);
       queryResultCache.delete(key);
       import('./idb-storage').then(({ idbDel }) => idbDel(key));
     }
@@ -874,7 +877,7 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
     try {
       await handleSubscribeQuery(msg.docId, msg.subId, msg.filter, (m) => (self as any).postMessage(m));
     } catch (err: any) {
-      (self as any).postMessage({ type: 'sub-result', subId: msg.subId, result: null, heads: [], error: errMsg(err) } satisfies WorkerToMain);
+      (self as any).postMessage({ type: 'query-result', subId: msg.subId, result: null, heads: [], error: errMsg(err) } satisfies WorkerToMain);
     }
   }
 
@@ -1404,7 +1407,7 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
         try {
           await handleSubscribeQuery(pm.docId, pm.subId, pm.filter, post);
         } catch (err: any) {
-          post({ type: 'sub-result', subId: pm.subId, result: null, heads: [], error: errMsg(err) });
+          post({ type: 'query-result', subId: pm.subId, result: null, heads: [], error: errMsg(err) });
         }
       } else if (pm.type === 'unsubscribe-query') {
         handleUnsubscribeQuery(pm.subId);
