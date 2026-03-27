@@ -508,6 +508,9 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
     for (let i = 0; i < 10; i++) rows[shortId()] = { index: i + 1 };
     const newSheet = { '@type': 'Sheet', name: `Sheet ${sheetCount + 1}`, index: maxIndex + 1, columns: cols, rows, cells: {} };
     updateDoc(docId, (d, sid, newSheet) => { d.sheets[sid] = newSheet as any; }, sid, newSheet);
+    // Optimistically update metadata so the tab appears immediately
+    docMetaRef.current = { ...m, sheets: { ...m.sheets, [sid]: { name: newSheet.name, index: newSheet.index, rows: [], cols: [] } } };
+    setTick(t => t + 1);
     handleSelectSheet(sid);
   }, [docId, handleSelectSheet]);
 
@@ -548,12 +551,21 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
     const visibleCount = Object.values(m.sheets).filter(s => !s.hidden).length;
     if (visibleCount <= 1) return;
     mutate((d, id) => { d.sheets[id].hidden = true; }, [id]);
+    docMetaRef.current = { ...m, sheets: { ...m.sheets, [id]: { ...m.sheets[id], hidden: true } } };
     if (id === currentSheetId) {
       const order = sortedEntries(m.sheets);
-      const firstVisible = order.find(([, s]: [string, any]) => !s.hidden);
+      const firstVisible = order.find(([sid, s]: [string, any]) => sid !== id && !s.hidden);
       if (firstVisible) handleSelectSheet(firstVisible[0]);
     }
   }, [mutate, currentSheetId, handleSelectSheet]);
+
+  const handleUnhideSheet = useCallback((id: string) => {
+    mutate((d, id) => { d.sheets[id].hidden = false; }, [id]);
+    const m = docMetaRef.current;
+    if (m?.sheets[id]) {
+      docMetaRef.current = { ...m, sheets: { ...m.sheets, [id]: { ...m.sheets[id], hidden: false } } };
+    }
+  }, [mutate]);
 
   const handleReorderSheet = useCallback((draggedId: string, dropIndex: number) => {
     const m = docMetaRef.current;
@@ -1370,6 +1382,7 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
                 onRename={handleRenameSheet}
                 onReorder={handleReorderSheet}
                 onContextMenu={(id) => setSheetContextMenu(id)}
+                onUnhide={handleUnhideSheet}
                 renameRef={sheetRenameRef}
               />
             </ContextMenuTrigger>

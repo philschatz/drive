@@ -333,8 +333,15 @@
   background: #f8f9fa;
   padding: 0 4px;
   min-height: 40px;
-  overflow-x: auto;
   flex-shrink: 0;
+}
+
+.sheet-tabs-scroll {
+  display: flex;
+  align-items: end;
+  overflow-x: auto;
+  flex: 1;
+  min-width: 0;
 }
 
 .sheet-tab {
@@ -400,12 +407,55 @@
   display: flex;
   align-items: center;
   border-radius: 50%;
-  margin-left: 2px;
+  margin-right: 2px;
 }
 
 .sheet-tab-add:hover {
   color: #228be6;
   background: #e9ecef;
+}
+
+.sheet-hidden-menu {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.sheet-hidden-popup {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  background: #fff;
+  border: 1px solid #dee2e6;
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  padding: 4px 0;
+  min-width: 160px;
+  z-index: 100;
+  margin-bottom: 4px;
+}
+
+.sheet-hidden-item {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 6px 12px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: #495057;
+  white-space: nowrap;
+  text-align: left;
+}
+
+.sheet-hidden-item.hidden-sheet {
+  color: #adb5bd;
+}
+
+.sheet-hidden-item:hover {
+  background: #e9ecef;
+  color: #228be6;
 }
 
 /* HyperFormula sync progress bar */
