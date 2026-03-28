@@ -317,9 +317,7 @@ async function pushToSubscriptions(docId: string) {
   const prefix = `qc:${docId}:`;
   for (const key of queryResultCache.keys()) {
     if (key.startsWith(prefix) && !activeHashes.has(key.slice(prefix.length))) {
-      console.log(`[worker] deleting possibly stale key ${key}`);
-      queryResultCache.delete(key);
-      import('./idb-storage').then(({ idbDel }) => idbDel(key));
+      console.log(`[worker] might want to (but will not) delete possibly stale key ${key}`);
     }
   }
 

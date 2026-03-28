@@ -52,9 +52,11 @@ export function a1ToInternal(
           return {
             rowId: (idx) => ids.rowIds[idx] ?? `?row${idx}`,
             colId: (idx) => ids.colIds[idx] ?? `?col${idx}`,
+            totalRows: ids.rowIds.length,
           };
         }
       : undefined,
+    sortedRowIds.length,
   );
   return serialize(ast);
 }

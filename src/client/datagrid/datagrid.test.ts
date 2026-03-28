@@ -122,6 +122,25 @@ describe('a1ToInternal', () => {
     expect(result).toBe('=SUM({R[r0]C[c0]}:{R[r3]C[c0]})');
   });
 
+  it('resolves partial range B2:B (missing end row = last row)', () => {
+    const result = a1ToInternal('=SUM(B2:B)', 0, 0, rowIds, colIds);
+    // 4 rows (r0-r3), B=c1, row 2=r1, last row=r3
+    expect(result).toBe('=SUM({R[r1]C[c1]}:{R[r3]C[c1]})');
+  });
+
+  it('resolves partial range B:B4 (missing start row = row 1)', () => {
+    const result = a1ToInternal('=SUM(B:B4)', 0, 0, rowIds, colIds);
+    // B=c1, start row=r0, B4 row=r3
+    expect(result).toBe('=SUM({R[r0]C[c1]}:{R[r3]C[c1]})');
+  });
+
+  it('round-trips partial range B2:B through a1ToInternal → internalToA1', () => {
+    const internal = a1ToInternal('=SUM(B2:B)', 0, 0, rowIds, colIds);
+    const back = internalToA1(internal, 0, 0, rowIds, colIds);
+    // B2:B resolves to B2:B4 (4 rows)
+    expect(back).toBe('=SUM(B2:B4)');
+  });
+
   it('converts cross-sheet references using target sheet row/col IDs', () => {
     // Current sheet needs enough cols for local refs H2, I2 (indices 7, 8)
     const localRows = ['lr0', 'lr1', 'lr2', 'lr3', 'lr4', 'lr5', 'lr6', 'lr7'];

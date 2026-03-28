@@ -106,8 +106,8 @@ function tokenizeA1(text: string): FormulaToken[] {
     // Quoted sheet prefix: 'Sheet Name'!A1 or 'Sheet Name'!A1:B2
     if (ch === "'") {
       const rest = text.slice(i);
-      // Match 'SheetName'! followed by a cell ref or range
-      const quotedMatch = rest.match(/^'(?:[^']|'')*'!(\$?[A-Za-z]+\$?\d+)(?::(\$?[A-Za-z]+\$?\d+))?/);
+      // Match 'SheetName'! followed by a cell ref or range (including partial ranges like B2:B or B:B5)
+      const quotedMatch = rest.match(/^'(?:[^']|'')*'!(\$?[A-Za-z]+\$?\d+)(?::(\$?[A-Za-z]+\$?\d+|\$?[A-Za-z]+))?/);
       if (quotedMatch) {
         const refIdx = refCounter++;
         if (quotedMatch[2]) {
@@ -118,8 +118,8 @@ function tokenizeA1(text: string): FormulaToken[] {
         i += quotedMatch[0].length;
         continue;
       }
-      // Also match quoted sheet prefix with column range: 'Sheet'!B:B
-      const quotedColRange = rest.match(/^'(?:[^']|'')*'!\$?[A-Za-z]+:\$?[A-Za-z]+/);
+      // Also match quoted sheet prefix with column range: 'Sheet'!B:B or partial 'Sheet'!B:B5
+      const quotedColRange = rest.match(/^'(?:[^']|'')*'!\$?[A-Za-z]+:\$?[A-Za-z]+\$?\d*/);
       if (quotedColRange) {
         tokens.push({ type: 'range', start: i, end: i + quotedColRange[0].length, refIndex: refCounter++, crossSheet: true });
         i += quotedColRange[0].length;
@@ -140,8 +140,8 @@ function tokenizeA1(text: string): FormulaToken[] {
     if (ch === '$' || (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z')) {
       const rest = text.slice(i);
 
-      // Unquoted sheet prefix: SheetName!A1 or SheetName!A1:B2
-      const sheetCellMatch = rest.match(/^([A-Za-z0-9_]+)!(\$?[A-Za-z]+\$?\d+)(?::(\$?[A-Za-z]+\$?\d+))?/);
+      // Unquoted sheet prefix: SheetName!A1 or SheetName!A1:B2 or SheetName!A1:B (partial)
+      const sheetCellMatch = rest.match(/^([A-Za-z0-9_]+)!(\$?[A-Za-z]+\$?\d+)(?::(\$?[A-Za-z]+\$?\d+|\$?[A-Za-z]+))?/);
       if (sheetCellMatch) {
         const name = sheetCellMatch[1].toUpperCase();
         if (name !== 'TRUE' && name !== 'FALSE') {
@@ -155,8 +155,8 @@ function tokenizeA1(text: string): FormulaToken[] {
           continue;
         }
       }
-      // Unquoted sheet prefix with column range: SheetName!B:B
-      const sheetColRange = rest.match(/^([A-Za-z0-9_]+)!\$?[A-Za-z]+:\$?[A-Za-z]+/);
+      // Unquoted sheet prefix with column range: SheetName!B:B or partial SheetName!B:B5
+      const sheetColRange = rest.match(/^([A-Za-z0-9_]+)!\$?[A-Za-z]+:\$?[A-Za-z]+\$?\d*/);
       if (sheetColRange) {
         const name = sheetColRange[1].toUpperCase();
         if (name !== 'TRUE' && name !== 'FALSE') {
@@ -176,7 +176,7 @@ function tokenizeA1(text: string): FormulaToken[] {
         }
       }
 
-      const cellMatch = rest.match(/^(\$?[A-Za-z]+\$?\d+)(?::(\$?[A-Za-z]+\$?\d+))?/);
+      const cellMatch = rest.match(/^(\$?[A-Za-z]+\$?\d+)(?::(\$?[A-Za-z]+\$?\d+|\$?[A-Za-z]+))?/);
       if (cellMatch) {
         const firstRef = cellMatch[1];
         const lettersMatch = firstRef.match(/^\$?([A-Za-z]+)\$?\d+$/);
@@ -198,6 +198,20 @@ function tokenizeA1(text: string): FormulaToken[] {
                 continue;
               }
             }
+          }
+        }
+      }
+
+      // Local column range: B:B, or partial range: B:B5
+      const localColRange = rest.match(/^(\$?[A-Za-z]+):(\$?[A-Za-z]+\$?\d*)(?![A-Za-z(])/);
+      if (localColRange) {
+        const colLetters = localColRange[1].replace(/\$/g, '').toUpperCase();
+        if (colLetters !== 'TRUE' && colLetters !== 'FALSE') {
+          const colIdx = letterToColIndex(colLetters);
+          if (colIdx >= 0 && colIdx < 18278) {
+            tokens.push({ type: 'range', start: i, end: i + localColRange[0].length, refIndex: refCounter++ });
+            i += localColRange[0].length;
+            continue;
           }
         }
       }

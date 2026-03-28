@@ -95,6 +95,15 @@ function extractRefs(formula: string, currentSheetId: string): Map<string, Set<s
     if (!refs.has(sheetId)) refs.set(sheetId, new Set());
     refs.get(sheetId)!.add(`${rowId}:${colId}`);
   }
+
+  // Also match column-only refs {C{colId}S{sheetId}} (whole-column cross-sheet refs).
+  // These don't have specific row IDs, but we still need to track the sheet dependency.
+  const colOnlyPattern = /\{C[\{[]([^\}\]]+)[\}\]]S\{([^}]+)\}\}/g;
+  while ((m = colOnlyPattern.exec(formula)) !== null) {
+    const sheetId = m[2];
+    if (!refs.has(sheetId)) refs.set(sheetId, new Set());
+  }
+
   return refs;
 }
 

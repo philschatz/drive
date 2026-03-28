@@ -750,7 +750,9 @@ export function parseFormula(
   lookupRowId: IdLookup, lookupColId: IdLookup,
   lookupSheetId?: (name: string) => string | undefined,
   /** For cross-sheet refs: given a sheetId, return row/col lookups for that sheet. */
-  lookupSheetRowColIds?: (sheetId: string) => { rowId: IdLookup; colId: IdLookup } | undefined,
+  lookupSheetRowColIds?: (sheetId: string) => { rowId: IdLookup; colId: IdLookup; totalRows?: number } | undefined,
+  /** Total number of rows in the current sheet. Used to resolve partial ranges like B2:B → B2:B{lastRow}. */
+  totalRows?: number,
 ): FormulaAST {
   let result = '';
   let i = 0;
@@ -893,9 +895,32 @@ export function parseFormula(
             if (a1Match2) {
               result += ':' + convertA1(a1Match2[0], a1Match2[1], a1Match2[2], a1Match2[3], a1Match2[4], sheetSuffix, sheetId);
               i += 1 + a1Match2[0].length;
+            } else {
+              // Partial range end: 'Sheet'!B2:B — missing row = last row
+              const effectiveRows = lookupSheetRowColIds?.(sheetId)?.totalRows ?? totalRows;
+              if (effectiveRows != null) {
+                const colOnlyEnd = rangeRest.match(/^(\$?)([A-Za-z]+)(?![A-Za-z0-9(])/);
+                if (colOnlyEnd) {
+                  result += ':' + convertA1('', colOnlyEnd[1], colOnlyEnd[2], '', String(effectiveRows), sheetSuffix, sheetId);
+                  i += 1 + colOnlyEnd[0].length;
+                }
+              }
             }
           }
           continue;
+        }
+        // Partial range: B:B5 — column-only start (row 1), full cell ref end
+        {
+          const effectiveRows = lookupSheetRowColIds?.(sheetId)?.totalRows ?? totalRows;
+          if (effectiveRows != null) {
+            const partialStartMatch = rest.match(/^(\$?)([A-Za-z]+):(\$?)([A-Za-z]+)(\$?)(\d+)(?![A-Za-z(])/);
+            if (partialStartMatch) {
+              result += convertA1('', partialStartMatch[1], partialStartMatch[2], '', '1', sheetSuffix, sheetId)
+                + ':' + convertA1('', partialStartMatch[3], partialStartMatch[4], partialStartMatch[5], partialStartMatch[6], sheetSuffix, sheetId);
+              i += partialStartMatch[0].length;
+              continue;
+            }
+          }
         }
         // Column range: B:B, $A:$C
         const colRangeMatch = rest.match(/^(\$?)([A-Za-z]+):(\$?)([A-Za-z]+)(?![A-Za-z0-9(])/);
@@ -1020,9 +1045,46 @@ export function parseFormula(
           if (a1Match2) {
             result += ':' + convertA1(a1Match2[0], a1Match2[1], a1Match2[2], a1Match2[3], a1Match2[4], sheetSuffix, targetSheetId);
             i += 1 + a1Match2[0].length;
+          } else {
+            // Partial range end: Sheet!B2:B — missing row = last row
+            const effectiveRows = (targetSheetId && lookupSheetRowColIds?.(targetSheetId)?.totalRows) ?? totalRows;
+            if (effectiveRows != null) {
+              const colOnlyEnd = rangeRest.match(/^(\$?)([A-Za-z]+)(?![A-Za-z0-9(])/);
+              if (colOnlyEnd) {
+                result += ':' + convertA1('', colOnlyEnd[1], colOnlyEnd[2], '', String(effectiveRows), sheetSuffix, targetSheetId);
+                i += 1 + colOnlyEnd[0].length;
+              }
+            }
+          }
+        }
+        // Partial range end (no sheet prefix): B2:B — missing row = last row
+        if (!sheetSuffix && i < len && formula[i] === ':') {
+          const rangeRest = formula.slice(i + 1);
+          // Only handle column-only after colon (full ref B2:B5 is handled by parseInternal)
+          const fullRefCheck = rangeRest.match(/^(\$?)([A-Za-z]+)(\$?)(\d+)(?![A-Za-z(])/);
+          if (!fullRefCheck && totalRows != null) {
+            const colOnlyEnd = rangeRest.match(/^(\$?)([A-Za-z]+)(?![A-Za-z0-9(])/);
+            if (colOnlyEnd) {
+              result += ':' + convertA1('', colOnlyEnd[1], colOnlyEnd[2], '', String(totalRows), '', undefined);
+              i += 1 + colOnlyEnd[0].length;
+            }
           }
         }
         continue;
+      }
+
+      // Partial range: B:B5 — column-only start (row 1), full cell ref end (with optional sheet prefix)
+      {
+        const effectiveRows = (targetSheetId && lookupSheetRowColIds?.(targetSheetId)?.totalRows) ?? totalRows;
+        if (effectiveRows != null) {
+          const partialStartMatch = rest.match(/^(\$?)([A-Za-z]+):(\$?)([A-Za-z]+)(\$?)(\d+)(?![A-Za-z(])/);
+          if (partialStartMatch) {
+            result += convertA1('', partialStartMatch[1], partialStartMatch[2], '', '1', sheetSuffix, targetSheetId)
+              + ':' + convertA1('', partialStartMatch[3], partialStartMatch[4], partialStartMatch[5], partialStartMatch[6], sheetSuffix, targetSheetId);
+            i += partialStartMatch[0].length;
+            continue;
+          }
+        }
       }
 
       // Column range: B:B, $A:$C, A:Z (with optional sheet prefix)

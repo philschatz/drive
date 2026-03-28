@@ -672,6 +672,93 @@ describe('parseFormula', () => {
       expect(fn).toMatchObject({ type: 'function', name: 'SUMIFS' });
     });
   });
+
+  describe('partial ranges (missing row number)', () => {
+    it('resolves B2:B to B2:B{lastRow} (missing end row = last row)', () => {
+      const ast = parseFormula('=SUM(B2:B)', 0, 0, lookupRow, lookupCol, undefined, undefined, 4);
+      const fn = ast.body as any;
+      expect(fn.type).toBe('function');
+      expect(fn.args[0]).toMatchObject({
+        type: 'range',
+        from: { type: 'cellRef', row: { id: 'r1' }, col: { id: 'c1' } },
+        to: { type: 'cellRef', row: { id: 'r3' }, col: { id: 'c1' } },
+      });
+    });
+
+    it('resolves B:B4 to B1:B4 (missing start row = row 1)', () => {
+      const ast = parseFormula('=SUM(B:B4)', 0, 0, lookupRow, lookupCol, undefined, undefined, 4);
+      const fn = ast.body as any;
+      expect(fn.type).toBe('function');
+      expect(fn.args[0]).toMatchObject({
+        type: 'range',
+        from: { type: 'cellRef', row: { id: 'r0' }, col: { id: 'c1' } },
+        to: { type: 'cellRef', row: { id: 'r3' }, col: { id: 'c1' } },
+      });
+    });
+
+    it('resolves $B2:$B with absolute column', () => {
+      const ast = parseFormula('=SUM($B2:$B)', 0, 0, lookupRow, lookupCol, undefined, undefined, 4);
+      const fn = ast.body as any;
+      expect(fn.args[0]).toMatchObject({
+        type: 'range',
+        from: { type: 'cellRef', row: { id: 'r1' }, col: { id: 'c1', relative: false } },
+        to: { type: 'cellRef', row: { id: 'r3' }, col: { id: 'c1', relative: false } },
+      });
+    });
+
+    it('resolves quoted cross-sheet partial range: Sheet!B2:B', () => {
+      const sheetIds = ['sr0', 'sr1', 'sr2', 'sr3'];
+      const sheetCols = ['sc0', 'sc1', 'sc2', 'sc3'];
+      const sheetIdLookup = (name: string) => name === 'Sheet1' ? 's1' : undefined;
+      const sheetRowColLookup = (id: string) =>
+        id === 's1' ? { rowId: (i: number) => sheetIds[i] ?? `?row${i}`, colId: (i: number) => sheetCols[i] ?? `?col${i}`, totalRows: 4 } : undefined;
+      const ast = parseFormula(
+        "=SUM('Sheet1'!B2:B)", 0, 0, lookupRow, lookupCol,
+        sheetIdLookup, sheetRowColLookup, 4,
+      );
+      const fn = ast.body as any;
+      expect(fn.type).toBe('function');
+      const range = fn.args[0];
+      expect(range.type).toBe('range');
+      expect(range.from.sheet).toMatchObject({ id: 's1' });
+      expect(range.from.row.id).toBe('sr1');
+      expect(range.to.row.id).toBe('sr3');
+    });
+
+    it('resolves quoted cross-sheet partial range: Sheet!B:B5', () => {
+      const sheetIds = ['sr0', 'sr1', 'sr2', 'sr3', 'sr4'];
+      const sheetCols = ['sc0', 'sc1', 'sc2', 'sc3'];
+      const sheetIdLookup = (name: string) => name === 'Sheet1' ? 's1' : undefined;
+      const sheetRowColLookup = (id: string) =>
+        id === 's1' ? { rowId: (i: number) => sheetIds[i] ?? `?row${i}`, colId: (i: number) => sheetCols[i] ?? `?col${i}`, totalRows: 5 } : undefined;
+      const ast = parseFormula(
+        "=SUM('Sheet1'!B:B5)", 0, 0, lookupRow, lookupCol,
+        sheetIdLookup, sheetRowColLookup, 4,
+      );
+      const fn = ast.body as any;
+      expect(fn.type).toBe('function');
+      const range = fn.args[0];
+      expect(range.type).toBe('range');
+      expect(range.from.sheet).toMatchObject({ id: 's1' });
+      expect(range.from.row.id).toBe('sr0');
+      expect(range.to.row.id).toBe('sr4');
+    });
+
+    it('throws when partial range used without totalRows', () => {
+      // Without totalRows, B after : cannot be resolved and the bare letter causes a parse error
+      expect(() => parseFormula('=SUM(B2:B)', 0, 0, lookupRow, lookupCol)).toThrow();
+    });
+
+    it('resolves A1:A with totalRows=1 (single row sheet)', () => {
+      const ast = parseFormula('=SUM(A1:A)', 0, 0, lookupRow, lookupCol, undefined, undefined, 1);
+      const fn = ast.body as any;
+      expect(fn.args[0]).toMatchObject({
+        type: 'range',
+        from: { type: 'cellRef', row: { id: 'r0' }, col: { id: 'c0' } },
+        to: { type: 'cellRef', row: { id: 'r0' }, col: { id: 'c0' } },
+      });
+    });
+  });
 });
 
 // ─── serializeA1 ─────────────────────────────────────────────────────────────
