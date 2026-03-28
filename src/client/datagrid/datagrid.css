@@ -324,7 +324,6 @@
   z-index: 1;
 }
 
-
 /* Sheet tabs */
 .sheet-tabs-bar {
   display: flex;
@@ -370,7 +369,7 @@
 }
 
 .sheet-tab.drop-left::before {
-  content: '';
+  content: "";
   position: absolute;
   left: -1px;
   top: 4px;
@@ -380,7 +379,7 @@
 }
 
 .sheet-tab.drop-right::after {
-  content: '';
+  content: "";
   position: absolute;
   right: -1px;
   top: 4px;
@@ -473,8 +472,12 @@
 }
 
 @keyframes hf-sync-slide {
-  0% { transform: translateX(-100%); }
-  100% { transform: translateX(430%); }
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(430%);
+  }
 }
 
 /* Add rows bar */
@@ -524,8 +527,14 @@
 
 /* Spill target cells (array formula results) */
 .spill-target {
-  background: rgba(59, 130, 246, 0.05);
-  color: #495057;
+  background: repeating-linear-gradient(
+    -45deg,
+    transparent,
+    transparent 4px,
+    #f1f3f5 4px,
+    #f1f3f5 8px
+  );
+  color: #666;
 }
 
 /* Distribution cells */

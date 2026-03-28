@@ -269,14 +269,15 @@ class SplitPlugin extends FunctionPlugin {
   }
 
   splitArraySize(ast: any, state: any): ArraySize {
-    // Evaluate the text argument to determine the actual split count
-    const subresult = this.evaluateAst(ast.args[0], state);
-    const delimResult = this.evaluateAst(ast.args[1], state);
-    if (typeof subresult === 'string' && typeof delimResult === 'string') {
-      const count = subresult.split(delimResult).length;
-      return new ArraySize(count, 1);
+    try {
+      const subresult = this.evaluateAst(ast.args[0], state);
+      const delimResult = this.evaluateAst(ast.args[1], state);
+      if (typeof subresult === 'string' && typeof delimResult === 'string') {
+        return new ArraySize(subresult.split(delimResult).length, 1);
+      }
+    } catch {
+      // Cell values may not be computed yet during size prediction
     }
-    // Fallback: can't determine at compile time, estimate
     return new ArraySize(1, 1);
   }
 }
