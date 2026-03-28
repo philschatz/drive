@@ -522,6 +522,12 @@
   border-color: #228be6;
 }
 
+/* Spill target cells (array formula results) */
+.spill-target {
+  background: rgba(59, 130, 246, 0.05);
+  color: #495057;
+}
+
 /* Distribution cells */
 .dist-source {
   background: rgba(139, 92, 246, 0.08) !important;

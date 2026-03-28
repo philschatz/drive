@@ -64,6 +64,7 @@ export interface GridCommandContext {
   /** Lightweight metadata for all sheets (name, index, hidden). */
   sheetsMeta: Record<string, { name: string; index: number; hidden?: boolean }> | null;
   computedValues: Map<string, string | number> | null;
+  spillTargets: Set<string>;
   currentSheetId: string;
   sortedRowIds: string[];
   sortedColIds: string[];
@@ -471,7 +472,7 @@ const clipboardPlugin: GridPlugin = {
       shortcuts: [{ key: 'Delete' }, { key: 'Backspace' }],
       isEnabled: s => s.hasSelection,
       execute: (_, ctx) => {
-        const { sheet: doc, selectedCell, selectionAnchor, sortedRowIds, sortedColIds, currentSheetId } = ctx;
+        const { sheet: doc, selectedCell, selectionAnchor, sortedRowIds, sortedColIds, currentSheetId, spillTargets } = ctx;
         if (!selectedCell || !doc) return;
         const [col, row] = selectedCell;
         const anchor = selectionAnchor;
@@ -483,19 +484,22 @@ const clipboardPlugin: GridPlugin = {
         } : null;
 
         if (range && (range.minCol !== range.maxCol || range.minRow !== range.maxRow)) {
-          ctx.mutate((d, currentSheetId, range, sortedRowIds, sortedColIds) => {
+          ctx.mutate((d, currentSheetId, range, sortedRowIds, sortedColIds, spillKeys) => {
             const cells = d.sheets[currentSheetId].cells;
             for (let r = range.minRow; r <= range.maxRow; r++) {
               for (let c = range.minCol; c <= range.maxCol; c++) {
                 if (r < sortedRowIds.length && c < sortedColIds.length) {
-                  delete cells[`${sortedRowIds[r]}:${sortedColIds[c]}`];
+                  const key = `${sortedRowIds[r]}:${sortedColIds[c]}`;
+                  if (spillKeys.has(`${currentSheetId}:${key}`)) continue;
+                  delete cells[key];
                 }
               }
             }
-          }, [currentSheetId, range, sortedRowIds, sortedColIds]);
+          }, [currentSheetId, range, sortedRowIds, sortedColIds, spillTargets]);
         } else {
           if (col >= sortedColIds.length || row >= sortedRowIds.length) return;
           const cellKey = `${sortedRowIds[row]}:${sortedColIds[col]}`;
+          if (spillTargets.has(`${currentSheetId}:${cellKey}`)) return;
           ctx.mutate((d, currentSheetId, cellKey) => {
             if (d.sheets[currentSheetId].cells[cellKey]) delete d.sheets[currentSheetId].cells[cellKey];
           }, [currentSheetId, cellKey]);

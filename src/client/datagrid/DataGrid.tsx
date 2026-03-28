@@ -89,6 +89,7 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
   canEditRef.current = canEdit;
   const hfBridgeRef = useRef<HfBridge | null>(null);
   const computedValuesRef = useRef<Map<string, string | number>>(new Map());
+  const spillTargetsRef = useRef<Set<string>>(new Set());
   const activeSheetUnsubRef = useRef<(() => void) | null>(null);
   const [syncing, setSyncing] = useState(false);
   const titleFocusedRef = useRef(false);
@@ -236,6 +237,7 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
     if (!sh || !currentSheetId) return;
     const rowId = sortedRowIds[row];
     const colId = sortedColIds[col];
+    if (spillTargetsRef.current.has(`${currentSheetId}:${rowId}:${colId}`)) return;
     const raw = sh.cells[`${rowId}:${colId}`]?.value || '';
     const display = raw.startsWith('=') ? internalToA1(raw, row, col, sortedRowIds, sortedColIds, sheetNameLookup, sheetRowColLookup) : raw;
     setEditingCell([col, row]);
@@ -647,6 +649,7 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
     else if (e.key === 'ArrowDown') { newRow = Math.min(row + 1, sortedRowIds.length - 1); }
     else if (e.key === 'ArrowUp') { newRow = Math.max(row - 1, 0); }
     else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey) {
+      if (spillTargetsRef.current.has(`${currentSheetId}:${sortedRowIds[row]}:${sortedColIds[col]}`)) return;
       e.preventDefault();
       setSelectionAnchor(null);
       setEditingCell([col, row]);
@@ -813,8 +816,9 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
     // Set up HF bridge for formula evaluation
     const bridge = createHfBridge(sendHfPort);
     hfBridgeRef.current = bridge;
-    const unsubValues = bridge.onComputedValues((values) => {
+    const unsubValues = bridge.onComputedValues((values, spillTargets) => {
       computedValuesRef.current = values;
+      spillTargetsRef.current = spillTargets;
       if (mounted) setTick(t => t + 1);
     });
     const unsubMC = bridge.onMCResults((results) => {
@@ -887,9 +891,14 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
     if (row >= sortedRowIds.length || col >= sortedColIds.length) return '';
     const rowId = sortedRowIds[row];
     const colId = sortedColIds[col];
+    const spillKey = `${effectiveSheetId}:${rowId}:${colId}`;
+    if (spillTargetsRef.current.has(spillKey)) {
+      const computed = computedValuesRef.current?.get(spillKey);
+      return computed != null ? String(computed) : '';
+    }
     const raw = currentSheet.cells[`${rowId}:${colId}`]?.value || '';
     return raw.startsWith('=') ? internalToA1(raw, row, col, sortedRowIds, sortedColIds, sheetNameLookup, sheetRowColLookup) : raw;
-  }, [selectedCell, currentSheet, sortedRowIds, sortedColIds, sheetNameLookup, sheetRowColLookup]);
+  }, [selectedCell, currentSheet, sortedRowIds, sortedColIds, sheetNameLookup, sheetRowColLookup, effectiveSheetId]);
 
   // Cell address label (e.g. "A1", "A1:C3", "2:5", "A:C")
   const cellLabel = useMemo(() => {
@@ -975,6 +984,7 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
     sheet: doc2 ?? null,
     sheetsMeta: meta?.sheets ?? null,
     computedValues: computedValuesRef.current,
+    spillTargets: spillTargetsRef.current,
     currentSheetId: currentSheetId ?? '',
     sortedRowIds,
     sortedColIds,
@@ -1238,7 +1248,7 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
                         return (
                           <td
                             key={colId}
-                            className={'datagrid-cell' + (isSelected && !refInfo && !isEditing ? ' selected' : '') + (inRange && isMultiSelect ? ' in-range' : '') + (inAutofillTarget ? ' autofill-target' : '') + (isRowSelected || selectedCols.has(ci) ? ' header-selected' : '') + (peers ? ' peer-focused' : '') + (refInfo ? ' formula-ref-highlight' : '') + (isMcSource ? ' dist-source' : mcStats ? ' dist-dependent' : '')}
+                            className={'datagrid-cell' + (isSelected && !refInfo && !isEditing ? ' selected' : '') + (inRange && isMultiSelect ? ' in-range' : '') + (inAutofillTarget ? ' autofill-target' : '') + (isRowSelected || selectedCols.has(ci) ? ' header-selected' : '') + (peers ? ' peer-focused' : '') + (refInfo ? ' formula-ref-highlight' : '') + (isMcSource ? ' dist-source' : mcStats ? ' dist-dependent' : '') + (spillTargetsRef.current.has(`${effectiveSheetId}:${rowId}:${colId}`) ? ' spill-target' : '')}
                             style={Object.keys(cellStyle).length > 0 ? cellStyle : undefined}
                             title={mcStats ? `μ=${mcStats.mean.toFixed(2)} σ=${mcStats.stdev.toFixed(2)} [P5=${mcStats.p5.toFixed(2)}, P95=${mcStats.p95.toFixed(2)}]` : peers ? `Peer ${peers.peerId.slice(0, 8)}` : undefined}
                             data-cell-col={ci}

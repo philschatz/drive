@@ -18,7 +18,7 @@ export interface HfBridge {
   switchSheet(sheetId: string): void;
   unwatch(): void;
   setCellContents(sheetId: string, rowId: string, colId: string, value: string): void;
-  onComputedValues(cb: (values: Map<string, string | number>) => void): () => void;
+  onComputedValues(cb: (values: Map<string, string | number>, spillTargets: Set<string>) => void): () => void;
   onMCResults(cb: (results: MCResults) => void): () => void;
   destroy(): void;
 }
@@ -38,14 +38,15 @@ export function createHfBridge(sendPortToAutomerge: (port: MessagePort) => void)
   sendPortToAutomerge(channel.port1);
   worker.postMessage({ type: 'init', port: channel.port2 }, [channel.port2]);
 
-  const valueListeners = new Set<(values: Map<string, string | number>) => void>();
+  const valueListeners = new Set<(values: Map<string, string | number>, spillTargets: Set<string>) => void>();
   const mcListeners = new Set<(results: MCResults) => void>();
 
   worker.onmessage = (e) => {
     const msg = e.data;
     if (msg.type === 'computed-values') {
       const map = new Map<string, string | number>(Object.entries(msg.values));
-      for (const cb of valueListeners) cb(map);
+      const spillTargets = new Set<string>(msg.spillTargets ?? []);
+      for (const cb of valueListeners) cb(map, spillTargets);
     } else if (msg.type === 'mc-results') {
       const cells = new Map<string, DistributionStats>(msg.cells);
       const sources = new Set<string>(msg.sources);

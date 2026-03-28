@@ -331,6 +331,151 @@ describe('getDisplayValue', () => {
     const map = new Map<string, string | number>();
     expect(getDisplayValue(map, '=A1+B2', 's1', 'r1', 'c1')).toBe('');
   });
+
+  it('returns spilled value for empty cell with computed value (spill target)', () => {
+    const map = new Map<string, string | number>([['s1:r2:c1', 10], ['s1:r3:c1', 20]]);
+    expect(getDisplayValue(map, '', 's1', 'r2', 'c1')).toBe('10');
+    expect(getDisplayValue(map, '', 's1', 'r3', 'c1')).toBe('20');
+  });
+
+  it('returns empty string for empty cell with no computed value', () => {
+    const map = new Map<string, string | number>([['s1:r1:c1', 42]]);
+    expect(getDisplayValue(map, '', 's1', 'r2', 'c1')).toBe('');
+  });
+});
+
+describe('HyperFormula array spill', () => {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const HyperFormula = require('hyperformula').default;
+
+  it('spills down rows AND across columns for 2D array results', () => {
+    // 3x3 grid of values in columns A and B, formula in C1 that produces a vertical array
+    const hf = HyperFormula.buildFromArray(
+      [
+        [1, 10, '=A1:A3*B1:B3'],
+        [2, 20, null],
+        [3, 30, null],
+      ],
+      { licenseKey: 'gpl-v3', useArrayArithmetic: true },
+    );
+
+    // Should spill C1=10, C2=40, C3=90
+    expect(hf.getCellValue({ sheet: 0, col: 2, row: 0 })).toBe(10);
+    expect(hf.getCellValue({ sheet: 0, col: 2, row: 1 })).toBe(40);
+    expect(hf.getCellValue({ sheet: 0, col: 2, row: 2 })).toBe(90);
+
+    // C2 and C3 should be ARRAY type (spill targets)
+    expect(hf.getCellType({ sheet: 0, col: 2, row: 1 })).toBe('ARRAY');
+    expect(hf.getCellType({ sheet: 0, col: 2, row: 2 })).toBe('ARRAY');
+
+    hf.destroy();
+  });
+
+  it('spills horizontally with TRANSPOSE', () => {
+    // Column of values in A1:A3, TRANSPOSE in B1 should spill to C1, D1
+    const hf = HyperFormula.buildFromArray(
+      [
+        [1, '=TRANSPOSE(A1:A3)', null, null],
+        [2, null,                null, null],
+        [3, null,                null, null],
+      ],
+      { licenseKey: 'gpl-v3', useArrayArithmetic: true },
+    );
+
+    // B1=1, C1=2, D1=3
+    expect(hf.getCellValue({ sheet: 0, col: 1, row: 0 })).toBe(1);
+    expect(hf.getCellValue({ sheet: 0, col: 2, row: 0 })).toBe(2);
+    expect(hf.getCellValue({ sheet: 0, col: 3, row: 0 })).toBe(3);
+
+    // C1 and D1 should be ARRAY type (horizontal spill targets)
+    expect(hf.getCellType({ sheet: 0, col: 2, row: 0 })).toBe('ARRAY');
+    expect(hf.getCellType({ sheet: 0, col: 3, row: 0 })).toBe('ARRAY');
+
+    hf.destroy();
+  });
+
+  it('HyperFormula expands grid for horizontal spill beyond input dimensions', () => {
+    // Grid is only 2 columns wide — TRANSPOSE needs 3 columns for spill
+    const hf = HyperFormula.buildFromArray(
+      [
+        [1, '=TRANSPOSE(A1:A3)'],
+        [2, null],
+        [3, null],
+      ],
+      { licenseKey: 'gpl-v3', useArrayArithmetic: true },
+    );
+
+    const dims = hf.getSheetDimensions(0);
+    // HyperFormula expands grid from 2 to 4 columns for spill
+    expect(dims.width).toBe(4);
+
+    expect(hf.getCellValue({ sheet: 0, col: 1, row: 0 })).toBe(1);
+    expect(hf.getCellValue({ sheet: 0, col: 2, row: 0 })).toBe(2);
+    expect(hf.getCellValue({ sheet: 0, col: 3, row: 0 })).toBe(3);
+    expect(hf.getCellType({ sheet: 0, col: 2, row: 0 })).toBe('ARRAY');
+    expect(hf.getCellType({ sheet: 0, col: 3, row: 0 })).toBe('ARRAY');
+
+    hf.destroy();
+  });
+
+  it('spills 2D matrix with MMULT', () => {
+    // 2x2 matrix multiply should produce a 2x2 result
+    const hf = HyperFormula.buildFromArray(
+      [
+        [1, 0, '=MMULT(A1:B2,A1:B2)', null],
+        [0, 1, null,                   null],
+      ],
+      { licenseKey: 'gpl-v3', useArrayArithmetic: true },
+    );
+
+    // Identity * Identity = Identity: C1=1, D1=0, C2=0, D2=1
+    expect(hf.getCellValue({ sheet: 0, col: 2, row: 0 })).toBe(1);
+    expect(hf.getCellValue({ sheet: 0, col: 3, row: 0 })).toBe(0);
+    expect(hf.getCellValue({ sheet: 0, col: 2, row: 1 })).toBe(0);
+    expect(hf.getCellValue({ sheet: 0, col: 3, row: 1 })).toBe(1);
+
+    // D1, C2, D2 should be ARRAY type
+    expect(hf.getCellType({ sheet: 0, col: 3, row: 0 })).toBe('ARRAY');
+    expect(hf.getCellType({ sheet: 0, col: 2, row: 1 })).toBe('ARRAY');
+    expect(hf.getCellType({ sheet: 0, col: 3, row: 1 })).toBe('ARRAY');
+
+    hf.destroy();
+  });
+
+  it('SPLIT splits a string horizontally by delimiter', () => {
+    const { registerCustomFunctions } = require('./hf-functions');
+    registerCustomFunctions();
+
+    // Test with literal strings
+    const hf1 = HyperFormula.buildFromArray(
+      [
+        ['=SPLIT("food:grocery:safeway", ":")', null, null],
+      ],
+      { licenseKey: 'gpl-v3', useArrayArithmetic: true },
+    );
+
+    expect(hf1.getCellValue({ sheet: 0, col: 0, row: 0 })).toBe('food');
+    expect(hf1.getCellValue({ sheet: 0, col: 1, row: 0 })).toBe('grocery');
+    expect(hf1.getCellValue({ sheet: 0, col: 2, row: 0 })).toBe('safeway');
+    expect(hf1.getCellType({ sheet: 0, col: 1, row: 0 })).toBe('ARRAY');
+    expect(hf1.getCellType({ sheet: 0, col: 2, row: 0 })).toBe('ARRAY');
+
+    hf1.destroy();
+
+    // Test with cell reference
+    const hf2 = HyperFormula.buildFromArray(
+      [
+        ['food:grocery:safeway', '=SPLIT(A1, ":")', null, null],
+      ],
+      { licenseKey: 'gpl-v3', useArrayArithmetic: true },
+    );
+
+    expect(hf2.getCellValue({ sheet: 0, col: 1, row: 0 })).toBe('food');
+    expect(hf2.getCellValue({ sheet: 0, col: 2, row: 0 })).toBe('grocery');
+    expect(hf2.getCellValue({ sheet: 0, col: 3, row: 0 })).toBe('safeway');
+
+    hf2.destroy();
+  });
 });
 
 describe('shortId', () => {

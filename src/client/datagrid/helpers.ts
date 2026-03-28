@@ -166,14 +166,17 @@ export function buildSheetData(
  * Falls back to rawValue for non-formula cells.
  */
 export function getDisplayValue(computedValues: Map<string, string | number> | null, rawValue: string, sheetId: string, rowId: string, colId: string): string {
-  if (!rawValue) return '';
+  const key = `${sheetId}:${rowId}:${colId}`;
   if (rawValue.startsWith('=') && computedValues) {
-    const key = `${sheetId}:${rowId}:${colId}`;
     const computed = computedValues.get(key);
     if (computed == null) return '';
     return String(computed);
   }
-  return rawValue;
+  // Spill target: cell has no raw value but has a computed (spilled) value
+  if (!rawValue && computedValues?.has(key)) {
+    return String(computedValues.get(key));
+  }
+  return rawValue || '';
 }
 
 export function shortId(): string {

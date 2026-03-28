@@ -180,7 +180,7 @@ function rebuildAndEvaluate() {
   // Rebuild HF
   hf?.destroy();
   clearDistributionRegistry();
-  hf = HyperFormula.buildFromSheets(sheetsHfData, { licenseKey: 'gpl-v3' });
+  hf = HyperFormula.buildFromSheets(sheetsHfData, { licenseKey: 'gpl-v3', useArrayArithmetic: true });
 
   // Evaluate all formula cells and collect results
   const values: Record<string, string | number> = {};
@@ -205,7 +205,37 @@ function rebuildAndEvaluate() {
     }
   }
 
-  (self as any).postMessage({ type: 'computed-values', values });
+  // Detect spill targets (cells that receive array formula results).
+  // Use HF's sheet dimensions since spilling can expand the grid beyond the document's row/col count.
+  const spillTargetKeys: string[] = [];
+  for (let si = 0; si < sheetOrder.length; si++) {
+    const sid = sheetOrder[si];
+    const info = merged.get(sid)!;
+    const { width, height } = hf.getSheetDimensions(si);
+    for (let row = 0; row < height; row++) {
+      for (let col = 0; col < width; col++) {
+        // Skip cells within document bounds that have formulas (already handled)
+        if (row < info.rows.length && col < info.cols.length) {
+          const cell = info.cells[`${info.rows[row]}:${info.cols[col]}`];
+          if (cell?.value?.startsWith('=')) continue;
+        }
+        const cellType = hf.getCellType({ sheet: si, col, row });
+        if (cellType === 'ARRAY') {
+          const computed = hf.getCellValue({ sheet: si, col, row });
+          if (computed != null) {
+            // Map HF indices back to document IDs; skip if beyond document grid
+            if (row >= info.rows.length || col >= info.cols.length) continue;
+            const cellKey = `${info.rows[row]}:${info.cols[col]}`;
+            const key = `${sid}:${cellKey}`;
+            values[key] = typeof computed === 'string' || typeof computed === 'number' ? computed : String(computed);
+            spillTargetKeys.push(key);
+          }
+        }
+      }
+    }
+  }
+
+  (self as any).postMessage({ type: 'computed-values', values, spillTargets: spillTargetKeys });
 
   // Auto-run Monte Carlo if distributions were detected
   const registry = getDistributionRegistry();

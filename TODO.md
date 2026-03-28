@@ -23,6 +23,8 @@ actually, implement things in such a way that adding a device does not require a
 
 temporarily remove filtering the doc list by access level. I am curious what happens when a doc attempts to load
 
+Move source editor validation errors and history navigation to be the same as all the other editors
+
 BUG: If an admin user deletes the doc (revokes their access) and someone adds them back in, their edits do not show up but should. Also, they do not seem to see that they have regained permissions (a generic share link is present on the top bar instead of their role)
 
 In keyhive, a user should be able to remove themselves from any group or document. Make any necessary updates to keyhive too.

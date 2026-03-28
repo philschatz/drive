@@ -242,6 +242,46 @@ function uniqueColumns(range: SimpleRangeValue, exactlyOnce: boolean): SimpleRan
 }
 
 // ---------------------------------------------------------------------------
+// SPLIT — splits a string by a delimiter, returns a horizontal array
+// SPLIT(text, delimiter)
+// ---------------------------------------------------------------------------
+
+class SplitPlugin extends FunctionPlugin {
+  static implementedFunctions = {
+    'SPLIT': {
+      method: 'split',
+      parameters: [
+        { argumentType: FunctionArgumentType.STRING },
+        { argumentType: FunctionArgumentType.STRING },
+      ],
+      sizeOfResultArrayMethod: 'splitArraySize',
+    },
+  };
+
+  split(ast: any, state: any) {
+    return this.runFunction(ast.args, state, this.metadata('SPLIT'),
+      (text: string, delimiter: string) => {
+        const parts = text.split(delimiter);
+        if (parts.length <= 1) return parts[0] ?? '';
+        return SimpleRangeValue.onlyValues([parts]);
+      },
+    );
+  }
+
+  splitArraySize(ast: any, state: any): ArraySize {
+    // Evaluate the text argument to determine the actual split count
+    const subresult = this.evaluateAst(ast.args[0], state);
+    const delimResult = this.evaluateAst(ast.args[1], state);
+    if (typeof subresult === 'string' && typeof delimResult === 'string') {
+      const count = subresult.split(delimResult).length;
+      return new ArraySize(count, 1);
+    }
+    // Fallback: can't determine at compile time, estimate
+    return new ArraySize(1, 1);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Distribution functions — NORMAL, UNIFORM, TRIANGULAR, PERT, LOGNORMAL
 // During normal HF evaluation they return analytical mean and register in
 // the distribution registry.  The MC engine reads the registry to sample.
@@ -467,6 +507,7 @@ export function registerCustomFunctions() {
   HyperFormula.registerFunctionPlugin(ConcatPlugin, { enGB: { CONCAT: 'CONCAT' } });
   HyperFormula.registerFunctionPlugin(SortPlugin, { enGB: { SORT: 'SORT' } });
   HyperFormula.registerFunctionPlugin(UniquePlugin, { enGB: { UNIQUE: 'UNIQUE' } });
+  HyperFormula.registerFunctionPlugin(SplitPlugin, { enGB: { SPLIT: 'SPLIT' } });
   HyperFormula.registerFunctionPlugin(DistributionPlugin, {
     enGB: {
       NORMAL: 'NORMAL', UNIFORM: 'UNIFORM', TRIANGULAR: 'TRIANGULAR', PERT: 'PERT', LOGNORMAL: 'LOGNORMAL',
