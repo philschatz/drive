@@ -9,6 +9,8 @@ import HyperFormula, {
   SimpleRangeValue,
   ArraySize,
   EmptyValue,
+  CellError,
+  ErrorType,
 } from 'hyperformula';
 import { distributionMean, type DistributionInfo } from './distributions';
 
@@ -114,7 +116,7 @@ class SortPlugin extends FunctionPlugin {
   sortArraySize(ast: any, state: any): ArraySize {
     if (ast.args.length < 1) return ArraySize.error();
     const range = this.arraySizeForAst(ast.args[0], state);
-    if (range.isScalar()) return ArraySize.scalar();
+    if (range.width <= 1 && range.height <= 1) return ArraySize.scalar();
     return new ArraySize(range.width, range.height);
   }
 }
@@ -152,7 +154,7 @@ class UniquePlugin extends FunctionPlugin {
   uniqueArraySize(ast: any, state: any): ArraySize {
     if (ast.args.length < 1) return ArraySize.error();
     const range = this.arraySizeForAst(ast.args[0], state);
-    if (range.isScalar()) return ArraySize.scalar();
+    if (range.width <= 1 && range.height <= 1) return ArraySize.scalar();
     return new ArraySize(range.width, range.height);
   }
 }
@@ -239,6 +241,75 @@ function uniqueColumns(range: SimpleRangeValue, exactlyOnce: boolean): SimpleRan
   }
   const result = data.map((_: any, r: number) => uniqueCols.map(col => col[r]));
   return SimpleRangeValue.onlyValues(result);
+}
+
+// ---------------------------------------------------------------------------
+// FILTER — filters rows from a range by one or more conditions
+// FILTER(range, condition1, [condition2, ...])
+// Overrides HyperFormula's built-in FILTER which requires identical dimensions
+// for data and condition ranges. This implementation matches Google Sheets:
+// conditions only need matching row count.
+// ---------------------------------------------------------------------------
+
+class FilterPlugin extends FunctionPlugin {
+  static implementedFunctions = {
+    'FILTER': {
+      method: 'filter',
+      parameters: [
+        { argumentType: FunctionArgumentType.RANGE },
+        { argumentType: FunctionArgumentType.RANGE },
+      ],
+      repeatLastArgs: 1,
+      sizeOfResultArrayMethod: 'filterArraySize',
+      enableArrayArithmeticForArguments: true,
+    },
+  };
+
+  filter(ast: any, state: any) {
+    return this.runFunction(ast.args, state, this.metadata('FILTER'),
+      (...args: any[]) => {
+        const data = (args[0] as SimpleRangeValue).data;
+        const rowCount = data.length;
+        const colCount = data[0]?.length ?? 1;
+
+        // Build a boolean mask: row passes if ALL conditions are truthy
+        const mask = new Array(rowCount).fill(true);
+        for (let ci = 1; ci < args.length; ci++) {
+          const cond = args[ci] as SimpleRangeValue;
+          const condData = cond.data;
+          if (condData.length !== rowCount) {
+            return new CellError(ErrorType.NA, 'Ranges need to be of equal length.');
+          }
+          for (let r = 0; r < rowCount; r++) {
+            if (mask[r]) {
+              const v = condData[r][0];
+              if (!v || v === EmptyValue || v === 0) {
+                mask[r] = false;
+              }
+            }
+          }
+        }
+
+        const result = data.filter((_, i) => mask[i]);
+        if (result.length === 0) {
+          return new CellError(ErrorType.NA, 'No matches found.');
+        }
+        // Pad result to match input row count (predicted array size)
+        const emptyRow = new Array(colCount).fill(EmptyValue);
+        while (result.length < rowCount) {
+          result.push([...emptyRow]);
+        }
+        return SimpleRangeValue.onlyValues(result);
+      },
+    );
+  }
+
+  filterArraySize(ast: any, state: any): ArraySize {
+    if (ast.args.length < 1) return ArraySize.error();
+    const range = this.arraySizeForAst(ast.args[0], state);
+    if (range.width <= 1 && range.height <= 1) return ArraySize.scalar();
+    return new ArraySize(range.width, range.height);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -509,6 +580,8 @@ export function registerCustomFunctions() {
   HyperFormula.registerFunctionPlugin(SortPlugin, { enGB: { SORT: 'SORT' } });
   HyperFormula.registerFunctionPlugin(UniquePlugin, { enGB: { UNIQUE: 'UNIQUE' } });
   HyperFormula.registerFunctionPlugin(SplitPlugin, { enGB: { SPLIT: 'SPLIT' } });
+  try { HyperFormula.unregisterFunction('FILTER'); } catch { /* may be protected */ }
+  HyperFormula.registerFunctionPlugin(FilterPlugin, { enGB: { FILTER: 'FILTER' } });
   HyperFormula.registerFunctionPlugin(DistributionPlugin, {
     enGB: {
       NORMAL: 'NORMAL', UNIFORM: 'UNIFORM', TRIANGULAR: 'TRIANGULAR', PERT: 'PERT', LOGNORMAL: 'LOGNORMAL',

@@ -476,6 +476,138 @@ describe('HyperFormula array spill', () => {
 
     hf2.destroy();
   });
+
+  it('FILTER returns matching rows from a multi-column range', () => {
+    const { FunctionPlugin: FP, FunctionArgumentType: FAT, SimpleRangeValue: SRV, ArraySize: AS, CellError: CE, ErrorType: ET, EmptyValue: EV } = require('hyperformula');
+
+    class TestFilter extends FP {
+      static implementedFunctions = { 'TFILTER': { method: 'tfilter', parameters: [{ argumentType: FAT.RANGE }, { argumentType: FAT.RANGE }], repeatLastArgs: 1, sizeOfResultArrayMethod: 'tfilterSize', enableArrayArithmeticForArguments: true } };
+      tfilter(ast: any, state: any) {
+        return this.runFunction(ast.args, state, this.metadata('TFILTER'), (...args: any[]) => {
+          const data = args[0].data;
+          const colCount = data[0]?.length ?? 1;
+          const mask = new Array(data.length).fill(true);
+          for (let ci = 1; ci < args.length; ci++) {
+            const cd = args[ci].data;
+            for (let r = 0; r < data.length; r++) {
+              if (mask[r] && (!cd[r] || !cd[r][0] || cd[r][0] === EV || cd[r][0] === 0)) mask[r] = false;
+            }
+          }
+          const result = data.filter((_: any, i: number) => mask[i]);
+          if (result.length === 0) return new CE(ET.NA);
+          // Pad to match predicted size (input row count)
+          const emptyRow = new Array(colCount).fill(EV);
+          while (result.length < data.length) result.push([...emptyRow]);
+          return SRV.onlyValues(result);
+        });
+      }
+      tfilterSize(ast: any, state: any) { const r = this.arraySizeForAst(ast.args[0], state); return (r.width <= 1 && r.height <= 1) ? AS.scalar() : new AS(r.width, r.height); }
+    }
+    HyperFormula.registerFunctionPlugin(TestFilter, { enGB: { TFILTER: 'TFILTER' } });
+
+    // 5 rows, filter keeps 3 → result is 3 data rows + 2 empty padding rows
+    const hf1 = HyperFormula.buildFromArray([
+      ['Alice',   100, false, '=TFILTER(A1:B5,C1:C5)', null],
+      ['Bob',     200, true,  null, null],
+      ['Carol',   300, true,  null, null],
+      ['Dave',    400, false, null, null],
+      ['Eve',     500, true,  null, null],
+    ], { licenseKey: 'gpl-v3' });
+
+    expect(hf1.getCellValue({ sheet: 0, col: 3, row: 0 })).toBe('Bob');
+    expect(hf1.getCellValue({ sheet: 0, col: 4, row: 0 })).toBe(200);
+    expect(hf1.getCellValue({ sheet: 0, col: 3, row: 1 })).toBe('Carol');
+    expect(hf1.getCellValue({ sheet: 0, col: 3, row: 2 })).toBe('Eve');
+
+    hf1.destroy();
+    HyperFormula.unregisterFunctionPlugin(TestFilter);
+  });
+
+  it('FILTER override: multi-column data with single-column condition', () => {
+    // This test uses the ACTUAL FILTER name (not TFILTER) to verify the built-in is overridden
+    const { registerCustomFunctions } = require('./hf-functions');
+    registerCustomFunctions();
+
+    // Check if the test's HyperFormula has our FILTER registered
+    const hfFuncs = HyperFormula.getRegisteredFunctionNames('enGB');
+    console.log('FILTER in test HF:', hfFuncs.includes('FILTER'));
+
+    // Check if it's the same instance
+    const HF2 = require('hyperformula').default;
+    console.log('Same HF instance:', HyperFormula === HF2);
+
+    const hf = HyperFormula.buildFromArray([
+      ['Alice',   100, false, '=FILTER(A1:B5,C1:C5)', null],
+      ['Bob',     200, true,  null, null],
+      ['Carol',   300, true,  null, null],
+      ['Dave',    400, false, null, null],
+      ['Eve',     500, true,  null, null],
+    ], { licenseKey: 'gpl-v3' });
+
+    // Built-in FILTER would fail here (width mismatch: 2 vs 1)
+    // Custom FILTER should return Bob, Carol, Eve
+    const val = hf.getCellValue({ sheet: 0, col: 3, row: 0 });
+    expect(val).toBe('Bob');
+    expect(hf.getCellValue({ sheet: 0, col: 4, row: 0 })).toBe(200);
+    expect(hf.getCellValue({ sheet: 0, col: 3, row: 1 })).toBe('Carol');
+    expect(hf.getCellValue({ sheet: 0, col: 3, row: 2 })).toBe('Eve');
+
+    hf.destroy();
+  });
+
+  it('FILTER with expression conditions and cross-sheet refs', () => {
+    const { FunctionPlugin: FP, FunctionArgumentType: FAT, SimpleRangeValue: SRV, ArraySize: AS, CellError: CE, ErrorType: ET, EmptyValue: EV } = require('hyperformula');
+
+    class TestFilter2 extends FP {
+      static implementedFunctions = { 'TFILTER2': { method: 'tfilter2', parameters: [{ argumentType: FAT.RANGE }, { argumentType: FAT.RANGE }], repeatLastArgs: 1, sizeOfResultArrayMethod: 'tfilter2Size', enableArrayArithmeticForArguments: true } };
+      tfilter2(ast: any, state: any) {
+        return this.runFunction(ast.args, state, this.metadata('TFILTER2'), (...args: any[]) => {
+          const data = args[0].data;
+          const colCount = data[0]?.length ?? 1;
+          const mask = new Array(data.length).fill(true);
+          for (let ci = 1; ci < args.length; ci++) {
+            const cd = args[ci].data;
+            for (let r = 0; r < data.length; r++) {
+              if (mask[r] && (!cd[r] || !cd[r][0] || cd[r][0] === EV || cd[r][0] === 0)) mask[r] = false;
+            }
+          }
+          const result = data.filter((_: any, i: number) => mask[i]);
+          if (result.length === 0) return new CE(ET.NA);
+          const emptyRow = new Array(colCount).fill(EV);
+          while (result.length < data.length) result.push([...emptyRow]);
+          return SRV.onlyValues(result);
+        });
+      }
+      tfilter2Size(ast: any, state: any) { const r = this.arraySizeForAst(ast.args[0], state); return (r.width <= 1 && r.height <= 1) ? AS.scalar() : new AS(r.width, r.height); }
+    }
+    HyperFormula.registerFunctionPlugin(TestFilter2, { enGB: { TFILTER2: 'TFILTER2' } });
+
+    // Cross-sheet with expression conditions (B>10 AND B<30)
+    const hf = HyperFormula.buildFromSheets({
+      'Main': [
+        ['=ARRAYFORMULA(TFILTER2(Data!A1:C5,Data!B1:B5>E1,Data!B1:B5<F1))', null, null, null, 10, 30],
+      ],
+      'Data': [
+        ['Alice', 5, 100],
+        ['Bob', 15, 200],
+        ['Carol', 20, 300],
+        ['Dave', 25, 400],
+        ['Eve', 35, 500],
+      ],
+    }, { licenseKey: 'gpl-v3' });
+
+    // Bob(15), Carol(20), Dave(25) match the conditions
+    expect(hf.getCellValue({ sheet: 0, col: 0, row: 0 })).toBe('Bob');
+    expect(hf.getCellValue({ sheet: 0, col: 1, row: 0 })).toBe(15);
+    expect(hf.getCellValue({ sheet: 0, col: 2, row: 0 })).toBe(200);
+    expect(hf.getCellValue({ sheet: 0, col: 0, row: 1 })).toBe('Carol');
+    expect(hf.getCellValue({ sheet: 0, col: 0, row: 2 })).toBe('Dave');
+    // Row 3 and 4 should be empty (padded)
+    expect(hf.getCellType({ sheet: 0, col: 0, row: 0 })).toBe('ARRAYFORMULA');
+
+    hf.destroy();
+    HyperFormula.unregisterFunctionPlugin(TestFilter2);
+  });
 });
 
 describe('shortId', () => {

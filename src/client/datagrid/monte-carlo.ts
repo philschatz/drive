@@ -64,7 +64,7 @@ export function runMonteCarlo(doc: DataGridDocument, registry: Map<string, Distr
   }
 
   for (let iter = 0; iter < MC_SAMPLES; iter++) {
-    const hf = HyperFormula.buildFromSheets(sheetsData, { licenseKey: 'gpl-v3', useArrayArithmetic: true });
+    const hf = HyperFormula.buildFromSheets(sheetsData, { licenseKey: 'gpl-v3' });
 
     // Replace distribution cells with sampled values
     for (const dc of distCells) {

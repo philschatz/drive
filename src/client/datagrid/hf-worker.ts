@@ -180,7 +180,7 @@ function rebuildAndEvaluate() {
   // Rebuild HF
   hf?.destroy();
   clearDistributionRegistry();
-  hf = HyperFormula.buildFromSheets(sheetsHfData, { licenseKey: 'gpl-v3', useArrayArithmetic: true });
+  hf = HyperFormula.buildFromSheets(sheetsHfData, { licenseKey: 'gpl-v3' });
 
   // Evaluate all formula cells and collect results
   const values: Record<string, string | number> = {};
