@@ -8,7 +8,7 @@
  */
 
 import HyperFormula from 'hyperformula';
-import { registerCustomFunctions, getDistributionRegistry, clearDistributionRegistry } from './hf-functions';
+import { registerCustomFunctions, getDistributionRegistry, clearDistributionRegistry, hfConfig, addGoogleSheetsNamedExpressions } from './hf-functions';
 import { buildSheetData, cellToHfValue, sortedEntries } from './helpers';
 import { runMonteCarlo, type MCResults } from './monte-carlo';
 import { sampleDistribution, computeStats, type DistributionInfo, type DistributionStats } from './distributions';
@@ -180,7 +180,8 @@ function rebuildAndEvaluate() {
   // Rebuild HF
   hf?.destroy();
   clearDistributionRegistry();
-  hf = HyperFormula.buildFromSheets(sheetsHfData, { licenseKey: 'gpl-v3' });
+  hf = HyperFormula.buildFromSheets(sheetsHfData, hfConfig);
+  addGoogleSheetsNamedExpressions(hf);
 
   // Evaluate all formula cells and collect results
   const values: Record<string, string | number> = {};

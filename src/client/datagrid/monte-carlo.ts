@@ -6,7 +6,7 @@
  */
 import HyperFormula from 'hyperformula';
 import { sampleDistribution, computeStats, type DistributionInfo, type DistributionStats } from './distributions';
-import { registerCustomFunctions } from './hf-functions';
+import { registerCustomFunctions, hfConfig, addGoogleSheetsNamedExpressions } from './hf-functions';
 import { buildSheetData, sortedEntries } from './helpers';
 import type { DataGridDocument } from './schema';
 
@@ -64,7 +64,8 @@ export function runMonteCarlo(doc: DataGridDocument, registry: Map<string, Distr
   }
 
   for (let iter = 0; iter < MC_SAMPLES; iter++) {
-    const hf = HyperFormula.buildFromSheets(sheetsData, { licenseKey: 'gpl-v3' });
+    const hf = HyperFormula.buildFromSheets(sheetsData, hfConfig);
+    addGoogleSheetsNamedExpressions(hf);
 
     // Replace distribution cells with sampled values
     for (const dc of distCells) {

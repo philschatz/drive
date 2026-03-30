@@ -573,6 +573,28 @@ class DistributionPlugin extends FunctionPlugin {
 
 let registered = false;
 
+export const hfConfig = {
+  licenseKey: 'gpl-v3',
+  dateFormats: ['MM/DD/YYYY', 'MM/DD/YY', 'YYYY/MM/DD'],
+  timeFormats: ['hh:mm', 'hh:mm:ss.sss'],
+  currencySymbol: ['$', 'USD'],
+  localeLang: 'en-US',
+  functionArgSeparator: ',',
+  decimalSeparator: '.' as const,
+  thousandSeparator: '' as const,
+  arrayColumnSeparator: ',',
+  arrayRowSeparator: ';',
+  nullYear: 30,
+  useArrayArithmetic: false,
+  leapYear1900: false,
+  smartRounding: true,
+};
+
+export function addGoogleSheetsNamedExpressions(hf: HyperFormula) {
+  hf.addNamedExpression('TRUE', '=TRUE()');
+  hf.addNamedExpression('FALSE', '=FALSE()');
+}
+
 export function registerCustomFunctions() {
   if (registered) return;
   registered = true;
