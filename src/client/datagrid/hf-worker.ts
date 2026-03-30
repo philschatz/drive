@@ -7,7 +7,7 @@
  * cross-sheet dependencies.
  */
 
-import HyperFormula from 'hyperformula';
+import HyperFormula, { CellValueDetailedType } from 'hyperformula';
 import { registerCustomFunctions, getDistributionRegistry, clearDistributionRegistry, hfConfig, addGoogleSheetsNamedExpressions } from './hf-functions';
 import { buildSheetData, cellToHfValue, sortedEntries } from './helpers';
 import { runMonteCarlo, type MCResults } from './monte-carlo';
@@ -79,6 +79,31 @@ function getMergedSheetData(): Map<string, SheetInfo> {
 }
 
 // --- Helpers ---
+
+/** Format a HyperFormula cell value, converting date/time serial numbers to strings. */
+function formatCellValue(addr: { sheet: number; col: number; row: number }): string | number | null {
+  const computed = hf!.getCellValue(addr);
+  if (computed == null) return null;
+  if (typeof computed === 'object' && 'value' in computed) return String(computed.value);
+  if (typeof computed === 'number') {
+    const detailedType = hf!.getCellValueDetailedType(addr);
+    if (detailedType === CellValueDetailedType.NUMBER_DATE) {
+      const d = hf!.numberToDate(computed) as { year: number; month: number; day: number };
+      return `${String(d.month).padStart(2, '0')}/${String(d.day).padStart(2, '0')}/${d.year}`;
+    }
+    if (detailedType === CellValueDetailedType.NUMBER_DATETIME) {
+      const dt = hf!.numberToDateTime(computed) as { year: number; month: number; day: number; hours: number; minutes: number; seconds: number };
+      return `${String(dt.month).padStart(2, '0')}/${String(dt.day).padStart(2, '0')}/${dt.year} ${String(dt.hours).padStart(2, '0')}:${String(dt.minutes).padStart(2, '0')}`;
+    }
+    if (detailedType === CellValueDetailedType.NUMBER_TIME) {
+      const t = hf!.numberToTime(computed) as { hours: number; minutes: number; seconds: number };
+      return `${String(t.hours).padStart(2, '0')}:${String(t.minutes).padStart(2, '0')}:${String(Math.round(t.seconds)).padStart(2, '0')}`;
+    }
+    return computed;
+  }
+  if (typeof computed === 'string') return computed;
+  return String(computed);
+}
 
 /** Extract all cell refs from an internal-format formula, grouped by sheet ID. */
 function extractRefs(formula: string, currentSheetId: string): Map<string, Set<string>> {
@@ -193,13 +218,9 @@ function rebuildAndEvaluate() {
         const cellKey = `${info.rows[row]}:${info.cols[col]}`;
         const cell = info.cells[cellKey];
         if (cell?.value?.startsWith('=')) {
-          const computed = hf.getCellValue({ sheet: si, col, row });
+          const computed = formatCellValue({ sheet: si, col, row });
           if (computed != null) {
-            if (typeof computed === 'object' && 'value' in computed) {
-              values[`${sid}:${cellKey}`] = String(computed.value);
-            } else {
-              values[`${sid}:${cellKey}`] = typeof computed === 'string' || typeof computed === 'number' ? computed : String(computed);
-            }
+            values[`${sid}:${cellKey}`] = computed;
           }
         }
       }
@@ -222,13 +243,13 @@ function rebuildAndEvaluate() {
         }
         const cellType = hf.getCellType({ sheet: si, col, row });
         if (cellType === 'ARRAY') {
-          const computed = hf.getCellValue({ sheet: si, col, row });
+          // Map HF indices back to document IDs; skip if beyond document grid
+          if (row >= info.rows.length || col >= info.cols.length) continue;
+          const computed = formatCellValue({ sheet: si, col, row });
           if (computed != null) {
-            // Map HF indices back to document IDs; skip if beyond document grid
-            if (row >= info.rows.length || col >= info.cols.length) continue;
             const cellKey = `${info.rows[row]}:${info.cols[col]}`;
             const key = `${sid}:${cellKey}`;
-            values[key] = typeof computed === 'string' || typeof computed === 'number' ? computed : String(computed);
+            values[key] = computed;
             spillTargetKeys.push(key);
           }
         }

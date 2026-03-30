@@ -66,6 +66,7 @@ export function Home({ path }: { path?: string }) {
   const [entries, setEntries] = useState<DocEntry[]>(initialEntries);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
+  const [importStatus, setImportStatus] = useState<{ label: string; progress: number } | null>(null);
   const connected = useConnectionStatus();
   const repoPeers = usePeerList();
   const showUnencrypted = localStorage.getItem('showUnencrypted') !== 'false';
@@ -227,11 +228,13 @@ export function Home({ path }: { path?: string }) {
     if (xlsInputRef.current) xlsInputRef.current.value = '';
 
     try {
+      setImportStatus({ label: 'Reading file...', progress: 0 });
       const XLSX = await import('xlsx');
       const buffer = await file.arrayBuffer();
-      const wb = XLSX.read(buffer, { type: 'array' });
+      const wb = XLSX.read(buffer, { type: 'array', cellDates: true });
       const sid = () => Math.random().toString(36).slice(2, 10);
       const name = file.name.replace(/\.(xlsx?|csv)$/i, '') || 'Imported';
+      const totalSheets = wb.SheetNames.length;
 
       const sheetNameToId = new Map<string, string>();
       const sheetIdToRowColIds = new Map<string, { rowIds: string[]; colIds: string[] }>();
@@ -243,7 +246,7 @@ export function Home({ path }: { path?: string }) {
         rows2d: any[][]; ws: any;
       }[] = [];
 
-      for (let si = 0; si < wb.SheetNames.length; si++) {
+      for (let si = 0; si < totalSheets; si++) {
         const sheetName = wb.SheetNames[si];
         const ws = wb.Sheets[sheetName];
         const rows2d: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1 });
@@ -290,6 +293,9 @@ export function Home({ path }: { path?: string }) {
       }[] = [];
 
       for (let si = 0; si < sheetDefs.length; si++) {
+        setImportStatus({ label: `Processing sheet ${si + 1}/${totalSheets}...`, progress: Math.round(((si) / totalSheets) * 90) });
+        await new Promise(r => setTimeout(r, 0)); // yield to UI
+
         const { sheetId, sheetName, columns, rowsMap, colIds, rowIds, rows2d, ws } = sheetDefs[si];
         const cells: Record<string, { value: string }> = {};
         const ref = ws['!ref'] ? XLSX.utils.decode_range(ws['!ref']) : null;
@@ -310,6 +316,13 @@ export function Home({ path }: { path?: string }) {
               } catch {
                 stored = String(val);
               }
+            } else if (val instanceof Date) {
+              const mm = String(val.getMonth() + 1).padStart(2, '0');
+              const dd = String(val.getDate()).padStart(2, '0');
+              const yyyy = val.getFullYear();
+              stored = `${mm}/${dd}/${yyyy}`;
+            } else if (wsCell?.t === 'n' && wsCell.z && XLSX.SSF.is_date(wsCell.z) && wsCell.w) {
+              stored = wsCell.w;
             } else {
               stored = String(val);
             }
@@ -321,6 +334,9 @@ export function Home({ path }: { path?: string }) {
         builtSheets.push({ sheetId, sheetName, index: si + 1, hidden, columns, rows: rowsMap, cells });
       }
 
+      setImportStatus({ label: 'Saving document...', progress: 95 });
+      await new Promise(r => setTimeout(r, 0));
+
       const sheets: Record<string, any> = {};
       for (const s of builtSheets) {
         sheets[s.sheetId] = {
@@ -331,8 +347,12 @@ export function Home({ path }: { path?: string }) {
       }
       const { docId } = await createDoc({ '@type': 'DataGrid', name, sheets }, createSecure);
       addDocId(docId, { type: 'DataGrid', name, encrypted: createSecure });
-      alert(`/datagrids/${docId}`)
+      setImportStatus(null);
+      setMessage(`Imported ${totalSheets} sheet${totalSheets !== 1 ? 's' : ''} into "${name}"`);
+      setError('');
+      reloadEntries();
     } catch (err: any) {
+      setImportStatus(null);
       setError('Failed to import: ' + err.message);
     }
   }, []);
@@ -376,18 +396,25 @@ export function Home({ path }: { path?: string }) {
     if (!file) return;
     if (icsInputRef.current) icsInputRef.current.value = '';
     try {
+      setImportStatus({ label: 'Reading .ics file...', progress: 0 });
       const text = await file.text();
+      setImportStatus({ label: 'Parsing events...', progress: 30 });
+      await new Promise(r => setTimeout(r, 0));
       const { icsToEvent } = await import('../shared/ics-parser');
       const parsed = icsToEvent(text);
+      setImportStatus({ label: 'Saving calendar...', progress: 80 });
+      await new Promise(r => setTimeout(r, 0));
       const calName = file.name.replace(/\.ics$/i, '') || 'Imported';
       const events: Record<string, any> = {};
       for (const { uid, event } of parsed) events[uid] = event;
       const { docId } = await createDoc({ '@type': 'Calendar', name: calName, events }, createSecure);
       addDocId(docId, { type: 'Calendar', name: calName, encrypted: createSecure });
+      setImportStatus(null);
       setMessage(`Imported ${parsed.length} event${parsed.length !== 1 ? 's' : ''} into "${calName}"`);
       setError('');
       reloadEntries();
     } catch (err: any) {
+      setImportStatus(null);
       setError('Import failed: ' + err.message);
     }
   }, [reloadEntries]);
@@ -448,6 +475,12 @@ export function Home({ path }: { path?: string }) {
         ))}
       </div>
 
+      {importStatus && (
+        <Alert className="mb-2 flex items-center gap-3">
+          <span className="text-sm whitespace-nowrap">{importStatus.label}</span>
+          <Progress className="flex-1" value={importStatus.progress} />
+        </Alert>
+      )}
       {message && (
         <Alert variant="success" className="mb-2 flex items-center justify-between">
           <span>{message}</span>
