@@ -74,6 +74,8 @@ export function internalToA1(
   sheetNameLookup?: (sheetId: string) => string | undefined,
   /** For cross-sheet refs: given a sheetId, return row/col ID arrays for that sheet. */
   sheetRowColLookup?: (sheetId: string) => { rowIds: string[]; colIds: string[] } | undefined,
+  /** When true, expand whole-column/row refs to concrete cell refs (needed for HyperFormula). */
+  expandWholeRefs?: boolean,
 ): string {
   try {
     const ast = parseInternal(formula);
@@ -89,9 +91,12 @@ export function internalToA1(
             return {
               idToRowIndex: (id) => { const idx = ids.rowIds.indexOf(id); return idx === -1 ? undefined : idx; },
               idToColIndex: (id) => { const idx = ids.colIds.indexOf(id); return idx === -1 ? undefined : idx; },
+              ...(expandWholeRefs ? { totalRows: ids.rowIds.length, totalCols: ids.colIds.length } : {}),
             };
           }
         : undefined,
+      expandWholeRefs ? sortedRowIds.length : undefined,
+      expandWholeRefs ? sortedColIds.length : undefined,
     );
   } catch {
     return formula;
@@ -146,7 +151,7 @@ export function cellToHfValue(
 ): string | number | boolean | null {
   if (!rawValue || rawValue === '') return null;
   if (rawValue.startsWith('=')) {
-    return internalToA1(rawValue, rowIdx, colIdx, sortedRowIds, sortedColIds, sheetNameLookup, sheetRowColLookup);
+    return internalToA1(rawValue, rowIdx, colIdx, sortedRowIds, sortedColIds, sheetNameLookup, sheetRowColLookup, true);
   }
   const num = Number(rawValue);
   if (!isNaN(num) && rawValue.trim() !== '') return num;

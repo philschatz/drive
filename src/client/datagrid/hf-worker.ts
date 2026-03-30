@@ -81,31 +81,30 @@ function getMergedSheetData(): Map<string, SheetInfo> {
 // --- Helpers ---
 
 /** Format a HyperFormula cell value, converting date/time serial numbers to strings. */
-function formatCellValue(addr: { sheet: number; col: number; row: number }): string | number | null {
+function formatCellValue(addr: { sheet: number; col: number; row: number }): { value: string | number | null; errorMessage?: string } {
   const computed = hf!.getCellValue(addr);
-  if (computed == null) return '';
+  if (computed == null) return { value: '' };
   if (typeof computed === 'object' && 'value' in computed) {
-    if ((computed as any).message) console.warn('[HF error]', addr, (computed as any).value, (computed as any).message);
-    return String(computed.value);
+    return { value: String(computed.value), errorMessage: (computed as any).message || undefined };
   }
   if (typeof computed === 'number') {
     const detailedType = hf!.getCellValueDetailedType(addr);
     if (detailedType === CellValueDetailedType.NUMBER_DATE) {
       const d = hf!.numberToDate(computed) as { year: number; month: number; day: number };
-      return `${String(d.month).padStart(2, '0')}/${String(d.day).padStart(2, '0')}/${d.year}`;
+      return { value: `${String(d.month).padStart(2, '0')}/${String(d.day).padStart(2, '0')}/${d.year}` };
     }
     if (detailedType === CellValueDetailedType.NUMBER_DATETIME) {
       const dt = hf!.numberToDateTime(computed) as { year: number; month: number; day: number; hours: number; minutes: number; seconds: number };
-      return `${String(dt.month).padStart(2, '0')}/${String(dt.day).padStart(2, '0')}/${dt.year} ${String(dt.hours).padStart(2, '0')}:${String(dt.minutes).padStart(2, '0')}`;
+      return { value: `${String(dt.month).padStart(2, '0')}/${String(dt.day).padStart(2, '0')}/${dt.year} ${String(dt.hours).padStart(2, '0')}:${String(dt.minutes).padStart(2, '0')}` };
     }
     if (detailedType === CellValueDetailedType.NUMBER_TIME) {
       const t = hf!.numberToTime(computed) as { hours: number; minutes: number; seconds: number };
-      return `${String(t.hours).padStart(2, '0')}:${String(t.minutes).padStart(2, '0')}:${String(Math.round(t.seconds)).padStart(2, '0')}`;
+      return { value: `${String(t.hours).padStart(2, '0')}:${String(t.minutes).padStart(2, '0')}:${String(Math.round(t.seconds)).padStart(2, '0')}` };
     }
-    return computed;
+    return { value: computed };
   }
-  if (typeof computed === 'string') return computed;
-  return String(computed);
+  if (typeof computed === 'string') return { value: computed };
+  return { value: String(computed) };
 }
 
 /** Extract all cell refs from an internal-format formula, grouped by sheet ID. */
@@ -205,18 +204,6 @@ function rebuildAndEvaluate() {
     sheetOrder.push(sid);
   }
 
-  // Debug: log formulas being sent to HyperFormula
-  for (const [name, data] of Object.entries(sheetsHfData)) {
-    for (let r = 0; r < data.length; r++) {
-      for (let c = 0; c < data[r].length; c++) {
-        const v = data[r][c];
-        if (typeof v === 'string' && v.startsWith('=')) {
-          console.log(`[HF formula] ${name}!R${r+1}C${c+1}:`, v);
-        }
-      }
-    }
-  }
-
   // Rebuild HF
   hf?.destroy();
   clearDistributionRegistry();
@@ -225,6 +212,7 @@ function rebuildAndEvaluate() {
 
   // Evaluate all formula cells and collect results
   const values: Record<string, string | number> = {};
+  const errors: Record<string, string> = {};
   for (let si = 0; si < sheetOrder.length; si++) {
     const sid = sheetOrder[si];
     const info = merged.get(sid)!;
@@ -233,9 +221,11 @@ function rebuildAndEvaluate() {
         const cellKey = `${info.rows[row]}:${info.cols[col]}`;
         const cell = info.cells[cellKey];
         if (cell?.value?.startsWith('=')) {
-          const computed = formatCellValue({ sheet: si, col, row });
+          const { value: computed, errorMessage } = formatCellValue({ sheet: si, col, row });
           if (computed != null) {
-            values[`${sid}:${cellKey}`] = computed;
+            const fullKey = `${sid}:${cellKey}`;
+            values[fullKey] = computed;
+            if (errorMessage) errors[fullKey] = errorMessage;
           }
         }
       }
@@ -260,11 +250,12 @@ function rebuildAndEvaluate() {
         if (cellType === 'ARRAY') {
           // Map HF indices back to document IDs; skip if beyond document grid
           if (row >= info.rows.length || col >= info.cols.length) continue;
-          const computed = formatCellValue({ sheet: si, col, row });
+          const { value: computed, errorMessage } = formatCellValue({ sheet: si, col, row });
           if (computed != null) {
             const cellKey = `${info.rows[row]}:${info.cols[col]}`;
             const key = `${sid}:${cellKey}`;
             values[key] = computed;
+            if (errorMessage) errors[key] = errorMessage;
             spillTargetKeys.push(key);
           }
         }
@@ -272,7 +263,7 @@ function rebuildAndEvaluate() {
     }
   }
 
-  (self as any).postMessage({ type: 'computed-values', values, spillTargets: spillTargetKeys });
+  (self as any).postMessage({ type: 'computed-values', values, spillTargets: spillTargetKeys, errors });
 
   // Auto-run Monte Carlo if distributions were detected
   const registry = getDistributionRegistry();

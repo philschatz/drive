@@ -89,6 +89,7 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
   canEditRef.current = canEdit;
   const hfBridgeRef = useRef<HfBridge | null>(null);
   const computedValuesRef = useRef<Map<string, string | number>>(new Map());
+  const errorMessagesRef = useRef<Map<string, string>>(new Map());
   const spillTargetsRef = useRef<Set<string>>(new Set());
   const activeSheetUnsubRef = useRef<(() => void) | null>(null);
   const [syncing, setSyncing] = useState(false);
@@ -816,8 +817,9 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
     // Set up HF bridge for formula evaluation
     const bridge = createHfBridge(sendHfPort);
     hfBridgeRef.current = bridge;
-    const unsubValues = bridge.onComputedValues((values, spillTargets) => {
+    const unsubValues = bridge.onComputedValues((values, spillTargets, errors) => {
       computedValuesRef.current = values;
+      errorMessagesRef.current = errors;
       spillTargetsRef.current = spillTargets;
       if (mounted) setTick(t => t + 1);
     });
@@ -956,6 +958,7 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
   const peerList = Object.values(peerStates).filter(p => p.value?.viewing);
   const doc2 = activeSheetRef.current;
   const computedValues = computedValuesRef.current;
+  const errorMessages = errorMessagesRef.current;
 
   const currentRowIndices = useMemo(() => {
     if (selectedRows.size > 0) return [...selectedRows].sort((a, b) => a - b);
@@ -1316,7 +1319,7 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
                                 })()}
                               </>
                             ) : (
-                              <span className={display.startsWith('#') ? 'datagrid-cell-error' : rawValue.startsWith('=') ? 'datagrid-formula' : ''} title={display.startsWith('#') ? display : undefined}>{display}</span>
+                              <span className={display.startsWith('#') ? 'datagrid-cell-error' : rawValue.startsWith('=') ? 'datagrid-formula' : ''} title={display.startsWith('#') ? (errorMessages.get(`${effectiveSheetId}:${rowId}:${colId}`) || display) : undefined}>{display}</span>
                             )}
                             {showAutofillHandle && (
                               <div

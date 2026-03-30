@@ -594,15 +594,19 @@ function serializeNodeA1(
   idToRowIndex: (id: string) => number | undefined,
   idToColIndex: (id: string) => number | undefined,
   sheetNameLookup?: (sheetId: string) => string | undefined,
-  sheetRowColLookup?: (sheetId: string) => { idToRowIndex: (id: string) => number | undefined; idToColIndex: (id: string) => number | undefined } | undefined,
+  sheetRowColLookup?: (sheetId: string) => { idToRowIndex: (id: string) => number | undefined; idToColIndex: (id: string) => number | undefined; totalRows?: number; totalCols?: number } | undefined,
+  totalRows?: number,
+  totalCols?: number,
 ): string {
-  const s = (n: FormulaNode) => serializeNodeA1(n, cellRow, cellCol, idToRowIndex, idToColIndex, sheetNameLookup, sheetRowColLookup);
+  const s = (n: FormulaNode) => serializeNodeA1(n, cellRow, cellCol, idToRowIndex, idToColIndex, sheetNameLookup, sheetRowColLookup, totalRows, totalCols);
   switch (node.type) {
     case 'cellRef': {
       // For cross-sheet refs, use the target sheet's row/col lookups
       const targetLookups = node.sheet && sheetRowColLookup ? sheetRowColLookup(node.sheet.id) : undefined;
       const rowLookup = targetLookups?.idToRowIndex ?? idToRowIndex;
       const colLookup = targetLookups?.idToColIndex ?? idToColIndex;
+      const effectiveTotalRows = targetLookups?.totalRows ?? totalRows;
+      const effectiveTotalCols = targetLookups?.totalCols ?? totalCols;
       const isWholeCol = node.row.id === '*';
       const isWholeRow = node.col.id === '*';
       const rowIdx = isWholeCol ? undefined : rowLookup(node.row.id);
@@ -611,11 +615,23 @@ function serializeNodeA1(
       if (!isWholeRow && colIdx === undefined) return '#REF!';
       let cellA1: string;
       if (isWholeCol) {
-        // Column-only ref: B or $B
-        cellA1 = (node.col.relative ? '' : '$') + colIndexToLetter(colIdx!);
+        const colStr = (node.col.relative ? '' : '$') + colIndexToLetter(colIdx!);
+        if (effectiveTotalRows !== undefined) {
+          // Expand whole-column ref to concrete last row (HyperFormula doesn't support bare column refs)
+          cellA1 = colStr + '$' + effectiveTotalRows;
+        } else {
+          // Column-only ref: B or $B
+          cellA1 = colStr;
+        }
       } else if (isWholeRow) {
-        // Row-only ref: 1 or $1
-        cellA1 = (node.row.relative ? '' : '$') + (rowIdx! + 1);
+        const rowStr = (node.row.relative ? '' : '$') + (rowIdx! + 1);
+        if (effectiveTotalCols !== undefined) {
+          // Expand whole-row ref to concrete last column
+          cellA1 = '$' + colIndexToLetter(effectiveTotalCols - 1) + rowStr;
+        } else {
+          // Row-only ref: 1 or $1
+          cellA1 = rowStr;
+        }
       } else {
         const colStr = (node.col.relative ? '' : '$') + colIndexToLetter(colIdx!);
         const rowStr = (node.row.relative ? '' : '$') + (rowIdx! + 1);
@@ -636,7 +652,9 @@ function serializeNodeA1(
         const toRowLookup = targetLookups?.idToRowIndex ?? idToRowIndex;
         const toColLookup = targetLookups?.idToColIndex ?? idToColIndex;
         const toNoSheet: FormulaNode = { ...node.to, sheet: undefined };
-        const toStr = serializeNodeA1(toNoSheet, cellRow, cellCol, toRowLookup, toColLookup, sheetNameLookup, sheetRowColLookup);
+        const toTotalRows = targetLookups?.totalRows ?? totalRows;
+        const toTotalCols = targetLookups?.totalCols ?? totalCols;
+        const toStr = serializeNodeA1(toNoSheet, cellRow, cellCol, toRowLookup, toColLookup, sheetNameLookup, sheetRowColLookup, toTotalRows, toTotalCols);
         return fromStr + ':' + toStr;
       }
       return s(node.from) + ':' + s(node.to);
@@ -656,9 +674,11 @@ export function serializeA1(
   idToRowIndex: (id: string) => number | undefined,
   idToColIndex: (id: string) => number | undefined,
   sheetNameLookup?: (sheetId: string) => string | undefined,
-  sheetRowColLookup?: (sheetId: string) => { idToRowIndex: (id: string) => number | undefined; idToColIndex: (id: string) => number | undefined } | undefined,
+  sheetRowColLookup?: (sheetId: string) => { idToRowIndex: (id: string) => number | undefined; idToColIndex: (id: string) => number | undefined; totalRows?: number; totalCols?: number } | undefined,
+  totalRows?: number,
+  totalCols?: number,
 ): string {
-  return '=' + serializeNodeA1(ast.body, cellRow, cellCol, idToRowIndex, idToColIndex, sheetNameLookup, sheetRowColLookup);
+  return '=' + serializeNodeA1(ast.body, cellRow, cellCol, idToRowIndex, idToColIndex, sheetNameLookup, sheetRowColLookup, totalRows, totalCols);
 }
 
 // ─── Serialize to R1C1 format ────────────────────────────────────────────────

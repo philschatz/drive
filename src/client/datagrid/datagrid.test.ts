@@ -633,32 +633,31 @@ describe('HyperFormula array spill', () => {
     HyperFormula.unregisterFunctionPlugin(TestFilter2);
   });
 
-  it('MATCH(TRUE, SEARCH(range, cell)>=1, 0) finds first matching row via full pipeline', () => {
+  it('expands whole-column wildcard refs for HyperFormula via buildSheetData', () => {
     const { addGoogleSheetsNamedExpressions, hfConfig } = require('./hf-functions');
 
-    // Simulate two sheets with ID-based storage (like Automerge documents)
     const mainRows = ['r0', 'r1', 'r2'];
     const mainCols = ['c0', 'c1', 'c2', 'c3', 'c4', 'c5'];
     const catRows = ['cr0', 'cr1', 'cr2', 'cr3', 'cr4'];
     const catCols = ['cc0', 'cc1', 'cc2'];
 
-    const lookupSheetId = (name: string) => name === 'Categories' ? 'cat1' : undefined;
     const lookupSheetRowColIds = (sheetId: string) =>
       sheetId === 'cat1' ? { rowIds: catRows, colIds: catCols } : undefined;
     const sheetNameLookup = (id: string) => id === 'cat1' ? 'Categories' : undefined;
 
-    // User enters this formula in cell F3 (row=2, col=5)
-    const userFormula = '=IF(NOT(E3>0),"IGNORED",IF(""=INDEX(Categories!$C$2:$C$5,MATCH(TRUE,SEARCH(Categories!$A$2:$A$5,C3)>=1,0)),"UNCATEGORIZED",INDEX(Categories!$C$2:$C$5,MATCH(TRUE,SEARCH(Categories!$A$2:$A$5,C3)>=1,0))))';
+    // Simulate a formula stored in the document with wildcard row refs (whole-column refs).
+    // In internal format, {C{cc2}S{cat1}} = column-only ref (no R = whole column).
+    // This is what gets stored when a user enters Categories!$C$2:$C
+    const storedFormula = '=IF(NOT({R[r2]C[c4]}>0),"IGNORED",IF(""=INDEX({R{cr1}C{cc2}S{cat1}}:{C{cc2}S{cat1}},MATCH(TRUE(),SEARCH({R{cr1}C{cc0}S{cat1}}:{C{cc0}S{cat1}},{R[r2]C[c2]})>=1,0)),"UNCATEGORIZED",INDEX({R{cr1}C{cc2}S{cat1}}:{C{cc2}S{cat1}},MATCH(TRUE(),SEARCH({R{cr1}C{cc0}S{cat1}}:{C{cc0}S{cat1}},{R[r2]C[c2]})>=1,0))))';
 
-    // Convert A1 → internal (stored in Automerge)
-    const internal = a1ToInternal(userFormula, 2, 5, mainRows, mainCols, lookupSheetId, lookupSheetRowColIds);
-    expect(internal).not.toContain('#REF');
+    // Verify display shows open-ended ranges
+    const display = internalToA1(storedFormula, 2, 5, mainRows, mainCols, sheetNameLookup, lookupSheetRowColIds);
+    expect(display).toContain('$C$2:$C,');  // bare column in display
 
-    // Build sheet data using the same pipeline as hf-worker
     const mainCells: Record<string, { value: string }> = {
       'r2:c2': { value: 'SAFEWAY STORE #1234' },
       'r2:c4': { value: '50' },
-      'r2:c5': { value: internal },
+      'r2:c5': { value: storedFormula },
     };
     const catCells: Record<string, { value: string }> = {
       'cr0:cc0': { value: 'keyword' }, 'cr0:cc1': { value: 'x' }, 'cr0:cc2': { value: 'category' },
@@ -668,14 +667,16 @@ describe('HyperFormula array spill', () => {
       'cr4:cc0': { value: 'costco' },  'cr4:cc1': { value: 'x' }, 'cr4:cc2': { value: 'grocery:costco' },
     };
 
+    // buildSheetData should expand whole-column refs for HyperFormula
     const mainData = buildSheetData(mainCells, mainRows, mainCols, sheetNameLookup, lookupSheetRowColIds);
     const catData = buildSheetData(catCells, catRows, catCols, sheetNameLookup, lookupSheetRowColIds);
 
-    // Verify the formula was converted back to valid A1
-    const formulaInSheet = mainData[2][5];
-    expect(typeof formulaInSheet).toBe('string');
-    expect((formulaInSheet as string).startsWith('=')).toBe(true);
-    expect(formulaInSheet).not.toContain('#REF');
+    const formulaForHF = mainData[2][5] as string;
+    // Should expand $C to $C$5 (5 rows in Categories sheet)
+    expect(formulaForHF).toContain('$C$5');
+    expect(formulaForHF).toContain('$A$5');
+    // Should NOT have bare column refs
+    expect(formulaForHF).not.toMatch(/:\$[A-Z]+[,)]/);
 
     const hf = HyperFormula.buildFromSheets({
       'Sheet1': mainData,
