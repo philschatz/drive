@@ -109,6 +109,7 @@ export function internalToR1C1(
   sortedRowIds: string[],
   sortedColIds: string[],
   sheetNameLookup?: (sheetId: string) => string | undefined,
+  sheetRowColLookup?: (sheetId: string) => { rowIds: string[]; colIds: string[] } | undefined,
 ): string {
   try {
     const ast = parseInternal(formula);
@@ -117,6 +118,16 @@ export function internalToR1C1(
       (id) => { const idx = sortedRowIds.indexOf(id); return idx === -1 ? undefined : idx; },
       (id) => { const idx = sortedColIds.indexOf(id); return idx === -1 ? undefined : idx; },
       sheetNameLookup,
+      sheetRowColLookup
+        ? (sheetId) => {
+            const ids = sheetRowColLookup(sheetId);
+            if (!ids) return undefined;
+            return {
+              idToRowIndex: (id) => { const idx = ids.rowIds.indexOf(id); return idx === -1 ? undefined : idx; },
+              idToColIndex: (id) => { const idx = ids.colIds.indexOf(id); return idx === -1 ? undefined : idx; },
+            };
+          }
+        : undefined,
     );
   } catch {
     return formula;

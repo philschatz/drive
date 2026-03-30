@@ -182,6 +182,30 @@ describe('a1ToInternal', () => {
     const back = internalToA1(internal, 0, 0, localRows, localCols, sheetNameLookup, lookupSheetRowColIds);
     expect(back).toBe(formula);
   });
+
+  it('round-trips cross-sheet refs through internalToR1C1 → a1ToInternal (autofill path)', () => {
+    const localRows = ['lr0', 'lr1', 'lr2'];
+    const localCols = ['lc0', 'lc1', 'lc2', 'lc3', 'lc4'];
+    const catRowIds = Array.from({ length: 1642 }, (_, i) => 'cr' + i);
+    const catColIds = ['cc0', 'cc1', 'cc2'];
+    const lookupSheetId = (name: string) => name === 'Categories' ? 'cat1' : undefined;
+    const lookupSheetRowColIds = (sheetId: string) =>
+      sheetId === 'cat1' ? { rowIds: catRowIds, colIds: catColIds } : undefined;
+    const sheetNameLookup = (id: string) => id === 'cat1' ? 'Categories' : undefined;
+
+    const formula = '=INDEX(Categories!$C$2:$C$1642,MATCH(TRUE,SEARCH(Categories!$A$2:$A$1642,C3)>=1,0))';
+    const internal = a1ToInternal(formula, 2, 0, localRows, localCols, lookupSheetId, lookupSheetRowColIds);
+    expect(internal).not.toContain('#REF');
+
+    // Autofill round-trip: internal → R1C1 → internal
+    const r1c1 = internalToR1C1(internal, 2, 0, localRows, localCols, sheetNameLookup, lookupSheetRowColIds);
+    expect(r1c1).toContain('Categories!');
+    expect(r1c1).not.toContain('#REF');
+
+    const backInternal = a1ToInternal(r1c1, 2, 0, localRows, localCols, lookupSheetId, lookupSheetRowColIds);
+    expect(backInternal).not.toContain('#REF');
+    expect(backInternal).toBe(internal);
+  });
 });
 
 describe('internalToA1', () => {
@@ -607,6 +631,28 @@ describe('HyperFormula array spill', () => {
 
     hf.destroy();
     HyperFormula.unregisterFunctionPlugin(TestFilter2);
+  });
+
+  it('MATCH(TRUE, SEARCH(range, cell)>=1, 0) finds first matching row', () => {
+    const { addGoogleSheetsNamedExpressions } = require('./hf-functions');
+    const hf = HyperFormula.buildFromSheets({
+      'Sheet1': [
+        ['SAFEWAY STORE', null, '=INDEX(Categories!B1:B4,MATCH(TRUE,SEARCH(Categories!A1:A4,A1)>=1,0))'],
+      ],
+      'Categories': [
+        ['walmart', 'grocery:walmart'],
+        ['safeway', 'grocery:safeway'],
+        ['target',  'grocery:target'],
+        ['costco',  'grocery:costco'],
+      ],
+    }, { licenseKey: 'gpl-v3', useArrayArithmetic: true });
+    addGoogleSheetsNamedExpressions(hf);
+
+    // SEARCH is case-insensitive: "safeway" found in "SAFEWAY STORE" at position 1
+    // MATCH finds the first TRUE → row 2 → INDEX returns "grocery:safeway"
+    expect(hf.getCellValue({ sheet: 0, col: 2, row: 0 })).toBe('grocery:safeway');
+
+    hf.destroy();
   });
 });
 

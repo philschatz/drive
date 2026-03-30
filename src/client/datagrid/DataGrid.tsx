@@ -1215,6 +1215,7 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
                         const rawValue = currentSheet?.cells[`${rowId}:${colId}`]?.value || '';
                         let display = getDisplayValue(computedValues, rawValue, effectiveSheetId ?? '', rowId, colId);
                         const mcKey = `${effectiveSheetId}:${rowId}:${colId}`;
+                        const isEvaluating = rawValue.startsWith('=') && !computedValues?.has(mcKey);
                         const mcStats = mcResults?.cells.get(mcKey);
                         const isMcSource = mcResults?.sources.has(mcKey);
                         if (mcStats && !display.startsWith('#')) {
@@ -1248,7 +1249,7 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
                         return (
                           <td
                             key={colId}
-                            className={'datagrid-cell' + (isSelected && !refInfo && !isEditing ? ' selected' : '') + (inRange && isMultiSelect ? ' in-range' : '') + (inAutofillTarget ? ' autofill-target' : '') + (isRowSelected || selectedCols.has(ci) ? ' header-selected' : '') + (peers ? ' peer-focused' : '') + (refInfo ? ' formula-ref-highlight' : '') + (isMcSource ? ' dist-source' : mcStats ? ' dist-dependent' : '') + (spillTargetsRef.current.has(`${effectiveSheetId}:${rowId}:${colId}`) ? ' spill-target' : '')}
+                            className={'datagrid-cell' + (isSelected && !refInfo && !isEditing ? ' selected' : '') + (inRange && isMultiSelect ? ' in-range' : '') + (inAutofillTarget ? ' autofill-target' : '') + (isRowSelected || selectedCols.has(ci) ? ' header-selected' : '') + (peers ? ' peer-focused' : '') + (refInfo ? ' formula-ref-highlight' : '') + (isMcSource ? ' dist-source' : mcStats ? ' dist-dependent' : '') + (spillTargetsRef.current.has(`${effectiveSheetId}:${rowId}:${colId}`) ? ' spill-target' : '') + (isEvaluating ? ' evaluating' : '')}
                             style={Object.keys(cellStyle).length > 0 ? cellStyle : undefined}
                             title={mcStats ? `μ=${mcStats.mean.toFixed(2)} σ=${mcStats.stdev.toFixed(2)} [P5=${mcStats.p5.toFixed(2)}, P95=${mcStats.p95.toFixed(2)}]` : peers ? `Peer ${peers.peerId.slice(0, 8)}` : undefined}
                             data-cell-col={ci}

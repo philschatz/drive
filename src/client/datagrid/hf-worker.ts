@@ -83,7 +83,7 @@ function getMergedSheetData(): Map<string, SheetInfo> {
 /** Format a HyperFormula cell value, converting date/time serial numbers to strings. */
 function formatCellValue(addr: { sheet: number; col: number; row: number }): string | number | null {
   const computed = hf!.getCellValue(addr);
-  if (computed == null) return null;
+  if (computed == null) return '';
   if (typeof computed === 'object' && 'value' in computed) return String(computed.value);
   if (typeof computed === 'number') {
     const detailedType = hf!.getCellValueDetailedType(addr);

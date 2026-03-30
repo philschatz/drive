@@ -669,14 +669,18 @@ function serializeNodeR1C1(
   idToRowIndex: (id: string) => number | undefined,
   idToColIndex: (id: string) => number | undefined,
   sheetNameLookup?: (sheetId: string) => string | undefined,
+  sheetRowColLookup?: (sheetId: string) => { idToRowIndex: (id: string) => number | undefined; idToColIndex: (id: string) => number | undefined } | undefined,
 ): string {
-  const s = (n: FormulaNode) => serializeNodeR1C1(n, cellRow, cellCol, idToRowIndex, idToColIndex, sheetNameLookup);
+  const s = (n: FormulaNode) => serializeNodeR1C1(n, cellRow, cellCol, idToRowIndex, idToColIndex, sheetNameLookup, sheetRowColLookup);
   switch (node.type) {
     case 'cellRef': {
+      const targetLookups = node.sheet && sheetRowColLookup ? sheetRowColLookup(node.sheet.id) : undefined;
+      const rowLookup = targetLookups?.idToRowIndex ?? idToRowIndex;
+      const colLookup = targetLookups?.idToColIndex ?? idToColIndex;
       const isWholeCol = node.row.id === '*';
       const isWholeRow = node.col.id === '*';
-      const rowIdx = isWholeCol ? undefined : idToRowIndex(node.row.id);
-      const colIdx = isWholeRow ? undefined : idToColIndex(node.col.id);
+      const rowIdx = isWholeCol ? undefined : rowLookup(node.row.id);
+      const colIdx = isWholeRow ? undefined : colLookup(node.col.id);
       if (!isWholeCol && rowIdx === undefined) return '#REF!';
       if (!isWholeRow && colIdx === undefined) return '#REF!';
       let r1c1: string;
@@ -705,9 +709,10 @@ function serializeNodeR1C1(
     case 'range': {
       if (node.from.sheet) {
         const fromStr = s(node.from);
-        const toNoSheet: FormulaNode = { ...node.to, sheet: undefined };
-        const toStr = serializeNodeR1C1(toNoSheet, cellRow, cellCol, idToRowIndex, idToColIndex, sheetNameLookup);
-        return fromStr + ':' + toStr;
+        const toStr = s(node.to);
+        // Strip redundant sheet prefix from the second endpoint (Sheet!A1:B2, not Sheet!A1:Sheet!B2)
+        const bangIdx = toStr.indexOf('!');
+        return fromStr + ':' + (bangIdx >= 0 ? toStr.slice(bangIdx + 1) : toStr);
       }
       return s(node.from) + ':' + s(node.to);
     }
@@ -726,8 +731,9 @@ export function serializeR1C1(
   idToRowIndex: (id: string) => number | undefined,
   idToColIndex: (id: string) => number | undefined,
   sheetNameLookup?: (sheetId: string) => string | undefined,
+  sheetRowColLookup?: (sheetId: string) => { idToRowIndex: (id: string) => number | undefined; idToColIndex: (id: string) => number | undefined } | undefined,
 ): string {
-  return '=' + serializeNodeR1C1(ast.body, cellRow, cellCol, idToRowIndex, idToColIndex, sheetNameLookup);
+  return '=' + serializeNodeR1C1(ast.body, cellRow, cellCol, idToRowIndex, idToColIndex, sheetNameLookup, sheetRowColLookup);
 }
 
 // ─── parseFormula (universal parser) ─────────────────────────────────────────
@@ -817,6 +823,62 @@ export function parseFormula(
     const rowId = (sheetLookups?.rowId ?? lookupRowId)(rowIdx);
     const rowStr = rowAbsolute ? `{${rowId}}` : `[${rowId}]`;
     return `{R${rowStr}${sheetSuffix}}`;
+  }
+
+  /** Try to match and convert an R1C1 ref at the given position. Returns null if no match. */
+  function tryConvertR1C1(
+    rest: string,
+    sheetSuffix = '',
+    targetSheetId?: string,
+  ): { result: string; consumed: number } | null {
+    const r1c1Match = rest.match(/^R(\d+|\[-?\d+\])?C(\d+|\[-?\d+\])?(?![A-Za-z])/);
+    if (!r1c1Match) return null;
+    const rowPart = r1c1Match[1] ?? '[0]';
+    const colPart = r1c1Match[2] ?? '[0]';
+    const sheetLookups = targetSheetId && lookupSheetRowColIds ? lookupSheetRowColIds(targetSheetId) : undefined;
+
+    let rowId: string;
+    let rowRelative: boolean;
+    if (rowPart[0] === '[') {
+      const offset = parseInt(rowPart.slice(1, -1), 10);
+      rowId = (sheetLookups?.rowId ?? lookupRowId)(cellRow + offset);
+      rowRelative = true;
+    } else {
+      const idx = parseInt(rowPart, 10) - 1;
+      rowId = (sheetLookups?.rowId ?? lookupRowId)(idx);
+      rowRelative = false;
+    }
+
+    let colId: string;
+    let colRelative: boolean;
+    if (colPart[0] === '[') {
+      const offset = parseInt(colPart.slice(1, -1), 10);
+      colId = (sheetLookups?.colId ?? lookupColId)(cellCol + offset);
+      colRelative = true;
+    } else {
+      const idx = parseInt(colPart, 10) - 1;
+      colId = (sheetLookups?.colId ?? lookupColId)(idx);
+      colRelative = false;
+    }
+
+    const rowStr = rowRelative ? `[${rowId}]` : `{${rowId}}`;
+    const colStr = colRelative ? `[${colId}]` : `{${colId}}`;
+    let out = `{R${rowStr}C${colStr}${sheetSuffix}}`;
+
+    let consumed = r1c1Match[0].length;
+    // Handle R1C1 range: R2C3:R1642C3
+    if (consumed < rest.length && rest[consumed] === ':') {
+      const rangeRest = rest.slice(consumed + 1);
+      const r1c1Match2 = rangeRest.match(/^R(\d+|\[-?\d+\])?C(\d+|\[-?\d+\])?(?![A-Za-z])/);
+      if (r1c1Match2) {
+        const conv2 = tryConvertR1C1(rangeRest, sheetSuffix, targetSheetId);
+        if (conv2) {
+          out += ':' + conv2.result;
+          consumed += 1 + conv2.consumed;
+        }
+      }
+    }
+    return { result: out, consumed };
   }
 
   /** Convert an A1 cell ref to canonical format with optional sheet suffix. */
@@ -938,6 +1000,13 @@ export function parseFormula(
           i += rowRangeMatch[0].length;
           continue;
         }
+        // Try R1C1 format after quoted sheet prefix: 'Sheet'!R2C3
+        const r1c1Result = tryConvertR1C1(rest, sheetSuffix, sheetId);
+        if (r1c1Result) {
+          result += r1c1Result.result;
+          i += r1c1Result.consumed;
+          continue;
+        }
         // Not a valid ref after sheet name — backtrack
         i = saved;
       }
@@ -973,46 +1042,10 @@ export function parseFormula(
     // R1C1 relative: R[<offset>]C[<offset>]
     // Mixed combinations
     if (ch === 'R' && i + 1 < len) {
-      const rest = formula.slice(i);
-      // R1C1 pattern: R followed by optional digits or [offset], then C, then optional digits or [offset].
-      // Bare R or C (no part) means current row/col (offset 0) — LibreOffice writes e.g. RC[-1], R[-1]C.
-      const r1c1Match = rest.match(/^R(\d+|\[-?\d+\])?C(\d+|\[-?\d+\])?(?![A-Za-z])/);
-      if (r1c1Match) {
-        const rowPart = r1c1Match[1] ?? '[0]';
-        const colPart = r1c1Match[2] ?? '[0]';
-
-        let rowId: string;
-        let rowRelative: boolean;
-        if (rowPart[0] === '[') {
-          // Relative: R[offset]
-          const offset = parseInt(rowPart.slice(1, -1), 10);
-          const targetRow = cellRow + offset;
-          rowId = lookupRowId(targetRow);
-          rowRelative = true;
-        } else {
-          // Absolute: R<1-based>
-          const idx = parseInt(rowPart, 10) - 1;
-          rowId = lookupRowId(idx);
-          rowRelative = false;
-        }
-
-        let colId: string;
-        let colRelative: boolean;
-        if (colPart[0] === '[') {
-          const offset = parseInt(colPart.slice(1, -1), 10);
-          const targetCol = cellCol + offset;
-          colId = lookupColId(targetCol);
-          colRelative = true;
-        } else {
-          const idx = parseInt(colPart, 10) - 1;
-          colId = lookupColId(idx);
-          colRelative = false;
-        }
-
-        const rowStr = rowRelative ? `[${rowId}]` : `{${rowId}}`;
-        const colStr = colRelative ? `[${colId}]` : `{${colId}}`;
-        result += `{R${rowStr}C${colStr}}`;
-        i += r1c1Match[0].length;
+      const converted = tryConvertR1C1(formula.slice(i));
+      if (converted) {
+        result += converted.result;
+        i += converted.consumed;
         continue;
       }
     }
@@ -1071,6 +1104,16 @@ export function parseFormula(
           }
         }
         continue;
+      }
+
+      // Try R1C1 format after unquoted sheet prefix: SheetName!R2C3
+      {
+        const r1c1Result = tryConvertR1C1(rest, sheetSuffix, targetSheetId);
+        if (r1c1Result) {
+          result += r1c1Result.result;
+          i += r1c1Result.consumed;
+          continue;
+        }
       }
 
       // Partial range: B:B5 — column-only start (row 1), full cell ref end (with optional sheet prefix)

@@ -61,8 +61,8 @@ export interface GridCommandState {
 export interface GridCommandContext {
   /** Immutable snapshot of the active sheet. */
   sheet: any | null;
-  /** Lightweight metadata for all sheets (name, index, hidden). */
-  sheetsMeta: Record<string, { name: string; index: number; hidden?: boolean }> | null;
+  /** Lightweight metadata for all sheets (name, index, hidden, sorted row/col IDs). */
+  sheetsMeta: Record<string, { name: string; index: number; hidden?: boolean; rows?: string[]; cols?: string[] }> | null;
   computedValues: Map<string, string | number> | null;
   spillTargets: Set<string>;
   currentSheetId: string;
@@ -1048,12 +1048,29 @@ export function commitAutofill(
   sourceRange: CellRange,
   fillRange: CellRange,
 ): void {
-  const { sheet: doc, mutate, setSelectionAnchor, setSelectedCell, currentSheetId } = ctx;
+  const { sheet: doc, mutate, setSelectionAnchor, setSelectedCell, currentSheetId, sheetsMeta } = ctx;
   if (!doc) return;
   const sh = ctxSheet(doc, ctx);
 
   const freshRowIds = sortedEntries(sh.rows).map(([id]) => id);
   const freshColIds = sortedEntries(sh.columns).map(([id]) => id);
+
+  // Build cross-sheet lookup functions for formula conversion
+  const sheetNameLookup = sheetsMeta
+    ? (sheetId: string) => sheetsMeta[sheetId]?.name
+    : undefined;
+  const nameToIdMap = new Map<string, string>();
+  if (sheetsMeta) {
+    for (const [id, s] of Object.entries(sheetsMeta)) nameToIdMap.set(s.name, id);
+  }
+  const lookupSheetId = nameToIdMap.size > 0 ? (name: string) => nameToIdMap.get(name) : undefined;
+  const lookupSheetRowColIds = sheetsMeta
+    ? (sheetId: string) => {
+        const s = sheetsMeta[sheetId];
+        if (!s?.rows || !s?.cols) return undefined;
+        return { rowIds: s.rows, colIds: s.cols };
+      }
+    : undefined;
 
   const isVertical = fillRange.minCol === sourceRange.minCol && fillRange.maxCol === sourceRange.maxCol;
   const axis: 'row' | 'col' = isVertical ? 'row' : 'col';
@@ -1078,7 +1095,7 @@ export function commitAutofill(
         srcRow = sourceRange.minRow + stripIdx;
         srcCol = sourceRange.minCol + srcIdx;
       }
-      return internalToR1C1(val, srcRow, srcCol, freshRowIds, freshColIds);
+      return internalToR1C1(val, srcRow, srcCol, freshRowIds, freshColIds, sheetNameLookup, lookupSheetRowColIds);
     })
   );
 
@@ -1097,7 +1114,7 @@ export function commitAutofill(
       }
       if (r >= freshRowIds.length || c >= freshColIds.length) return;
       const stored = val.startsWith('=')
-        ? a1ToInternal(val, r, c, freshRowIds, freshColIds)
+        ? a1ToInternal(val, r, c, freshRowIds, freshColIds, lookupSheetId, lookupSheetRowColIds)
         : val;
       cellWrites.push([`${freshRowIds[r]}:${freshColIds[c]}`, stored]);
     });

@@ -582,10 +582,10 @@ export const hfConfig = {
   functionArgSeparator: ',',
   decimalSeparator: '.' as const,
   thousandSeparator: '' as const,
-  arrayColumnSeparator: ',' as const,
-  arrayRowSeparator: ';' as const,
+  arrayColumnSeparator: ',',
+  arrayRowSeparator: ';',
   nullYear: 30,
-  useArrayArithmetic: false,
+  useArrayArithmetic: true,
   leapYear1900: false,
   smartRounding: true,
 };
