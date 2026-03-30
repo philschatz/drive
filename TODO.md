@@ -25,6 +25,10 @@ temporarily remove filtering the doc list by access level. I am curious what hap
 
 Move source editor validation errors and history navigation to be the same as all the other editors
 
+Support pinning rows/columns, hiding rows/columns, changing the width of rows/columns with a popup prompt. Each of these should have a context menu, a menu bar menu, extra validation (that if there is a row/column freeze and that's a field on the row(s)/column(s) then all rows/columns have that frozen flag, not just the last row/column)
+
+Datagrid: Support the URL containing the cell/range of cells that are selected. Cell selection should replace the history state while sheet changes should push the history.
+
 BUG: If an admin user deletes the doc (revokes their access) and someone adds them back in, their edits do not show up but should. Also, they do not seem to see that they have regained permissions (a generic share link is present on the top bar instead of their role)
 
 In keyhive, a user should be able to remove themselves from any group or document. Make any necessary updates to keyhive too.

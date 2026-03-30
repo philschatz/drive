@@ -648,6 +648,7 @@ function serializeNodeA1(
       if (node.from.sheet) {
         // Cross-sheet range: sheet name only on 'from' (e.g., Sheet!A1:B2)
         const fromStr = s(node.from);
+        if (fromStr === '#REF!') return '#REF!';
         const targetLookups = sheetRowColLookup ? sheetRowColLookup(node.from.sheet.id) : undefined;
         const toRowLookup = targetLookups?.idToRowIndex ?? idToRowIndex;
         const toColLookup = targetLookups?.idToColIndex ?? idToColIndex;
@@ -655,9 +656,13 @@ function serializeNodeA1(
         const toTotalRows = targetLookups?.totalRows ?? totalRows;
         const toTotalCols = targetLookups?.totalCols ?? totalCols;
         const toStr = serializeNodeA1(toNoSheet, cellRow, cellCol, toRowLookup, toColLookup, sheetNameLookup, sheetRowColLookup, toTotalRows, toTotalCols);
+        if (toStr === '#REF!') return fromStr;
         return fromStr + ':' + toStr;
       }
-      return s(node.from) + ':' + s(node.to);
+      const fromStr = s(node.from);
+      const toStr = s(node.to);
+      if (fromStr === '#REF!' || toStr === '#REF!') return '#REF!';
+      return fromStr + ':' + toStr;
     }
     case 'binary': return s(node.left) + node.operator + s(node.right);
     case 'unary': return node.operator + s(node.operand);

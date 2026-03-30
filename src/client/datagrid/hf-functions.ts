@@ -590,6 +590,78 @@ export const hfConfig = {
   smartRounding: true,
 };
 
+// ---------------------------------------------------------------------------
+// SEARCH override — iterative array handling to avoid stack overflow.
+// HyperFormula's built-in SEARCH with useArrayArithmetic recursively expands
+// range arguments via resultArray, causing stack overflow on large ranges.
+// This override detects range arguments and processes them iteratively,
+// returning a SimpleRangeValue directly.
+// ---------------------------------------------------------------------------
+
+class SearchPlugin extends FunctionPlugin {
+  static implementedFunctions = {
+    'SEARCH': {
+      method: 'search',
+      parameters: [
+        { argumentType: FunctionArgumentType.ANY },
+        { argumentType: FunctionArgumentType.ANY },
+        { argumentType: FunctionArgumentType.NUMBER, optionalArg: true, defaultValue: 1 },
+      ],
+      // No sizeOfResultArrayMethod — returning a declared array size causes HyperFormula's
+      // build phase to treat cells containing SEARCH as array formulas, which breaks
+      // downstream formulas like SPLIT(IFERROR(cell,...),":"). The array expansion is
+      // handled internally by _searchArray and consumed by MATCH/INDEX, so the cell
+      // result is always scalar.
+    },
+  };
+
+  search(ast: any, state: any) {
+    return this.runFunction(ast.args, state, this.metadata('SEARCH'),
+      (findText: CellValue, withinText: CellValue, startNum: number) => {
+        // If either argument is a range, process iteratively
+        if (findText instanceof SimpleRangeValue || withinText instanceof SimpleRangeValue) {
+          return this._searchArray(findText, withinText, startNum);
+        }
+        // Scalar case: standard SEARCH behavior
+        return this._searchScalar(String(findText), String(withinText), startNum);
+      },
+    );
+  }
+
+  private _searchScalar(find: string, within: string, startNum: number): number | CellError {
+    if (startNum < 1 || startNum > within.length) return new CellError(ErrorType.VALUE, 'Invalid start position.');
+    const idx = within.toLowerCase().indexOf(find.toLowerCase(), startNum - 1);
+    if (idx === -1) return new CellError(ErrorType.VALUE, 'Pattern not found.');
+    return idx + 1; // 1-based
+  }
+
+  private _searchArray(findText: CellValue, withinText: CellValue, startNum: number): SimpleRangeValue | CellError {
+    // Determine which argument is a range
+    const findIsRange = findText instanceof SimpleRangeValue;
+    const range = findIsRange ? findText as SimpleRangeValue : withinText as SimpleRangeValue;
+    const scalar = findIsRange ? String(withinText) : String(findText);
+    const data = range.data;
+
+    const result: CellValue[][] = [];
+    for (let r = 0; r < data.length; r++) {
+      const row: CellValue[] = [];
+      for (let c = 0; c < data[r].length; c++) {
+        const cell = data[r][c];
+        if (cell === EmptyValue || cell == null || cell instanceof CellError) {
+          row.push(new CellError(ErrorType.VALUE, 'Pattern not found.'));
+        } else {
+          const find = findIsRange ? String(cell) : scalar;
+          const within = findIsRange ? scalar : String(cell);
+          row.push(this._searchScalar(find, within, startNum));
+        }
+      }
+      result.push(row);
+    }
+    return SimpleRangeValue.onlyValues(result);
+  }
+
+}
+
 export function addGoogleSheetsNamedExpressions(hf: HyperFormula) {
   hf.addNamedExpression('TRUE', '=TRUE()');
   hf.addNamedExpression('FALSE', '=FALSE()');
@@ -604,6 +676,8 @@ export function registerCustomFunctions() {
   HyperFormula.registerFunctionPlugin(SplitPlugin, { enGB: { SPLIT: 'SPLIT' } });
   try { HyperFormula.unregisterFunction('FILTER'); } catch { /* may be protected */ }
   HyperFormula.registerFunctionPlugin(FilterPlugin, { enGB: { FILTER: 'FILTER' } });
+  try { HyperFormula.unregisterFunction('SEARCH'); } catch { /* may be protected */ }
+  HyperFormula.registerFunctionPlugin(SearchPlugin, { enGB: { SEARCH: 'SEARCH' } });
   HyperFormula.registerFunctionPlugin(DistributionPlugin, {
     enGB: {
       NORMAL: 'NORMAL', UNIFORM: 'UNIFORM', TRIANGULAR: 'TRIANGULAR', PERT: 'PERT', LOGNORMAL: 'LOGNORMAL',

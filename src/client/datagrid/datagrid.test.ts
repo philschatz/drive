@@ -689,6 +689,139 @@ describe('HyperFormula array spill', () => {
 
     hf.destroy();
   });
+
+  it('concrete cross-sheet ranges with 1642 rows', () => {
+    const { addGoogleSheetsNamedExpressions, hfConfig } = require('./hf-functions');
+
+    const mainRows = Array.from({ length: 5 }, (_, i) => 'r' + i);
+    const mainCols = Array.from({ length: 6 }, (_, i) => 'c' + i);
+    const catRows = Array.from({ length: 1642 }, (_, i) => 'cr' + i);
+    const catCols = ['cc0', 'cc1', 'cc2'];
+
+    const lookupSheetId = (name: string) => name === 'Categories' ? 'cat1' : undefined;
+    const lookupSheetRowColIds = (sheetId: string) =>
+      sheetId === 'cat1' ? { rowIds: catRows, colIds: catCols } : undefined;
+    const sheetNameLookup = (id: string) => id === 'cat1' ? 'Categories' : undefined;
+
+    const formula = '=IF(NOT(E3>0),"IGNORED:BECAUSE_NEGATIVE",IF(""=INDEX(Categories!$C$2:$C$1642,MATCH(TRUE(),SEARCH(Categories!$A$2:$A$1642,C3)>=1,0)),"UNCATEGORIZED",INDEX(Categories!$C$2:$C$1642,MATCH(TRUE(),SEARCH(Categories!$A$2:$A$1642,C3)>=1,0))))';
+
+    // A1 -> internal
+    const internal = a1ToInternal(formula, 2, 5, mainRows, mainCols, lookupSheetId, lookupSheetRowColIds);
+    expect(internal).not.toContain('#REF');
+
+    // Build sheet data using the same pipeline as hf-worker
+    const mainCells: Record<string, { value: string }> = {
+      'r2:c2': { value: 'SAFEWAY STORE' },
+      'r2:c4': { value: '50' },
+      'r2:c5': { value: internal },
+    };
+    const catCells: Record<string, { value: string }> = {};
+    catRows.forEach((rid, ri) => {
+      if (ri === 0) { catCells[`${rid}:cc0`] = { value: 'keyword' }; catCells[`${rid}:cc1`] = { value: 'x' }; catCells[`${rid}:cc2`] = { value: 'category' }; }
+      else if (ri === 1) { catCells[`${rid}:cc0`] = { value: 'safeway' }; catCells[`${rid}:cc1`] = { value: 'x' }; catCells[`${rid}:cc2`] = { value: 'grocery:safeway' }; }
+    });
+
+    const mainData = buildSheetData(mainCells, mainRows, mainCols, sheetNameLookup, lookupSheetRowColIds);
+    const catData = buildSheetData(catCells, catRows, catCols, sheetNameLookup, lookupSheetRowColIds);
+
+    const formulaForHF = mainData[2][5] as string;
+    expect(formulaForHF).not.toContain('#REF');
+
+    const hf = HyperFormula.buildFromSheets({
+      'Sheet1': mainData,
+      'Categories': catData,
+    }, hfConfig);
+    addGoogleSheetsNamedExpressions(hf);
+
+    const result = hf.getCellValue({ sheet: 0, col: 5, row: 2 });
+    expect(result).toBe('grocery:safeway');
+
+    hf.destroy();
+  });
+
+  it('custom SEARCH handles large ranges iteratively without stack overflow', () => {
+    const { registerCustomFunctions, hfConfig, addGoogleSheetsNamedExpressions } = require('./hf-functions');
+    registerCustomFunctions();
+
+    // Build a Categories sheet with 2000 rows to verify no stack overflow
+    const catData: (string | null)[][] = [];
+    for (let i = 0; i < 2000; i++) catData.push([`keyword${i}`, `category:${i}`]);
+    // Put "safeway" at row 500
+    catData[500] = ['safeway', 'grocery:safeway'];
+
+    const hf = HyperFormula.buildFromSheets({
+      'Sheet1': [
+        ['SAFEWAY STORE #1234', null, '=INDEX(Categories!B1:B2000,MATCH(TRUE(),SEARCH(Categories!A1:A2000,A1)>=1,0))'],
+      ],
+      'Categories': catData,
+    }, hfConfig);
+    addGoogleSheetsNamedExpressions(hf);
+
+    // Should find "safeway" at row 501 and return "grocery:safeway"
+    expect(hf.getCellValue({ sheet: 0, col: 2, row: 0 })).toBe('grocery:safeway');
+
+    // Scalar SEARCH still works
+    hf.setCellContents({ sheet: 0, col: 2, row: 0 }, '=SEARCH("safe","SAFEWAY STORE")');
+    expect(hf.getCellValue({ sheet: 0, col: 2, row: 0 })).toBe(1);
+
+    // SEARCH with no match returns #VALUE!
+    hf.setCellContents({ sheet: 0, col: 2, row: 0 }, '=SEARCH("xyz","SAFEWAY STORE")');
+    const noMatch = hf.getCellValue({ sheet: 0, col: 2, row: 0 });
+    expect((noMatch as any).type).toBe('VALUE');
+
+    hf.destroy();
+  });
+
+  it('SPLIT works on a cell whose value comes from SEARCH/MATCH/INDEX formula', () => {
+    const { registerCustomFunctions, hfConfig, addGoogleSheetsNamedExpressions } = require('./hf-functions');
+    registerCustomFunctions();
+
+    const hf = HyperFormula.buildFromSheets({
+      'Sheet1': [
+        [null, null, 'SAFEWAY STORE', null, 50,
+         '=IF(NOT(E1>0),"IGNORED",IF(""=INDEX(Cat!B1:B4,MATCH(TRUE(),SEARCH(Cat!A1:A4,C1)>=1,0)),"UNCATEGORIZED",INDEX(Cat!B1:B4,MATCH(TRUE(),SEARCH(Cat!A1:A4,C1)>=1,0))))',
+         '=SPLIT(IFERROR(F1,"UNCATEGORIZED"),":")'],
+      ],
+      'Cat': [
+        ['walmart',  'grocery:walmart'],
+        ['safeway',  'grocery:safeway'],
+        ['target',   'grocery:target'],
+        ['costco',   'grocery:costco'],
+      ],
+    }, hfConfig);
+    addGoogleSheetsNamedExpressions(hf);
+
+    // F1 should resolve to "grocery:safeway"
+    expect(hf.getCellValue({ sheet: 0, col: 5, row: 0 })).toBe('grocery:safeway');
+
+    // HyperFormula's build-phase array analysis incorrectly marks cells with SEARCH
+    // as array formulas. Re-setting error cells fixes this (same workaround as hf-worker).
+    const errorAddrs: { sheet: number; col: number; row: number; formula: string }[] = [];
+    for (let row = 0; row < 1; row++) {
+      for (let col = 0; col < 8; col++) {
+        const addr = { sheet: 0, col, row };
+        const val = hf.getCellValue(addr);
+        if (typeof val === 'object' && val && 'type' in val && (val as any).type === 'VALUE') {
+          const formula = hf.getCellFormula(addr);
+          if (formula) errorAddrs.push({ ...addr, formula });
+        }
+      }
+    }
+    if (errorAddrs.length > 0) {
+      hf.suspendEvaluation();
+      for (const { sheet, col, row, formula } of errorAddrs) {
+        hf.setCellContents({ sheet, col, row }, formula);
+      }
+      hf.resumeEvaluation();
+    }
+
+    // G1 SPLIT should produce "grocery" (first part)
+    expect(hf.getCellValue({ sheet: 0, col: 6, row: 0 })).toBe('grocery');
+    // H1 should be the spill: "safeway"
+    expect(hf.getCellValue({ sheet: 0, col: 7, row: 0 })).toBe('safeway');
+
+    hf.destroy();
+  });
 });
 
 describe('shortId', () => {

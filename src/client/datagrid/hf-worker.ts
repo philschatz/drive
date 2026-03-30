@@ -210,6 +210,32 @@ function rebuildAndEvaluate() {
   hf = HyperFormula.buildFromSheets(sheetsHfData, hfConfig);
   addGoogleSheetsNamedExpressions(hf);
 
+  // Work around HyperFormula's build-phase array analysis: formulas containing
+  // SEARCH with range arguments get marked as array formulas, causing downstream
+  // cells (e.g. SPLIT) to receive ranges instead of scalars. Re-setting error
+  // cells forces HF to re-evaluate without the stale array marking.
+  const errorAddrs: { sheet: number; col: number; row: number; formula: string }[] = [];
+  for (let si = 0; si < sheetOrder.length; si++) {
+    const info = merged.get(sheetOrder[si])!;
+    for (let row = 0; row < info.rows.length; row++) {
+      for (let col = 0; col < info.cols.length; col++) {
+        const addr = { sheet: si, col, row };
+        const val = hf.getCellValue(addr);
+        if (typeof val === 'object' && val && 'type' in val && val.type === 'VALUE') {
+          const formula = hf.getCellFormula(addr);
+          if (formula) errorAddrs.push({ ...addr, formula });
+        }
+      }
+    }
+  }
+  if (errorAddrs.length > 0) {
+    hf.suspendEvaluation();
+    for (const { sheet, col, row, formula } of errorAddrs) {
+      hf.setCellContents({ sheet, col, row }, formula);
+    }
+    hf.resumeEvaluation();
+  }
+
   // Evaluate all formula cells and collect results
   const values: Record<string, string | number> = {};
   const errors: Record<string, string> = {};
