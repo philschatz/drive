@@ -18,6 +18,7 @@ import {
   getKnownContacts,
   addMember,
   dismissInvite,
+  onKeyhiveStateChanged,
   type MemberInfo,
 } from '../shared/keyhive-api';
 import type { InviteRecord } from '../invite-storage';
@@ -130,32 +131,48 @@ export function AccessControl({ docId, docType, access: accessProp }: AccessCont
   }, [docId]);
 
   const refresh = useCallback(async () => {
-    try {
-      const [{ members: m, invites }, a, c] = await Promise.all([
-        getDocMembers(docId),
-        getMyAccess(docId),
-        getKnownContacts(docId),
-      ]);
-      // Normalize roles to lowercase to match SelectItem values
+    // Use allSettled so a failure in one call (e.g. getKnownContacts iterating
+    // over docs with incomplete CGKA state) doesn't prevent member list display.
+    const [membersResult, accessResult, contactsResult] = await Promise.allSettled([
+      getDocMembers(docId),
+      getMyAccess(docId),
+      getKnownContacts(docId),
+    ]);
+
+    if (membersResult.status === 'fulfilled') {
+      const { members: m, invites } = membersResult.value;
       const normalized = m.map((member: MemberInfo) => ({ ...member, role: member.role.toLowerCase() }));
       setMembers(normalized);
-      setMyAccess(a);
+      await checkInvites(normalized, invites);
+    }
+
+    if (accessResult.status === 'fulfilled') {
+      setMyAccess(accessResult.value);
+    }
+
+    if (contactsResult.status === 'fulfilled') {
+      const c = contactsResult.value;
       setContacts(c);
-      // Reset selection if the previously selected contact is no longer available
       setSelectedContact(prev => {
         if (prev === '__new__') return prev;
         return c.some(ct => ct.agentId === prev) ? prev : (c.length > 0 ? c[0].agentId : '__new__');
       });
-      await checkInvites(normalized, invites);
-      setLoaded(true);
-    } catch (err: any) {
-      setError(err.message);
-      setLoaded(true);
     }
+
+    const firstError = [membersResult, accessResult, contactsResult]
+      .find((r): r is PromiseRejectedResult => r.status === 'rejected');
+    if (firstError) setError(firstError.reason?.message ?? 'Unknown error');
+    setLoaded(true);
   }, [docId, checkInvites]);
 
   useEffect(() => {
     if (open) refresh();
+  }, [open, refresh]);
+
+  // Re-fetch when keyhive state changes (e.g. membership ops arriving from peers)
+  useEffect(() => {
+    if (!open) return;
+    return onKeyhiveStateChanged(() => refresh());
   }, [open, refresh]);
 
   const handleChangeRole = async (agentId: string, newRole: string) => {

@@ -326,7 +326,13 @@ export class KeyhiveOps {
 
     const reachable = await this.kh.reachableDocs();
     for (const summary of reachable) {
-      const members = await this.kh.docMemberCapabilities(summary.doc.doc_id);
+      let members: any[];
+      try {
+        members = await this.kh.docMemberCapabilities(summary.doc.doc_id);
+      } catch {
+        // CGKA state may be incomplete for some docs (e.g. after revoke+re-add) — skip
+        continue;
+      }
       for (const m of members) {
         if (!m.who.isIndividual()) continue;
         const agentId = bytesToBase64(m.who.id.toBytes());
