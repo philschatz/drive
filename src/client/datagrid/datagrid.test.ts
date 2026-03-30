@@ -633,24 +633,58 @@ describe('HyperFormula array spill', () => {
     HyperFormula.unregisterFunctionPlugin(TestFilter2);
   });
 
-  it('MATCH(TRUE, SEARCH(range, cell)>=1, 0) finds first matching row', () => {
-    const { addGoogleSheetsNamedExpressions } = require('./hf-functions');
+  it('MATCH(TRUE, SEARCH(range, cell)>=1, 0) finds first matching row via full pipeline', () => {
+    const { addGoogleSheetsNamedExpressions, hfConfig } = require('./hf-functions');
+
+    // Simulate two sheets with ID-based storage (like Automerge documents)
+    const mainRows = ['r0', 'r1', 'r2'];
+    const mainCols = ['c0', 'c1', 'c2', 'c3', 'c4', 'c5'];
+    const catRows = ['cr0', 'cr1', 'cr2', 'cr3', 'cr4'];
+    const catCols = ['cc0', 'cc1', 'cc2'];
+
+    const lookupSheetId = (name: string) => name === 'Categories' ? 'cat1' : undefined;
+    const lookupSheetRowColIds = (sheetId: string) =>
+      sheetId === 'cat1' ? { rowIds: catRows, colIds: catCols } : undefined;
+    const sheetNameLookup = (id: string) => id === 'cat1' ? 'Categories' : undefined;
+
+    // User enters this formula in cell F3 (row=2, col=5)
+    const userFormula = '=IF(NOT(E3>0),"IGNORED",IF(""=INDEX(Categories!$C$2:$C$5,MATCH(TRUE,SEARCH(Categories!$A$2:$A$5,C3)>=1,0)),"UNCATEGORIZED",INDEX(Categories!$C$2:$C$5,MATCH(TRUE,SEARCH(Categories!$A$2:$A$5,C3)>=1,0))))';
+
+    // Convert A1 → internal (stored in Automerge)
+    const internal = a1ToInternal(userFormula, 2, 5, mainRows, mainCols, lookupSheetId, lookupSheetRowColIds);
+    expect(internal).not.toContain('#REF');
+
+    // Build sheet data using the same pipeline as hf-worker
+    const mainCells: Record<string, { value: string }> = {
+      'r2:c2': { value: 'SAFEWAY STORE #1234' },
+      'r2:c4': { value: '50' },
+      'r2:c5': { value: internal },
+    };
+    const catCells: Record<string, { value: string }> = {
+      'cr0:cc0': { value: 'keyword' }, 'cr0:cc1': { value: 'x' }, 'cr0:cc2': { value: 'category' },
+      'cr1:cc0': { value: 'walmart' }, 'cr1:cc1': { value: 'x' }, 'cr1:cc2': { value: 'grocery:walmart' },
+      'cr2:cc0': { value: 'safeway' }, 'cr2:cc1': { value: 'x' }, 'cr2:cc2': { value: 'grocery:safeway' },
+      'cr3:cc0': { value: 'target' },  'cr3:cc1': { value: 'x' }, 'cr3:cc2': { value: 'grocery:target' },
+      'cr4:cc0': { value: 'costco' },  'cr4:cc1': { value: 'x' }, 'cr4:cc2': { value: 'grocery:costco' },
+    };
+
+    const mainData = buildSheetData(mainCells, mainRows, mainCols, sheetNameLookup, lookupSheetRowColIds);
+    const catData = buildSheetData(catCells, catRows, catCols, sheetNameLookup, lookupSheetRowColIds);
+
+    // Verify the formula was converted back to valid A1
+    const formulaInSheet = mainData[2][5];
+    expect(typeof formulaInSheet).toBe('string');
+    expect((formulaInSheet as string).startsWith('=')).toBe(true);
+    expect(formulaInSheet).not.toContain('#REF');
+
     const hf = HyperFormula.buildFromSheets({
-      'Sheet1': [
-        ['SAFEWAY STORE', null, '=INDEX(Categories!B1:B4,MATCH(TRUE,SEARCH(Categories!A1:A4,A1)>=1,0))'],
-      ],
-      'Categories': [
-        ['walmart', 'grocery:walmart'],
-        ['safeway', 'grocery:safeway'],
-        ['target',  'grocery:target'],
-        ['costco',  'grocery:costco'],
-      ],
-    }, { licenseKey: 'gpl-v3', useArrayArithmetic: true });
+      'Sheet1': mainData,
+      'Categories': catData,
+    }, hfConfig);
     addGoogleSheetsNamedExpressions(hf);
 
-    // SEARCH is case-insensitive: "safeway" found in "SAFEWAY STORE" at position 1
-    // MATCH finds the first TRUE → row 2 → INDEX returns "grocery:safeway"
-    expect(hf.getCellValue({ sheet: 0, col: 2, row: 0 })).toBe('grocery:safeway');
+    const result = hf.getCellValue({ sheet: 0, col: 5, row: 2 });
+    expect(result).toBe('grocery:safeway');
 
     hf.destroy();
   });

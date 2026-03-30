@@ -84,7 +84,10 @@ function getMergedSheetData(): Map<string, SheetInfo> {
 function formatCellValue(addr: { sheet: number; col: number; row: number }): string | number | null {
   const computed = hf!.getCellValue(addr);
   if (computed == null) return '';
-  if (typeof computed === 'object' && 'value' in computed) return String(computed.value);
+  if (typeof computed === 'object' && 'value' in computed) {
+    if ((computed as any).message) console.warn('[HF error]', addr, (computed as any).value, (computed as any).message);
+    return String(computed.value);
+  }
   if (typeof computed === 'number') {
     const detailedType = hf!.getCellValueDetailedType(addr);
     if (detailedType === CellValueDetailedType.NUMBER_DATE) {
@@ -200,6 +203,18 @@ function rebuildAndEvaluate() {
       sheetNameLookup, sheetRowColLookup,
     );
     sheetOrder.push(sid);
+  }
+
+  // Debug: log formulas being sent to HyperFormula
+  for (const [name, data] of Object.entries(sheetsHfData)) {
+    for (let r = 0; r < data.length; r++) {
+      for (let c = 0; c < data[r].length; c++) {
+        const v = data[r][c];
+        if (typeof v === 'string' && v.startsWith('=')) {
+          console.log(`[HF formula] ${name}!R${r+1}C${c+1}:`, v);
+        }
+      }
+    }
   }
 
   // Rebuild HF

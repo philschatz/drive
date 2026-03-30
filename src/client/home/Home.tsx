@@ -348,9 +348,7 @@ export function Home({ path }: { path?: string }) {
       const { docId } = await createDoc({ '@type': 'DataGrid', name, sheets }, createSecure);
       addDocId(docId, { type: 'DataGrid', name, encrypted: createSecure });
       setImportStatus(null);
-      setMessage(`Imported ${totalSheets} sheet${totalSheets !== 1 ? 's' : ''} into "${name}"`);
-      setError('');
-      reloadEntries();
+      window.location.hash = viewPathForType('DataGrid', docId);
     } catch (err: any) {
       setImportStatus(null);
       setError('Failed to import: ' + err.message);
@@ -381,9 +379,7 @@ export function Home({ path }: { path?: string }) {
       const type = (data['@type'] === 'Calendar' || data['@type'] === 'TaskList' || data['@type'] === 'DataGrid')
         ? data['@type'] as DocType : 'unknown';
       addDocId(docId, { type, name, encrypted: createSecure });
-      setMessage(`Imported "${name}"`);
-      setError('');
-      reloadEntries();
+      window.location.hash = viewPathForType(type, docId);
     } catch (err: any) {
       setError('Import failed: ' + err.message);
     }
@@ -410,9 +406,7 @@ export function Home({ path }: { path?: string }) {
       const { docId } = await createDoc({ '@type': 'Calendar', name: calName, events }, createSecure);
       addDocId(docId, { type: 'Calendar', name: calName, encrypted: createSecure });
       setImportStatus(null);
-      setMessage(`Imported ${parsed.length} event${parsed.length !== 1 ? 's' : ''} into "${calName}"`);
-      setError('');
-      reloadEntries();
+      window.location.hash = viewPathForType('Calendar', docId);
     } catch (err: any) {
       setImportStatus(null);
       setError('Import failed: ' + err.message);
