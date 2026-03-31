@@ -130,11 +130,8 @@ export function SheetTabs({ sheets, currentSheetId, onSelect, onAdd, onRename, o
                 key={sheet.id}
                 className={'sheet-hidden-item' + (sheet.hidden ? ' hidden-sheet' : '')}
                 onClick={() => {
-                  if (sheet.hidden) {
-                    onUnhide(sheet.id);
-                  } else {
-                    onSelect(sheet.id);
-                  }
+                  if (sheet.hidden) onUnhide(sheet.id);
+                  onSelect(sheet.id);
                   setHiddenMenuOpen(false);
                 }}
               >

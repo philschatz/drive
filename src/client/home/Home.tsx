@@ -317,13 +317,15 @@ export function Home({ path }: { path?: string }) {
       const totalRows = sheetDefs.reduce((sum, sd) => sum + sd.rows2d.length, 0);
       let processedRows = 0;
       const BATCH_SIZE = 2000;
+      const sentRowCounts = new Map<string, number>();
+      const sentColCounts = new Map<string, number>();
 
       // Parse each sheet and stream directly into the document
       for (let si = 0; si < sheetDefs.length; si++) {
         const { sheetId, sheetName, columns, rowsMap, colIds, rowIds, rows2d, ws } = sheetDefs[si];
         const processedRowsBefore = processedRows;
 
-        // Add sheet structure first
+        // Add sheet structure (rows/columns known so far — formulas may add more below)
         const { hidden } = sheetDefs[si];
         await updateDoc(
           docId,
@@ -334,6 +336,8 @@ export function Home({ path }: { path?: string }) {
             columns, rows: rowsMap, cells: {},
           },
         );
+        sentRowCounts.set(sheetId, rowIds.length);
+        sentColCounts.set(sheetId, colIds.length);
 
         const ref = ws['!ref'] ? XLSX.utils.decode_range(ws['!ref']) : null;
         const cellFormats: { r: number; c: number; fmt: Record<string, any> }[] = [];
@@ -489,6 +493,28 @@ export function Home({ path }: { path?: string }) {
             docId,
             (d, sid, fmts) => { (d as any).sheets[sid].formats = fmts; },
             sheetId, formats,
+          );
+        }
+
+      }
+
+      // Final pass: sync rows/columns auto-created by cross-sheet formula refs
+      // (e.g., Sheet2's formula added rows to Sheet1 after Sheet1 was already sent)
+      for (const sd of sheetDefs) {
+        const sentRows = sentRowCounts.get(sd.sheetId) ?? 0;
+        const sentCols = sentColCounts.get(sd.sheetId) ?? 0;
+        if (sd.rowIds.length > sentRows || sd.colIds.length > sentCols) {
+          const newRows: Record<string, { index: number }> = {};
+          const newCols: Record<string, { index: number }> = {};
+          for (let i = sentRows; i < sd.rowIds.length; i++) newRows[sd.rowIds[i]] = sd.rowsMap[sd.rowIds[i]];
+          for (let i = sentCols; i < sd.colIds.length; i++) newCols[sd.colIds[i]] = sd.columns[sd.colIds[i]];
+          await updateDoc(
+            docId,
+            (d, sid, nr, nc) => {
+              for (const [k, v] of Object.entries(nr)) (d as any).sheets[sid].rows[k] = v;
+              for (const [k, v] of Object.entries(nc)) (d as any).sheets[sid].columns[k] = v;
+            },
+            sd.sheetId, newRows, newCols,
           );
         }
       }
