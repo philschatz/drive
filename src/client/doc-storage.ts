@@ -111,4 +111,5 @@ export function updateDocCache(id: string, cache: Omit<DocEntry, 'id'>) {
   if (!entry) return;
   Object.assign(entry, cache);
   saveDocList(list);
+  dispatch?.('add-doc-to-list', id, cache);
 }

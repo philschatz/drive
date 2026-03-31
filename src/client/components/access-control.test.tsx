@@ -8,6 +8,7 @@ jest.mock('../shared/keyhive-api', () => ({
   getDocMembers: (...args: any[]) => mockGetDocMembers(...args),
   getMyAccess: (...args: any[]) => mockGetMyAccess(...args),
   getKnownContacts: (...args: any[]) => mockGetKnownContacts(...args),
+  onKeyhiveStateChanged: jest.fn(() => jest.fn()),
   changeRole: jest.fn(),
   revokeMember: jest.fn(),
   generateInvite: jest.fn(),
