@@ -228,16 +228,28 @@ export function Home({ path }: { path?: string }) {
     if (xlsInputRef.current) xlsInputRef.current.value = '';
 
     try {
-      setImportStatus({ label: 'Reading file...', progress: 0 });
+      const sid = () => Math.random().toString(36).slice(2, 10);
+      const name = file.name.replace(/\.(xlsx?|csv)$/i, '') || 'Imported';
+
+      // Create the document before parsing so the worker handles it while still healthy
+      // (XLSX.read blocks the main thread, during which the worker's WASM can crash)
+      setImportStatus({ label: 'Creating document...', progress: 0 });
+      const { docId } = await createDoc({ '@type': 'DataGrid', name, sheets: {} }, createSecure);
+      addDocId(docId, { type: 'DataGrid', name, encrypted: createSecure });
+
+      setImportStatus({ label: 'Reading file...', progress: 2 });
+      await new Promise(r => setTimeout(r, 0));
       const XLSX = await import('xlsx');
       const buffer = await file.arrayBuffer();
       const wb = XLSX.read(buffer, { type: 'array', cellDates: true, cellStyles: true });
-      const sid = () => Math.random().toString(36).slice(2, 10);
-      const name = file.name.replace(/\.(xlsx?|csv)$/i, '') || 'Imported';
       const totalSheets = wb.SheetNames.length;
 
       const sheetNameToId = new Map<string, string>();
-      const sheetIdToRowColIds = new Map<string, { rowIds: string[]; colIds: string[] }>();
+      const sheetIdToRowColIds = new Map<string, {
+        rowIds: string[]; colIds: string[];
+        onMissingRow: (idx: number) => string;
+        onMissingCol: (idx: number) => string;
+      }>();
       const sheetDefs: {
         sheetId: string; sheetName: string; hidden: boolean;
         columns: Record<string, { index: number; hidden?: boolean }>;
@@ -278,31 +290,55 @@ export function Home({ path }: { path?: string }) {
         }
 
         const sheetHidden = !!(wb as any).Workbook?.Sheets?.[si]?.Hidden;
-        sheetIdToRowColIds.set(sheetId, { rowIds, colIds });
+        const onMissingRow = (idx: number) => {
+          while (rowIds.length <= idx) {
+            const rid = sid();
+            rowsMap[rid] = { index: rowIds.length + 1 };
+            rowIds.push(rid);
+          }
+          return rowIds[idx];
+        };
+        const onMissingCol = (idx: number) => {
+          while (colIds.length <= idx) {
+            const cid = sid();
+            columns[cid] = { index: colIds.length + 1 };
+            colIds.push(cid);
+          }
+          return colIds[idx];
+        };
+        sheetIdToRowColIds.set(sheetId, { rowIds, colIds, onMissingRow, onMissingCol });
         sheetDefs.push({ sheetId, sheetName, hidden: sheetHidden, columns, rowsMap, colIds, rowIds, rows2d, ws });
       }
 
       const lookupSheetId = (n: string) => sheetNameToId.get(n);
       const lookupSheetRowColIds = (id: string) => sheetIdToRowColIds.get(id);
 
-      const builtSheets: {
-        sheetId: string; sheetName: string; index: number; hidden: boolean;
-        columns: Record<string, { index: number; hidden?: boolean }>;
-        rows: Record<string, { index: number; hidden?: boolean }>;
-        cells: Record<string, { value: string }>;
-        formats: Record<string, any>;
-      }[] = [];
+      // Estimate total cells for progress (use row count as proxy since we haven't parsed yet)
+      const totalRows = sheetDefs.reduce((sum, sd) => sum + sd.rows2d.length, 0);
+      let processedRows = 0;
+      const BATCH_SIZE = 2000;
 
+      // Parse each sheet and stream directly into the document
       for (let si = 0; si < sheetDefs.length; si++) {
-        setImportStatus({ label: `Processing sheet ${si + 1}/${totalSheets}...`, progress: Math.round(((si) / totalSheets) * 10) });
-        await new Promise(r => setTimeout(r, 0)); // yield to UI
-
         const { sheetId, sheetName, columns, rowsMap, colIds, rowIds, rows2d, ws } = sheetDefs[si];
-        const cells: Record<string, { value: string }> = {};
-        const ref = ws['!ref'] ? XLSX.utils.decode_range(ws['!ref']) : null;
+        const processedRowsBefore = processedRows;
 
-        // Per-cell format extraction: collect (r, c, formatJSON) tuples for coalescing
+        // Add sheet structure first
+        const { hidden } = sheetDefs[si];
+        await updateDoc(
+          docId,
+          (d, sid, sheet) => { (d as any).sheets[sid] = sheet; },
+          sheetId, {
+            '@type': 'Sheet', name: sheetName, index: si + 1,
+            ...(hidden ? { hidden: true } : {}),
+            columns, rows: rowsMap, cells: {},
+          },
+        );
+
+        const ref = ws['!ref'] ? XLSX.utils.decode_range(ws['!ref']) : null;
         const cellFormats: { r: number; c: number; fmt: Record<string, any> }[] = [];
+        let cellBatch: Record<string, { value: string }> = {};
+        let batchCount = 0;
 
         for (let r = 0; r < rows2d.length; r++) {
           const row = rows2d[r];
@@ -348,7 +384,8 @@ export function Home({ path }: { path?: string }) {
               const formula = unwrapDummyFunction(wsCell.f);
               if (/^"[^"]*"$/.test(formula)) continue;
               try {
-                stored = a1ToInternal('=' + formula, r, c, rowIds, colIds, lookupSheetId, lookupSheetRowColIds);
+                const sheetLookup = sheetIdToRowColIds.get(sheetId)!;
+                stored = a1ToInternal('=' + formula, r, c, rowIds, colIds, lookupSheetId, lookupSheetRowColIds, sheetLookup.onMissingRow, sheetLookup.onMissingCol);
               } catch {
                 stored = String(val);
               }
@@ -362,14 +399,49 @@ export function Home({ path }: { path?: string }) {
             } else {
               stored = String(val);
             }
-            cells[`${rowIds[r]}:${colIds[c]}`] = { value: stored };
+            cellBatch[`${rowIds[r]}:${colIds[c]}`] = { value: stored };
+            batchCount++;
+
+            // Flush batch when full
+            if (batchCount >= BATCH_SIZE) {
+              const truncName = sheetName.slice(0, 20);
+              const rowLabel = rows2d.length < 2000
+                ? `row ${r + 1} / ${rows2d.length}`
+                : `${Math.round(r / 1000)}k / ${Math.round(rows2d.length / 1000)}k rows`;
+              processedRows = processedRowsBefore + r;
+              setImportStatus({
+                label: `Importing "${truncName}" — ${rowLabel}`,
+                progress: totalRows > 0 ? Math.round(5 + (processedRows / totalRows) * 90) : 50,
+              });
+              await updateDoc(
+                docId,
+                (d, sid, cells) => {
+                  for (const [k, v] of Object.entries(cells)) (d as any).sheets[sid].cells[k] = v;
+                },
+                sheetId, cellBatch,
+              );
+              cellBatch = {};
+              batchCount = 0;
+              await new Promise(r => setTimeout(r, 0));
+            }
           }
+        }
+        processedRows = processedRowsBefore + rows2d.length;
+
+        // Flush remaining cells
+        if (batchCount > 0) {
+          await updateDoc(
+            docId,
+            (d, sid, cells) => {
+              for (const [k, v] of Object.entries(cells)) (d as any).sheets[sid].cells[k] = v;
+            },
+            sheetId, cellBatch,
+          );
         }
 
         // Coalesce per-cell formats into FormatRange entries
-        // Group cells with identical formatting, then merge contiguous rectangles
-        const formats: Record<string, any> = {};
         if (cellFormats.length > 0) {
+          const formats: Record<string, any> = {};
           const byKey = new Map<string, { r: number; c: number }[]>();
           for (const { r, c, fmt } of cellFormats) {
             const key = JSON.stringify(fmt);
@@ -380,10 +452,7 @@ export function Home({ path }: { path?: string }) {
           let fmtIndex = 1;
           for (const [key, positions] of byKey) {
             const fmt = JSON.parse(key);
-            // Simple coalesce: scan for maximal row spans per column, then merge horizontally
-            // Sort by row then col
             positions.sort((a, b) => a.r - b.r || a.c - b.c);
-            // Build row-based spans: group contiguous columns in same row
             const rowSpans: { r: number; cStart: number; cEnd: number }[] = [];
             let cur = { r: positions[0].r, cStart: positions[0].c, cEnd: positions[0].c };
             for (let i = 1; i < positions.length; i++) {
@@ -396,7 +465,6 @@ export function Home({ path }: { path?: string }) {
               }
             }
             rowSpans.push(cur);
-            // Merge vertically: stack row spans with same column range
             const merged: { rStart: number; rEnd: number; cStart: number; cEnd: number }[] = [];
             for (const span of rowSpans) {
               const prev = merged.length > 0 ? merged[merged.length - 1] : null;
@@ -417,61 +485,10 @@ export function Home({ path }: { path?: string }) {
               };
             }
           }
-        }
-
-        const { hidden } = sheetDefs[si];
-        builtSheets.push({ sheetId, sheetName, index: si + 1, hidden, columns, rows: rowsMap, cells, formats });
-      }
-
-      // Phase 1: create minimal empty document
-      setImportStatus({ label: 'Creating document...', progress: 10 });
-      await new Promise(r => setTimeout(r, 0));
-
-      const { docId } = await createDoc({ '@type': 'DataGrid', name, sheets: {} }, createSecure);
-      addDocId(docId, { type: 'DataGrid', name, encrypted: createSecure });
-
-      // Phase 2: populate sheets, cells, and formats in batches
-      const BATCH_SIZE = 2000;
-      const totalCells = builtSheets.reduce((sum, s) => sum + Object.keys(s.cells).length, 0);
-      let populatedCells = 0;
-
-      for (const s of builtSheets) {
-        // Add sheet structure (columns, rows, no cells yet)
-        await updateDoc(
-          docId,
-          (d, sheetId, sheet) => { (d as any).sheets[sheetId] = sheet; },
-          s.sheetId, {
-            '@type': 'Sheet', name: s.sheetName, index: s.index,
-            ...(s.hidden ? { hidden: true } : {}),
-            columns: s.columns, rows: s.rows, cells: {},
-          },
-        );
-
-        // Add cells in batches
-        const cellEntries = Object.entries(s.cells);
-        for (let i = 0; i < cellEntries.length; i += BATCH_SIZE) {
-          const batch = Object.fromEntries(cellEntries.slice(i, i + BATCH_SIZE));
           await updateDoc(
             docId,
-            (d, sheetId, cells) => {
-              for (const [k, v] of Object.entries(cells)) (d as any).sheets[sheetId].cells[k] = v;
-            },
-            s.sheetId, batch,
-          );
-          populatedCells += Math.min(BATCH_SIZE, cellEntries.length - i);
-          setImportStatus({
-            label: 'Adding cells...',
-            progress: totalCells > 0 ? Math.round(10 + (populatedCells / totalCells) * 89) : 99,
-          });
-          await new Promise(r => setTimeout(r, 0));
-        }
-
-        // Add formats for this sheet
-        if (Object.keys(s.formats).length > 0) {
-          await updateDoc(
-            docId,
-            (d, sheetId, formats) => { (d as any).sheets[sheetId].formats = formats; },
-            s.sheetId, s.formats,
+            (d, sid, fmts) => { (d as any).sheets[sid].formats = fmts; },
+            sheetId, formats,
           );
         }
       }

@@ -37,21 +37,27 @@ export function a1ToInternal(
   sortedRowIds: string[],
   sortedColIds: string[],
   lookupSheetId?: (name: string) => string | undefined,
-  /** For cross-sheet refs: given a sheetId, return row/col ID arrays for that sheet. */
-  lookupSheetRowColIds?: (sheetId: string) => { rowIds: string[]; colIds: string[] } | undefined,
+  /** For cross-sheet refs: given a sheetId, return row/col ID arrays and optional missing-ID callbacks. */
+  lookupSheetRowColIds?: (sheetId: string) => {
+    rowIds: string[]; colIds: string[];
+    onMissingRow?: (idx: number) => string;
+    onMissingCol?: (idx: number) => string;
+  } | undefined,
+  onMissingRow?: (idx: number) => string,
+  onMissingCol?: (idx: number) => string,
 ): string {
   const ast = parseFormula(
     formula, cellRow, cellCol,
-    (idx) => sortedRowIds[idx] ?? `?row${idx}`,
-    (idx) => sortedColIds[idx] ?? `?col${idx}`,
+    (idx) => sortedRowIds[idx] ?? onMissingRow?.(idx) ?? `?row${idx}`,
+    (idx) => sortedColIds[idx] ?? onMissingCol?.(idx) ?? `?col${idx}`,
     lookupSheetId,
     lookupSheetRowColIds
       ? (sheetId) => {
           const ids = lookupSheetRowColIds(sheetId);
           if (!ids) return undefined;
           return {
-            rowId: (idx) => ids.rowIds[idx] ?? `?row${idx}`,
-            colId: (idx) => ids.colIds[idx] ?? `?col${idx}`,
+            rowId: (idx) => ids.rowIds[idx] ?? ids.onMissingRow?.(idx) ?? `?row${idx}`,
+            colId: (idx) => ids.colIds[idx] ?? ids.onMissingCol?.(idx) ?? `?col${idx}`,
             totalRows: ids.rowIds.length,
           };
         }

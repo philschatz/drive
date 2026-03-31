@@ -1089,7 +1089,7 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
       }
       queryResultCache.deletePrefix(`qc:${msg.docId}:`);
       const { idbDelPrefix } = await import('./idb-storage');
-      idbDelPrefix(`qc:${msg.docId}:`);
+      await idbDelPrefix(`qc:${msg.docId}:`);
       // Remove invite records for the deleted doc
       {
         const { removeInviteRecordsForDoc } = await import('./invite-storage');
