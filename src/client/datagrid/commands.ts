@@ -6,7 +6,7 @@ import {
   buildClipboardData, writeClipboard, parseHtmlClipboard,
   getEffectiveRange, type ClipboardEntry, type CellRange,
 } from './clipboard';
-import type { DataGridDocument, DataGridCell } from './schema';
+import type { DataGridDocument, DataGridCell, DataGridCellFormat } from './schema';
 
 // ============================================================
 // Shortcut — canonical keyboard shortcut definition
@@ -52,6 +52,8 @@ export interface GridCommandState {
   sheetCount: number;
   /** Non-null only when resolving context-menu slots */
   contextScope: { type: 'row' | 'col' | 'cell'; indices: number[] } | null;
+  /** Format of the currently selected cell (for toggle state in toolbar/menus). */
+  currentCellFormat?: DataGridCellFormat;
 }
 
 // ============================================================
@@ -92,6 +94,8 @@ export interface GridCommandContext {
   onDeleteSheet?: (id: string) => void;
   onHideSheet?: (id: string) => void;
   onRenameSheet?: (id: string) => void;
+  openConditionalFormatPanel?: () => void;
+  formatCache?: Map<string, DataGridCellFormat>;
 }
 
 // ============================================================
@@ -264,9 +268,9 @@ const clipboardPlugin: GridPlugin = {
         const range = getEffectiveRange(ctx.selectedCell, ctx.selectionAnchor);
         if (!range || !ctx.sheet) return;
         const sh = ctxSheet(ctx.sheet, ctx);
-        const data = buildClipboardData(sh.cells, ctx.computedValues, range, ctx.sortedRowIds, ctx.sortedColIds, ctx.currentSheetId);
+        const data = buildClipboardData(sh.cells, ctx.computedValues, range, ctx.sortedRowIds, ctx.sortedColIds, ctx.currentSheetId, ctx.formatCache);
         if (!data) return;
-        ctx.clipboardRef.current = { values: data.values, mode: 'copy', range };
+        ctx.clipboardRef.current = { values: data.values, formats: data.formats, mode: 'copy', range };
         ctx.setClipboardSource(range);
         writeClipboard(data.tsv, data.html);
       },
@@ -281,9 +285,9 @@ const clipboardPlugin: GridPlugin = {
         const range = getEffectiveRange(ctx.selectedCell, ctx.selectionAnchor);
         if (!range || !ctx.sheet) return;
         const sh = ctxSheet(ctx.sheet, ctx);
-        const data = buildClipboardData(sh.cells, ctx.computedValues, range, ctx.sortedRowIds, ctx.sortedColIds, ctx.currentSheetId);
+        const data = buildClipboardData(sh.cells, ctx.computedValues, range, ctx.sortedRowIds, ctx.sortedColIds, ctx.currentSheetId, ctx.formatCache);
         if (!data) return;
-        ctx.clipboardRef.current = { values: data.values, mode: 'cut', range };
+        ctx.clipboardRef.current = { values: data.values, formats: data.formats, mode: 'cut', range };
         ctx.setClipboardSource(range);
         writeClipboard(data.tsv, data.html);
       },
@@ -302,7 +306,7 @@ const clipboardPlugin: GridPlugin = {
 
         if (clipboardRef.current) {
           // Internal paste: pre-compute everything outside mutate
-          const { values, mode, range: srcRange } = clipboardRef.current;
+          const { values, formats: clipFormats, mode, range: srcRange } = clipboardRef.current;
           const { sheet: doc } = ctx;
           if (!doc) return;
           const sh = ctxSheet(doc, ctx);
@@ -350,7 +354,68 @@ const clipboardPlugin: GridPlugin = {
             }
           }
 
-          mutate((d, currentSheetId, newRowEntries, newColEntries, cellWrites, cutDeletes) => {
+          // Build format ranges from clipboard formats
+          const pasteFormatRanges: Array<[string, any]> = [];
+          if (clipFormats) {
+            // Compute max existing format index
+            let maxFmtIdx = 0;
+            if (sh.formats) {
+              for (const f of Object.values(sh.formats)) {
+                if ((f as any).index > maxFmtIdx) maxFmtIdx = (f as any).index;
+              }
+            }
+            // Group cells by identical format, then coalesce into rectangles
+            const byKey = new Map<string, { r: number; c: number }[]>();
+            for (let dr = 0; dr < clipFormats.length; dr++) {
+              for (let dc = 0; dc < clipFormats[dr].length; dc++) {
+                const fmt = clipFormats[dr][dc];
+                if (!fmt) continue;
+                const r = destRow + dr;
+                const c = destCol + dc;
+                if (r >= allRowIds.length || c >= allColIds.length) continue;
+                const key = JSON.stringify(fmt);
+                let list = byKey.get(key);
+                if (!list) { list = []; byKey.set(key, list); }
+                list.push({ r, c });
+              }
+            }
+            let fmtIdx = maxFmtIdx + 1;
+            for (const [key, positions] of byKey) {
+              const fmt = JSON.parse(key);
+              positions.sort((a, b) => a.r - b.r || a.c - b.c);
+              // Row-based spans
+              const rowSpans: { r: number; cStart: number; cEnd: number }[] = [];
+              let cur = { r: positions[0].r, cStart: positions[0].c, cEnd: positions[0].c };
+              for (let i = 1; i < positions.length; i++) {
+                const p = positions[i];
+                if (p.r === cur.r && p.c === cur.cEnd + 1) { cur.cEnd = p.c; }
+                else { rowSpans.push({ ...cur }); cur = { r: p.r, cStart: p.c, cEnd: p.c }; }
+              }
+              rowSpans.push(cur);
+              // Merge vertically
+              const merged: { rStart: number; rEnd: number; cStart: number; cEnd: number }[] = [];
+              for (const span of rowSpans) {
+                const prev = merged.length > 0 ? merged[merged.length - 1] : null;
+                if (prev && prev.cStart === span.cStart && prev.cEnd === span.cEnd && prev.rEnd + 1 === span.r) {
+                  prev.rEnd = span.r;
+                } else {
+                  merged.push({ rStart: span.r, rEnd: span.r, cStart: span.cStart, cEnd: span.cEnd });
+                }
+              }
+              for (const rect of merged) {
+                pasteFormatRanges.push([shortId(), {
+                  index: fmtIdx++,
+                  rangeRowStart: allRowIds[rect.rStart],
+                  rangeRowEnd: allRowIds[rect.rEnd],
+                  rangeColStart: allColIds[rect.cStart],
+                  rangeColEnd: allColIds[rect.cEnd],
+                  format: fmt,
+                }]);
+              }
+            }
+          }
+
+          mutate((d, currentSheetId, newRowEntries, newColEntries, cellWrites, cutDeletes, pasteFormatRanges) => {
             const ms = d.sheets[currentSheetId];
             for (const [id, entry] of newRowEntries) ms.rows[id] = entry;
             for (const [id, entry] of newColEntries) ms.columns[id] = entry;
@@ -360,7 +425,11 @@ const clipboardPlugin: GridPlugin = {
               else { ms.cells[key].value = stored; }
             }
             for (const key of cutDeletes) delete ms.cells[key];
-          }, [currentSheetId, newRowEntries, newColEntries, cellWrites, cutDeletes]);
+            if (pasteFormatRanges.length > 0) {
+              if (!ms.formats) ms.formats = {};
+              for (const [id, entry] of pasteFormatRanges) ms.formats[id] = entry;
+            }
+          }, [currentSheetId, newRowEntries, newColEntries, cellWrites, cutDeletes, pasteFormatRanges]);
 
           clipboardRef.current = null;
           setClipboardSource(null);
@@ -940,7 +1009,268 @@ const sheetPlugin: GridPlugin = {
   },
 };
 
-const ALL_PLUGINS: GridPlugin[] = [historyPlugin, clipboardPlugin, rowPlugin, columnPlugin, sheetPlugin];
+// ============================================================
+// Formatting helpers
+// ============================================================
+
+function getSelectionRowColIds(ctx: GridCommandContext): { rowIds: string[]; colIds: string[] } {
+  const { selectedCell, selectionAnchor, sortedRowIds, sortedColIds, selectedRows, selectedCols } = ctx;
+  if (!selectedCell) return { rowIds: [], colIds: [] };
+
+  const range = getEffectiveRange(selectedCell, selectionAnchor) ?? {
+    minRow: selectedCell[1], maxRow: selectedCell[1],
+    minCol: selectedCell[0], maxCol: selectedCell[0],
+  };
+
+  const minRow = selectedRows.size > 0 ? Math.min(...selectedRows) : range.minRow;
+  const maxRow = selectedRows.size > 0 ? Math.max(...selectedRows) : range.maxRow;
+  const minCol = selectedCols.size > 0 ? Math.min(...selectedCols) : range.minCol;
+  const maxCol = selectedCols.size > 0 ? Math.max(...selectedCols) : range.maxCol;
+
+  const rowIds: string[] = [];
+  for (let r = minRow; r <= maxRow; r++) {
+    if (r < sortedRowIds.length) rowIds.push(sortedRowIds[r]);
+  }
+  const colIds: string[] = [];
+  for (let c = minCol; c <= maxCol; c++) {
+    if (c < sortedColIds.length) colIds.push(sortedColIds[c]);
+  }
+  return { rowIds, colIds };
+}
+
+/** Apply a format patch to the selection, reusing an existing FormatRange if one matches. */
+export function applyFormatToSelection(ctx: GridCommandContext, patch: Partial<DataGridCellFormat>): void {
+  const { rowIds, colIds } = getSelectionRowColIds(ctx);
+  if (rowIds.length === 0 || colIds.length === 0) return;
+
+  const rangeRowStart = rowIds[0];
+  const rangeRowEnd = rowIds[rowIds.length - 1];
+  const rangeColStart = colIds[0];
+  const rangeColEnd = colIds[colIds.length - 1];
+
+  const sheet = ctx.sheet;
+  const formats = sheet?.formats;
+
+  // Look for an existing FormatRange with the exact same bounds
+  let existingId: string | null = null;
+  if (formats) {
+    for (const [id, f] of Object.entries(formats)) {
+      const r = f as any;
+      if (r.rangeRowStart === rangeRowStart && r.rangeRowEnd === rangeRowEnd &&
+          r.rangeColStart === rangeColStart && r.rangeColEnd === rangeColEnd) {
+        existingId = id;
+        break;
+      }
+    }
+  }
+
+  if (existingId) {
+    // Merge patch into the existing range's format
+    ctx.mutate((d: any, currentSheetId: string, existingId: string, patch: any) => {
+      const ms = d.sheets[currentSheetId];
+      const range = ms.formats[existingId];
+      if (!range.format) range.format = {};
+      for (const [k, v] of Object.entries(patch)) {
+        if (v === undefined) {
+          delete range.format[k];
+        } else {
+          range.format[k] = v;
+        }
+      }
+      // Clean up: if format is now empty, remove the range entirely
+      if (Object.keys(range.format).length === 0) {
+        delete ms.formats[existingId];
+      }
+    }, [ctx.currentSheetId, existingId, patch]);
+  } else {
+    // Create a new FormatRange
+    let maxIndex = 0;
+    if (formats) {
+      for (const f of Object.values(formats)) {
+        if ((f as any).index > maxIndex) maxIndex = (f as any).index;
+      }
+    }
+    const newId = shortId();
+    ctx.mutate((d: any, currentSheetId: string, newId: string, entry: any) => {
+      const ms = d.sheets[currentSheetId];
+      if (!ms.formats) ms.formats = {};
+      ms.formats[newId] = entry;
+    }, [ctx.currentSheetId, newId, {
+      index: maxIndex + 1,
+      rangeRowStart,
+      rangeRowEnd,
+      rangeColStart,
+      rangeColEnd,
+      format: { ...patch },
+    }]);
+  }
+}
+
+/** Remove all formatting from the selection by adding a FormatRange that resets all properties. */
+function clearFormatFromSelection(ctx: GridCommandContext): void {
+  // Delete all format ranges that fall entirely within the selection
+  const { rowIds, colIds } = getSelectionRowColIds(ctx);
+  if (rowIds.length === 0 || colIds.length === 0) return;
+
+  const sheet = ctx.sheet;
+  const formats = sheet?.formats;
+  if (!formats) return;
+
+  const rowIdSet = new Set(rowIds);
+  const colIdSet = new Set(colIds);
+  const allRowIds = ctx.sortedRowIds;
+  const allColIds = ctx.sortedColIds;
+
+  // Find format ranges entirely within selection to delete
+  const toDelete: string[] = [];
+  for (const [id, range] of Object.entries(formats)) {
+    const r = range as any;
+    const rStart = allRowIds.indexOf(r.rangeRowStart);
+    const rEnd = allRowIds.indexOf(r.rangeRowEnd);
+    const cStart = allColIds.indexOf(r.rangeColStart);
+    const cEnd = allColIds.indexOf(r.rangeColEnd);
+    if (rStart === -1 || rEnd === -1 || cStart === -1 || cEnd === -1) continue;
+
+    // Check if this range is entirely within the selection
+    let allInside = true;
+    for (let ri = rStart; ri <= rEnd && allInside; ri++) {
+      if (!rowIdSet.has(allRowIds[ri])) allInside = false;
+    }
+    for (let ci = cStart; ci <= cEnd && allInside; ci++) {
+      if (!colIdSet.has(allColIds[ci])) allInside = false;
+    }
+    if (allInside) toDelete.push(id);
+  }
+
+  if (toDelete.length > 0) {
+    ctx.mutate((d: any, currentSheetId: string, toDelete: string[]) => {
+      const ms = d.sheets[currentSheetId];
+      if (!ms.formats) return;
+      for (const id of toDelete) delete ms.formats[id];
+    }, [ctx.currentSheetId, toDelete]);
+  }
+}
+
+// ============================================================
+// Formatting plugin
+// ============================================================
+
+const formattingPlugin: GridPlugin = {
+  id: 'formatting',
+  commands: [
+    {
+      id: 'toggle-bold',
+      defaultLabel: 'Bold',
+      icon: 'format_bold',
+      shortcuts: [{ key: 'b', mod: true }],
+      toggle: { isChecked: s => !!s.currentCellFormat?.bold },
+      isEnabled: s => s.hasSelection,
+      execute: (s, ctx) => {
+        applyFormatToSelection(ctx, { bold: !s.currentCellFormat?.bold || undefined });
+      },
+    },
+    {
+      id: 'toggle-italic',
+      defaultLabel: 'Italic',
+      icon: 'format_italic',
+      shortcuts: [{ key: 'i', mod: true }],
+      toggle: { isChecked: s => !!s.currentCellFormat?.italic },
+      isEnabled: s => s.hasSelection,
+      execute: (s, ctx) => {
+        applyFormatToSelection(ctx, { italic: !s.currentCellFormat?.italic || undefined });
+      },
+    },
+    {
+      id: 'toggle-underline',
+      defaultLabel: 'Underline',
+      icon: 'format_underlined',
+      shortcuts: [{ key: 'u', mod: true }],
+      toggle: { isChecked: s => !!s.currentCellFormat?.underline },
+      isEnabled: s => s.hasSelection,
+      execute: (s, ctx) => {
+        applyFormatToSelection(ctx, { underline: !s.currentCellFormat?.underline || undefined });
+      },
+    },
+    {
+      id: 'toggle-strikethrough',
+      defaultLabel: 'Strikethrough',
+      icon: 'format_strikethrough',
+      shortcuts: [{ key: '5', mod: true }],
+      toggle: { isChecked: s => !!s.currentCellFormat?.strikethrough },
+      isEnabled: s => s.hasSelection,
+      execute: (s, ctx) => {
+        applyFormatToSelection(ctx, { strikethrough: !s.currentCellFormat?.strikethrough || undefined });
+      },
+    },
+    {
+      id: 'align-left',
+      defaultLabel: 'Align left',
+      icon: 'format_align_left',
+      toggle: { isChecked: s => s.currentCellFormat?.hAlign === 'left' },
+      isEnabled: s => s.hasSelection,
+      execute: (_, ctx) => applyFormatToSelection(ctx, { hAlign: 'left' }),
+    },
+    {
+      id: 'align-center',
+      defaultLabel: 'Align center',
+      icon: 'format_align_center',
+      toggle: { isChecked: s => s.currentCellFormat?.hAlign === 'center' },
+      isEnabled: s => s.hasSelection,
+      execute: (_, ctx) => applyFormatToSelection(ctx, { hAlign: 'center' }),
+    },
+    {
+      id: 'align-right',
+      defaultLabel: 'Align right',
+      icon: 'format_align_right',
+      toggle: { isChecked: s => s.currentCellFormat?.hAlign === 'right' },
+      isEnabled: s => s.hasSelection,
+      execute: (_, ctx) => applyFormatToSelection(ctx, { hAlign: 'right' }),
+    },
+    {
+      id: 'clear-formatting',
+      defaultLabel: 'Clear formatting',
+      icon: 'format_clear',
+      shortcuts: [{ key: '\\', mod: true }],
+      isEnabled: s => s.hasSelection,
+      execute: (_, ctx) => clearFormatFromSelection(ctx),
+    },
+    {
+      id: 'conditional-formatting',
+      defaultLabel: 'Conditional formatting...',
+      icon: 'auto_awesome',
+      isEnabled: () => true,
+      execute: (_, ctx) => ctx.openConditionalFormatPanel?.(),
+    },
+  ],
+  slots: {
+    'format-menu': [
+      { kind: 'command', id: 'toggle-bold' },
+      { kind: 'command', id: 'toggle-italic' },
+      { kind: 'command', id: 'toggle-underline' },
+      { kind: 'command', id: 'toggle-strikethrough' },
+      { kind: 'separator' },
+      { kind: 'command', id: 'align-left' },
+      { kind: 'command', id: 'align-center' },
+      { kind: 'command', id: 'align-right' },
+      { kind: 'separator' },
+      { kind: 'command', id: 'clear-formatting' },
+      { kind: 'separator' },
+      { kind: 'command', id: 'conditional-formatting' },
+    ],
+    toolbar: [
+      { kind: 'command', id: 'toggle-bold', toolbarDividerBefore: true },
+      { kind: 'command', id: 'toggle-italic' },
+      { kind: 'command', id: 'toggle-underline' },
+      { kind: 'command', id: 'toggle-strikethrough' },
+    ],
+    'cell-ctx': [
+      { kind: 'separator' },
+      { kind: 'command', id: 'clear-formatting' },
+    ],
+  },
+};
+
+const ALL_PLUGINS: GridPlugin[] = [historyPlugin, clipboardPlugin, rowPlugin, columnPlugin, sheetPlugin, formattingPlugin];
 
 const COMMAND_REGISTRY = new Map<string, GridCommand>();
 for (const plugin of ALL_PLUGINS) {
@@ -1190,6 +1520,7 @@ export function useGridCommands(
   const menus: ResolvedMenu[] = [
     { menuId: 'edit-menu', triggerLabel: 'Edit', entries: resolveSlot('edit-menu', state, ctx) },
     { menuId: 'insert-menu', triggerLabel: 'Insert', entries: resolveSlot('insert-menu', state, ctx) },
+    { menuId: 'format-menu', triggerLabel: 'Format', entries: resolveSlot('format-menu', state, ctx) },
   ];
 
   function dispatchKey(e: KeyboardEvent, isMod: boolean): boolean {

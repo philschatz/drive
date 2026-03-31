@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'preact/hooks';
 import { useConnectionStatus, usePeerList } from '../shared/automerge';
-import { createDoc, subscribeQuery, HOME_SUMMARY_QUERY } from '../worker-api';
+import { createDoc, updateDoc, subscribeQuery, HOME_SUMMARY_QUERY } from '../worker-api';
 import { getMyAccess, onKeyhiveStateChanged } from '../shared/keyhive-api';
 import { getCachedAccess } from '../shared/useAccess';
 import { peerColor, peerDisplayName } from '../shared/presence';
@@ -231,7 +231,7 @@ export function Home({ path }: { path?: string }) {
       setImportStatus({ label: 'Reading file...', progress: 0 });
       const XLSX = await import('xlsx');
       const buffer = await file.arrayBuffer();
-      const wb = XLSX.read(buffer, { type: 'array', cellDates: true });
+      const wb = XLSX.read(buffer, { type: 'array', cellDates: true, cellStyles: true });
       const sid = () => Math.random().toString(36).slice(2, 10);
       const name = file.name.replace(/\.(xlsx?|csv)$/i, '') || 'Imported';
       const totalSheets = wb.SheetNames.length;
@@ -290,23 +290,59 @@ export function Home({ path }: { path?: string }) {
         columns: Record<string, { index: number; hidden?: boolean }>;
         rows: Record<string, { index: number; hidden?: boolean }>;
         cells: Record<string, { value: string }>;
+        formats: Record<string, any>;
       }[] = [];
 
       for (let si = 0; si < sheetDefs.length; si++) {
-        setImportStatus({ label: `Processing sheet ${si + 1}/${totalSheets}...`, progress: Math.round(((si) / totalSheets) * 90) });
+        setImportStatus({ label: `Processing sheet ${si + 1}/${totalSheets}...`, progress: Math.round(((si) / totalSheets) * 10) });
         await new Promise(r => setTimeout(r, 0)); // yield to UI
 
         const { sheetId, sheetName, columns, rowsMap, colIds, rowIds, rows2d, ws } = sheetDefs[si];
         const cells: Record<string, { value: string }> = {};
         const ref = ws['!ref'] ? XLSX.utils.decode_range(ws['!ref']) : null;
 
+        // Per-cell format extraction: collect (r, c, formatJSON) tuples for coalescing
+        const cellFormats: { r: number; c: number; fmt: Record<string, any> }[] = [];
+
         for (let r = 0; r < rows2d.length; r++) {
           const row = rows2d[r];
           for (let c = 0; c < row.length; c++) {
-            const val = row[c];
-            if (val == null || val === '') continue;
             const cellAddr = XLSX.utils.encode_cell({ r: (ref?.s.r ?? 0) + r, c: (ref?.s.c ?? 0) + c });
             const wsCell = ws[cellAddr];
+
+            // Extract formatting regardless of whether cell has a value
+            if (wsCell?.s) {
+              const s = wsCell.s;
+              const fmt: Record<string, any> = {};
+              if (s.font?.bold) fmt.bold = true;
+              if (s.font?.italic) fmt.italic = true;
+              if (s.font?.underline) fmt.underline = true;
+              if (s.font?.strike) fmt.strikethrough = true;
+              if (s.font?.name) fmt.fontFamily = s.font.name;
+              if (s.font?.sz) fmt.fontSize = s.font.sz;
+              if (s.font?.color?.rgb) fmt.textColor = '#' + String(s.font.color.rgb).slice(-6);
+              if (s.fill?.fgColor?.rgb && s.fill.fgColor.rgb !== '000000') {
+                fmt.bgColor = '#' + String(s.fill.fgColor.rgb).slice(-6);
+              }
+              if (s.alignment?.horizontal) fmt.hAlign = s.alignment.horizontal;
+              if (s.alignment?.vertical) fmt.vAlign = s.alignment.vertical;
+              if (s.alignment?.wrapText) fmt.wrapText = true;
+              if (wsCell.z) fmt.numFmt = wsCell.z;
+              const mapBorder = (b: any) => {
+                if (!b || !b.style) return undefined;
+                const border: Record<string, string> = { style: b.style };
+                if (b.color?.rgb) border.color = '#' + String(b.color.rgb).slice(-6);
+                return border;
+              };
+              if (s.border?.top) { const b = mapBorder(s.border.top); if (b) fmt.borderTop = b; }
+              if (s.border?.bottom) { const b = mapBorder(s.border.bottom); if (b) fmt.borderBottom = b; }
+              if (s.border?.left) { const b = mapBorder(s.border.left); if (b) fmt.borderLeft = b; }
+              if (s.border?.right) { const b = mapBorder(s.border.right); if (b) fmt.borderRight = b; }
+              if (Object.keys(fmt).length > 0) cellFormats.push({ r, c, fmt });
+            }
+
+            const val = row[c];
+            if (val == null || val === '') continue;
             let stored: string;
             if (wsCell?.f) {
               const formula = unwrapDummyFunction(wsCell.f);
@@ -330,23 +366,116 @@ export function Home({ path }: { path?: string }) {
           }
         }
 
+        // Coalesce per-cell formats into FormatRange entries
+        // Group cells with identical formatting, then merge contiguous rectangles
+        const formats: Record<string, any> = {};
+        if (cellFormats.length > 0) {
+          const byKey = new Map<string, { r: number; c: number }[]>();
+          for (const { r, c, fmt } of cellFormats) {
+            const key = JSON.stringify(fmt);
+            let list = byKey.get(key);
+            if (!list) { list = []; byKey.set(key, list); }
+            list.push({ r, c });
+          }
+          let fmtIndex = 1;
+          for (const [key, positions] of byKey) {
+            const fmt = JSON.parse(key);
+            // Simple coalesce: scan for maximal row spans per column, then merge horizontally
+            // Sort by row then col
+            positions.sort((a, b) => a.r - b.r || a.c - b.c);
+            // Build row-based spans: group contiguous columns in same row
+            const rowSpans: { r: number; cStart: number; cEnd: number }[] = [];
+            let cur = { r: positions[0].r, cStart: positions[0].c, cEnd: positions[0].c };
+            for (let i = 1; i < positions.length; i++) {
+              const p = positions[i];
+              if (p.r === cur.r && p.c === cur.cEnd + 1) {
+                cur.cEnd = p.c;
+              } else {
+                rowSpans.push({ ...cur });
+                cur = { r: p.r, cStart: p.c, cEnd: p.c };
+              }
+            }
+            rowSpans.push(cur);
+            // Merge vertically: stack row spans with same column range
+            const merged: { rStart: number; rEnd: number; cStart: number; cEnd: number }[] = [];
+            for (const span of rowSpans) {
+              const prev = merged.length > 0 ? merged[merged.length - 1] : null;
+              if (prev && prev.cStart === span.cStart && prev.cEnd === span.cEnd && prev.rEnd + 1 === span.r) {
+                prev.rEnd = span.r;
+              } else {
+                merged.push({ rStart: span.r, rEnd: span.r, cStart: span.cStart, cEnd: span.cEnd });
+              }
+            }
+            for (const rect of merged) {
+              formats[sid()] = {
+                index: fmtIndex++,
+                rangeRowStart: rowIds[rect.rStart],
+                rangeRowEnd: rowIds[rect.rEnd],
+                rangeColStart: colIds[rect.cStart],
+                rangeColEnd: colIds[rect.cEnd],
+                format: fmt,
+              };
+            }
+          }
+        }
+
         const { hidden } = sheetDefs[si];
-        builtSheets.push({ sheetId, sheetName, index: si + 1, hidden, columns, rows: rowsMap, cells });
+        builtSheets.push({ sheetId, sheetName, index: si + 1, hidden, columns, rows: rowsMap, cells, formats });
       }
 
-      setImportStatus({ label: 'Saving document...', progress: 95 });
+      // Phase 1: create minimal empty document
+      setImportStatus({ label: 'Creating document...', progress: 10 });
       await new Promise(r => setTimeout(r, 0));
 
-      const sheets: Record<string, any> = {};
-      for (const s of builtSheets) {
-        sheets[s.sheetId] = {
-          '@type': 'Sheet', name: s.sheetName, index: s.index,
-          ...(s.hidden ? { hidden: true } : {}),
-          columns: s.columns, rows: s.rows, cells: s.cells,
-        };
-      }
-      const { docId } = await createDoc({ '@type': 'DataGrid', name, sheets }, createSecure);
+      const { docId } = await createDoc({ '@type': 'DataGrid', name, sheets: {} }, createSecure);
       addDocId(docId, { type: 'DataGrid', name, encrypted: createSecure });
+
+      // Phase 2: populate sheets, cells, and formats in batches
+      const BATCH_SIZE = 2000;
+      const totalCells = builtSheets.reduce((sum, s) => sum + Object.keys(s.cells).length, 0);
+      let populatedCells = 0;
+
+      for (const s of builtSheets) {
+        // Add sheet structure (columns, rows, no cells yet)
+        await updateDoc(
+          docId,
+          (d, sheetId, sheet) => { (d as any).sheets[sheetId] = sheet; },
+          s.sheetId, {
+            '@type': 'Sheet', name: s.sheetName, index: s.index,
+            ...(s.hidden ? { hidden: true } : {}),
+            columns: s.columns, rows: s.rows, cells: {},
+          },
+        );
+
+        // Add cells in batches
+        const cellEntries = Object.entries(s.cells);
+        for (let i = 0; i < cellEntries.length; i += BATCH_SIZE) {
+          const batch = Object.fromEntries(cellEntries.slice(i, i + BATCH_SIZE));
+          await updateDoc(
+            docId,
+            (d, sheetId, cells) => {
+              for (const [k, v] of Object.entries(cells)) (d as any).sheets[sheetId].cells[k] = v;
+            },
+            s.sheetId, batch,
+          );
+          populatedCells += Math.min(BATCH_SIZE, cellEntries.length - i);
+          setImportStatus({
+            label: 'Adding cells...',
+            progress: totalCells > 0 ? Math.round(10 + (populatedCells / totalCells) * 89) : 99,
+          });
+          await new Promise(r => setTimeout(r, 0));
+        }
+
+        // Add formats for this sheet
+        if (Object.keys(s.formats).length > 0) {
+          await updateDoc(
+            docId,
+            (d, sheetId, formats) => { (d as any).sheets[sheetId].formats = formats; },
+            s.sheetId, s.formats,
+          );
+        }
+      }
+
       setImportStatus(null);
       window.location.hash = viewPathForType('DataGrid', docId);
     } catch (err: any) {

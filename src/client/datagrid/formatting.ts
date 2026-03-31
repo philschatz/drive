@@ -1,0 +1,256 @@
+import type { DataGridCellFormat, DataGridBorder, FormatRange, ConditionalFormatRule } from './schema';
+import { sortedEntries } from './helpers';
+
+// ============================================================
+// formatToCss — convert DataGridCellFormat to inline CSS styles
+// ============================================================
+
+export function formatToCss(format: DataGridCellFormat | undefined): Record<string, string> | undefined {
+  if (!format) return undefined;
+  const style: Record<string, string> = {};
+
+  if (format.bold) style.fontWeight = 'bold';
+  if (format.italic) style.fontStyle = 'italic';
+
+  const decorations: string[] = [];
+  if (format.underline) decorations.push('underline');
+  if (format.strikethrough) decorations.push('line-through');
+  if (decorations.length > 0) style.textDecoration = decorations.join(' ');
+
+  if (format.fontFamily) style.fontFamily = format.fontFamily;
+  if (format.fontSize) style.fontSize = `${format.fontSize}pt`;
+  if (format.textColor) style.color = format.textColor;
+  if (format.bgColor) style.background = format.bgColor;
+  if (format.hAlign) style.textAlign = format.hAlign;
+  if (format.vAlign) style.verticalAlign = format.vAlign === 'middle' ? 'middle' : format.vAlign;
+  if (format.wrapText) { style.whiteSpace = 'normal'; style.wordWrap = 'break-word'; }
+
+  if (format.borderTop) style.borderTop = borderToCss(format.borderTop);
+  if (format.borderBottom) style.borderBottom = borderToCss(format.borderBottom);
+  if (format.borderLeft) style.borderLeft = borderToCss(format.borderLeft);
+  if (format.borderRight) style.borderRight = borderToCss(format.borderRight);
+
+  return Object.keys(style).length > 0 ? style : undefined;
+}
+
+function borderToCss(b: DataGridBorder): string {
+  const widthMap: Record<string, string> = { thin: '1px', medium: '2px', thick: '3px' };
+  const styleMap: Record<string, string> = {
+    thin: 'solid', medium: 'solid', thick: 'solid',
+    dashed: 'dashed', dotted: 'dotted', double: 'double',
+  };
+  const width = widthMap[b.style || 'thin'] || '1px';
+  const borderStyle = styleMap[b.style || 'thin'] || 'solid';
+  return `${width} ${borderStyle} ${b.color || '#000'}`;
+}
+
+// ============================================================
+// formatDisplayValue — apply number format to display value
+// ============================================================
+
+export function formatDisplayValue(display: string, numFmt: string | undefined): string {
+  if (!numFmt || display === '' || display.startsWith('#')) return display;
+  const num = Number(display);
+  if (isNaN(num)) return display;
+
+  // Common format patterns
+  if (numFmt === '0%' || numFmt === '0.00%') {
+    const pct = num * 100;
+    const decimals = numFmt === '0.00%' ? 2 : 0;
+    return pct.toFixed(decimals) + '%';
+  }
+  if (numFmt === '#,##0' || numFmt === '#,##0.00') {
+    const decimals = numFmt.includes('.00') ? 2 : 0;
+    return num.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+  }
+  if (numFmt === '$#,##0.00' || numFmt === '$#,##0') {
+    const decimals = numFmt.includes('.00') ? 2 : 0;
+    return '$' + num.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+  }
+  if (numFmt === '0' || numFmt === '0.00') {
+    const decimals = numFmt === '0.00' ? 2 : 0;
+    return num.toFixed(decimals);
+  }
+
+  return display;
+}
+
+// ============================================================
+// computeCellFormat — resolve effective format for a cell from format ranges
+// ============================================================
+
+export function computeCellFormat(
+  formats: Record<string, FormatRange> | undefined,
+  rowId: string,
+  colId: string,
+  rowIds: string[],
+  colIds: string[],
+): DataGridCellFormat | undefined {
+  if (!formats) return undefined;
+
+  const rowIdx = rowIds.indexOf(rowId);
+  const colIdx = colIds.indexOf(colId);
+  if (rowIdx === -1 || colIdx === -1) return undefined;
+
+  // Sort ranges by index (ascending) so later overrides earlier
+  const sorted = Object.values(formats).sort((a, b) => a.index - b.index);
+
+  let merged: DataGridCellFormat | undefined;
+  for (const range of sorted) {
+    const rStart = rowIds.indexOf(range.rangeRowStart);
+    const rEnd = rowIds.indexOf(range.rangeRowEnd);
+    const cStart = colIds.indexOf(range.rangeColStart);
+    const cEnd = colIds.indexOf(range.rangeColEnd);
+    if (rStart === -1 || rEnd === -1 || cStart === -1 || cEnd === -1) continue;
+    if (rowIdx < rStart || rowIdx > rEnd || colIdx < cStart || colIdx > cEnd) continue;
+
+    if (!merged) {
+      merged = { ...range.format };
+    } else {
+      Object.assign(merged, range.format);
+    }
+  }
+
+  return merged;
+}
+
+// ============================================================
+// buildFormatCache — precompute format map for all visible cells
+// ============================================================
+
+export function buildFormatCache(
+  formats: Record<string, FormatRange> | undefined,
+  rowIds: string[],
+  colIds: string[],
+): Map<string, DataGridCellFormat> {
+  const cache = new Map<string, DataGridCellFormat>();
+  if (!formats) return cache;
+
+  // Sort by index ascending
+  const sorted = Object.values(formats).sort((a, b) => a.index - b.index);
+
+  // Build row/col index lookups
+  const rowIdxMap = new Map<string, number>();
+  rowIds.forEach((id, i) => rowIdxMap.set(id, i));
+  const colIdxMap = new Map<string, number>();
+  colIds.forEach((id, i) => colIdxMap.set(id, i));
+
+  for (const range of sorted) {
+    const rStart = rowIdxMap.get(range.rangeRowStart);
+    const rEnd = rowIdxMap.get(range.rangeRowEnd);
+    const cStart = colIdxMap.get(range.rangeColStart);
+    const cEnd = colIdxMap.get(range.rangeColEnd);
+    if (rStart === undefined || rEnd === undefined || cStart === undefined || cEnd === undefined) continue;
+
+    for (let r = rStart; r <= rEnd; r++) {
+      for (let c = cStart; c <= cEnd; c++) {
+        const key = `${r}:${c}`;
+        const existing = cache.get(key);
+        if (existing) {
+          Object.assign(existing, range.format);
+        } else {
+          cache.set(key, { ...range.format });
+        }
+      }
+    }
+  }
+
+  return cache;
+}
+
+// ============================================================
+// evaluateConditionalFormats — resolve conditional formatting for a cell
+// ============================================================
+
+export function evaluateConditionalFormats(
+  rules: Record<string, ConditionalFormatRule> | undefined,
+  rowId: string,
+  colId: string,
+  cellValue: string,
+  rowIds: string[],
+  colIds: string[],
+): DataGridCellFormat | undefined {
+  if (!rules) return undefined;
+
+  const rowIdx = rowIds.indexOf(rowId);
+  const colIdx = colIds.indexOf(colId);
+  if (rowIdx === -1 || colIdx === -1) return undefined;
+
+  const sorted = Object.values(rules).sort((a, b) => a.index - b.index);
+
+  for (const rule of sorted) {
+    const rStart = rowIds.indexOf(rule.rangeRowStart);
+    const rEnd = rowIds.indexOf(rule.rangeRowEnd);
+    const cStart = colIds.indexOf(rule.rangeColStart);
+    const cEnd = colIds.indexOf(rule.rangeColEnd);
+    if (rStart === -1 || rEnd === -1 || cStart === -1 || cEnd === -1) continue;
+    if (rowIdx < rStart || rowIdx > rEnd || colIdx < cStart || colIdx > cEnd) continue;
+
+    if (matchesCondition(cellValue, rule.conditionType, rule.conditionValue)) {
+      return rule.format;
+    }
+  }
+
+  return undefined;
+}
+
+/**
+ * Resolve conditional formatting for a cell, combining inline condition checks
+ * with HF worker results for customFormula rules. First matching rule wins.
+ */
+export function resolveConditionalFormat(
+  rules: Record<string, ConditionalFormatRule>,
+  rowId: string,
+  colId: string,
+  cellValue: string,
+  rowIds: string[],
+  colIds: string[],
+  condFormatResults: { matches: Map<string, Set<string>> } | null,
+): DataGridCellFormat | undefined {
+  const rowIdx = rowIds.indexOf(rowId);
+  const colIdx = colIds.indexOf(colId);
+  if (rowIdx === -1 || colIdx === -1) return undefined;
+
+  const cellKey = `${rowId}:${colId}`;
+  const sorted = Object.entries(rules).sort((a, b) => a[1].index - b[1].index);
+
+  for (const [ruleId, rule] of sorted) {
+    const rStart = rowIds.indexOf(rule.rangeRowStart);
+    const rEnd = rowIds.indexOf(rule.rangeRowEnd);
+    const cStart = colIds.indexOf(rule.rangeColStart);
+    const cEnd = colIds.indexOf(rule.rangeColEnd);
+    if (rStart === -1 || rEnd === -1 || cStart === -1 || cEnd === -1) continue;
+    if (rowIdx < rStart || rowIdx > rEnd || colIdx < cStart || colIdx > cEnd) continue;
+
+    if (rule.conditionType === 'customFormula') {
+      // Check HF worker results
+      if (condFormatResults?.matches.get(ruleId)?.has(cellKey)) {
+        return rule.format;
+      }
+    } else if (matchesCondition(cellValue, rule.conditionType, rule.conditionValue)) {
+      return rule.format;
+    }
+  }
+
+  return undefined;
+}
+
+function matchesCondition(value: string, type: string, conditionValue?: string): boolean {
+  const num = Number(value);
+  const cond = conditionValue !== undefined ? Number(conditionValue) : NaN;
+
+  switch (type) {
+    case 'gt': return !isNaN(num) && !isNaN(cond) && num > cond;
+    case 'lt': return !isNaN(num) && !isNaN(cond) && num < cond;
+    case 'eq': return value === (conditionValue ?? '');
+    case 'neq': return value !== (conditionValue ?? '');
+    case 'gte': return !isNaN(num) && !isNaN(cond) && num >= cond;
+    case 'lte': return !isNaN(num) && !isNaN(cond) && num <= cond;
+    case 'textContains': return conditionValue !== undefined && value.toLowerCase().includes(conditionValue.toLowerCase());
+    case 'textStartsWith': return conditionValue !== undefined && value.toLowerCase().startsWith(conditionValue.toLowerCase());
+    case 'textEndsWith': return conditionValue !== undefined && value.toLowerCase().endsWith(conditionValue.toLowerCase());
+    case 'isEmpty': return value === '';
+    case 'isNotEmpty': return value !== '';
+    default: return false;
+  }
+}

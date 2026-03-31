@@ -16,8 +16,52 @@ export interface DataGridRow {
   hidden?: boolean;
 }
 
+export interface DataGridBorder {
+  style?: string;
+  color?: string;
+}
+
+export interface DataGridCellFormat {
+  bold?: boolean;
+  italic?: boolean;
+  underline?: boolean;
+  strikethrough?: boolean;
+  fontFamily?: string;
+  fontSize?: number;
+  textColor?: string;
+  bgColor?: string;
+  hAlign?: string;
+  vAlign?: string;
+  wrapText?: boolean;
+  numFmt?: string;
+  borderTop?: DataGridBorder;
+  borderBottom?: DataGridBorder;
+  borderLeft?: DataGridBorder;
+  borderRight?: DataGridBorder;
+}
+
 export interface DataGridCell {
   value: string;
+}
+
+export interface FormatRange {
+  index: number;
+  rangeRowStart: string;
+  rangeRowEnd: string;
+  rangeColStart: string;
+  rangeColEnd: string;
+  format: DataGridCellFormat;
+}
+
+export interface ConditionalFormatRule {
+  index: number;
+  rangeRowStart: string;
+  rangeRowEnd: string;
+  rangeColStart: string;
+  rangeColEnd: string;
+  conditionType: string;
+  conditionValue?: string;
+  format: DataGridCellFormat;
 }
 
 export interface DataGridSheet {
@@ -28,6 +72,8 @@ export interface DataGridSheet {
   columns: Record<string, DataGridColumn>;
   rows: Record<string, DataGridRow>;
   cells: Record<string, DataGridCell>;
+  formats?: Record<string, FormatRange>;
+  conditionalFormats?: Record<string, ConditionalFormatRule>;
 }
 
 export interface DataGridDocument {
@@ -50,8 +96,54 @@ const dataGridRowSchema = obj({
   hidden: bool({ optional: true }),
 });
 
+const dataGridBorderSchema = obj({
+  style: str({ enum: ['thin', 'medium', 'thick', 'dashed', 'dotted', 'double'], optional: true }),
+  color: str({ optional: true }),
+}, { optional: true });
+
+const dataGridCellFormatSchema = obj({
+  bold: bool({ optional: true }),
+  italic: bool({ optional: true }),
+  underline: bool({ optional: true }),
+  strikethrough: bool({ optional: true }),
+  fontFamily: str({ optional: true }),
+  fontSize: num({ min: 1, max: 400, optional: true }),
+  textColor: str({ optional: true }),
+  bgColor: str({ optional: true }),
+  hAlign: str({ enum: ['left', 'center', 'right', 'justify'], optional: true }),
+  vAlign: str({ enum: ['top', 'middle', 'bottom'], optional: true }),
+  wrapText: bool({ optional: true }),
+  numFmt: str({ optional: true }),
+  borderTop: dataGridBorderSchema,
+  borderBottom: dataGridBorderSchema,
+  borderLeft: dataGridBorderSchema,
+  borderRight: dataGridBorderSchema,
+}, { optional: true });
+
 const dataGridCellSchema = obj({
   value: str(),
+});
+
+const formatRangeSchema = obj({
+  index: num({ min: 0 }),
+  rangeRowStart: str(),
+  rangeRowEnd: str(),
+  rangeColStart: str(),
+  rangeColEnd: str(),
+  format: dataGridCellFormatSchema,
+});
+
+const conditionalFormatRuleSchema = obj({
+  index: num({ min: 0 }),
+  rangeRowStart: str(),
+  rangeRowEnd: str(),
+  rangeColStart: str(),
+  rangeColEnd: str(),
+  conditionType: str({ enum: ['gt', 'lt', 'eq', 'neq', 'gte', 'lte',
+    'textContains', 'textStartsWith', 'textEndsWith',
+    'isEmpty', 'isNotEmpty', 'customFormula'] }),
+  conditionValue: str({ optional: true }),
+  format: dataGridCellFormatSchema,
 });
 
 const dataGridSheetSchema = obj({
@@ -62,6 +154,8 @@ const dataGridSheetSchema = obj({
   columns: record(dataGridColumnSchema),
   rows: record(dataGridRowSchema),
   cells: record(dataGridCellSchema),
+  formats: record(formatRangeSchema, { optional: true }),
+  conditionalFormats: record(conditionalFormatRuleSchema, { optional: true }),
 });
 
 export const dataGridDocumentSchema = obj({
@@ -87,6 +181,20 @@ function checkSheetDependencies(
 
   const colIds = new Set(Object.keys(columns));
   const rowIds = new Set(Object.keys(rows));
+
+  const formats = sheet.formats;
+  if (formats) {
+    for (const [id, fmt] of Object.entries(formats)) {
+      validateRangeIds(fmt, id, rowIds, colIds, [...pathPrefix, 'formats'], errors);
+    }
+  }
+
+  const conditionalFormats = sheet.conditionalFormats;
+  if (conditionalFormats) {
+    for (const [id, rule] of Object.entries(conditionalFormats)) {
+      validateRangeIds(rule, id, rowIds, colIds, [...pathPrefix, 'conditionalFormats'], errors);
+    }
+  }
 
   const colIndices = new Map<number, string>();
   for (const [id, col] of Object.entries(columns)) {
@@ -192,5 +300,33 @@ export function checkDataGridDependencies(doc: any, errors: ValidationError[]): 
     }
 
     checkSheetDependencies(sheet, id, sheets, allSheetIds, ['sheets', id], errors);
+  }
+}
+
+function validateRangeIds(
+  rangeObj: any,
+  rangeId: string,
+  rowIds: Set<string>,
+  colIds: Set<string>,
+  pathPrefix: string[],
+  errors: ValidationError[],
+): void {
+  for (const field of ['rangeRowStart', 'rangeRowEnd'] as const) {
+    if (typeof rangeObj[field] === 'string' && !rowIds.has(rangeObj[field])) {
+      errors.push({
+        path: [...pathPrefix, rangeId, field],
+        message: `References non-existent row "${rangeObj[field]}"`,
+        kind: 'dependency',
+      });
+    }
+  }
+  for (const field of ['rangeColStart', 'rangeColEnd'] as const) {
+    if (typeof rangeObj[field] === 'string' && !colIds.has(rangeObj[field])) {
+      errors.push({
+        path: [...pathPrefix, rangeId, field],
+        message: `References non-existent column "${rangeObj[field]}"`,
+        kind: 'dependency',
+      });
+    }
   }
 }

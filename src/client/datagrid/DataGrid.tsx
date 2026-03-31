@@ -6,6 +6,9 @@ import { EditorTitleBar } from '../shared/EditorTitleBar';
 import type { PeerFieldInfo } from '../shared/presence';
 import { useGridCommands, commitReorder, commitAutofill, type GridCommandState, type GridCommandContext } from './commands';
 import { CommandMenuBar, CommandToolbar, CommandContextMenuContent } from './CommandBar';
+import { FormattingToolbar } from './FormattingToolbar';
+import { ConditionalFormatPanel } from './ConditionalFormatPanel';
+import { applyFormatToSelection } from './commands';
 import { ContextMenu, ContextMenuTrigger } from '@/components/ui/context-menu';
 import {
   sortedEntries, colIndexToLetter, shortId,
@@ -13,6 +16,8 @@ import {
   getDisplayValue,
 } from './helpers';
 import { FormulaEditor, type FormulaHighlight, isRange } from './FormulaEditor';
+import { buildFormatCache, formatToCss, formatDisplayValue, resolveConditionalFormat } from './formatting';
+import type { DataGridCellFormat } from './schema';
 import { SheetTabs } from './SheetTabs';
 import { useUndoRedo } from '../shared/useUndoRedo';
 import { useDocumentHistory } from '../shared/useDocumentHistory';
@@ -21,7 +26,7 @@ import { HistorySlider } from '../shared/HistorySlider';
 import { useDocumentValidation } from '../shared/useDocumentValidation';
 import { ValidationPanel } from '../shared/ValidationPanel';
 import { DocLoader } from '../shared/useDocument';
-import { createHfBridge, type HfBridge, type MCResults } from './hf-bridge';
+import { createHfBridge, type HfBridge, type MCResults, type CondFormatResults } from './hf-bridge';
 import { sendHfPort } from '../worker-api';
 import { DistributionPanel } from './DistributionPanel';
 import { formatDistValue } from './helpers';
@@ -109,14 +114,17 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
   const [autofillTarget, setAutofillTarget] = useState<{ minCol: number; maxCol: number; minRow: number; maxRow: number } | null>(null);
   const [clipboardSource, setClipboardSource] = useState<{ minRow: number; maxRow: number; minCol: number; maxCol: number } | null>(null);
   const [sheetContextMenu, setSheetContextMenu] = useState<string | null>(null);
+  const [condFormatOpen, setCondFormatOpen] = useState(false);
   const clipboardRef = useRef<{
     values: string[][];
+    formats: (DataGridCellFormat | undefined)[][];
     mode: 'copy' | 'cut';
     range: { minRow: number; maxRow: number; minCol: number; maxCol: number };
   } | null>(null);
 
   const [addRowCount, setAddRowCount] = useState<number | null>(10);
   const [mcResults, setMcResults] = useState<MCResults | null>(null);
+  const condFormatResultsRef = useRef<CondFormatResults | null>(null);
   const [showValidation, setShowValidation] = useState(false);
 
   const [currentSheetId, setCurrentSheetId] = useState<string | null>(null);
@@ -158,6 +166,10 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
     if (!currentSheet?.rows) return [];
     return sortedEntries(currentSheet.rows).map(([id]: [string, any]) => id);
   }, [currentSheet?.rows]);
+
+  const formatCache = useMemo(() => {
+    return buildFormatCache(currentSheet?.formats, sortedRowIds, sortedColIds);
+  }, [currentSheet?.formats, sortedRowIds, sortedColIds]);
 
   const columnDefs = useMemo(() => {
     if (!currentSheet?.columns) return [];
@@ -826,6 +838,10 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
     const unsubMC = bridge.onMCResults((results) => {
       if (mounted) setMcResults(results);
     });
+    const unsubCF = bridge.onCondFormatResults((results) => {
+      condFormatResultsRef.current = results;
+      if (mounted) setTick(t => t + 1);
+    });
 
     // Helper to subscribe to a sheet's full data
     const subscribeToSheet = (sid: string) => {
@@ -881,10 +897,34 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
       activeSheetUnsubRef.current = null;
       unsubValues();
       unsubMC();
+      unsubCF();
       bridge.destroy();
       hfBridgeRef.current = null;
     };
   }, [docId]);
+
+  // Send conditional format rules with customFormula to HF worker for evaluation
+  useEffect(() => {
+    const bridge = hfBridgeRef.current;
+    if (!bridge) return;
+    const condFormats = currentSheet?.conditionalFormats;
+    if (!condFormats) {
+      bridge.evalCondFormats([]);
+      return;
+    }
+    const rules = Object.entries(condFormats)
+      .filter(([, rule]: [string, any]) => rule.conditionType === 'customFormula')
+      .map(([id, rule]: [string, any]) => ({
+        id,
+        conditionType: rule.conditionType,
+        conditionValue: rule.conditionValue,
+        rangeRowStart: rule.rangeRowStart,
+        rangeRowEnd: rule.rangeRowEnd,
+        rangeColStart: rule.rangeColStart,
+        rangeColEnd: rule.rangeColEnd,
+      }));
+    bridge.evalCondFormats(rules);
+  }, [currentSheet?.conditionalFormats]);
 
   // Formula bar value
   const formulaBarValue = useMemo(() => {
@@ -972,6 +1012,11 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
     return [];
   }, [selectedCols, selectedCell]);
 
+  const currentCellFormat = useMemo(() => {
+    if (!selectedCell) return undefined;
+    return formatCache.get(`${selectedCell[1]}:${selectedCell[0]}`);
+  }, [selectedCell, formatCache]);
+
   const commandState: GridCommandState = {
     canUndo,
     canRedo,
@@ -982,6 +1027,7 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
     contextScope: contextMenu
       ? { type: contextMenu.type, indices: contextMenu.indices }
       : null,
+    currentCellFormat,
   };
   const commandCtx: GridCommandContext = {
     sheet: doc2 ?? null,
@@ -1015,6 +1061,8 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
       setSheetContextMenu(null);
       sheetRenameRef.current?.(id);
     },
+    formatCache,
+    openConditionalFormatPanel: () => setCondFormatOpen(true),
   };
   commandCtxRef.current = commandCtx;
   const commands = useGridCommands(commandState, commandCtx);
@@ -1073,7 +1121,14 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
         <>
           <CommandMenuBar menus={commands.menus} />
 
-          <CommandToolbar entries={commands.toolbar} />
+          <div className="flex items-center gap-1 mb-1 flex-wrap">
+            <CommandToolbar entries={commands.toolbar} />
+            <FormattingToolbar
+              currentFormat={currentCellFormat}
+              hasSelection={commandState.hasSelection}
+              onFormatChange={(patch) => applyFormatToSelection(commandCtx, patch)}
+            />
+          </div>
 
           {/* Formula bar — shows a CodeMirror editor once a cell is selected,
               so CodeMirror is never loaded at page-load time (avoids OOM crash). */}
@@ -1217,6 +1272,7 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
                         const refInfo = refHighlightMap.get(`${ci}:${ri}`);
                         const rawValue = currentSheet?.cells[`${rowId}:${colId}`]?.value || '';
                         let display = getDisplayValue(computedValues, rawValue, effectiveSheetId ?? '', rowId, colId);
+                        const cellFmt = formatCache.get(`${ri}:${ci}`);
                         const mcKey = `${effectiveSheetId}:${rowId}:${colId}`;
                         const isEvaluating = rawValue.startsWith('=') && !computedValues?.has(mcKey);
                         const mcStats = mcResults?.cells.get(mcKey);
@@ -1228,7 +1284,23 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
                         const inAutofillTarget = autofillTarget && ci >= autofillTarget.minCol && ci <= autofillTarget.maxCol && ri >= autofillTarget.minRow && ri <= autofillTarget.maxRow;
                         const showAutofillHandle = autofillHandleCell && autofillHandleCell[0] === ci && autofillHandleCell[1] === ri && !autofillDragRef.current;
 
+                        // Apply cell formatting first (lowest priority)
                         const cellStyle: Record<string, string> = {};
+                        const fmtCss = formatToCss(cellFmt);
+                        if (fmtCss) Object.assign(cellStyle, fmtCss);
+                        if (cellFmt?.numFmt) display = formatDisplayValue(display, cellFmt.numFmt);
+                        // Apply conditional formatting (overrides cell format)
+                        if (currentSheet?.conditionalFormats) {
+                          const condFmt = resolveConditionalFormat(
+                            currentSheet.conditionalFormats, rowId, colId, display,
+                            sortedRowIds, sortedColIds, condFormatResultsRef.current,
+                          );
+                          if (condFmt) {
+                            const condCss = formatToCss(condFmt);
+                            if (condCss) Object.assign(cellStyle, condCss);
+                          }
+                        }
+                        // UI overlays (peer, ref-highlight, clipboard) override formatting
                         if (peers) cellStyle.boxShadow = `inset 0 0 0 2px ${peers.color}`;
                         if (refInfo) {
                           const c = refInfo.color;
@@ -1407,6 +1479,16 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
       )}
 
       </div>
+
+      <ConditionalFormatPanel
+        open={condFormatOpen}
+        onOpenChange={setCondFormatOpen}
+        rules={currentSheet?.conditionalFormats}
+        sortedRowIds={sortedRowIds}
+        sortedColIds={sortedColIds}
+        currentSheetId={currentSheetId ?? ''}
+        mutate={mutate}
+      />
     </div>
     </DocLoader>
   );

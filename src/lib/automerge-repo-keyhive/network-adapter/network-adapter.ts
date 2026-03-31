@@ -926,11 +926,11 @@ export class KeyhiveNetworkAdapter extends NetworkAdapter {
     includeContactCard: boolean = false,
     attemptRecovery: boolean = false
   ): void {
-    void this.asyncSyncKeyhive(
+    this.asyncSyncKeyhive(
       maybeSenderId,
       includeContactCard,
       attemptRecovery
-    );
+    ).catch((err: any) => console.error('[AMRepoKeyhive] syncKeyhive failed:', err));
   }
 
   // Trigger the keyhive op set reconciliation sync protocol. Determine the hashes
@@ -1016,18 +1016,6 @@ export class KeyhiveNetworkAdapter extends NetworkAdapter {
               targetId: targetId,
               data: data,
             };
-            // BUG1 DIAGNOSTIC: check for staleness on every sync check (bypasses all caches)
-            {
-              const pubAgent = await this.keyhive.getAgent(Identifier.publicId());
-              if (pubAgent) {
-                const rawHashes = await this.keyhive.eventHashesForAgent(pubAgent);
-                const rawEvents = await this.keyhive.eventsForAgent(pubAgent);
-                const stats = await this.keyhive.stats();
-                if (rawHashes.length !== rawEvents.size) {
-                  console.error(`[BUG1] STALE at sync-check! eventHashesForAgent=${rawHashes.length} eventsForAgent=${rawEvents.size} totalOps=${stats.totalOps} myTotal=${myTotal}`);
-                }
-              }
-            }
             this.streamingMetrics.recordSyncCheckSent();
             this.send(message, maybeContactCard);
           } else {
@@ -1245,18 +1233,6 @@ export class KeyhiveNetworkAdapter extends NetworkAdapter {
             this.invalidateCaches();
           }
           const statsAfterIngest = await this.keyhive.stats();
-          // BUG1 DIAGNOSTIC: check eventHashesForAgent consistency after ingestion
-          {
-            const pubAgent = await this.keyhive.getAgent(Identifier.publicId());
-            if (pubAgent) {
-              const hashes = await this.keyhive.eventHashesForAgent(pubAgent);
-              const events = await this.keyhive.eventsForAgent(pubAgent);
-              if (hashes.length !== events.size) {
-                console.error(`[BUG1] STALE after sync-response ingest! eventHashesForAgent=${hashes.length} but eventsForAgent=${events.size}, totalOps=${statsAfterIngest.totalOps}`);
-              } else {
-              }
-            }
-          }
           if (statsAfterIngest.totalOps !== this.lastKnownTotalOps) {
             this.lastKnownTotalOps = statsAfterIngest.totalOps;
             // Only clear beliefs when state actually changed
@@ -1428,18 +1404,6 @@ export class KeyhiveNetworkAdapter extends NetworkAdapter {
           // Invalidate hash cache since we ingested events from a peer
           this.invalidateCaches();
           const statsAfterIngest = await this.keyhive.stats();
-          // BUG1 DIAGNOSTIC: check eventHashesForAgent consistency after ingestion
-          {
-            const pubAgent = await this.keyhive.getAgent(Identifier.publicId());
-            if (pubAgent) {
-              const hashes = await this.keyhive.eventHashesForAgent(pubAgent);
-              const events = await this.keyhive.eventsForAgent(pubAgent);
-              if (hashes.length !== events.size) {
-                console.error(`[BUG1] STALE after sync-ops ingest! eventHashesForAgent=${hashes.length} but eventsForAgent=${events.size}, totalOps=${statsAfterIngest.totalOps}`);
-              } else {
-              }
-            }
-          }
           if (statsAfterIngest.totalOps !== this.lastKnownTotalOps) {
             this.lastKnownTotalOps = statsAfterIngest.totalOps;
             // Only clear beliefs when state actually changed
@@ -1651,9 +1615,9 @@ export class KeyhiveNetworkAdapter extends NetworkAdapter {
   }
 
   private runCompaction(): void {
-    void this.keyhiveQueue.run(async () => {
+    this.keyhiveQueue.run(async () => {
       await this.keyhiveStorage.compact(this.keyhive);
-    });
+    }).catch((err: any) => console.error('[AMRepoKeyhive] compaction failed:', err));
   }
 
   private static readonly MAX_DECRYPT_RETRIES = 50;
@@ -1666,7 +1630,7 @@ export class KeyhiveNetworkAdapter extends NetworkAdapter {
     this.docObjects.clear();
     for (const entry of pending) {
       const { message, rawPayload, automergeDocId } = entry;
-      void this.keyhiveQueue.run(async () => {
+      this.keyhiveQueue.run(async () => {
         let doc = this.docObjects.get(automergeDocId);
         if (!doc) {
           const khDocId = this.docMap.get(automergeDocId);
@@ -1713,7 +1677,7 @@ export class KeyhiveNetworkAdapter extends NetworkAdapter {
             console.warn(`[AMRepoKeyhive] dropping undecryptable msg for doc ${automergeDocId} after ${entry.retries} retries: ${errDetail}`);
           }
         }
-      });
+      }).catch((err: any) => console.error(`[AMRepoKeyhive] retryPendingDecrypt failed for ${automergeDocId}:`, err));
     }
   }
 

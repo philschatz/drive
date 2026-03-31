@@ -9,7 +9,7 @@
 
 import HyperFormula, { CellValueDetailedType } from 'hyperformula';
 import { registerCustomFunctions, getDistributionRegistry, clearDistributionRegistry, hfConfig, addGoogleSheetsNamedExpressions } from './hf-functions';
-import { buildSheetData, cellToHfValue, sortedEntries } from './helpers';
+import { buildSheetData, cellToHfValue, sortedEntries, internalToA1 } from './helpers';
 import { runMonteCarlo, type MCResults } from './monte-carlo';
 import { sampleDistribution, computeStats, type DistributionInfo, type DistributionStats } from './distributions';
 
@@ -24,12 +24,23 @@ interface SheetInfo {
   cells: Record<string, { value: string }>;
 }
 
+interface CondFormatRuleMsg {
+  id: string;
+  conditionType: string;
+  conditionValue?: string;
+  rangeRowStart: string;
+  rangeRowEnd: string;
+  rangeColStart: string;
+  rangeColEnd: string;
+}
+
 type MainToHf =
   | { type: 'init'; port: MessagePort }
   | { type: 'watch'; docId: string; activeSheet: string }
   | { type: 'switch-sheet'; sheetId: string }
   | { type: 'unwatch' }
-  | { type: 'set-cell'; sheetId: string; rowId: string; colId: string; value: string };
+  | { type: 'set-cell'; sheetId: string; rowId: string; colId: string; value: string }
+  | { type: 'eval-cond-formats'; rules: CondFormatRuleMsg[] };
 
 // --- State ---
 
@@ -52,6 +63,9 @@ const depsData = new Map<string, SheetInfo>();
 // Set of dependency cell keys we're currently subscribed to,
 // grouped by sheetId: Map<sheetId, Set<"rowId:colId">>
 const depCells = new Map<string, Set<string>>();
+
+// Cached conditional format rules with customFormula
+let pendingCondFormatRules: CondFormatRuleMsg[] = [];
 
 /** Merge formula cells and dep cells into a unified view per sheet. */
 function getMergedSheetData(): Map<string, SheetInfo> {
@@ -291,11 +305,81 @@ function rebuildAndEvaluate() {
 
   (self as any).postMessage({ type: 'computed-values', values, spillTargets: spillTargetKeys, errors });
 
+  // Evaluate conditional format custom formulas
+  if (pendingCondFormatRules.length > 0 && activeInfo) {
+    evaluateCondFormats(activeInfo);
+  }
+
   // Auto-run Monte Carlo if distributions were detected
   const registry = getDistributionRegistry();
   if (registry.size > 0) {
     runMCInWorker(sheetOrder, merged, registry);
   }
+}
+
+/**
+ * Evaluate conditional format rules that use customFormula.
+ * For each cell in the rule's range, evaluates the formula relative to that cell
+ * using the already-built HyperFormula instance.
+ */
+function evaluateCondFormats(activeInfo: SheetInfo) {
+  if (!hf || pendingCondFormatRules.length === 0) return;
+
+  const rows = activeInfo.rows;
+  const cols = activeInfo.cols;
+
+  // Build lookup maps
+  const rowIdxMap = new Map<string, number>();
+  rows.forEach((id, i) => rowIdxMap.set(id, i));
+  const colIdxMap = new Map<string, number>();
+  cols.forEach((id, i) => colIdxMap.set(id, i));
+
+  // results: ruleId -> list of matching "rowId:colId" keys
+  const results: Record<string, string[]> = {};
+
+  // Use a temporary cell position: one row beyond the sheet grid in sheet 0
+  const tmpRow = rows.length;
+  const tmpCol = 0;
+  // Ensure HF has room for the temp cell by adding a row
+  hf.addRows(0, [tmpRow, 1]);
+
+  for (const rule of pendingCondFormatRules) {
+    if (rule.conditionType !== 'customFormula' || !rule.conditionValue) continue;
+
+    const rStart = rowIdxMap.get(rule.rangeRowStart);
+    const rEnd = rowIdxMap.get(rule.rangeRowEnd);
+    const cStart = colIdxMap.get(rule.rangeColStart);
+    const cEnd = colIdxMap.get(rule.rangeColEnd);
+    if (rStart === undefined || rEnd === undefined || cStart === undefined || cEnd === undefined) continue;
+
+    const formula = rule.conditionValue; // internal format
+    const matches: string[] = [];
+
+    for (let r = rStart; r <= rEnd; r++) {
+      for (let c = cStart; c <= cEnd; c++) {
+        // Convert internal formula to A1 at this cell's position
+        const a1Formula = internalToA1(formula, r, c, rows, cols, undefined, undefined, true);
+        try {
+          hf.setCellContents({ sheet: 0, col: tmpCol, row: tmpRow }, a1Formula);
+          const val = hf.getCellValue({ sheet: 0, col: tmpCol, row: tmpRow });
+          // Truthy check: true, non-zero number, non-empty string
+          const truthy = val === true || (typeof val === 'number' && val !== 0) || (typeof val === 'string' && val !== '');
+          if (truthy) {
+            matches.push(`${rows[r]}:${cols[c]}`);
+          }
+        } catch {
+          // Formula evaluation failed for this cell — skip
+        }
+      }
+    }
+
+    results[rule.id] = matches;
+  }
+
+  // Clear the temp row
+  try { hf.removeRows(0, [tmpRow, 1]); } catch { /* ok */ }
+
+  (self as any).postMessage({ type: 'cond-format-results', results });
 }
 
 function runMCInWorker(sheetOrder: string[], mergedData: Map<string, SheetInfo>, registry: Map<string, DistributionInfo>) {
@@ -493,6 +577,14 @@ self.onmessage = (e: MessageEvent<MainToHf>) => {
         resolveDeps();
       }
       rebuildAndEvaluate();
+    }
+  }
+
+  if (msg.type === 'eval-cond-formats') {
+    pendingCondFormatRules = msg.rules;
+    // Re-evaluate if HF is already built
+    if (hf && formulaData) {
+      evaluateCondFormats(formulaData);
     }
   }
 };

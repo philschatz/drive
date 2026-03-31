@@ -1,5 +1,6 @@
 import { internalToR1C1, getDisplayValue } from './helpers';
-import type { DataGridCell } from './schema';
+import type { DataGridCell, DataGridCellFormat } from './schema';
+import { formatToCss } from './formatting';
 
 // ============================================================
 // Shared types
@@ -9,6 +10,7 @@ export type CellRange = { minRow: number; maxRow: number; minCol: number; maxCol
 
 export type ClipboardEntry = {
   values: string[][];
+  formats: (DataGridCellFormat | undefined)[][];
   mode: 'copy' | 'cut';
   range: CellRange;
 };
@@ -56,7 +58,7 @@ export function getEffectiveRange(
   return { minRow: selectedCell[1], maxRow: selectedCell[1], minCol: selectedCell[0], maxCol: selectedCell[0] };
 }
 
-/** Build clipboard payload from a sheet's cells. Returns values (R1C1 formulas), TSV text, and HTML. */
+/** Build clipboard payload from a sheet's cells. Returns values (R1C1 formulas), formats, TSV text, and HTML. */
 export function buildClipboardData(
   cells: Record<string, DataGridCell> | null,
   computedValues: Map<string, string | number> | null,
@@ -64,15 +66,18 @@ export function buildClipboardData(
   sortedRowIds: string[],
   sortedColIds: string[],
   sheetId: string,
-): { values: string[][]; tsv: string; html: string } | null {
+  formatCache?: Map<string, DataGridCellFormat>,
+): { values: string[][]; formats: (DataGridCellFormat | undefined)[][]; tsv: string; html: string } | null {
   if (!cells) return null;
 
   const values: string[][] = [];
+  const formats: (DataGridCellFormat | undefined)[][] = [];
   const tsvRows: string[] = [];
   const htmlTrs: string[] = [];
 
   for (let r = range.minRow; r <= range.maxRow; r++) {
     const row: string[] = [];
+    const fmtRow: (DataGridCellFormat | undefined)[] = [];
     const tsvCols: string[] = [];
     const htmlTds: string[] = [];
     for (let c = range.minCol; c <= range.maxCol; c++) {
@@ -82,22 +87,33 @@ export function buildClipboardData(
         ? internalToR1C1(raw, r, c, sortedRowIds, sortedColIds)
         : raw;
       row.push(clipVal);
+
+      const cellFmt = formatCache?.get(`${r}:${c}`);
+      fmtRow.push(cellFmt);
+
       tsvCols.push(clipVal);
       const display = escHtml(getDisplayValue(computedValues, raw, sheetId, sortedRowIds[r], sortedColIds[c]));
-      if (raw.startsWith('=')) {
-        htmlTds.push(`<td data-sheets-formula="${escHtml(clipVal)}">${display}</td>`);
-      } else {
-        htmlTds.push(`<td>${display}</td>`);
-      }
+      const inlineStyle = cellFmt ? formatToInlineStyle(cellFmt) : '';
+      const formulaAttr = raw.startsWith('=') ? ` data-sheets-formula="${escHtml(clipVal)}"` : '';
+      htmlTds.push(`<td${formulaAttr}${inlineStyle ? ` style="${escHtml(inlineStyle)}"` : ''}>${display}</td>`);
     }
     values.push(row);
+    formats.push(fmtRow);
     tsvRows.push(tsvCols.join('\t'));
     htmlTrs.push(`<tr>${htmlTds.join('')}</tr>`);
   }
 
   const tsv = tsvRows.join('\n');
   const html = `<table><tbody>${htmlTrs.join('')}</tbody></table>`;
-  return { values, tsv, html };
+  return { values, formats, tsv, html };
+}
+
+function formatToInlineStyle(fmt: DataGridCellFormat): string {
+  const css = formatToCss(fmt);
+  if (!css) return '';
+  return Object.entries(css)
+    .map(([k, v]) => `${k.replace(/([A-Z])/g, '-$1').toLowerCase()}:${v}`)
+    .join(';');
 }
 
 /** Write TSV + HTML to the OS clipboard, falling back to plain text. */
