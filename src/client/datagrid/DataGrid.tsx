@@ -67,7 +67,9 @@ function parseCellRef(cellId: string, anchorId?: string | null) {
   return { rowId, colId };
 }
 
-export function DataGrid({ docId, sheetId, cellId, readOnly }: { docId?: string; sheetId?: string; cellId?: string; readOnly?: boolean; path?: string }) {
+export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; sheetId?: string; rest?: string; readOnly?: boolean; path?: string }) {
+  // Parse cellId from the rest wildcard: "cells/{rowId}:{colId}" → "{rowId}:{colId}"
+  const cellId = rest?.startsWith('cells/') ? rest.slice(6) : undefined;
   // Read initial sheet from URL — prefer router-provided sheetId, fall back to parsing hash
   const initialSheetId = sheetId
     || (docId ? window.location.hash.match(/\/sheets\/([^/?#]+)/)?.[1] : undefined);
@@ -930,18 +932,23 @@ export function DataGrid({ docId, sheetId, cellId, readOnly }: { docId?: string;
 
   // Resolve pending cell selection once row/col IDs are available
   useEffect(() => {
+    if (sortedRowIds.length === 0 || sortedColIds.length === 0) return;
     const pending = pendingCellRef.current;
-    if (!pending || sortedRowIds.length === 0 || sortedColIds.length === 0) return;
-    const row = sortedRowIds.indexOf(pending.rowId);
-    const col = sortedColIds.indexOf(pending.colId);
-    if (row < 0 || col < 0) { pendingCellRef.current = null; return; }
-    setSelectedCell([col, row]);
-    if (pending.anchorRowId && pending.anchorColId) {
-      const ar = sortedRowIds.indexOf(pending.anchorRowId);
-      const ac = sortedColIds.indexOf(pending.anchorColId);
-      if (ar >= 0 && ac >= 0) setSelectionAnchor([ac, ar]);
+    if (pending) {
+      const row = sortedRowIds.indexOf(pending.rowId);
+      const col = sortedColIds.indexOf(pending.colId);
+      if (row < 0 || col < 0) { pendingCellRef.current = null; return; }
+      setSelectedCell([col, row]);
+      if (pending.anchorRowId && pending.anchorColId) {
+        const ar = sortedRowIds.indexOf(pending.anchorRowId);
+        const ac = sortedColIds.indexOf(pending.anchorColId);
+        if (ar >= 0 && ac >= 0) setSelectionAnchor([ac, ar]);
+      }
+      pendingCellRef.current = null;
+    } else if (!selectedCell) {
+      // Default to first cell when no cell specified in URL
+      setSelectedCell([0, 0]);
     }
-    pendingCellRef.current = null;
   }, [sortedRowIds, sortedColIds]);
 
   // Sync cell/range selection to URL via replaceState

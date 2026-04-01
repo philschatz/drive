@@ -29,6 +29,8 @@ Support pinning rows/columns, hiding rows/columns, changing the width of rows/co
 
 Editors: Add URL Hash URL support for the remaining editors. Then, the validation errors page should link to the current edit page they are on. That way, DataGrid validation errors should highlight the cell, Calendar validation errors should open and focus on the event/recurrence problem, and task lists should somehow edit the invalid task/field.
 
+Datagrid: Include all toolbar buttons (including font choice) in the main menu. In fact, make each command required to be in the main menu. Also, add a search button that allows filtering the main menu and toolbar so users can find the item they want.
+
 BUG: If an admin user deletes the doc (revokes their access) and someone adds them back in, their edits do not show up but should. Also, they do not seem to see that they have regained permissions (a generic share link is present on the top bar instead of their role)
 
 In keyhive, a user should be able to remove themselves from any group or document. Make any necessary updates to keyhive too.

@@ -18,7 +18,11 @@ export const hashHistory = {
   listen(cb: (loc: { pathname: string; search: string }) => void) {
     const handler = () => cb({ pathname: getHashPath(), search: getHashSearch() });
     window.addEventListener('hashchange', handler);
-    return () => window.removeEventListener('hashchange', handler);
+    window.addEventListener('popstate', handler);
+    return () => {
+      window.removeEventListener('hashchange', handler);
+      window.removeEventListener('popstate', handler);
+    };
   },
   push(path: string) {
     window.location.hash = path;
