@@ -25,7 +25,7 @@ import { usePeerFocusedFields } from './usePeerFocusedFields';
 import { getInitialDateRange, makeSXCallbacks } from './calendar-utils';
 
 export function Calendar({ docId, rest, readOnly }: { docId?: string; rest?: string; readOnly?: boolean; path?: string }) {
-  const eventId = rest?.startsWith('events/') ? rest.slice(7) : undefined;
+  const eventId = rest?.startsWith('events/') ? rest.slice(7).split('/')[0] : undefined;
   return (
     <DocLoader docId={docId}>
       <CalendarInner docId={docId!} readOnly={readOnly} initialEventId={eventId} />
@@ -254,7 +254,7 @@ function CalendarInner({ docId, readOnly, initialEventId }: { docId: string; rea
         }}
         onKeyDown={(e: any) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
       />
-      {showValidation && <ValidationPanel errors={validationErrors} docId={docId} />}
+      {showValidation && <ValidationPanel errors={validationErrors} docId={docId} docType="Calendar" />}
       <div id="sx-cal" />
       <EventEditor
         uid={editorState?.uid || ''}

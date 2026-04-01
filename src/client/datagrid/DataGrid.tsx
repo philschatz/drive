@@ -69,7 +69,7 @@ function parseCellRef(cellId: string, anchorId?: string | null) {
 
 export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; sheetId?: string; rest?: string; readOnly?: boolean; path?: string }) {
   // Parse cellId from the rest wildcard: "cells/{rowId}:{colId}" → "{rowId}:{colId}"
-  const cellId = rest?.startsWith('cells/') ? rest.slice(6) : undefined;
+  const cellId = rest?.startsWith('cells/') ? rest.slice(6).split('/')[0] : undefined;
   // Read initial sheet from URL — prefer router-provided sheetId, fall back to parsing hash
   const initialSheetId = sheetId
     || (docId ? window.location.hash.match(/\/sheets\/([^/?#]+)/)?.[1] : undefined);
@@ -1193,7 +1193,7 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
       />
       <HistorySlider history={history} />
       <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', ...(noAccess ? { opacity: 0.4, pointerEvents: 'none' as const } : {}) }}>
-      {showValidation && <ValidationPanel errors={validationErrors} docId={docId} />}
+      {showValidation && <ValidationPanel errors={validationErrors} docId={docId} docType="DataGrid" />}
 
       {columnDefs.length > 0 && doc2 && (
         <>

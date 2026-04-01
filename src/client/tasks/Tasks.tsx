@@ -58,7 +58,7 @@ function sortedTasks(tasks: Record<string, Task>): { uid: string; task: Task }[]
 }
 
 export function Tasks({ docId, rest, readOnly }: { docId?: string; rest?: string; readOnly?: boolean; path?: string }) {
-  const taskId = rest?.startsWith('tasks/') ? rest.slice(6) : undefined;
+  const taskId = rest?.startsWith('tasks/') ? rest.slice(6).split('/')[0] : undefined;
   const [listName, setListName] = useState('Tasks');
   const [listDesc, setListDesc] = useState('');
   const [tasks, setTasks] = useState<Record<string, Task>>({});
@@ -290,7 +290,7 @@ export function Tasks({ docId, rest, readOnly }: { docId?: string; rest?: string
         }}
         onKeyDown={(e: any) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
       />
-      {showValidation && <ValidationPanel errors={validationErrors} docId={docId} />}
+      {showValidation && <ValidationPanel errors={validationErrors} docId={docId} docType="TaskList" />}
       {canEdit && (
       <div className="flex items-center gap-2 mb-3">
         <Input
