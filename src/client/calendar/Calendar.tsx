@@ -24,15 +24,16 @@ import { useEventMutations } from './useEventMutations';
 import { usePeerFocusedFields } from './usePeerFocusedFields';
 import { getInitialDateRange, makeSXCallbacks } from './calendar-utils';
 
-export function Calendar({ docId, readOnly }: { docId?: string; readOnly?: boolean; path?: string }) {
+export function Calendar({ docId, rest, readOnly }: { docId?: string; rest?: string; readOnly?: boolean; path?: string }) {
+  const eventId = rest?.startsWith('events/') ? rest.slice(7) : undefined;
   return (
     <DocLoader docId={docId}>
-      <CalendarInner docId={docId!} readOnly={readOnly} />
+      <CalendarInner docId={docId!} readOnly={readOnly} initialEventId={eventId} />
     </DocLoader>
   );
 }
 
-function CalendarInner({ docId, readOnly }: { docId: string; readOnly?: boolean }) {
+function CalendarInner({ docId, readOnly, initialEventId }: { docId: string; readOnly?: boolean; initialEventId?: string }) {
   const [calName, setCalName] = useState('Calendar');
   const [calDesc, setCalDesc] = useState('');
   const [calColor, setCalColor] = useState('#039be5');
@@ -59,6 +60,7 @@ function CalendarInner({ docId, readOnly }: { docId: string; readOnly?: boolean 
   const presenceCleanupRef = useRef<(() => void) | null>(null);
   const titleFocusedRef = useRef(false);
   const descFocusedRef = useRef(false);
+  const pendingEventIdRef = useRef(initialEventId);
 
   const getEvents = useCallback(() => eventsRef.current, []);
   const { editorState, setEditorState, openEditor, refreshEditorFromEvents } = useCalendarEditor(getEvents);
@@ -78,7 +80,14 @@ function CalendarInner({ docId, readOnly }: { docId: string; readOnly?: boolean 
 
   useEffect(() => {
     if (!editorState) broadcastRef.current?.('focusedField', null);
-  }, [editorState]);
+    // Sync editor state to URL
+    const base = window.location.href.split('#')[0];
+    if (editorState) {
+      window.history.replaceState(null, '', `${base}#/calendars/${docId}/events/${editorState.uid}`);
+    } else {
+      window.history.replaceState(null, '', `${base}#/calendars/${docId}`);
+    }
+  }, [editorState, docId]);
 
   const handleFieldFocus = useCallback((path: (string | number)[] | null) => {
     broadcastRef.current?.('focusedField', path);
@@ -156,6 +165,12 @@ function CalendarInner({ docId, readOnly }: { docId: string; readOnly?: boolean 
       history.onNewHeads(heads);
       refreshCalendar();
       refreshEditorFromEvents(eventsRef.current);
+      // Auto-open event from URL on first load
+      if (pendingEventIdRef.current && result.events) {
+        const ev = result.events[pendingEventIdRef.current];
+        if (ev) openEditor(pendingEventIdRef.current, ev, null, null);
+        pendingEventIdRef.current = undefined;
+      }
     };
 
     resubscribe(initRange.start, initRange.end);

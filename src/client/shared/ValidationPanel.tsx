@@ -2,10 +2,29 @@ import type { ValidationError } from '../../shared/schemas';
 import { pathToHash } from './path-hash';
 import './validation-panel.css';
 
+/** Build a hash-based URL that opens the appropriate editor for this error. */
+function errorToEditorHref(err: ValidationError, docId: string): string {
+  const p = err.path;
+  if (p[0] === 'events' && p.length >= 2) {
+    return `#/calendars/${docId}/events/${p[1]}`;
+  }
+  if (p[0] === 'tasks' && p.length >= 2) {
+    return `#/tasks/${docId}/tasks/${p[1]}`;
+  }
+  if (p[0] === 'sheets' && p.length >= 2) {
+    const sheetId = p[1];
+    if (p[2] === 'cells' && p.length >= 4) {
+      return `#/datagrids/${docId}/sheets/${sheetId}/cells/${p[3]}`;
+    }
+    return `#/datagrids/${docId}/sheets/${sheetId}`;
+  }
+  return `#/source/${docId}${pathToHash(err.path)}`;
+}
+
 interface ValidationPanelProps {
   errors: ValidationError[];
   onClickError?: (error: ValidationError) => void;
-  /** When provided, errors in the light variant link to /source/:docId#path */
+  /** When provided, errors link to the appropriate editor for the error path */
   docId?: string;
   variant?: 'light' | 'dark';
 }
@@ -49,7 +68,7 @@ export function ValidationPanel({ errors, onClickError, docId, variant = 'light'
       </div>
       <ul className="divide-y divide-amber-200 overflow-y-auto" style={{ minHeight: 0 }}>
         {errors.map((err, i) => {
-          const href = docId ? `/source/${docId}${pathToHash(err.path)}` : undefined;
+          const href = docId ? errorToEditorHref(err, docId) : undefined;
           return (
             <li
               key={i}

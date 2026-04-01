@@ -57,7 +57,8 @@ function sortedTasks(tasks: Record<string, Task>): { uid: string; task: Task }[]
   return [...incomplete, ...done];
 }
 
-export function Tasks({ docId, readOnly }: { docId?: string; readOnly?: boolean; path?: string }) {
+export function Tasks({ docId, rest, readOnly }: { docId?: string; rest?: string; readOnly?: boolean; path?: string }) {
+  const taskId = rest?.startsWith('tasks/') ? rest.slice(6) : undefined;
   const [listName, setListName] = useState('Tasks');
   const [listDesc, setListDesc] = useState('');
   const [tasks, setTasks] = useState<Record<string, Task>>({});
@@ -81,6 +82,7 @@ export function Tasks({ docId, readOnly }: { docId?: string; readOnly?: boolean;
   const titleFocusedRef = useRef(false);
   const descFocusedRef = useRef(false);
   const quickAddRef = useRef<HTMLInputElement>(null);
+  const pendingTaskIdRef = useRef(taskId);
 
   const saveTask = useCallback((uid: string, taskData: Task) => {
     if (!canEditRef.current || !docId) return;
@@ -147,7 +149,14 @@ export function Tasks({ docId, readOnly }: { docId?: string; readOnly?: boolean;
 
   useEffect(() => {
     if (!editorState) broadcastRef.current?.('focusedField', null);
-  }, [editorState]);
+    // Sync editor state to URL
+    const base = window.location.href.split('#')[0];
+    if (editorState) {
+      window.history.replaceState(null, '', `${base}#/tasks/${docId}/tasks/${editorState.uid}`);
+    } else if (docId) {
+      window.history.replaceState(null, '', `${base}#/tasks/${docId}`);
+    }
+  }, [editorState, docId]);
 
   const peerFocusedFields = useMemo(() => {
     const result: Record<string, { color: string; peerId: string }> = {};
@@ -190,6 +199,13 @@ export function Tasks({ docId, readOnly }: { docId?: string; readOnly?: boolean;
       if (!descFocusedRef.current) setListDesc(result.description || '');
       // Update history tracking
       history.onNewHeads(heads);
+
+      // Auto-open task from URL on first load
+      if (pendingTaskIdRef.current && result.tasks) {
+        const task = result.tasks[pendingTaskIdRef.current];
+        if (task) openEditor(pendingTaskIdRef.current, task);
+        pendingTaskIdRef.current = undefined;
+      }
 
       // Update open editor if task data changed
       const es = editorStateRef.current;
