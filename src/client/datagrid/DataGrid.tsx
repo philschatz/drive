@@ -49,10 +49,30 @@ const CUSTOM_FN_NAMES = [
   'TRIANGULAR', 'UNIFORM', 'UNIQUE', 'WEIBULL',
 ];
 
-export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId?: string; readOnly?: boolean; path?: string }) {
+function getAnchorFromHash(): string | null {
+  const hash = window.location.hash;
+  const q = hash.indexOf('?');
+  if (q < 0) return null;
+  return new URLSearchParams(hash.slice(q + 1)).get('anchor');
+}
+
+function parseCellRef(cellId: string, anchorId?: string | null) {
+  const sep = cellId.indexOf(':');
+  const rowId = cellId.slice(0, sep);
+  const colId = cellId.slice(sep + 1);
+  if (anchorId) {
+    const aSep = anchorId.indexOf(':');
+    return { rowId, colId, anchorRowId: anchorId.slice(0, aSep), anchorColId: anchorId.slice(aSep + 1) };
+  }
+  return { rowId, colId };
+}
+
+export function DataGrid({ docId, sheetId, cellId, readOnly }: { docId?: string; sheetId?: string; cellId?: string; readOnly?: boolean; path?: string }) {
   // Read initial sheet from URL — prefer router-provided sheetId, fall back to parsing hash
   const initialSheetId = sheetId
     || (docId ? window.location.hash.match(/\/sheets\/([^/?#]+)/)?.[1] : undefined);
+  // Capture initial cell from router prop (resolved after sheet data loads)
+  const [initialCellId] = useState(cellId);
   const [gridName, setGridName] = useState('Spreadsheet');
   const [peerStates, setPeerStates] = useState<Record<string, PeerState<PresenceState>>>({});
   const [, setTick] = useState(0);
@@ -97,6 +117,7 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
   const errorMessagesRef = useRef<Map<string, string>>(new Map());
   const spillTargetsRef = useRef<Set<string>>(new Set());
   const activeSheetUnsubRef = useRef<(() => void) | null>(null);
+  const pendingCellRef = useRef<{ rowId: string; colId: string; anchorRowId?: string; anchorColId?: string } | null>(null);
   const [syncing, setSyncing] = useState(false);
   const titleFocusedRef = useRef(false);
   const editFromBarRef = useRef(false);
@@ -482,7 +503,7 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
 
   // -- Sheet management handlers --
 
-  const handleSelectSheet = useCallback((id: string) => {
+  const handleSelectSheet = useCallback((id: string, skipUrlUpdate = false) => {
     if (id === currentSheetId) return;
     if (editingCell) commitEdit();
     hfBridgeRef.current?.switchSheet(id);
@@ -504,10 +525,10 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
     setContextMenu(null);
     setClipboardSource(null);
     setFormulaRefHighlights([]);
-    // Update URL without triggering hashchange (which would cause router rematch → remount)
-    if (docId) {
+    // Push history so back button navigates between sheets
+    if (!skipUrlUpdate && docId) {
       const base = window.location.href.split('#')[0];
-      window.history.replaceState(null, '', `${base}#/datagrids/${docId}/sheets/${id}`);
+      window.history.pushState(null, '', `${base}#/datagrids/${docId}/sheets/${id}`);
     }
   }, [currentSheetId, editingCell, commitEdit, docId]);
 
@@ -870,6 +891,10 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
           bridge.watch(docId, activeSheet);
           subscribeToSheet(activeSheet);
         }
+        // Queue initial cell selection from URL (resolved after sheet data loads)
+        if (initialCellId) {
+          pendingCellRef.current = parseCellRef(initialCellId, getAnchorFromHash());
+        }
       }
 
       setRawDoc(result);
@@ -902,6 +927,52 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
       hfBridgeRef.current = null;
     };
   }, [docId]);
+
+  // Resolve pending cell selection once row/col IDs are available
+  useEffect(() => {
+    const pending = pendingCellRef.current;
+    if (!pending || sortedRowIds.length === 0 || sortedColIds.length === 0) return;
+    const row = sortedRowIds.indexOf(pending.rowId);
+    const col = sortedColIds.indexOf(pending.colId);
+    if (row < 0 || col < 0) { pendingCellRef.current = null; return; }
+    setSelectedCell([col, row]);
+    if (pending.anchorRowId && pending.anchorColId) {
+      const ar = sortedRowIds.indexOf(pending.anchorRowId);
+      const ac = sortedColIds.indexOf(pending.anchorColId);
+      if (ar >= 0 && ac >= 0) setSelectionAnchor([ac, ar]);
+    }
+    pendingCellRef.current = null;
+  }, [sortedRowIds, sortedColIds]);
+
+  // Sync cell/range selection to URL via replaceState
+  useEffect(() => {
+    if (!docId || !currentSheetId) return;
+    const base = window.location.href.split('#')[0];
+    const sheetBase = `${base}#/datagrids/${docId}/sheets/${currentSheetId}`;
+    if (!selectedCell || sortedRowIds.length === 0 || sortedColIds.length === 0) {
+      window.history.replaceState(null, '', sheetBase);
+      return;
+    }
+    const [col, row] = selectedCell;
+    if (row >= sortedRowIds.length || col >= sortedColIds.length) return;
+    let url = `${sheetBase}/cells/${sortedRowIds[row]}:${sortedColIds[col]}`;
+    if (selectionAnchor) {
+      const [ac, ar] = selectionAnchor;
+      if (ar < sortedRowIds.length && ac < sortedColIds.length) {
+        url += `?anchor=${sortedRowIds[ar]}:${sortedColIds[ac]}`;
+      }
+    }
+    window.history.replaceState(null, '', url);
+  }, [selectedCell, selectionAnchor, sortedRowIds, sortedColIds, currentSheetId, docId]);
+
+  // Handle sheetId prop changes from back/forward navigation
+  useEffect(() => {
+    if (!sheetId || sheetId === currentSheetId) return;
+    if (cellId) {
+      pendingCellRef.current = parseCellRef(cellId, getAnchorFromHash());
+    }
+    handleSelectSheet(sheetId, /* skipUrlUpdate */ true);
+  }, [sheetId]);
 
   // Send conditional format rules with customFormula to HF worker for evaluation
   useEffect(() => {

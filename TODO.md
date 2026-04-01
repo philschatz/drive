@@ -27,7 +27,7 @@ Move source editor validation errors and history navigation to be the same as al
 
 Support pinning rows/columns, hiding rows/columns, changing the width of rows/columns with a popup prompt. Each of these should have a context menu, a menu bar menu, extra validation (that if there is a row/column freeze and that's a field on the row(s)/column(s) then all rows/columns have that frozen flag, not just the last row/column)
 
-Datagrid: Support the URL containing the cell/range of cells that are selected. Cell selection should replace the history state while sheet changes should push the history.
+Editors: Add URL Hash URL support for the remaining editors. Then, the validation errors page should link to the current edit page they are on. That way, DataGrid validation errors should highlight the cell, Calendar validation errors should open and focus on the event/recurrence problem, and task lists should somehow edit the invalid task/field.
 
 BUG: If an admin user deletes the doc (revokes their access) and someone adds them back in, their edits do not show up but should. Also, they do not seem to see that they have regained permissions (a generic share link is present on the top bar instead of their role)
 

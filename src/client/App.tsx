@@ -31,8 +31,10 @@ export function App() {
       <Calendar path="/view/calendars/:docId" readOnly />
       <Tasks path="/tasks/:docId" />
       <Tasks path="/view/tasks/:docId" readOnly />
+      <DataGrid path="/datagrids/:docId/sheets/:sheetId/cells/:cellId" />
       <DataGrid path="/datagrids/:docId/sheets/:sheetId" />
       <DataGrid path="/datagrids/:docId" />
+      <DataGrid path="/view/datagrids/:docId/sheets/:sheetId/cells/:cellId" readOnly />
       <DataGrid path="/view/datagrids/:docId/sheets/:sheetId" readOnly />
       <DataGrid path="/view/datagrids/:docId" readOnly />
       <SourceViewer path="/source/:docId/:rest*" />
