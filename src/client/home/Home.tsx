@@ -258,7 +258,7 @@ export function Home({ path }: { path?: string }) {
       }>();
       const sheetDefs: {
         sheetId: string; sheetName: string; hidden: boolean;
-        columns: Record<string, { index: number; hidden?: boolean; frozen?: boolean }>;
+        columns: Record<string, { index: number; width?: number; hidden?: boolean; frozen?: boolean }>;
         rowsMap: Record<string, { index: number; hidden?: boolean; frozen?: boolean }>;
         colIds: string[]; rowIds: string[];
         rows2d: any[][]; ws: any;
@@ -285,14 +285,16 @@ export function Home({ path }: { path?: string }) {
         }
 
         const colCount = Math.max(ws.columnCount || 0, rows2d.reduce((max, row) => Math.max(max, row?.length || 0), 0), 1);
-        const columns: Record<string, { index: number; hidden?: boolean; frozen?: boolean }> = {};
+        const columns: Record<string, { index: number; width?: number; hidden?: boolean; frozen?: boolean }> = {};
         const colIds: string[] = [];
         for (let c = 0; c < colCount; c++) {
           const cid = sid();
           colIds.push(cid);
-          const col: { index: number; hidden?: boolean; frozen?: boolean } = { index: c + 1 };
+          const col: { index: number; width?: number; hidden?: boolean; frozen?: boolean } = { index: c + 1 };
           const wsCol = ws.getColumn(c + 1);
           if (wsCol?.hidden) col.hidden = true;
+          // ExcelJS width is in characters; convert to pixels (~7px per character + 12px padding)
+          if (wsCol?.width) col.width = Math.round(wsCol.width * 7 + 12);
           columns[cid] = col;
         }
 

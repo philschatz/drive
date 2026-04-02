@@ -1498,15 +1498,20 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
                   const startRow = Math.max(frozenRowCount, firstVisible - OVERSCAN);
                   const visibleCount = Math.ceil(viewportHeight / ROW_HEIGHT);
                   const endRow = Math.min(totalRows, firstVisible + visibleCount + OVERSCAN);
+                  // Build row indices: frozen rows first (always rendered), then virtualized window
+                  const rowIndicesToRender: number[] = [];
+                  for (let i = 0; i < frozenRowCount && i < totalRows; i++) rowIndicesToRender.push(i);
+                  // Spacer insertion point: after frozen rows, before virtualized rows
+                  const spacerHeight = startRow > frozenRowCount ? (startRow - frozenRowCount) * ROW_HEIGHT : 0;
+                  for (let i = startRow; i < endRow; i++) rowIndicesToRender.push(i);
+                  let spacerInserted = false;
                   return (
                     <>
-                      {startRow > frozenRowCount && (
-                        <tr style={{ height: (startRow - frozenRowCount) * ROW_HEIGHT + 'px' }}>
-                          <td colSpan={visibleColIds.length + 1} />
-                        </tr>
-                      )}
-                      {visibleRowIds.slice(startRow, endRow).map((rowId, offset) => {
-                  const ri = startRow + offset;
+                      {rowIndicesToRender.map((ri) => {
+                  const rowId = visibleRowIds[ri];
+                  // Insert spacer between frozen rows and virtualized rows
+                  const needSpacer = !spacerInserted && ri >= frozenRowCount && spacerHeight > 0;
+                  if (needSpacer) spacerInserted = true;
                   const isRowSelected = selectedRows.has(ri);
                   let dropClass = '';
                   if (dropIndicator?.type === 'row') {
@@ -1519,6 +1524,11 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
                   const rowGap = rowHiddenGaps.find(g => g.beforeVisualIndex === ri);
                   return (
                     <>
+                      {needSpacer && (
+                        <tr key="frozen-spacer" style={{ height: spacerHeight + 'px' }}>
+                          <td colSpan={visibleColIds.length + 1} />
+                        </tr>
+                      )}
                       {rowGap && (
                         <tr key={`unhide-row-${ri}`} className="datagrid-row-unhide-tr">
                           <td className="datagrid-row-unhide" colSpan={visibleColIds.length + 1} onClick={() => unhideRows(rowGap.hiddenIds)} title={`Show ${rowGap.hiddenIds.length} hidden row${rowGap.hiddenIds.length > 1 ? 's' : ''}`}>
