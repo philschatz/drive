@@ -1,5 +1,4 @@
-import { useState } from 'preact/hooks';
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
+import { useState, useEffect, useCallback } from 'preact/hooks';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -197,146 +196,163 @@ export function ConditionalFormatPanel({
   const condLabel = (type: string) =>
     CONDITION_TYPES.find(c => c.value === type)?.label ?? type;
 
-  return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className="w-[400px] sm:max-w-[400px]">
-        <SheetHeader>
-          <SheetTitle>Conditional Formatting</SheetTitle>
-        </SheetHeader>
+  const handleClose = useCallback(() => onOpenChange(false), [onOpenChange]);
 
-        <div className="mt-4 space-y-3">
-          {editing ? (
-            // Editor
-            <div className="space-y-3">
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') handleClose();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [open, handleClose]);
+
+  if (!open) return null;
+
+  return (
+    <div className="cond-format-panel">
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-lg font-semibold">Conditional Formatting</h2>
+        <button
+          className="rounded-sm opacity-70 hover:opacity-100 focus:outline-none"
+          onClick={handleClose}
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+        </button>
+      </div>
+
+      <div className="space-y-3">
+        {editing ? (
+          // Editor
+          <div className="space-y-3">
+            <div>
+              <Label>Ranges (e.g. A1:C10, E1:E20)</Label>
+              <Input
+                value={rangeText}
+                onInput={(e: any) => setRangeText(e.target.value)}
+                placeholder="A1:C10, E1:E20"
+                className="mt-1"
+              />
+            </div>
+            <div>
+              <Label>Condition</Label>
+              <Select value={conditionType} onValueChange={setConditionType}>
+                <SelectTrigger className="mt-1">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {CONDITION_TYPES.map(c => (
+                    <SelectItem key={c.value} value={c.value}>{c.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            {!NO_VALUE_CONDITIONS.has(conditionType) && (
               <div>
-                <Label>Ranges (e.g. A1:C10, E1:E20)</Label>
+                <Label>{conditionType === 'customFormula' ? 'Formula' : 'Value'}</Label>
                 <Input
-                  value={rangeText}
-                  onInput={(e: any) => setRangeText(e.target.value)}
-                  placeholder="A1:C10, E1:E20"
+                  value={conditionValue}
+                  onInput={(e: any) => setConditionValue(e.target.value)}
+                  placeholder={conditionType === 'customFormula' ? '=ISFORMULA(A1)' : 'Enter value...'}
                   className="mt-1"
                 />
+                {conditionType === 'customFormula' && (
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Formula is evaluated relative to each cell in the range.
+                  </p>
+                )}
               </div>
-              <div>
-                <Label>Condition</Label>
-                <Select value={conditionType} onValueChange={setConditionType}>
-                  <SelectTrigger className="mt-1">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {CONDITION_TYPES.map(c => (
-                      <SelectItem key={c.value} value={c.value}>{c.label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              {!NO_VALUE_CONDITIONS.has(conditionType) && (
-                <div>
-                  <Label>{conditionType === 'customFormula' ? 'Formula' : 'Value'}</Label>
-                  <Input
-                    value={conditionValue}
-                    onInput={(e: any) => setConditionValue(e.target.value)}
-                    placeholder={conditionType === 'customFormula' ? '=ISFORMULA(A1)' : 'Enter value...'}
-                    className="mt-1"
+            )}
+            <div>
+              <Label>Formatting</Label>
+              <div className="flex items-center gap-2 mt-1">
+                <Button
+                  variant={fmtBold ? 'active' : 'outline'}
+                  size="icon"
+                  className="h-8 w-8"
+                  onClick={() => setFmtBold(!fmtBold)}
+                >
+                  <span className="material-symbols-outlined" style={{ fontSize: '1rem' }}>format_bold</span>
+                </Button>
+                <Button
+                  variant={fmtItalic ? 'active' : 'outline'}
+                  size="icon"
+                  className="h-8 w-8"
+                  onClick={() => setFmtItalic(!fmtItalic)}
+                >
+                  <span className="material-symbols-outlined" style={{ fontSize: '1rem' }}>format_italic</span>
+                </Button>
+                <div className="flex items-center gap-1">
+                  <span className="text-xs text-muted-foreground">Text:</span>
+                  <input
+                    type="color"
+                    value={fmtTextColor}
+                    onChange={(e: any) => setFmtTextColor(e.target.value)}
+                    className="w-6 h-6 cursor-pointer border-0 p-0"
                   />
-                  {conditionType === 'customFormula' && (
-                    <p className="text-xs text-muted-foreground mt-1">
-                      Formula is evaluated relative to each cell in the range.
-                    </p>
-                  )}
                 </div>
-              )}
-              <div>
-                <Label>Formatting</Label>
-                <div className="flex items-center gap-2 mt-1">
-                  <Button
-                    variant={fmtBold ? 'default' : 'outline'}
-                    size="icon"
-                    className="h-8 w-8"
-                    onClick={() => setFmtBold(!fmtBold)}
-                  >
-                    <span className="material-symbols-outlined" style={{ fontSize: '1rem' }}>format_bold</span>
-                  </Button>
-                  <Button
-                    variant={fmtItalic ? 'default' : 'outline'}
-                    size="icon"
-                    className="h-8 w-8"
-                    onClick={() => setFmtItalic(!fmtItalic)}
-                  >
-                    <span className="material-symbols-outlined" style={{ fontSize: '1rem' }}>format_italic</span>
-                  </Button>
-                  <div className="flex items-center gap-1">
-                    <span className="text-xs text-muted-foreground">Text:</span>
-                    <input
-                      type="color"
-                      value={fmtTextColor}
-                      onChange={(e: any) => setFmtTextColor(e.target.value)}
-                      className="w-6 h-6 cursor-pointer border-0 p-0"
-                    />
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <span className="text-xs text-muted-foreground">Fill:</span>
-                    <input
-                      type="color"
-                      value={fmtBgColor}
-                      onChange={(e: any) => setFmtBgColor(e.target.value)}
-                      className="w-6 h-6 cursor-pointer border-0 p-0"
-                    />
-                  </div>
+                <div className="flex items-center gap-1">
+                  <span className="text-xs text-muted-foreground">Fill:</span>
+                  <input
+                    type="color"
+                    value={fmtBgColor}
+                    onChange={(e: any) => setFmtBgColor(e.target.value)}
+                    className="w-6 h-6 cursor-pointer border-0 p-0"
+                  />
                 </div>
-              </div>
-              <div className="flex gap-2 pt-2">
-                <Button onClick={save} size="sm">Save</Button>
-                <Button onClick={() => setEditing(null)} variant="outline" size="sm">Cancel</Button>
               </div>
             </div>
-          ) : (
-            // Rule list
-            <>
-              {sortedRules.length === 0 && (
-                <p className="text-sm text-muted-foreground">No conditional formatting rules.</p>
-              )}
-              {sortedRules.map(([id, rule]) => (
-                <div key={id} className="flex items-center justify-between border rounded-md p-2 text-sm">
-                  <div className="flex-1 min-w-0">
-                    <div className="font-medium truncate">{condLabel(rule.conditionType)}{rule.conditionValue ? ` ${rule.conditionValue}` : ''}</div>
-                    <div className="text-xs text-muted-foreground">{rangeToA1(rule)}</div>
-                  </div>
-                  <div
-                    className="w-6 h-6 rounded-sm border mx-2 flex-shrink-0"
-                    style={{
-                      background: rule.format.bgColor || 'transparent',
-                      color: rule.format.textColor || '#000',
-                      fontWeight: rule.format.bold ? 'bold' : 'normal',
-                      fontStyle: rule.format.italic ? 'italic' : 'normal',
-                      fontSize: '0.7rem',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                    }}
-                    title="Format preview"
-                  >
-                    Ab
-                  </div>
-                  <div className="flex gap-1">
-                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => startEdit(id)}>
-                      <span className="material-symbols-outlined" style={{ fontSize: '1rem' }}>edit</span>
-                    </Button>
-                    <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => deleteRule(id)}>
-                      <span className="material-symbols-outlined" style={{ fontSize: '1rem' }}>delete</span>
-                    </Button>
-                  </div>
+            <div className="flex gap-2 pt-2">
+              <Button onClick={save} size="sm">Save</Button>
+              <Button onClick={() => setEditing(null)} variant="outline" size="sm">Cancel</Button>
+            </div>
+          </div>
+        ) : (
+          // Rule list
+          <>
+            {sortedRules.length === 0 && (
+              <p className="text-sm text-muted-foreground">No conditional formatting rules.</p>
+            )}
+            {sortedRules.map(([id, rule]) => (
+              <div key={id} className="flex items-center justify-between border rounded-md p-2 text-sm">
+                <div className="flex-1 min-w-0">
+                  <div className="font-medium truncate">{condLabel(rule.conditionType)}{rule.conditionValue ? ` ${rule.conditionValue}` : ''}</div>
+                  <div className="text-xs text-muted-foreground">{rangeToA1(rule)}</div>
                 </div>
-              ))}
-              <Button onClick={startNew} size="sm" className="mt-2">
-                <span className="material-symbols-outlined mr-1" style={{ fontSize: '1rem' }}>add</span>
-                Add rule
-              </Button>
-            </>
-          )}
-        </div>
-      </SheetContent>
-    </Sheet>
+                <div
+                  className="w-6 h-6 rounded-sm border mx-2 flex-shrink-0"
+                  style={{
+                    background: rule.format.bgColor || 'transparent',
+                    color: rule.format.textColor || '#000',
+                    fontWeight: rule.format.bold ? 'bold' : 'normal',
+                    fontStyle: rule.format.italic ? 'italic' : 'normal',
+                    fontSize: '0.7rem',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                  title="Format preview"
+                >
+                  Ab
+                </div>
+                <div className="flex gap-1">
+                  <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => startEdit(id)}>
+                    <span className="material-symbols-outlined" style={{ fontSize: '1rem' }}>edit</span>
+                  </Button>
+                  <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => deleteRule(id)}>
+                    <span className="material-symbols-outlined" style={{ fontSize: '1rem' }}>delete</span>
+                  </Button>
+                </div>
+              </div>
+            ))}
+            <Button onClick={startNew} size="sm" className="mt-2">
+              <span className="material-symbols-outlined mr-1" style={{ fontSize: '1rem' }}>add</span>
+              Add rule
+            </Button>
+          </>
+        )}
+      </div>
+    </div>
   );
 }
 

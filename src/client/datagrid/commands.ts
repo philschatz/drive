@@ -186,6 +186,7 @@ export type ResolvedEntry =
       currentValueLabel?: string;
       toolbarDividerBefore?: boolean;
       children: ResolvedEntry[];
+      executeCustom?: (value: string) => void;
     };
 
 export interface ResolvedMenu {
@@ -810,10 +811,7 @@ const rowPlugin: GridPlugin = {
         }),
       },
     ],
-    toolbar: [
-      { kind: 'command', id: 'insert-row-above', toolbarDividerBefore: true, label: 'Insert row above' },
-      { kind: 'command', id: 'insert-row-below', label: 'Insert row below' },
-    ],
+    toolbar: [],
     'row-ctx': [
       { kind: 'command', id: 'insert-row-above' },
       { kind: 'command', id: 'insert-row-below' },
@@ -1006,10 +1004,7 @@ const columnPlugin: GridPlugin = {
         }),
       },
     ],
-    toolbar: [
-      { kind: 'command', id: 'insert-col-left', label: 'Insert Column Left' },
-      { kind: 'command', id: 'insert-col-right', label: 'Insert Column Right' },
-    ],
+    toolbar: [],
     'col-ctx': [
       { kind: 'command', id: 'insert-col-left' },
       { kind: 'command', id: 'insert-col-right' },
@@ -1274,6 +1269,10 @@ function buildFontSizeSubmenu(state: GridCommandState, ctx: GridCommandContext):
     kind: 'submenu', id: 'font-size', label: 'Font size', icon: 'format_size',
     isEnabled: state.hasSelection,
     currentValueLabel: state.currentCellFormat?.fontSize ? String(state.currentCellFormat.fontSize) : 'Default',
+    executeCustom: (value: string) => {
+      const size = parseInt(value, 10);
+      if (size > 0 && size <= 999) applyFormatToSelection(ctx, { fontSize: size });
+    },
     children: [
       { kind: 'command', id: 'font-size-default', label: 'Default', isEnabled: state.hasSelection,
         isChecked: !state.currentCellFormat?.fontSize,
@@ -1291,6 +1290,7 @@ function buildTextColorSubmenu(state: GridCommandState, ctx: GridCommandContext)
   return {
     kind: 'submenu', id: 'text-color', label: 'Text color', icon: 'format_color_text',
     isEnabled: state.hasSelection,
+    executeCustom: (color: string) => applyFormatToSelection(ctx, { textColor: color }),
     children: PRESET_COLORS.map(c => ({
       kind: 'command' as const, id: `text-color-${c}`, label: c, isEnabled: state.hasSelection,
       isChecked: state.currentCellFormat?.textColor === c,
@@ -1303,11 +1303,17 @@ function buildBgColorSubmenu(state: GridCommandState, ctx: GridCommandContext): 
   return {
     kind: 'submenu', id: 'bg-color', label: 'Fill color', icon: 'format_color_fill',
     isEnabled: state.hasSelection,
-    children: PRESET_COLORS.map(c => ({
-      kind: 'command' as const, id: `bg-color-${c}`, label: c, isEnabled: state.hasSelection,
-      isChecked: state.currentCellFormat?.bgColor === c,
-      execute: () => applyFormatToSelection(ctx, { bgColor: c }),
-    })),
+    executeCustom: (color: string) => applyFormatToSelection(ctx, { bgColor: color }),
+    children: [
+      { kind: 'command', id: 'bg-color-reset', label: '__reset__', isEnabled: state.hasSelection,
+        isChecked: !state.currentCellFormat?.bgColor,
+        execute: () => applyFormatToSelection(ctx, { bgColor: undefined }) },
+      ...PRESET_COLORS.map(c => ({
+        kind: 'command' as const, id: `bg-color-${c}`, label: c, isEnabled: state.hasSelection,
+        isChecked: state.currentCellFormat?.bgColor === c,
+        execute: () => applyFormatToSelection(ctx, { bgColor: c }),
+      })),
+    ],
   };
 }
 

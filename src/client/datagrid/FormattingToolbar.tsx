@@ -154,25 +154,36 @@ export function FormattingToolbar({ currentFormat, hasSelection, onFormatChange 
 // ColorPicker
 // ============================================================
 
-export function ColorPicker({ value, onChange, icon, title, disabled }: {
+export function ColorPicker({ value, onChange, onReset, icon, title, disabled, defaultColor = '#000' }: {
   value?: string;
   onChange: (color: string) => void;
+  onReset?: () => void;
   icon: string;
   title: string;
   disabled?: boolean;
+  defaultColor?: string;
 }) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="outline" size="icon" className="h-7 w-7 relative" disabled={disabled} title={title}>
+        <Button variant="ghost" size="icon" className="h-7 w-7 relative" disabled={disabled} title={title}>
           <span className="material-symbols-outlined" style={{ fontSize: '1rem' }}>{icon}</span>
           <div
             className="absolute bottom-0.5 left-1.5 right-1.5 h-0.5 rounded-sm"
-            style={{ background: value || '#000' }}
+            style={{ background: value || defaultColor }}
           />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent className="p-2 w-auto" align="start">
+        {onReset && (
+          <button
+            className="w-full text-left text-xs px-2 py-1 mb-2 rounded hover:bg-accent cursor-pointer flex items-center gap-1"
+            onClick={onReset}
+          >
+            <span className="material-symbols-outlined" style={{ fontSize: '0.9rem' }}>format_color_reset</span>
+            No fill
+          </button>
+        )}
         <div className="grid grid-cols-10 gap-1 mb-2">
           {PRESET_COLORS.map(color => (
             <button

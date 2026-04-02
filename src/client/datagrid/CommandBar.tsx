@@ -14,7 +14,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Button } from '@/components/ui/button';
 import type { ResolvedEntry, ResolvedMenu } from './commands';
-import { ColorPicker } from './FormattingToolbar';
+import { ColorPicker, FONT_SIZES } from './FormattingToolbar';
 
 // ------------------------------------------------------------
 // CommandMenuBar — renders the full menubar from resolved menus
@@ -57,7 +57,7 @@ function MenuEntry({ entry }: { entry: ResolvedEntry }) {
           {isColor ? (
             <div className="grid grid-cols-10 gap-1">
               {entry.children.map(child => {
-                if (child.kind !== 'command') return null;
+                if (child.kind !== 'command' || child.label === '__reset__') return null;
                 return (
                   <button
                     key={child.id}
@@ -135,7 +135,7 @@ export function CommandToolbar({ entries }: CommandToolbarProps) {
         }
 
         const isToggle = entry.isChecked !== undefined;
-        const variant = isToggle && entry.isChecked ? 'default' : 'outline';
+        const variant = isToggle && entry.isChecked ? 'active' : 'ghost';
         return (
           <span key={entry.id} className="contents">
             {entry.toolbarDividerBefore && (
@@ -193,30 +193,69 @@ function ToolbarSubmenuEntry({ entry }: { entry: ResolvedEntry & { kind: 'submen
     );
   }
 
-  // Font size select
+  // Font size input with +/- buttons
   if (entry.id === 'font-size') {
-    const current = entry.currentValueLabel || 'Default';
+    const currentLabel = entry.currentValueLabel || 'Default';
+    const currentSize = parseInt(currentLabel, 10) || null;
+    const defaultSize = 11;
+
+    const decrement = () => {
+      const effective = currentSize ?? defaultSize;
+      const smaller = FONT_SIZES.filter(s => s < effective);
+      const target = smaller.length > 0 ? smaller[smaller.length - 1] : FONT_SIZES[0];
+      const child = entry.children.find(c => c.kind === 'command' && c.label === String(target));
+      if (child && child.kind === 'command') child.execute();
+      else entry.executeCustom?.(String(target));
+    };
+
+    const increment = () => {
+      const effective = currentSize ?? defaultSize;
+      const larger = FONT_SIZES.filter(s => s > effective);
+      const target = larger.length > 0 ? larger[0] : FONT_SIZES[FONT_SIZES.length - 1];
+      const child = entry.children.find(c => c.kind === 'command' && c.label === String(target));
+      if (child && child.kind === 'command') child.execute();
+      else entry.executeCustom?.(String(target));
+    };
+
+    const applySize = (value: string) => {
+      const parsed = parseInt(value, 10);
+      if (!parsed || parsed < 1 || parsed > 999) return;
+      const child = entry.children.find(c => c.kind === 'command' && c.label === String(parsed));
+      if (child && child.kind === 'command') child.execute();
+      else entry.executeCustom?.(String(parsed));
+    };
+
     return (
       <span className="contents">
         {divider}
-        <Select
-          value={current}
-          onValueChange={(v: string) => {
-            const child = entry.children.find(c => c.kind === 'command' && c.label === v);
-            if (child && child.kind === 'command') child.execute();
-          }}
-          disabled={!entry.isEnabled}
-        >
-          <SelectTrigger className="h-7 w-[56px] text-xs">
-            <SelectValue placeholder="Size" />
-          </SelectTrigger>
-          <SelectContent>
-            {entry.children.map(child => {
-              if (child.kind !== 'command') return null;
-              return <SelectItem key={child.id} value={child.label}>{child.label}</SelectItem>;
-            })}
-          </SelectContent>
-        </Select>
+        <div className="flex items-center">
+          <Button variant="ghost" size="icon" className="h-7 w-7 rounded-r-none" onClick={decrement} disabled={!entry.isEnabled} title="Decrease font size">
+            <span className="material-symbols-outlined" style={{ fontSize: '1rem' }}>remove</span>
+          </Button>
+          <input
+            type="text"
+            className="h-7 w-[40px] text-xs text-center border border-input rounded bg-background outline-none"
+            value={currentLabel === 'Default' ? '' : currentLabel}
+            placeholder="--"
+            disabled={!entry.isEnabled}
+            onKeyDown={(e: any) => {
+              e.stopPropagation();
+              if (e.key === 'Enter') {
+                applySize(e.currentTarget.value);
+                e.currentTarget.blur();
+              }
+            }}
+            onBlur={(e: any) => applySize(e.currentTarget.value)}
+            onFocus={(e: any) => e.currentTarget.select()}
+            onInput={(e: any) => {
+              // Allow only digits in the input
+              e.currentTarget.value = e.currentTarget.value.replace(/\D/g, '');
+            }}
+          />
+          <Button variant="ghost" size="icon" className="h-7 w-7 rounded-l-none" onClick={increment} disabled={!entry.isEnabled} title="Increase font size">
+            <span className="material-symbols-outlined" style={{ fontSize: '1rem' }}>add</span>
+          </Button>
+        </div>
       </span>
     );
   }
@@ -233,6 +272,7 @@ function ToolbarSubmenuEntry({ entry }: { entry: ResolvedEntry & { kind: 'submen
           onChange={(c) => {
             const child = entry.children.find(ch => ch.kind === 'command' && ch.label === c);
             if (child && child.kind === 'command') child.execute();
+            else entry.executeCustom?.(c);
           }}
           icon="format_color_text"
           title="Text color"
@@ -244,7 +284,7 @@ function ToolbarSubmenuEntry({ entry }: { entry: ResolvedEntry & { kind: 'submen
 
   // Background color picker
   if (entry.id === 'bg-color') {
-    const bgChild = entry.children.find(c => c.kind === 'command' && c.isChecked);
+    const bgChild = entry.children.find(c => c.kind === 'command' && c.isChecked && c.id !== 'bg-color-reset');
     const current = bgChild?.kind === 'command' ? bgChild.label : undefined;
     return (
       <span className="contents">
@@ -254,9 +294,15 @@ function ToolbarSubmenuEntry({ entry }: { entry: ResolvedEntry & { kind: 'submen
           onChange={(c) => {
             const child = entry.children.find(ch => ch.kind === 'command' && ch.label === c);
             if (child && child.kind === 'command') child.execute();
+            else entry.executeCustom?.(c);
+          }}
+          onReset={() => {
+            const resetChild = entry.children.find(ch => ch.kind === 'command' && ch.id === 'bg-color-reset');
+            if (resetChild && resetChild.kind === 'command') resetChild.execute();
           }}
           icon="format_color_fill"
           title="Fill color"
+          defaultColor="transparent"
           disabled={!entry.isEnabled}
         />
       </span>
@@ -298,7 +344,7 @@ function ToolbarSubmenuEntry({ entry }: { entry: ResolvedEntry & { kind: 'submen
         {divider}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="outline" size="icon" className="h-7 w-7" disabled={!entry.isEnabled} title="Borders">
+            <Button variant="ghost" size="icon" className="h-7 w-7" disabled={!entry.isEnabled} title="Borders">
               <span className="material-symbols-outlined" style={{ fontSize: '1rem' }}>border_all</span>
             </Button>
           </DropdownMenuTrigger>
@@ -328,7 +374,7 @@ function ToolbarSubmenuEntry({ entry }: { entry: ResolvedEntry & { kind: 'submen
   return (
     <span className="contents">
       {divider}
-      <Button variant="outline" size="icon" disabled={!entry.isEnabled} title={entry.label}>
+      <Button variant="ghost" size="icon" disabled={!entry.isEnabled} title={entry.label}>
         {entry.icon && <span className="material-symbols-outlined">{entry.icon}</span>}
       </Button>
     </span>

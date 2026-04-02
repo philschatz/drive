@@ -69,7 +69,7 @@ export function CommandSearch({ entries }: CommandSearchProps) {
           type="text"
           value={query}
           placeholder="Menu"
-          className="h-7 w-[80px] rounded-sm border bg-transparent px-6 text-xs outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground focus:w-[180px] transition-all"
+          className="h-7 w-[80px] rounded-sm border bg-background px-6 text-xs outline-none focus:ring-1 focus:ring-ring placeholder:text-muted-foreground focus:w-[180px] transition-all"
           onInput={(e) => {
             setQuery((e.target as HTMLInputElement).value);
             setOpen(true);

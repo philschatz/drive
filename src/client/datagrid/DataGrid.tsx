@@ -1303,14 +1303,15 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
 
       />
       <HistorySlider history={history} />
-      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', ...(noAccess ? { opacity: 0.4, pointerEvents: 'none' as const } : {}) }}>
+      <div className="datagrid-body">
+      <div className="datagrid-main" style={noAccess ? { opacity: 0.4, pointerEvents: 'none' as const } : undefined}>
       {showValidation && <ValidationPanel errors={validationErrors} docId={docId} docType="DataGrid" />}
 
       {columnDefs.length > 0 && doc2 && (
         <>
           <CommandMenuBar menus={commands.menus} />
 
-          <div className="flex items-center gap-1 mb-1 flex-wrap">
+          <div className="flex items-center gap-1 mb-1 flex-wrap bg-blue-50 px-2 py-1 rounded">
             <CommandSearch entries={commands.allSearchable} />
             <CommandToolbar entries={commands.toolbar} />
           </div>
@@ -1705,6 +1706,7 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
         currentSheetId={currentSheetId ?? ''}
         mutate={mutate}
       />
+      </div>
     </div>
     </DocLoader>
   );

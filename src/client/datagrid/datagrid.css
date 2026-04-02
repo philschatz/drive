@@ -5,6 +5,29 @@
   overflow: hidden;
 }
 
+.datagrid-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: row;
+}
+
+.datagrid-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.cond-format-panel {
+  width: 350px;
+  flex-shrink: 0;
+  border-left: 1px solid #dee2e6;
+  padding: 16px;
+  overflow-y: auto;
+  background: var(--color-background);
+}
+
 .datagrid-wrapper {
   flex: 1;
   min-height: 0;
