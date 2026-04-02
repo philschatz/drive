@@ -15,7 +15,7 @@ import {
   getDisplayValue,
 } from './helpers';
 import { FormulaEditor, type FormulaHighlight, isRange } from './FormulaEditor';
-import { buildFormatCache, formatToCss, formatDisplayValue, resolveConditionalFormat } from './formatting';
+import { buildFormatCache, formatToCss, formatDisplayValue, isAccountingFormat, resolveConditionalFormat } from './formatting';
 import type { DataGridCellFormat } from './schema';
 import { SheetTabs } from './SheetTabs';
 import { useUndoRedo } from '../shared/useUndoRedo';
@@ -1693,6 +1693,11 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
                                   return cached != null ? <div className="cell-eval-tooltip">{String(cached)}</div> : null;
                                 })()}
                               </>
+                            ) : isAccountingFormat(cellFmt?.numFmt) && !display.startsWith('#') ? (
+                              <span className="datagrid-cell-accounting">
+                                <span className="acct-symbol">$</span>
+                                <span className="acct-value">{display}</span>
+                              </span>
                             ) : (
                               <span className={display.startsWith('#') ? 'datagrid-cell-error' : rawValue.startsWith('=') ? 'datagrid-formula' : ''} title={display.startsWith('#') ? (errorMessages.get(`${effectiveSheetId}:${rowId}:${colId}`) || display) : undefined}>{display}</span>
                             )}
@@ -1792,6 +1797,10 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
         sortedColIds={sortedColIds}
         currentSheetId={currentSheetId ?? ''}
         mutate={mutate}
+        selectedCell={selectedCell}
+        selectionRange={selectionRange}
+        visibleRowIds={visibleRowIds}
+        visibleColIds={visibleColIds}
       />
       </div>
     </div>

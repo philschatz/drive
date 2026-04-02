@@ -41,10 +41,15 @@ interface ConditionalFormatPanelProps {
   sortedColIds: string[];
   currentSheetId: string;
   mutate: (fn: (doc: any, ...args: any[]) => void, args: unknown[]) => void;
+  selectedCell: [number, number] | null;
+  selectionRange: { minCol: number; maxCol: number; minRow: number; maxRow: number } | null;
+  visibleRowIds: string[];
+  visibleColIds: string[];
 }
 
 export function ConditionalFormatPanel({
   open, onOpenChange, rules, sortedRowIds, sortedColIds, currentSheetId, mutate,
+  selectedCell, selectionRange, visibleRowIds, visibleColIds,
 }: ConditionalFormatPanelProps) {
   const [editing, setEditing] = useState<string | 'new' | null>(null);
   const [rangeText, setRangeText] = useState('');
@@ -58,6 +63,43 @@ export function ConditionalFormatPanel({
   const sortedRules = rules
     ? Object.entries(rules).sort((a, b) => a[1].index - b[1].index)
     : [];
+
+  // Determine which rules apply to the current selection
+  const ruleAppliesToSelection = useCallback((rule: ConditionalFormatRule): boolean => {
+    if (!selectedCell) return false;
+    // Build set of selected cell positions (row/col indices in sorted arrays)
+    const cells: [number, number][] = [];
+    if (selectionRange) {
+      for (let r = selectionRange.minRow; r <= selectionRange.maxRow; r++) {
+        for (let c = selectionRange.minCol; c <= selectionRange.maxCol; c++) {
+          if (r < visibleRowIds.length && c < visibleColIds.length) {
+            const ri = sortedRowIds.indexOf(visibleRowIds[r]);
+            const ci = sortedColIds.indexOf(visibleColIds[c]);
+            if (ri !== -1 && ci !== -1) cells.push([ri, ci]);
+          }
+        }
+      }
+    } else {
+      const [col, row] = selectedCell;
+      if (row < visibleRowIds.length && col < visibleColIds.length) {
+        const ri = sortedRowIds.indexOf(visibleRowIds[row]);
+        const ci = sortedColIds.indexOf(visibleColIds[col]);
+        if (ri !== -1 && ci !== -1) cells.push([ri, ci]);
+      }
+    }
+    // Check if any selected cell falls in any of the rule's ranges
+    for (const [rowIdx, colIdx] of cells) {
+      for (const range of Object.values(rule.ranges)) {
+        const rStart = sortedRowIds.indexOf(range.rangeRowStart);
+        const rEnd = sortedRowIds.indexOf(range.rangeRowEnd);
+        const cStart = sortedColIds.indexOf(range.rangeColStart);
+        const cEnd = sortedColIds.indexOf(range.rangeColEnd);
+        if (rStart === -1 || rEnd === -1 || cStart === -1 || cEnd === -1) continue;
+        if (rowIdx >= rStart && rowIdx <= rEnd && colIdx >= cStart && colIdx <= cEnd) return true;
+      }
+    }
+    return false;
+  }, [selectedCell, selectionRange, visibleRowIds, visibleColIds, sortedRowIds, sortedColIds]);
 
   const rangeToA1 = (rule: ConditionalFormatRule): string => {
     return Object.values(rule.ranges).map(range => {
@@ -308,13 +350,26 @@ export function ConditionalFormatPanel({
             </div>
           </div>
         ) : (
-          // Rule list
+          // Rule list — applicable rules first, then non-applicable greyed out
           <>
             {sortedRules.length === 0 && (
               <p className="text-sm text-muted-foreground">No conditional formatting rules.</p>
             )}
-            {sortedRules.map(([id, rule]) => (
-              <div key={id} className="flex items-center justify-between border rounded-md p-2 text-sm">
+            {(() => {
+              const applicable = sortedRules.filter(([, rule]) => ruleAppliesToSelection(rule));
+              const other = sortedRules.filter(([, rule]) => !ruleAppliesToSelection(rule));
+              const combined: ([string, ConditionalFormatRule] | 'divider')[] = [...applicable];
+              if (applicable.length > 0 && other.length > 0) combined.push('divider');
+              combined.push(...other);
+              return combined;
+            })().map((item, idx) => {
+              if (item === 'divider') {
+                return <div key="divider" className="border-t my-1" />;
+              }
+              const [id, rule] = item;
+              const applies = ruleAppliesToSelection(rule);
+              return (
+              <div key={id} className={'flex items-center justify-between border rounded-md p-2 text-sm' + (applies ? '' : ' opacity-40')}>
                 <div className="flex-1 min-w-0">
                   <div className="font-medium truncate">{condLabel(rule.conditionType)}{rule.conditionValue ? ` ${rule.conditionValue}` : ''}</div>
                   <div className="text-xs text-muted-foreground">{rangeToA1(rule)}</div>
@@ -344,7 +399,8 @@ export function ConditionalFormatPanel({
                   </Button>
                 </div>
               </div>
-            ))}
+              );
+            })}
             <Button onClick={startNew} size="sm" className="mt-2">
               <span className="material-symbols-outlined mr-1" style={{ fontSize: '1rem' }}>add</span>
               Add rule

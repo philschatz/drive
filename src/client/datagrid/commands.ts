@@ -1325,6 +1325,7 @@ function buildNumberFormatSubmenu(state: GridCommandState, ctx: GridCommandConte
     children: NUMBER_FORMATS.map(f => ({
       kind: 'command' as const, id: `num-fmt-${f.value}`, label: f.label, isEnabled: state.hasSelection,
       isChecked: (state.currentCellFormat?.numFmt || 'auto') === f.value,
+      shortcut: f.example,
       execute: () => applyFormatToSelection(ctx, { numFmt: f.value === 'auto' ? undefined : f.value }),
     })),
   };

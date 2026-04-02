@@ -48,10 +48,24 @@ function borderToCss(b: DataGridBorder): string {
 // formatDisplayValue — apply number format to display value
 // ============================================================
 
+/** Check if a numFmt is an accounting-style format (currency left, number right). */
+export function isAccountingFormat(numFmt: string | undefined): boolean {
+  if (!numFmt) return false;
+  return numFmt.includes('_($') || numFmt.includes('_($ ') || numFmt.includes('_("$"');
+}
+
 export function formatDisplayValue(display: string, numFmt: string | undefined): string {
   if (!numFmt || display === '' || display.startsWith('#')) return display;
+  if (numFmt === '@') return display; // Plain text — no formatting
   const num = Number(display);
   if (isNaN(num)) return display;
+
+  // Scientific notation
+  if (/[eE]\+/.test(numFmt)) {
+    const decMatch = numFmt.match(/0\.(0+)E/i);
+    const dec = decMatch ? decMatch[1].length : 2;
+    return num.toExponential(dec).toUpperCase();
+  }
 
   // Excel format codes can have up to 4 sections: positive;negative;zero;text
   const sections = numFmt.split(';');
@@ -83,13 +97,12 @@ export function formatDisplayValue(display: string, numFmt: string | undefined):
   const hasPercent = section.includes('%');
   const decimalMatch = section.match(/\.([0#?]+)/);
   const decimals = decimalMatch ? decimalMatch[1].length : 0;
+  const accounting = isAccountingFormat(numFmt);
 
   // Handle dash-for-zero pattern: sections like  "-"  or  $ -
-  if (num === 0) {
-    const stripped = section.replace(/[#0,.?()]/g, '').trim();
-    if (stripped === '-' || stripped === '$-' || stripped === '$ -') {
-      return hasDollar ? '$ -' : '-';
-    }
+  if (num === 0 && (section.includes('-') && !/[#0]/.test(section.replace(/[(),$.%\s]/g, '')))) {
+    // For accounting: return just dash ($ is rendered separately by cell)
+    return accounting ? '-' : (hasDollar ? '$ -' : '-');
   }
 
   // Apply percentage scaling
@@ -99,6 +112,14 @@ export function formatDisplayValue(display: string, numFmt: string | undefined):
   let formatted = hasComma
     ? val.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals })
     : val.toFixed(decimals);
+
+  // Accounting format: $ is rendered separately by the cell renderer
+  if (accounting) {
+    if (num < 0 && hasParen) formatted = '(' + formatted + ')';
+    // Add trailing space to match the paren-width padding for positive numbers
+    else if (hasParen) formatted = formatted + ' ';
+    return formatted;
+  }
 
   // Add currency symbol
   if (hasDollar) formatted = '$ ' + formatted;

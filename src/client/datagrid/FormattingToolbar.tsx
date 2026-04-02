@@ -18,14 +18,17 @@ export const FONT_FAMILIES = [
 
 export const FONT_SIZES = [8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 36, 48, 72];
 
-export const NUMBER_FORMATS: { label: string; value: string }[] = [
+export const NUMBER_FORMATS: { label: string; value: string; example?: string }[] = [
   { label: 'Automatic', value: 'auto' },
-  { label: 'Number', value: '#,##0.00' },
-  { label: 'Currency', value: '$#,##0.00' },
-  { label: 'Percentage', value: '0%' },
-  { label: 'Date', value: 'mm/dd/yyyy' },
-  { label: 'Integer', value: '#,##0' },
-  { label: 'Text', value: '@' },
+  { label: 'Plain text', value: '@' },
+  { label: 'Number', value: '#,##0.00', example: '1,234.56' },
+  { label: 'Integer', value: '#,##0', example: '1,235' },
+  { label: 'Accounting', value: '_($* #,##0.00_);_($* (#,##0.00);_($* "-"_);_(@_)', example: '$ 1,234.56' },
+  { label: 'Percent', value: '0.00%', example: '12.35%' },
+  { label: 'Scientific', value: '0.00E+0', example: '1.23E+3' },
+  { label: 'Date', value: 'mm/dd/yyyy', example: '04/02/2026' },
+  { label: 'Time', value: 'hh:mm:ss', example: '14:30:00' },
+  { label: 'Datetime', value: 'mm/dd/yyyy hh:mm', example: '04/02/2026 14:30' },
 ];
 
 export const PRESET_COLORS = [
