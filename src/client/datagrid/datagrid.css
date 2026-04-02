@@ -83,7 +83,7 @@
 
 .formula-cell-label {
   font-weight: 600;
-  font-size: 0.9rem;
+  font-size: 0.85rem;
   min-width: 3rem;
   color: #495057;
   font-family: monospace;
@@ -93,7 +93,7 @@
   flex: 1;
   border: none;
   outline: none;
-  font-size: 0.9rem;
+  font-size: 0.85rem;
   font-family: monospace;
   background: transparent;
 }
@@ -102,7 +102,7 @@
 .datagrid-table {
   border-collapse: collapse;
   table-layout: fixed;
-  font-size: 0.9rem;
+  font-size: 0.85rem;
 }
 
 .datagrid-table th,
@@ -204,7 +204,9 @@
 
 /* Frozen column/row boundary indicators — use pseudo-elements instead of
    borders because border-collapse: collapse causes shared borders to scroll
-   away with the non-frozen neighbor cell. */
+   away with the non-frozen neighbor cell.
+   Use ::after for columns and ::before for rows so both can render on the
+   same cell (the intersection of last frozen row and last frozen column). */
 .frozen-col-last::after {
   content: '';
   position: absolute;
@@ -215,7 +217,7 @@
   background: #adb5bd;
   pointer-events: none;
 }
-.frozen-row-last::after {
+.frozen-row-last::before {
   content: '';
   position: absolute;
   left: 0;
@@ -226,7 +228,19 @@
   pointer-events: none;
 }
 
-/* Selected headers */
+/* Active headers (cell selected in this row/col) */
+.datagrid-col-header.active {
+  background: #d0ebff;
+  color: #1971c2;
+  box-shadow: inset 0 -2px 0 0 #228be6;
+}
+.datagrid-row-header.active {
+  background: #d0ebff;
+  color: #1971c2;
+  box-shadow: inset -2px 0 0 0 #228be6;
+}
+
+/* Selected headers (entire row/col selected) */
 .datagrid-row-header.selected,
 .datagrid-col-header.selected {
   background: #d0ebff;

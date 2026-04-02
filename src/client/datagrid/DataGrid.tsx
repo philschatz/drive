@@ -1469,7 +1469,7 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
                         )}
                         <th
                           key={col.id}
-                          className={'datagrid-col-header' + (isColSelected ? ' selected' : '') + dropClass + (isLastFrozenCol ? ' frozen-col-last' : '')}
+                          className={'datagrid-col-header' + (isColSelected ? ' selected' : selectedCell && selectedCell[0] === ci ? ' active' : '') + dropClass + (isLastFrozenCol ? ' frozen-col-last' : '')}
                           style={{ width: (resizingCol?.index === ci ? resizingCol.width : col.width) || 100, ...frozenStyle }}
                           data-col-index={ci}
                           onClick={(e: any) => handleColHeaderClick(ci, e)}
@@ -1538,7 +1538,7 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
                       )}
                     <tr key={rowId}>
                       <td
-                        className={'datagrid-row-header' + (isRowSelected ? ' selected' : '') + dropClass + (isLastFrozenRow ? ' frozen-row-last' : '')}
+                        className={'datagrid-row-header' + (isRowSelected ? ' selected' : selectedCell && selectedCell[1] === ri ? ' active' : '') + dropClass + (isLastFrozenRow ? ' frozen-row-last' : '')}
                         style={isFrozenRow ? { position: 'sticky', left: 0, top: frozenRowTop, zIndex: 3 } : undefined}
                         data-row-index={ri}
                         onClick={(e: any) => handleRowHeaderClick(ri, e)}

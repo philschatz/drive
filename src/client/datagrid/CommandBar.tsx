@@ -127,7 +127,7 @@ export function CommandToolbar({ entries }: CommandToolbarProps) {
     <div className="flex items-center gap-1">
       {entries.map((entry, i) => {
         if (entry.kind === 'separator') {
-          return <div key={`sep-${i}`} className="w-px h-7 bg-border mx-1" />;
+          return <div key={`sep-${i}`} className="w-px h-6 bg-border mx-1" />;
         }
 
         if (entry.kind === 'submenu') {
@@ -139,7 +139,7 @@ export function CommandToolbar({ entries }: CommandToolbarProps) {
         return (
           <span key={entry.id} className="contents">
             {entry.toolbarDividerBefore && (
-              <div className="w-px h-7 bg-border mx-1" />
+              <div className="w-px h-6 bg-border mx-1" />
             )}
             <Button
               variant={variant}
@@ -159,7 +159,7 @@ export function CommandToolbar({ entries }: CommandToolbarProps) {
 
 // Render toolbar submenu entries as appropriate widgets
 function ToolbarSubmenuEntry({ entry }: { entry: ResolvedEntry & { kind: 'submenu' } }) {
-  const divider = entry.toolbarDividerBefore ? <div className="w-px h-7 bg-border mx-1" /> : null;
+  const divider = entry.toolbarDividerBefore ? <div className="w-px h-6 bg-border mx-1" /> : null;
 
   // Font family select
   if (entry.id === 'font-family') {
@@ -175,7 +175,7 @@ function ToolbarSubmenuEntry({ entry }: { entry: ResolvedEntry & { kind: 'submen
           }}
           disabled={!entry.isEnabled}
         >
-          <SelectTrigger className="h-8 w-[120px] text-sm">
+          <SelectTrigger className="h-7 w-[120px] text-xs">
             <SelectValue placeholder="Font" />
           </SelectTrigger>
           <SelectContent>
@@ -229,12 +229,12 @@ function ToolbarSubmenuEntry({ entry }: { entry: ResolvedEntry & { kind: 'submen
       <span className="contents">
         {divider}
         <div className="flex items-center">
-          <Button variant="ghost" size="icon" className="h-8 w-8 rounded-r-none" onClick={decrement} disabled={!entry.isEnabled} title="Decrease font size">
+          <Button variant="ghost" size="icon" className="h-7 w-7 rounded-r-none" onClick={decrement} disabled={!entry.isEnabled} title="Decrease font size">
             <span className="material-symbols-outlined" style={{ fontSize: '1rem' }}>remove</span>
           </Button>
           <input
             type="text"
-            className="h-8 w-[40px] text-sm text-center border border-input rounded bg-background outline-none"
+            className="h-7 w-[40px] text-xs text-center border border-input rounded bg-background outline-none"
             value={currentLabel === 'Default' ? '' : currentLabel}
             placeholder="--"
             disabled={!entry.isEnabled}
@@ -252,7 +252,7 @@ function ToolbarSubmenuEntry({ entry }: { entry: ResolvedEntry & { kind: 'submen
               e.currentTarget.value = e.currentTarget.value.replace(/\D/g, '');
             }}
           />
-          <Button variant="ghost" size="icon" className="h-8 w-8 rounded-l-none" onClick={increment} disabled={!entry.isEnabled} title="Increase font size">
+          <Button variant="ghost" size="icon" className="h-7 w-7 rounded-l-none" onClick={increment} disabled={!entry.isEnabled} title="Increase font size">
             <span className="material-symbols-outlined" style={{ fontSize: '1rem' }}>add</span>
           </Button>
         </div>
@@ -323,7 +323,7 @@ function ToolbarSubmenuEntry({ entry }: { entry: ResolvedEntry & { kind: 'submen
           }}
           disabled={!entry.isEnabled}
         >
-          <SelectTrigger className="h-8 w-[110px] text-sm">
+          <SelectTrigger className="h-7 w-[110px] text-xs">
             <SelectValue placeholder="Format" />
           </SelectTrigger>
           <SelectContent>
@@ -344,7 +344,7 @@ function ToolbarSubmenuEntry({ entry }: { entry: ResolvedEntry & { kind: 'submen
         {divider}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon" className="h-8 w-8" disabled={!entry.isEnabled} title="Borders">
+            <Button variant="ghost" size="icon" className="h-7 w-7" disabled={!entry.isEnabled} title="Borders">
               <span className="material-symbols-outlined" style={{ fontSize: '1rem' }}>border_all</span>
             </Button>
           </DropdownMenuTrigger>
