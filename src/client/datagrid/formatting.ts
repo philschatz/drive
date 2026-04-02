@@ -53,26 +53,66 @@ export function formatDisplayValue(display: string, numFmt: string | undefined):
   const num = Number(display);
   if (isNaN(num)) return display;
 
-  // Common format patterns
-  if (numFmt === '0%' || numFmt === '0.00%') {
-    const pct = num * 100;
-    const decimals = numFmt === '0.00%' ? 2 : 0;
-    return pct.toFixed(decimals) + '%';
-  }
-  if (numFmt === '#,##0' || numFmt === '#,##0.00') {
-    const decimals = numFmt.includes('.00') ? 2 : 0;
-    return num.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
-  }
-  if (numFmt === '$#,##0.00' || numFmt === '$#,##0') {
-    const decimals = numFmt.includes('.00') ? 2 : 0;
-    return '$' + num.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
-  }
-  if (numFmt === '0' || numFmt === '0.00') {
-    const decimals = numFmt === '0.00' ? 2 : 0;
-    return num.toFixed(decimals);
+  // Excel format codes can have up to 4 sections: positive;negative;zero;text
+  const sections = numFmt.split(';');
+  let section: string;
+  if (num > 0 || (num === 0 && sections.length < 3)) {
+    section = sections[0];
+  } else if (num < 0) {
+    section = sections[1] || sections[0];
+  } else {
+    section = sections[2] || sections[0];
   }
 
-  return display;
+  // Negative section uses absolute value (sign is conveyed by parens or explicit -)
+  const absNum = Math.abs(num);
+
+  // Strip color codes like [Red], [Blue], etc.
+  section = section.replace(/\[[A-Za-z]+\]/g, '');
+  // Strip padding _X (underscore + next char = width spacer)
+  section = section.replace(/_./g, '');
+  // Strip repeat *X (asterisk + next char = fill)
+  section = section.replace(/\*./g, '');
+  // Strip quoted literals but keep their content
+  section = section.replace(/"([^"]*)"/g, '$1');
+
+  // Detect formatting features from the cleaned section
+  const hasParen = section.includes('(') && section.includes(')');
+  const hasDollar = section.includes('$');
+  const hasComma = /[#0],/.test(section) || /,[#0]/.test(section);
+  const hasPercent = section.includes('%');
+  const decimalMatch = section.match(/\.([0#?]+)/);
+  const decimals = decimalMatch ? decimalMatch[1].length : 0;
+
+  // Handle dash-for-zero pattern: sections like  "-"  or  $ -
+  if (num === 0) {
+    const stripped = section.replace(/[#0,.?()]/g, '').trim();
+    if (stripped === '-' || stripped === '$-' || stripped === '$ -') {
+      return hasDollar ? '$ -' : '-';
+    }
+  }
+
+  // Apply percentage scaling
+  const val = hasPercent ? absNum * 100 : absNum;
+
+  // Format the number
+  let formatted = hasComma
+    ? val.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals })
+    : val.toFixed(decimals);
+
+  // Add currency symbol
+  if (hasDollar) formatted = '$ ' + formatted;
+
+  // Add sign: parentheses for negative in paren format, minus sign otherwise
+  if (num < 0) {
+    if (hasParen) formatted = '(' + formatted + ')';
+    else if (!sections[1]) formatted = '-' + formatted; // only add - if using section[0] for negatives
+  }
+
+  // Add percent suffix
+  if (hasPercent) formatted += '%';
+
+  return formatted;
 }
 
 // ============================================================

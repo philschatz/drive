@@ -1570,8 +1570,8 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
                         const cellStyle: Record<string, string> = {};
                         const fmtCss = formatToCss(cellFmt);
                         if (fmtCss) Object.assign(cellStyle, fmtCss);
-                        if (cellFmt?.numFmt) display = formatDisplayValue(display, cellFmt.numFmt);
-                        // Apply conditional formatting (overrides cell format)
+                        // Resolve conditional formatting BEFORE number formatting
+                        // (conditions compare raw numeric values, not formatted strings)
                         if (currentSheet?.conditionalFormats) {
                           const condFmt = resolveConditionalFormat(
                             currentSheet.conditionalFormats, rowId, colId, display,
@@ -1582,6 +1582,8 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
                             if (condCss) Object.assign(cellStyle, condCss);
                           }
                         }
+                        // Apply number formatting AFTER conditional format resolution
+                        if (cellFmt?.numFmt) display = formatDisplayValue(display, cellFmt.numFmt);
                         // UI overlays (peer, ref-highlight, clipboard) override formatting
                         if (peers) cellStyle.boxShadow = `inset 0 0 0 2px ${peers.color}`;
                         if (refInfo) {
@@ -1606,9 +1608,10 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
                         // Frozen cell positioning (highest priority — overlays everything)
                         const isFrozenCol = ci < frozenColCount;
                         const isLastFrozenCol = ci === frozenColCount - 1;
+                        const isSpillTarget = spillTargetsRef.current.has(`${effectiveSheetId}:${rowId}:${colId}`);
                         if (isFrozenCol || isFrozenRow) {
                           cellStyle.position = 'sticky';
-                          if (!cellStyle.background) cellStyle.background = '#fff';
+                          if (!cellStyle.background && !isSpillTarget) cellStyle.background = '#fff';
                           if (isFrozenCol) {
                             cellStyle.left = `${frozenColOffsets[ci]}px`;
                           }

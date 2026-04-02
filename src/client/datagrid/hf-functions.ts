@@ -662,6 +662,123 @@ class SearchPlugin extends FunctionPlugin {
 
 }
 
+// ---------------------------------------------------------------------------
+// TEXT — override HyperFormula's built-in TEXT() to properly handle Excel date
+// format codes (e.g., "MMM D", "YYYY", "MM/DD/YY").
+// ---------------------------------------------------------------------------
+
+const MONTH_ABBR = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const MONTH_FULL = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+const DAY_ABBR = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const DAY_FULL = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+/** Convert Excel serial number to JS Date (Excel epoch: Jan 0, 1900, with the Lotus 1-2-3 leap year bug). */
+function serialToDate(serial: number): Date {
+  // Excel serial 1 = Jan 1 1900, but serial 60 = Feb 29 1900 (doesn't exist)
+  const adjusted = serial > 60 ? serial - 1 : serial;
+  const ms = (adjusted - 1) * 86400000;
+  return new Date(Date.UTC(1900, 0, 1) + ms);
+}
+
+function applyDateFormat(date: Date, fmt: string): string {
+  const y = date.getUTCFullYear();
+  const m = date.getUTCMonth(); // 0-based
+  const d = date.getUTCDate();
+  const dow = date.getUTCDay();
+  const h = date.getUTCHours();
+  const min = date.getUTCMinutes();
+  const sec = date.getUTCSeconds();
+
+  let result = fmt;
+  // Order matters: replace longer tokens first
+
+  // Year
+  result = result.replace(/yyyy/gi, String(y));
+  result = result.replace(/yy/gi, String(y).slice(-2));
+
+  // Month: mmmm, mmm, mm, m (but not within 'h:mm' — use context to distinguish)
+  // Excel uses 'm' for both month and minute; context: after 'h' or ':' it's minutes
+  // Simple heuristic: replace month tokens that aren't preceded by 'h' or ':'
+  result = result.replace(/mmmm/gi, MONTH_FULL[m]);
+  result = result.replace(/mmm/gi, MONTH_ABBR[m]);
+  // For mm and m: distinguish from minutes by checking if preceded by h or :
+  result = result.replace(/(?<![h:])\bmm\b(?!:)/gi, String(m + 1).padStart(2, '0'));
+  result = result.replace(/(?<![h:])\bm\b(?!m)(?!:)/gi, String(m + 1));
+
+  // Day
+  result = result.replace(/dddd/gi, DAY_FULL[dow]);
+  result = result.replace(/ddd/gi, DAY_ABBR[dow]);
+  result = result.replace(/\bdd\b/gi, String(d).padStart(2, '0'));
+  result = result.replace(/\bd\b/gi, String(d));
+
+  // Hours
+  result = result.replace(/\bhh\b/gi, String(h).padStart(2, '0'));
+  result = result.replace(/\bh\b/gi, String(h));
+
+  // Minutes (after h: or :)
+  result = result.replace(/(?<=h|:)mm/gi, String(min).padStart(2, '0'));
+  result = result.replace(/(?<=h|:)m\b/gi, String(min));
+
+  // Seconds
+  result = result.replace(/\bss\b/gi, String(sec).padStart(2, '0'));
+  result = result.replace(/\bs\b/gi, String(sec));
+
+  return result;
+}
+
+function applyNumberFormat(num: number, fmt: string): string {
+  const absNum = Math.abs(num);
+  // Strip color codes, padding, repeats
+  let section = fmt.replace(/\[[A-Za-z]+\]/g, '').replace(/_./g, '').replace(/\*./g, '').replace(/"([^"]*)"/g, '$1');
+  const hasParen = section.includes('(') && section.includes(')');
+  const hasDollar = section.includes('$');
+  const hasComma = /[#0],/.test(section) || /,[#0]/.test(section);
+  const hasPercent = section.includes('%');
+  const decimalMatch = section.match(/\.([0#?]+)/);
+  const decimals = decimalMatch ? decimalMatch[1].length : 0;
+
+  let val = hasPercent ? absNum * 100 : absNum;
+  let formatted = hasComma
+    ? val.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals })
+    : val.toFixed(decimals);
+  if (hasDollar) formatted = '$' + formatted;
+  if (num < 0 && hasParen) formatted = '(' + formatted + ')';
+  else if (num < 0) formatted = '-' + formatted;
+  if (hasPercent) formatted += '%';
+  return formatted;
+}
+
+class TextPlugin extends FunctionPlugin {
+  static implementedFunctions = {
+    'TEXT': {
+      method: 'text',
+      parameters: [
+        { argumentType: FunctionArgumentType.ANY },
+        { argumentType: FunctionArgumentType.STRING },
+      ],
+    },
+  };
+
+  text(ast: any, state: any) {
+    return this.runFunction(ast.args, state, this.metadata('TEXT'),
+      (value: CellValue, formatStr: string) => {
+        if (value instanceof CellError) return value;
+        const num = Number(value);
+        if (isNaN(num)) return String(value);
+
+        // Check if format string looks like a date format
+        const isDateFmt = /[ymdhs]/i.test(formatStr) && /[ymd]/i.test(formatStr);
+        if (isDateFmt && num > 0) {
+          const date = serialToDate(num);
+          return applyDateFormat(date, formatStr);
+        }
+
+        return applyNumberFormat(num, formatStr);
+      },
+    );
+  }
+}
+
 export function addGoogleSheetsNamedExpressions(hf: HyperFormula) {
   hf.addNamedExpression('TRUE', '=TRUE()');
   hf.addNamedExpression('FALSE', '=FALSE()');
@@ -678,6 +795,8 @@ export function registerCustomFunctions() {
   HyperFormula.registerFunctionPlugin(FilterPlugin, { enGB: { FILTER: 'FILTER' } });
   try { HyperFormula.unregisterFunction('SEARCH'); } catch { /* may be protected */ }
   HyperFormula.registerFunctionPlugin(SearchPlugin, { enGB: { SEARCH: 'SEARCH' } });
+  try { HyperFormula.unregisterFunction('TEXT'); } catch { /* may be protected */ }
+  HyperFormula.registerFunctionPlugin(TextPlugin, { enGB: { TEXT: 'TEXT' } });
   HyperFormula.registerFunctionPlugin(DistributionPlugin, {
     enGB: {
       NORMAL: 'NORMAL', UNIFORM: 'UNIFORM', TRIANGULAR: 'TRIANGULAR', PERT: 'PERT', LOGNORMAL: 'LOGNORMAL',
