@@ -397,17 +397,13 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
     setEditingCell(null);
   }, []);
 
-  // Selection change → broadcast presence
   const selectCell = useCallback((col: number, row: number) => {
     setSelectedCell([col, row]);
     setSelectionAnchor(null);
     setSelectedRows(new Set());
     setSelectedCols(new Set());
     tableRef.current?.focus();
-    if (broadcastRef.current && row < visibleRowIds.length && col < visibleColIds.length) {
-      broadcastRef.current('focusedField', ['sheets', currentSheetId!, 'cells', `${visibleRowIds[row]}:${visibleColIds[col]}`]);
-    }
-  }, [visibleRowIds, visibleColIds, currentSheetId]);
+  }, []);
 
   const scrollCellIntoView = useCallback((col: number, row: number) => {
     const el = tableRef.current;
@@ -1109,26 +1105,32 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
     }
   }, [visibleRowIds, visibleColIds]);
 
-  // Sync cell/range selection to URL via replaceState
-  useEffect(() => {
-    if (!docId || !currentSheetId) return;
-    const base = window.location.href.split('#')[0];
-    const sheetBase = `${base}#/datagrids/${docId}/sheets/${currentSheetId}`;
-    if (!selectedCell || visibleRowIds.length === 0 || visibleColIds.length === 0) {
-      window.history.replaceState(null, '', sheetBase);
-      return;
-    }
+  // Automerge path to the focused cell (used for both URL sync and Edit Source link)
+  const focusPath: (string | number)[] | undefined = useMemo(() => {
+    if (!currentSheetId) return undefined;
+    if (!selectedCell || visibleRowIds.length === 0 || visibleColIds.length === 0) return ['sheets', currentSheetId];
     const [col, row] = selectedCell;
-    if (row >= visibleRowIds.length || col >= visibleColIds.length) return;
-    let url = `${sheetBase}/cells/${visibleRowIds[row]}:${visibleColIds[col]}`;
-    if (selectionAnchor) {
+    if (row >= visibleRowIds.length || col >= visibleColIds.length) return ['sheets', currentSheetId];
+    return ['sheets', currentSheetId, 'cells', `${visibleRowIds[row]}:${visibleColIds[col]}`];
+  }, [selectedCell, visibleRowIds, visibleColIds, currentSheetId]);
+
+  // Sync selection → presence broadcast + URL + Edit Source link
+  // All three derive from focusPath (the primary selected cell).
+  // The URL additionally encodes the range anchor as a query param (?anchor=rowId:colId);
+  // presence only tracks the primary cell since PresenceState.focusedField is a single path.
+  useEffect(() => {
+    if (!docId || !focusPath) return;
+    broadcastRef.current?.('focusedField', focusPath.length > 2 ? focusPath : null);
+    const base = window.location.href.split('#')[0];
+    let url = `${base}#/datagrids/${docId}/${focusPath.map(s => encodeURIComponent(String(s))).join('/')}`;
+    if (selectionAnchor && selectedCell) {
       const [ac, ar] = selectionAnchor;
       if (ar < visibleRowIds.length && ac < visibleColIds.length) {
         url += `?anchor=${visibleRowIds[ar]}:${visibleColIds[ac]}`;
       }
     }
     window.history.replaceState(null, '', url);
-  }, [selectedCell, selectionAnchor, visibleRowIds, visibleColIds, currentSheetId, docId]);
+  }, [focusPath, selectionAnchor, selectedCell, visibleRowIds, visibleColIds, docId]);
 
   // Handle sheetId prop changes from back/forward navigation
   useEffect(() => {
@@ -1355,9 +1357,7 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
         validationActive={showValidation}
         validationCount={validationErrors.length}
         docType="DataGrid"
-        sourcePath={selectedCell && currentSheetId && selectedCell[1] < visibleRowIds.length && selectedCell[0] < visibleColIds.length
-          ? ['sheets', currentSheetId, 'cells', `${visibleRowIds[selectedCell[1]]}:${visibleColIds[selectedCell[0]]}`]
-          : currentSheetId ? ['sheets', currentSheetId] : undefined}
+        sourcePath={focusPath}
       />
       <HistorySlider history={history} />
       <div className="datagrid-body">

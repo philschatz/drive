@@ -439,7 +439,7 @@ export function Home({ path }: { path?: string }) {
                 const bgColor = argbToHex((s.fill as any).fgColor);
                 if (bgColor) fmt.bgColor = bgColor;
               }
-              if (s.alignment?.horizontal) fmt.hAlign = s.alignment.horizontal;
+              if (s.alignment?.horizontal && s.alignment.horizontal !== 'general') fmt.hAlign = s.alignment.horizontal;
               if (s.alignment?.vertical) fmt.vAlign = s.alignment.vertical;
               if (s.alignment?.wrapText) fmt.wrapText = true;
               if (s.numFmt) fmt.numFmt = s.numFmt;
@@ -639,7 +639,7 @@ export function Home({ path }: { path?: string }) {
                 if (bgColor) format.bgColor = bgColor;
               }
               if (style?.numFmt) format.numFmt = style.numFmt;
-              if (style?.alignment?.horizontal) format.hAlign = style.alignment.horizontal;
+              if (style?.alignment?.horizontal && style.alignment.horizontal !== 'general') format.hAlign = style.alignment.horizontal;
               if (style?.alignment?.vertical) format.vAlign = style.alignment.vertical;
               if (style?.alignment?.wrapText) format.wrapText = true;
               if (style?.border?.top) { const b = mapBorder(style.border.top); if (b) format.borderTop = b; }

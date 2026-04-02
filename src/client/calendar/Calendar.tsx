@@ -78,22 +78,25 @@ function CalendarInner({ docId, readOnly, initialEventId }: { docId: string; rea
     }
   }, []);
 
+  // Automerge path to the focused field (drives presence, URL, and Edit Source link)
+  const [focusedPath, setFocusedPath] = useState<(string | number)[] | null>(null);
+  const focusPath: (string | number)[] | undefined = focusedPath ?? (editorState ? ['events', editorState.uid] : undefined);
+
+  const handleFieldFocus = useCallback((path: (string | number)[] | null) => {
+    setFocusedPath(path);
+  }, []);
+
+  // Sync selection → presence broadcast + URL (all derived from focusPath)
   useEffect(() => {
-    if (!editorState) broadcastRef.current?.('focusedField', null);
-    // Sync editor state to URL
+    if (!editorState) setFocusedPath(null);
+    broadcastRef.current?.('focusedField', focusPath ?? null);
     const base = window.location.href.split('#')[0];
-    if (editorState) {
-      window.history.replaceState(null, '', `${base}#/calendars/${docId}/events/${editorState.uid}`);
+    if (focusPath) {
+      window.history.replaceState(null, '', `${base}#/calendars/${docId}/${focusPath.map(s => encodeURIComponent(String(s))).join('/')}`);
     } else {
       window.history.replaceState(null, '', `${base}#/calendars/${docId}`);
     }
-  }, [editorState, docId]);
-
-  const [focusedPath, setFocusedPath] = useState<(string | number)[] | null>(null);
-  const handleFieldFocus = useCallback((path: (string | number)[] | null) => {
-    broadcastRef.current?.('focusedField', path);
-    setFocusedPath(path);
-  }, []);
+  }, [editorState, focusPath, docId]);
 
   useEffect(() => {
     if (!docId) return;
@@ -216,7 +219,7 @@ function CalendarInner({ docId, readOnly, initialEventId }: { docId: string; rea
         validationActive={showValidation}
         validationCount={validationErrors.length}
         docType="Calendar"
-        sourcePath={focusedPath || (editorState ? ['events', editorState.uid] : undefined)}
+        sourcePath={focusPath}
       >
         <input
           type="color"

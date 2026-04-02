@@ -34,7 +34,7 @@ describe('Button', () => {
   it('renders ghost variant', () => {
     render(<Button variant="ghost">Ghost</Button>);
     const btn = screen.getByRole('button', { name: 'Ghost' });
-    expect(btn.className).toContain('hover:bg-accent');
+    expect(btn.className).toContain('hover:bg-gray-200');
   });
 
   it('applies size classes', () => {

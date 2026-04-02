@@ -143,22 +143,25 @@ export function Tasks({ docId, rest, readOnly }: { docId?: string; rest?: string
     updateDoc(docId, (d, uid, newProgress) => { d.tasks[uid].progress = newProgress; }, uid, newProgress);
   }, [docId]);
 
+  // Automerge path to the focused field (drives presence, URL, and Edit Source link)
   const [focusedPath, setFocusedPath] = useState<(string | number)[] | null>(null);
+  const focusPath: (string | number)[] | undefined = focusedPath ?? (editorState ? ['tasks', editorState.uid] : undefined);
+
   const handleFieldFocus = useCallback((path: (string | number)[] | null) => {
-    broadcastRef.current?.('focusedField', path);
     setFocusedPath(path);
   }, []);
 
+  // Sync selection → presence broadcast + URL (all derived from focusPath)
   useEffect(() => {
-    if (!editorState) broadcastRef.current?.('focusedField', null);
-    // Sync editor state to URL
+    if (!editorState) setFocusedPath(null);
+    broadcastRef.current?.('focusedField', focusPath ?? null);
     const base = window.location.href.split('#')[0];
-    if (editorState) {
-      window.history.replaceState(null, '', `${base}#/tasks/${docId}/tasks/${editorState.uid}`);
+    if (focusPath) {
+      window.history.replaceState(null, '', `${base}#/tasks/${docId}/${focusPath.map(s => encodeURIComponent(String(s))).join('/')}`);
     } else if (docId) {
       window.history.replaceState(null, '', `${base}#/tasks/${docId}`);
     }
-  }, [editorState, docId]);
+  }, [editorState, focusPath, docId]);
 
   const peerFocusedFields = useMemo(() => {
     const result: Record<string, { color: string; peerId: string }> = {};
@@ -272,7 +275,7 @@ export function Tasks({ docId, rest, readOnly }: { docId?: string; rest?: string
         validationActive={showValidation}
         validationCount={validationErrors.length}
         docType="TaskList"
-        sourcePath={focusedPath || (editorState ? ['tasks', editorState.uid] : undefined)}
+        sourcePath={focusPath}
       />
       <HistorySlider history={history} />
       <div style={noAccess ? { opacity: 0.4, pointerEvents: 'none' } : undefined}>
