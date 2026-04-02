@@ -28,10 +28,7 @@ interface CondFormatRuleMsg {
   id: string;
   conditionType: string;
   conditionValue?: string;
-  rangeRowStart: string;
-  rangeRowEnd: string;
-  rangeColStart: string;
-  rangeColEnd: string;
+  ranges: { rangeRowStart: string; rangeRowEnd: string; rangeColStart: string; rangeColEnd: string }[];
 }
 
 type MainToHf =
@@ -346,29 +343,31 @@ function evaluateCondFormats(activeInfo: SheetInfo) {
   for (const rule of pendingCondFormatRules) {
     if (rule.conditionType !== 'customFormula' || !rule.conditionValue) continue;
 
-    const rStart = rowIdxMap.get(rule.rangeRowStart);
-    const rEnd = rowIdxMap.get(rule.rangeRowEnd);
-    const cStart = colIdxMap.get(rule.rangeColStart);
-    const cEnd = colIdxMap.get(rule.rangeColEnd);
-    if (rStart === undefined || rEnd === undefined || cStart === undefined || cEnd === undefined) continue;
-
     const formula = rule.conditionValue; // internal format
     const matches: string[] = [];
 
-    for (let r = rStart; r <= rEnd; r++) {
-      for (let c = cStart; c <= cEnd; c++) {
-        // Convert internal formula to A1 at this cell's position
-        const a1Formula = internalToA1(formula, r, c, rows, cols, undefined, undefined, true);
-        try {
-          hf.setCellContents({ sheet: 0, col: tmpCol, row: tmpRow }, a1Formula);
-          const val = hf.getCellValue({ sheet: 0, col: tmpCol, row: tmpRow });
-          // Truthy check: true, non-zero number, non-empty string
-          const truthy = val === true || (typeof val === 'number' && val !== 0) || (typeof val === 'string' && val !== '');
-          if (truthy) {
-            matches.push(`${rows[r]}:${cols[c]}`);
+    for (const range of rule.ranges) {
+      const rStart = rowIdxMap.get(range.rangeRowStart);
+      const rEnd = rowIdxMap.get(range.rangeRowEnd);
+      const cStart = colIdxMap.get(range.rangeColStart);
+      const cEnd = colIdxMap.get(range.rangeColEnd);
+      if (rStart === undefined || rEnd === undefined || cStart === undefined || cEnd === undefined) continue;
+
+      for (let r = rStart; r <= rEnd; r++) {
+        for (let c = cStart; c <= cEnd; c++) {
+          // Convert internal formula to A1 at this cell's position
+          const a1Formula = internalToA1(formula, r, c, rows, cols, undefined, undefined, true);
+          try {
+            hf.setCellContents({ sheet: 0, col: tmpCol, row: tmpRow }, a1Formula);
+            const val = hf.getCellValue({ sheet: 0, col: tmpCol, row: tmpRow });
+            // Truthy check: true, non-zero number, non-empty string
+            const truthy = val === true || (typeof val === 'number' && val !== 0) || (typeof val === 'string' && val !== '');
+            if (truthy) {
+              matches.push(`${rows[r]}:${cols[c]}`);
+            }
+          } catch {
+            // Formula evaluation failed for this cell — skip
           }
-        } catch {
-          // Formula evaluation failed for this cell — skip
         }
       }
     }

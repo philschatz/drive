@@ -7,7 +7,7 @@ import {
   Select, SelectTrigger, SelectValue, SelectContent, SelectItem,
 } from '@/components/ui/select';
 import { sortedEntries, colIndexToLetter, shortId, a1ToInternal, internalToA1 } from './helpers';
-import type { ConditionalFormatRule, DataGridCellFormat } from './schema';
+import type { ConditionalFormatRule, ConditionalFormatRange, DataGridCellFormat } from './schema';
 
 // ============================================================
 // Types
@@ -60,31 +60,44 @@ export function ConditionalFormatPanel({
     ? Object.entries(rules).sort((a, b) => a[1].index - b[1].index)
     : [];
 
-  const rangeToA1 = (rule: ConditionalFormatRule): string => {
-    const rStart = sortedRowIds.indexOf(rule.rangeRowStart);
-    const rEnd = sortedRowIds.indexOf(rule.rangeRowEnd);
-    const cStart = sortedColIds.indexOf(rule.rangeColStart);
-    const cEnd = sortedColIds.indexOf(rule.rangeColEnd);
-    if (rStart === -1 || rEnd === -1 || cStart === -1 || cEnd === -1) return '?';
-    return `${colIndexToLetter(cStart)}${rStart + 1}:${colIndexToLetter(cEnd)}${rEnd + 1}`;
+  const rangeToA1 = (rule: ConditionalFormatRule | any): string => {
+    // Support old flat-range format for backward compatibility
+    const ranges: Record<string, ConditionalFormatRange> = rule.ranges ?? {
+      _legacy: { rangeRowStart: rule.rangeRowStart, rangeRowEnd: rule.rangeRowEnd, rangeColStart: rule.rangeColStart, rangeColEnd: rule.rangeColEnd },
+    };
+    return Object.values(ranges).map(range => {
+      const rStart = sortedRowIds.indexOf(range.rangeRowStart);
+      const rEnd = sortedRowIds.indexOf(range.rangeRowEnd);
+      const cStart = sortedColIds.indexOf(range.rangeColStart);
+      const cEnd = sortedColIds.indexOf(range.rangeColEnd);
+      if (rStart === -1 || rEnd === -1 || cStart === -1 || cEnd === -1) return '?';
+      return `${colIndexToLetter(cStart)}${rStart + 1}:${colIndexToLetter(cEnd)}${rEnd + 1}`;
+    }).join(', ');
   };
 
-  const parseA1Range = (text: string): { rowStart: string; rowEnd: string; colStart: string; colEnd: string } | null => {
-    const m = text.match(/^([A-Z]+)(\d+):([A-Z]+)(\d+)$/i);
-    if (!m) return null;
-    const colStart = letterToColIndex(m[1].toUpperCase());
-    const rowStart = parseInt(m[2], 10) - 1;
-    const colEnd = letterToColIndex(m[3].toUpperCase());
-    const rowEnd = parseInt(m[4], 10) - 1;
-    if (rowStart < 0 || rowEnd < 0 || colStart < 0 || colEnd < 0) return null;
-    if (rowStart >= sortedRowIds.length || rowEnd >= sortedRowIds.length) return null;
-    if (colStart >= sortedColIds.length || colEnd >= sortedColIds.length) return null;
-    return {
-      rowStart: sortedRowIds[rowStart],
-      rowEnd: sortedRowIds[rowEnd],
-      colStart: sortedColIds[colStart],
-      colEnd: sortedColIds[colEnd],
-    };
+  const parseA1Ranges = (text: string): Record<string, ConditionalFormatRange> | null => {
+    const segments = text.split(',').map(s => s.trim()).filter(Boolean);
+    if (segments.length === 0) return null;
+
+    const ranges: Record<string, ConditionalFormatRange> = {};
+    for (const seg of segments) {
+      const m = seg.match(/^([A-Z]+)(\d+):([A-Z]+)(\d+)$/i);
+      if (!m) return null;
+      const colStart = letterToColIndex(m[1].toUpperCase());
+      const rowStart = parseInt(m[2], 10) - 1;
+      const colEnd = letterToColIndex(m[3].toUpperCase());
+      const rowEnd = parseInt(m[4], 10) - 1;
+      if (rowStart < 0 || rowEnd < 0 || colStart < 0 || colEnd < 0) return null;
+      if (rowStart >= sortedRowIds.length || rowEnd >= sortedRowIds.length) return null;
+      if (colStart >= sortedColIds.length || colEnd >= sortedColIds.length) return null;
+      ranges[shortId()] = {
+        rangeRowStart: sortedRowIds[rowStart],
+        rangeRowEnd: sortedRowIds[rowEnd],
+        rangeColStart: sortedColIds[colStart],
+        rangeColEnd: sortedColIds[colEnd],
+      };
+    }
+    return Object.keys(ranges).length > 0 ? ranges : null;
   };
 
   const startEdit = (id: string) => {
@@ -95,8 +108,9 @@ export function ConditionalFormatPanel({
     setConditionType(rule.conditionType);
     // For customFormula, convert internal format back to A1 for display
     if (rule.conditionType === 'customFormula' && rule.conditionValue) {
-      const anchorRow = sortedRowIds.indexOf(rule.rangeRowStart);
-      const anchorCol = sortedColIds.indexOf(rule.rangeColStart);
+      const firstRange = Object.values(rule.ranges ?? {})[0];
+      const anchorRow = firstRange ? sortedRowIds.indexOf(firstRange.rangeRowStart) : 0;
+      const anchorCol = firstRange ? sortedColIds.indexOf(firstRange.rangeColStart) : 0;
       setConditionValue(internalToA1(rule.conditionValue, anchorRow, anchorCol, sortedRowIds, sortedColIds));
     } else {
       setConditionValue(rule.conditionValue ?? '');
@@ -119,8 +133,8 @@ export function ConditionalFormatPanel({
   };
 
   const save = () => {
-    const parsed = parseA1Range(rangeText);
-    if (!parsed) return;
+    const ranges = parseA1Ranges(rangeText);
+    if (!ranges) return;
 
     const format: DataGridCellFormat = {};
     if (fmtBold) format.bold = true;
@@ -129,11 +143,12 @@ export function ConditionalFormatPanel({
     format.bgColor = fmtBgColor;
 
     // For customFormula, convert the A1 formula to internal format
-    // anchored at the top-left of the range
+    // anchored at the top-left of the first range
     let storedCondValue: string | undefined;
     if (conditionType === 'customFormula' && conditionValue) {
-      const anchorRow = sortedRowIds.indexOf(parsed.rowStart);
-      const anchorCol = sortedColIds.indexOf(parsed.colStart);
+      const firstRange = Object.values(ranges)[0];
+      const anchorRow = sortedRowIds.indexOf(firstRange.rangeRowStart);
+      const anchorCol = sortedColIds.indexOf(firstRange.rangeColStart);
       const formula = conditionValue.startsWith('=') ? conditionValue : '=' + conditionValue;
       storedCondValue = a1ToInternal(formula, anchorRow, anchorCol, sortedRowIds, sortedColIds);
     } else if (!NO_VALUE_CONDITIONS.has(conditionType)) {
@@ -150,10 +165,7 @@ export function ConditionalFormatPanel({
       const newId = shortId();
       const entry: any = {
         index: maxIndex + 1,
-        rangeRowStart: parsed.rowStart,
-        rangeRowEnd: parsed.rowEnd,
-        rangeColStart: parsed.colStart,
-        rangeColEnd: parsed.colEnd,
+        ranges,
         conditionType,
         ...(storedCondValue !== undefined ? { conditionValue: storedCondValue } : {}),
         format,
@@ -166,10 +178,7 @@ export function ConditionalFormatPanel({
     } else if (editing) {
       const entry: any = {
         index: rules![editing].index,
-        rangeRowStart: parsed.rowStart,
-        rangeRowEnd: parsed.rowEnd,
-        rangeColStart: parsed.colStart,
-        rangeColEnd: parsed.colEnd,
+        ranges,
         conditionType,
         ...(storedCondValue !== undefined ? { conditionValue: storedCondValue } : {}),
         format,
@@ -204,11 +213,11 @@ export function ConditionalFormatPanel({
             // Editor
             <div className="space-y-3">
               <div>
-                <Label>Range (e.g. A1:C10)</Label>
+                <Label>Ranges (e.g. A1:C10, E1:E20)</Label>
                 <Input
                   value={rangeText}
                   onInput={(e: any) => setRangeText(e.target.value)}
-                  placeholder="A1:C10"
+                  placeholder="A1:C10, E1:E20"
                   className="mt-1"
                 />
               </div>

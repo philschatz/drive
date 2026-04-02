@@ -53,12 +53,16 @@ export interface FormatRange {
   format: DataGridCellFormat;
 }
 
-export interface ConditionalFormatRule {
-  index: number;
+export interface ConditionalFormatRange {
   rangeRowStart: string;
   rangeRowEnd: string;
   rangeColStart: string;
   rangeColEnd: string;
+}
+
+export interface ConditionalFormatRule {
+  index: number;
+  ranges: Record<string, ConditionalFormatRange>;
   conditionType: string;
   conditionValue?: string;
   format: DataGridCellFormat;
@@ -133,12 +137,16 @@ const formatRangeSchema = obj({
   format: dataGridCellFormatSchema,
 });
 
-const conditionalFormatRuleSchema = obj({
-  index: num({ min: 0 }),
+const conditionalFormatRangeSchema = obj({
   rangeRowStart: str(),
   rangeRowEnd: str(),
   rangeColStart: str(),
   rangeColEnd: str(),
+});
+
+const conditionalFormatRuleSchema = obj({
+  index: num({ min: 0 }),
+  ranges: record(conditionalFormatRangeSchema),
   conditionType: str({ enum: ['gt', 'lt', 'eq', 'neq', 'gte', 'lte',
     'textContains', 'textStartsWith', 'textEndsWith',
     'isEmpty', 'isNotEmpty', 'customFormula'] }),
@@ -192,7 +200,12 @@ function checkSheetDependencies(
   const conditionalFormats = sheet.conditionalFormats;
   if (conditionalFormats) {
     for (const [id, rule] of Object.entries(conditionalFormats)) {
-      validateRangeIds(rule, id, rowIds, colIds, [...pathPrefix, 'conditionalFormats'], errors);
+      const ranges = (rule as any).ranges;
+      if (ranges) {
+        for (const [rangeId, range] of Object.entries(ranges)) {
+          validateRangeIds(range, `${id}.ranges.${rangeId}`, rowIds, colIds, [...pathPrefix, 'conditionalFormats'], errors);
+        }
+      }
     }
   }
 

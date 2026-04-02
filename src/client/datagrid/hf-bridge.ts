@@ -23,7 +23,7 @@ export interface HfBridge {
   switchSheet(sheetId: string): void;
   unwatch(): void;
   setCellContents(sheetId: string, rowId: string, colId: string, value: string): void;
-  evalCondFormats(rules: { id: string; conditionType: string; conditionValue?: string; rangeRowStart: string; rangeRowEnd: string; rangeColStart: string; rangeColEnd: string }[]): void;
+  evalCondFormats(rules: { id: string; conditionType: string; conditionValue?: string; ranges: { rangeRowStart: string; rangeRowEnd: string; rangeColStart: string; rangeColEnd: string }[] }[]): void;
   onComputedValues(cb: (values: Map<string, string | number>, spillTargets: Set<string>, errors: Map<string, string>) => void): () => void;
   onMCResults(cb: (results: MCResults) => void): () => void;
   onCondFormatResults(cb: (results: CondFormatResults) => void): () => void;

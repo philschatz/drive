@@ -1,4 +1,4 @@
-import type { DataGridCellFormat, DataGridBorder, FormatRange, ConditionalFormatRule } from './schema';
+import type { DataGridCellFormat, DataGridBorder, FormatRange, ConditionalFormatRule, ConditionalFormatRange } from './schema';
 import { sortedEntries } from './helpers';
 
 // ============================================================
@@ -159,6 +159,28 @@ export function buildFormatCache(
 }
 
 // ============================================================
+// cellInAnyRange — check if cell falls within any of a rule's ranges
+// ============================================================
+
+function cellInAnyRange(
+  ranges: Record<string, ConditionalFormatRange>,
+  rowIdx: number,
+  colIdx: number,
+  rowIds: string[],
+  colIds: string[],
+): boolean {
+  for (const range of Object.values(ranges)) {
+    const rStart = rowIds.indexOf(range.rangeRowStart);
+    const rEnd = rowIds.indexOf(range.rangeRowEnd);
+    const cStart = colIds.indexOf(range.rangeColStart);
+    const cEnd = colIds.indexOf(range.rangeColEnd);
+    if (rStart === -1 || rEnd === -1 || cStart === -1 || cEnd === -1) continue;
+    if (rowIdx >= rStart && rowIdx <= rEnd && colIdx >= cStart && colIdx <= cEnd) return true;
+  }
+  return false;
+}
+
+// ============================================================
 // evaluateConditionalFormats — resolve conditional formatting for a cell
 // ============================================================
 
@@ -179,13 +201,7 @@ export function evaluateConditionalFormats(
   const sorted = Object.values(rules).sort((a, b) => a.index - b.index);
 
   for (const rule of sorted) {
-    const rStart = rowIds.indexOf(rule.rangeRowStart);
-    const rEnd = rowIds.indexOf(rule.rangeRowEnd);
-    const cStart = colIds.indexOf(rule.rangeColStart);
-    const cEnd = colIds.indexOf(rule.rangeColEnd);
-    if (rStart === -1 || rEnd === -1 || cStart === -1 || cEnd === -1) continue;
-    if (rowIdx < rStart || rowIdx > rEnd || colIdx < cStart || colIdx > cEnd) continue;
-
+    if (!cellInAnyRange(rule.ranges, rowIdx, colIdx, rowIds, colIds)) continue;
     if (matchesCondition(cellValue, rule.conditionType, rule.conditionValue)) {
       return rule.format;
     }
@@ -212,18 +228,13 @@ export function resolveConditionalFormat(
   if (rowIdx === -1 || colIdx === -1) return undefined;
 
   const cellKey = `${rowId}:${colId}`;
-  const sorted = Object.entries(rules).sort((a, b) => a[1].index - b[1].index);
+  const sorted = Object.entries(rules)
+    .sort((a, b) => a[1].index - b[1].index);
 
   for (const [ruleId, rule] of sorted) {
-    const rStart = rowIds.indexOf(rule.rangeRowStart);
-    const rEnd = rowIds.indexOf(rule.rangeRowEnd);
-    const cStart = colIds.indexOf(rule.rangeColStart);
-    const cEnd = colIds.indexOf(rule.rangeColEnd);
-    if (rStart === -1 || rEnd === -1 || cStart === -1 || cEnd === -1) continue;
-    if (rowIdx < rStart || rowIdx > rEnd || colIdx < cStart || colIdx > cEnd) continue;
+    if (!cellInAnyRange(rule.ranges, rowIdx, colIdx, rowIds, colIds)) continue;
 
     if (rule.conditionType === 'customFormula') {
-      // Check HF worker results
       if (condFormatResults?.matches.get(ruleId)?.has(cellKey)) {
         return rule.format;
       }

@@ -63,10 +63,12 @@
     "@schedule-x/events-service": "^4.1.0",
     "@schedule-x/theme-default": "^4.1.0",
     "@tailwindcss/vite": "^4.2.0",
+    "buffer": "^6.0.3",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cors": "^2.8.6",
     "dayjs": "^1.11.19",
+    "exceljs": "^4.4.0",
     "express": "^5.2.1",
     "hyperformula": "^3.2.0",
     "ical.js": "^2.1.0",
@@ -83,8 +85,7 @@
     "ts-node": "^10.9.2",
     "tsconfig-paths": "^4.2.0",
     "typescript": "^5.9.3",
-    "ws": "^8.19.0",
-    "xlsx": "^0.18.5"
+    "ws": "^8.19.0"
   },
   "devDependencies": {
     "@cypress/code-coverage": "^4.0.1",

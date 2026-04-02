@@ -231,18 +231,23 @@ export function Home({ path }: { path?: string }) {
       const sid = () => Math.random().toString(36).slice(2, 10);
       const name = file.name.replace(/\.(xlsx?|csv)$/i, '') || 'Imported';
 
-      // Create the document before parsing so the worker handles it while still healthy
-      // (XLSX.read blocks the main thread, during which the worker's WASM can crash)
+      // Create the document before parsing
       setImportStatus({ label: 'Creating document...', progress: 0 });
       const { docId } = await createDoc({ '@type': 'DataGrid', name, sheets: {} }, createSecure);
       addDocId(docId, { type: 'DataGrid', name, encrypted: createSecure });
 
       setImportStatus({ label: 'Reading file...', progress: 2 });
       await new Promise(r => setTimeout(r, 0));
-      const XLSX = await import('xlsx');
+
+      // Polyfill Buffer for ExcelJS in the browser
+      if (typeof globalThis.Buffer === 'undefined') {
+        const { Buffer } = await import('buffer');
+        (globalThis as any).Buffer = Buffer;
+      }
+      const ExcelJS = await import('exceljs');
       const buffer = await file.arrayBuffer();
-      const wb = XLSX.read(buffer, { type: 'array', cellDates: true, cellStyles: true });
-      const totalSheets = wb.SheetNames.length;
+      const wb = new ExcelJS.Workbook();
+      await wb.xlsx.load(buffer);
 
       const sheetNameToId = new Map<string, string>();
       const sheetIdToRowColIds = new Map<string, {
@@ -258,38 +263,50 @@ export function Home({ path }: { path?: string }) {
         rows2d: any[][]; ws: any;
       }[] = [];
 
-      for (let si = 0; si < totalSheets; si++) {
-        const sheetName = wb.SheetNames[si];
-        const ws = wb.Sheets[sheetName];
-        const rows2d: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1 });
+      for (const ws of wb.worksheets) {
+        const sheetName = ws.name;
         const sheetId = sid();
         sheetNameToId.set(sheetName, sheetId);
 
-        const colCount = rows2d.reduce((max, row) => Math.max(max, row.length), 0) || 1;
-        const wsCols = ws['!cols'] || [];
+        // Build 2D row data from ExcelJS
+        const rows2d: any[][] = [];
+        ws.eachRow({ includeEmpty: true }, (row, rowNumber) => {
+          const rowData: any[] = [];
+          row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
+            rowData[colNumber - 1] = cell.value;
+          });
+          rows2d[rowNumber - 1] = rowData;
+        });
+        // Fill any gaps (eachRow skips fully empty rows)
+        const rowCount = ws.rowCount || Math.max(rows2d.length, 1);
+        for (let i = 0; i < rowCount; i++) {
+          if (!rows2d[i]) rows2d[i] = [];
+        }
+
+        const colCount = Math.max(ws.columnCount || 0, rows2d.reduce((max, row) => Math.max(max, row?.length || 0), 0), 1);
         const columns: Record<string, { index: number; hidden?: boolean }> = {};
         const colIds: string[] = [];
         for (let c = 0; c < colCount; c++) {
           const cid = sid();
           colIds.push(cid);
           const col: { index: number; hidden?: boolean } = { index: c + 1 };
-          if (wsCols[c]?.hidden) col.hidden = true;
+          const wsCol = ws.getColumn(c + 1);
+          if (wsCol?.hidden) col.hidden = true;
           columns[cid] = col;
         }
 
-        const wsRows = ws['!rows'] || [];
         const rowsMap: Record<string, { index: number; hidden?: boolean }> = {};
         const rowIds: string[] = [];
-        const rowCount = Math.max(rows2d.length, 1);
         for (let r = 0; r < rowCount; r++) {
           const rid = sid();
           rowIds.push(rid);
           const row: { index: number; hidden?: boolean } = { index: r + 1 };
-          if (wsRows[r]?.hidden) row.hidden = true;
+          const wsRow = ws.getRow(r + 1);
+          if (wsRow?.hidden) row.hidden = true;
           rowsMap[rid] = row;
         }
 
-        const sheetHidden = !!(wb as any).Workbook?.Sheets?.[si]?.Hidden;
+        const sheetHidden = ws.state === 'hidden' || ws.state === 'veryHidden';
         const onMissingRow = (idx: number) => {
           while (rowIds.length <= idx) {
             const rid = sid();
@@ -313,19 +330,64 @@ export function Home({ path }: { path?: string }) {
       const lookupSheetId = (n: string) => sheetNameToId.get(n);
       const lookupSheetRowColIds = (id: string) => sheetIdToRowColIds.get(id);
 
-      // Estimate total cells for progress (use row count as proxy since we haven't parsed yet)
       const totalRows = sheetDefs.reduce((sum, sd) => sum + sd.rows2d.length, 0);
       let processedRows = 0;
       const BATCH_SIZE = 2000;
       const sentRowCounts = new Map<string, number>();
       const sentColCounts = new Map<string, number>();
 
+      // Helper: extract ARGB color as #RRGGBB
+      const argbToHex = (color: any): string | undefined => {
+        if (!color) return undefined;
+        const argb = color.argb;
+        if (argb && typeof argb === 'string' && argb.length >= 6) {
+          const hex = argb.slice(-6);
+          if (hex !== '000000') return '#' + hex;
+        }
+        return undefined;
+      };
+
+      // Helper: map ExcelJS border to our format
+      const mapBorder = (b: any) => {
+        if (!b?.style) return undefined;
+        const border: Record<string, string> = { style: b.style };
+        const c = argbToHex(b.color);
+        if (c) border.color = c;
+        return border;
+      };
+
+      // Helper: map ExcelJS conditional formatting operator to our conditionType
+      const operatorMap: Record<string, string> = {
+        greaterThan: 'gt', lessThan: 'lt', equal: 'eq', notEqual: 'neq',
+        greaterThanOrEqual: 'gte', lessThanOrEqual: 'lte',
+      };
+
+      // Helper: parse an A1 ref string (e.g. "A1:C10") into a range using row/col ID arrays
+      const parseExcelRef = (ref: string, rowIds: string[], colIds: string[]) => {
+        const m = ref.match(/^([A-Z]+)(\d+)(?::([A-Z]+)(\d+))?$/i);
+        if (!m) return null;
+        const letterToIdx = (s: string) => {
+          let idx = 0;
+          for (let i = 0; i < s.length; i++) idx = idx * 26 + (s.toUpperCase().charCodeAt(i) - 64);
+          return idx - 1;
+        };
+        const c1 = letterToIdx(m[1]);
+        const r1 = parseInt(m[2], 10) - 1;
+        const c2 = m[3] ? letterToIdx(m[3]) : c1;
+        const r2 = m[4] ? parseInt(m[4], 10) - 1 : r1;
+        if (r1 >= rowIds.length || r2 >= rowIds.length || c1 >= colIds.length || c2 >= colIds.length) return null;
+        if (r1 < 0 || r2 < 0 || c1 < 0 || c2 < 0) return null;
+        return {
+          rangeRowStart: rowIds[r1], rangeRowEnd: rowIds[r2],
+          rangeColStart: colIds[c1], rangeColEnd: colIds[c2],
+        };
+      };
+
       // Parse each sheet and stream directly into the document
       for (let si = 0; si < sheetDefs.length; si++) {
         const { sheetId, sheetName, columns, rowsMap, colIds, rowIds, rows2d, ws } = sheetDefs[si];
         const processedRowsBefore = processedRows;
 
-        // Add sheet structure (rows/columns known so far — formulas may add more below)
         const { hidden } = sheetDefs[si];
         await updateDoc(
           docId,
@@ -339,41 +401,36 @@ export function Home({ path }: { path?: string }) {
         sentRowCounts.set(sheetId, rowIds.length);
         sentColCounts.set(sheetId, colIds.length);
 
-        const ref = ws['!ref'] ? XLSX.utils.decode_range(ws['!ref']) : null;
         const cellFormats: { r: number; c: number; fmt: Record<string, any> }[] = [];
         let cellBatch: Record<string, { value: string }> = {};
         let batchCount = 0;
 
         for (let r = 0; r < rows2d.length; r++) {
           const row = rows2d[r];
+          if (!row) continue;
           for (let c = 0; c < row.length; c++) {
-            const cellAddr = XLSX.utils.encode_cell({ r: (ref?.s.r ?? 0) + r, c: (ref?.s.c ?? 0) + c });
-            const wsCell = ws[cellAddr];
+            const cell = ws.getCell(r + 1, c + 1);
 
-            // Extract formatting regardless of whether cell has a value
-            if (wsCell?.s) {
-              const s = wsCell.s;
+            // Extract formatting
+            if (cell.style) {
+              const s = cell.style;
               const fmt: Record<string, any> = {};
               if (s.font?.bold) fmt.bold = true;
               if (s.font?.italic) fmt.italic = true;
               if (s.font?.underline) fmt.underline = true;
               if (s.font?.strike) fmt.strikethrough = true;
               if (s.font?.name) fmt.fontFamily = s.font.name;
-              if (s.font?.sz) fmt.fontSize = s.font.sz;
-              if (s.font?.color?.rgb) fmt.textColor = '#' + String(s.font.color.rgb).slice(-6);
-              if (s.fill?.fgColor?.rgb && s.fill.fgColor.rgb !== '000000') {
-                fmt.bgColor = '#' + String(s.fill.fgColor.rgb).slice(-6);
+              if (s.font?.size) fmt.fontSize = s.font.size;
+              const textColor = argbToHex(s.font?.color);
+              if (textColor) fmt.textColor = textColor;
+              if (s.fill && (s.fill as any).type === 'pattern') {
+                const bgColor = argbToHex((s.fill as any).fgColor);
+                if (bgColor) fmt.bgColor = bgColor;
               }
               if (s.alignment?.horizontal) fmt.hAlign = s.alignment.horizontal;
               if (s.alignment?.vertical) fmt.vAlign = s.alignment.vertical;
               if (s.alignment?.wrapText) fmt.wrapText = true;
-              if (wsCell.z) fmt.numFmt = wsCell.z;
-              const mapBorder = (b: any) => {
-                if (!b || !b.style) return undefined;
-                const border: Record<string, string> = { style: b.style };
-                if (b.color?.rgb) border.color = '#' + String(b.color.rgb).slice(-6);
-                return border;
-              };
+              if (s.numFmt) fmt.numFmt = s.numFmt;
               if (s.border?.top) { const b = mapBorder(s.border.top); if (b) fmt.borderTop = b; }
               if (s.border?.bottom) { const b = mapBorder(s.border.bottom); if (b) fmt.borderBottom = b; }
               if (s.border?.left) { const b = mapBorder(s.border.left); if (b) fmt.borderLeft = b; }
@@ -381,29 +438,37 @@ export function Home({ path }: { path?: string }) {
               if (Object.keys(fmt).length > 0) cellFormats.push({ r, c, fmt });
             }
 
+            // Extract cell value
+            const formula = cell.formula || cell.sharedFormula;
             const val = row[c];
-            if (val == null || val === '') continue;
-            let stored: string;
-            if (wsCell?.f) {
-              const formula = unwrapDummyFunction(wsCell.f);
-              if (/^"[^"]*"$/.test(formula)) continue;
+            if (formula) {
+              const unwrapped = unwrapDummyFunction(formula);
+              if (/^"[^"]*"$/.test(unwrapped)) continue;
+              let stored: string;
               try {
                 const sheetLookup = sheetIdToRowColIds.get(sheetId)!;
-                stored = a1ToInternal('=' + formula, r, c, rowIds, colIds, lookupSheetId, lookupSheetRowColIds, sheetLookup.onMissingRow, sheetLookup.onMissingCol);
+                stored = a1ToInternal('=' + unwrapped, r, c, rowIds, colIds, lookupSheetId, lookupSheetRowColIds, sheetLookup.onMissingRow, sheetLookup.onMissingCol);
               } catch {
+                stored = val != null ? String(val) : '';
+              }
+              if (stored) cellBatch[`${rowIds[r]}:${colIds[c]}`] = { value: stored };
+            } else if (val != null && val !== '') {
+              let stored: string;
+              if (val instanceof Date) {
+                const mm = String(val.getMonth() + 1).padStart(2, '0');
+                const dd = String(val.getDate()).padStart(2, '0');
+                const yyyy = val.getFullYear();
+                stored = `${mm}/${dd}/${yyyy}`;
+              } else if (typeof val === 'object' && val !== null && 'result' in val) {
+                // ExcelJS formula result objects
+                stored = String(val.result ?? '');
+              } else {
                 stored = String(val);
               }
-            } else if (val instanceof Date) {
-              const mm = String(val.getMonth() + 1).padStart(2, '0');
-              const dd = String(val.getDate()).padStart(2, '0');
-              const yyyy = val.getFullYear();
-              stored = `${mm}/${dd}/${yyyy}`;
-            } else if (wsCell?.t === 'n' && wsCell.z && XLSX.SSF.is_date(wsCell.z) && wsCell.w) {
-              stored = wsCell.w;
+              if (stored) cellBatch[`${rowIds[r]}:${colIds[c]}`] = { value: stored };
             } else {
-              stored = String(val);
+              continue;
             }
-            cellBatch[`${rowIds[r]}:${colIds[c]}`] = { value: stored };
             batchCount++;
 
             // Flush batch when full
@@ -496,10 +561,91 @@ export function Home({ path }: { path?: string }) {
           );
         }
 
+        // Import conditional formatting rules
+        const condFormattings = (ws as any).conditionalFormattings;
+        if (condFormattings && Array.isArray(condFormattings) && condFormattings.length > 0) {
+          const condRules: Record<string, any> = {};
+          let cfIndex = 1;
+
+          for (const cf of condFormattings) {
+            const ref = cf.ref || '';
+            for (const xlRule of (cf.rules || [])) {
+              // Map ExcelJS rule type/operator to our conditionType
+              let conditionType: string | null = null;
+              let conditionValue: string | undefined;
+
+              if (xlRule.type === 'cellIs' && xlRule.operator && operatorMap[xlRule.operator]) {
+                conditionType = operatorMap[xlRule.operator];
+                conditionValue = xlRule.formulae?.[0]?.toString();
+              } else if (xlRule.type === 'containsText') {
+                conditionType = 'textContains';
+                conditionValue = xlRule.text;
+              } else if (xlRule.type === 'beginsWith') {
+                conditionType = 'textStartsWith';
+                conditionValue = xlRule.text;
+              } else if (xlRule.type === 'endsWith') {
+                conditionType = 'textEndsWith';
+                conditionValue = xlRule.text;
+              } else if (xlRule.type === 'expression') {
+                conditionType = 'customFormula';
+                const rawFormula = xlRule.formulae?.[0]?.toString();
+                if (rawFormula) {
+                  try {
+                    const sheetLookup = sheetIdToRowColIds.get(sheetId)!;
+                    conditionValue = a1ToInternal('=' + rawFormula, 0, 0, rowIds, colIds, lookupSheetId, lookupSheetRowColIds, sheetLookup.onMissingRow, sheetLookup.onMissingCol);
+                  } catch {
+                    conditionValue = rawFormula;
+                  }
+                }
+              }
+
+              if (!conditionType) continue;
+
+              // Parse ref into ranges (space-separated in Excel, e.g. "A1:C10 E1:E20")
+              const ranges: Record<string, any> = {};
+              const refs = ref.split(/[\s,]+/);
+              for (const r of refs) {
+                const parsed = parseExcelRef(r.trim(), rowIds, colIds);
+                if (parsed) ranges[sid()] = parsed;
+              }
+              if (Object.keys(ranges).length === 0) continue;
+
+              // Extract style from rule
+              const format: Record<string, any> = {};
+              const style = xlRule.style;
+              if (style?.font?.bold) format.bold = true;
+              if (style?.font?.italic) format.italic = true;
+              if (style?.font?.underline) format.underline = true;
+              if (style?.font?.strike) format.strikethrough = true;
+              const textColor = argbToHex(style?.font?.color);
+              if (textColor) format.textColor = textColor;
+              if (style?.fill && (style.fill as any).fgColor) {
+                const bgColor = argbToHex((style.fill as any).fgColor);
+                if (bgColor) format.bgColor = bgColor;
+              }
+
+              condRules[sid()] = {
+                index: cfIndex++,
+                ranges,
+                conditionType,
+                ...(conditionValue !== undefined ? { conditionValue } : {}),
+                format,
+              };
+            }
+          }
+
+          if (Object.keys(condRules).length > 0) {
+            await updateDoc(
+              docId,
+              (d, sid, rules) => { (d as any).sheets[sid].conditionalFormats = rules; },
+              sheetId, condRules,
+            );
+          }
+        }
+
       }
 
       // Final pass: sync rows/columns auto-created by cross-sheet formula refs
-      // (e.g., Sheet2's formula added rows to Sheet1 after Sheet1 was already sent)
       for (const sd of sheetDefs) {
         const sentRows = sentRowCounts.get(sd.sheetId) ?? 0;
         const sentCols = sentColCounts.get(sd.sheetId) ?? 0;

@@ -995,10 +995,13 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
         id,
         conditionType: rule.conditionType,
         conditionValue: rule.conditionValue,
-        rangeRowStart: rule.rangeRowStart,
-        rangeRowEnd: rule.rangeRowEnd,
-        rangeColStart: rule.rangeColStart,
-        rangeColEnd: rule.rangeColEnd,
+        ranges: rule.ranges
+          ? Object.values(rule.ranges).map((r: any) => ({
+              rangeRowStart: r.rangeRowStart, rangeRowEnd: r.rangeRowEnd,
+              rangeColStart: r.rangeColStart, rangeColEnd: r.rangeColEnd,
+            }))
+          : [{ rangeRowStart: rule.rangeRowStart, rangeRowEnd: rule.rangeRowEnd,
+               rangeColStart: rule.rangeColStart, rangeColEnd: rule.rangeColEnd }],
       }));
     bridge.evalCondFormats(rules);
   }, [currentSheet?.conditionalFormats]);
