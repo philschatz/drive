@@ -89,8 +89,10 @@ function CalendarInner({ docId, readOnly, initialEventId }: { docId: string; rea
     }
   }, [editorState, docId]);
 
+  const [focusedPath, setFocusedPath] = useState<(string | number)[] | null>(null);
   const handleFieldFocus = useCallback((path: (string | number)[] | null) => {
     broadcastRef.current?.('focusedField', path);
+    setFocusedPath(path);
   }, []);
 
   useEffect(() => {
@@ -214,7 +216,7 @@ function CalendarInner({ docId, readOnly, initialEventId }: { docId: string; rea
         validationActive={showValidation}
         validationCount={validationErrors.length}
         docType="Calendar"
-
+        sourcePath={focusedPath || (editorState ? ['events', editorState.uid] : undefined)}
       >
         <input
           type="color"

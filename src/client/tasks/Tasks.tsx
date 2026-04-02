@@ -143,8 +143,10 @@ export function Tasks({ docId, rest, readOnly }: { docId?: string; rest?: string
     updateDoc(docId, (d, uid, newProgress) => { d.tasks[uid].progress = newProgress; }, uid, newProgress);
   }, [docId]);
 
+  const [focusedPath, setFocusedPath] = useState<(string | number)[] | null>(null);
   const handleFieldFocus = useCallback((path: (string | number)[] | null) => {
     broadcastRef.current?.('focusedField', path);
+    setFocusedPath(path);
   }, []);
 
   useEffect(() => {
@@ -270,7 +272,7 @@ export function Tasks({ docId, rest, readOnly }: { docId?: string; rest?: string
         validationActive={showValidation}
         validationCount={validationErrors.length}
         docType="TaskList"
-
+        sourcePath={focusedPath || (editorState ? ['tasks', editorState.uid] : undefined)}
       />
       <HistorySlider history={history} />
       <div style={noAccess ? { opacity: 0.4, pointerEvents: 'none' } : undefined}>

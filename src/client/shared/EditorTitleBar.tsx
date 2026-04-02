@@ -20,6 +20,7 @@ export function EditorTitleBar<P extends PeerLike>({
   peers = [],
   peerTitle,
   showSourceLink = true,
+  sourcePath,
   onToggleHistory,
   historyActive = false,
   onToggleValidation,
@@ -38,6 +39,8 @@ export function EditorTitleBar<P extends PeerLike>({
   peers?: P[];
   peerTitle?: (peer: P) => string;
   showSourceLink?: boolean;
+  /** Automerge path to the currently focused node — appended to Edit Source URL. */
+  sourcePath?: (string | number)[];
   onToggleHistory?: () => void;
   historyActive?: boolean;
   onToggleValidation?: () => void;
@@ -137,7 +140,7 @@ export function EditorTitleBar<P extends PeerLike>({
 
         {showSourceLink && docId && (
           <a
-            href={`#/source/${docId}`}
+            href={`#/source/${docId}${sourcePath?.length ? '/' + sourcePath.map(s => encodeURIComponent(String(s))).join('/') : ''}`}
             className="inline-flex items-center justify-center h-9 w-9 rounded-md hover:bg-accent hover:text-accent-foreground"
             title="Edit Source"
           >

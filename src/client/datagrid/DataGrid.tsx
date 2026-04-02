@@ -1355,7 +1355,9 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
         validationActive={showValidation}
         validationCount={validationErrors.length}
         docType="DataGrid"
-
+        sourcePath={selectedCell && currentSheetId && selectedCell[1] < visibleRowIds.length && selectedCell[0] < visibleColIds.length
+          ? ['sheets', currentSheetId, 'cells', `${visibleRowIds[selectedCell[1]]}:${visibleColIds[selectedCell[0]]}`]
+          : currentSheetId ? ['sheets', currentSheetId] : undefined}
       />
       <HistorySlider history={history} />
       <div className="datagrid-body">
