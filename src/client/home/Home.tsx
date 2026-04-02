@@ -239,12 +239,13 @@ export function Home({ path }: { path?: string }) {
       setImportStatus({ label: 'Reading file...', progress: 2 });
       await new Promise(r => setTimeout(r, 0));
 
-      // Polyfill Buffer for ExcelJS in the browser
+      const [{ Buffer: BufferPolyfill }, ExcelJS] = await Promise.all([
+        import('buffer/'),
+        import('exceljs'),
+      ]);
       if (typeof globalThis.Buffer === 'undefined') {
-        const { Buffer } = await import('buffer');
-        (globalThis as any).Buffer = Buffer;
+        (globalThis as any).Buffer = BufferPolyfill;
       }
-      const ExcelJS = await import('exceljs');
       const buffer = await file.arrayBuffer();
       const wb = new ExcelJS.Workbook();
       await wb.xlsx.load(buffer);

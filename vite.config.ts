@@ -202,7 +202,7 @@ export default defineConfig(async () => {
     },
   },
   optimizeDeps: {
-    include: ['@preact/signals', '@preact/signals-core', 'preact/hooks', 'preact/compat'],
+    include: ['@preact/signals', '@preact/signals-core', 'preact/hooks', 'preact/compat', 'buffer/', 'exceljs'],
     // Exclude automerge so the Vite automergeWasmPlugin load() hook can intercept
     // wasm_bindgen_output/web/index.js and replace base64 WASM with a URL fetch.
     // Pre-bundling bypasses load() hooks (esbuild doesn't use Vite plugins),

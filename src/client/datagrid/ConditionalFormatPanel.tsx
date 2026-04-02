@@ -60,12 +60,8 @@ export function ConditionalFormatPanel({
     ? Object.entries(rules).sort((a, b) => a[1].index - b[1].index)
     : [];
 
-  const rangeToA1 = (rule: ConditionalFormatRule | any): string => {
-    // Support old flat-range format for backward compatibility
-    const ranges: Record<string, ConditionalFormatRange> = rule.ranges ?? {
-      _legacy: { rangeRowStart: rule.rangeRowStart, rangeRowEnd: rule.rangeRowEnd, rangeColStart: rule.rangeColStart, rangeColEnd: rule.rangeColEnd },
-    };
-    return Object.values(ranges).map(range => {
+  const rangeToA1 = (rule: ConditionalFormatRule): string => {
+    return Object.values(rule.ranges).map(range => {
       const rStart = sortedRowIds.indexOf(range.rangeRowStart);
       const rEnd = sortedRowIds.indexOf(range.rangeRowEnd);
       const cStart = sortedColIds.indexOf(range.rangeColStart);
@@ -108,7 +104,7 @@ export function ConditionalFormatPanel({
     setConditionType(rule.conditionType);
     // For customFormula, convert internal format back to A1 for display
     if (rule.conditionType === 'customFormula' && rule.conditionValue) {
-      const firstRange = Object.values(rule.ranges ?? {})[0];
+      const firstRange = Object.values(rule.ranges)[0];
       const anchorRow = firstRange ? sortedRowIds.indexOf(firstRange.rangeRowStart) : 0;
       const anchorCol = firstRange ? sortedColIds.indexOf(firstRange.rangeColStart) : 0;
       setConditionValue(internalToA1(rule.conditionValue, anchorRow, anchorCol, sortedRowIds, sortedColIds));
