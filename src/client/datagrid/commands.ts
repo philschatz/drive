@@ -1113,7 +1113,8 @@ export function applyFormatToSelection(ctx: GridCommandContext, patch: Partial<D
     // Merge patch into the existing range's format
     ctx.mutate((d: any, currentSheetId: string, existingId: string, patch: any) => {
       const ms = d.sheets[currentSheetId];
-      const range = ms.formats[existingId];
+      const range = ms.formats?.[existingId];
+      if (!range) return;
       if (!range.format) range.format = {};
       for (const [k, v] of Object.entries(patch)) {
         if (v === undefined) {

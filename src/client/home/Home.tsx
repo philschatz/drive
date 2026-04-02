@@ -618,12 +618,23 @@ export function Home({ path }: { path?: string }) {
               if (style?.font?.italic) format.italic = true;
               if (style?.font?.underline) format.underline = true;
               if (style?.font?.strike) format.strikethrough = true;
+              if (style?.font?.name) format.fontFamily = style.font.name;
+              if (style?.font?.size) format.fontSize = style.font.size;
               const textColor = argbToHex(style?.font?.color);
               if (textColor) format.textColor = textColor;
-              if (style?.fill && (style.fill as any).fgColor) {
-                const bgColor = argbToHex((style.fill as any).fgColor);
+              // DXF fills use bgColor (not fgColor) for the cell background
+              if (style?.fill) {
+                const bgColor = argbToHex((style.fill as any).fgColor) || argbToHex((style.fill as any).bgColor);
                 if (bgColor) format.bgColor = bgColor;
               }
+              if (style?.numFmt) format.numFmt = style.numFmt;
+              if (style?.alignment?.horizontal) format.hAlign = style.alignment.horizontal;
+              if (style?.alignment?.vertical) format.vAlign = style.alignment.vertical;
+              if (style?.alignment?.wrapText) format.wrapText = true;
+              if (style?.border?.top) { const b = mapBorder(style.border.top); if (b) format.borderTop = b; }
+              if (style?.border?.bottom) { const b = mapBorder(style.border.bottom); if (b) format.borderBottom = b; }
+              if (style?.border?.left) { const b = mapBorder(style.border.left); if (b) format.borderLeft = b; }
+              if (style?.border?.right) { const b = mapBorder(style.border.right); if (b) format.borderRight = b; }
 
               condRules[sid()] = {
                 index: cfIndex++,
