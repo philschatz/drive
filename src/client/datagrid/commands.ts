@@ -1249,10 +1249,10 @@ function buildFontFamilySubmenu(state: GridCommandState, ctx: GridCommandContext
   return {
     kind: 'submenu', id: 'font-family', label: 'Font family', icon: 'font_download',
     isEnabled: state.hasSelection,
-    currentValueLabel: state.currentCellFormat?.fontFamily || 'Default',
+    currentValueLabel: (state.currentCellFormat?.fontFamily && state.currentCellFormat.fontFamily !== 'Arial') ? state.currentCellFormat.fontFamily : 'Default',
     children: [
       { kind: 'command', id: 'font-default', label: 'Default', isEnabled: state.hasSelection,
-        isChecked: !state.currentCellFormat?.fontFamily,
+        isChecked: !state.currentCellFormat?.fontFamily || state.currentCellFormat.fontFamily === 'Arial',
         execute: () => applyFormatToSelection(ctx, { fontFamily: undefined }) },
       ...FONT_FAMILIES.map(f => ({
         kind: 'command' as const, id: `font-${f}`, label: f, isEnabled: state.hasSelection,

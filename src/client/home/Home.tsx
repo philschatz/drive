@@ -258,8 +258,8 @@ export function Home({ path }: { path?: string }) {
       }>();
       const sheetDefs: {
         sheetId: string; sheetName: string; hidden: boolean;
-        columns: Record<string, { index: number; hidden?: boolean }>;
-        rowsMap: Record<string, { index: number; hidden?: boolean }>;
+        columns: Record<string, { index: number; hidden?: boolean; frozen?: boolean }>;
+        rowsMap: Record<string, { index: number; hidden?: boolean; frozen?: boolean }>;
         colIds: string[]; rowIds: string[];
         rows2d: any[][]; ws: any;
       }[] = [];
@@ -285,26 +285,35 @@ export function Home({ path }: { path?: string }) {
         }
 
         const colCount = Math.max(ws.columnCount || 0, rows2d.reduce((max, row) => Math.max(max, row?.length || 0), 0), 1);
-        const columns: Record<string, { index: number; hidden?: boolean }> = {};
+        const columns: Record<string, { index: number; hidden?: boolean; frozen?: boolean }> = {};
         const colIds: string[] = [];
         for (let c = 0; c < colCount; c++) {
           const cid = sid();
           colIds.push(cid);
-          const col: { index: number; hidden?: boolean } = { index: c + 1 };
+          const col: { index: number; hidden?: boolean; frozen?: boolean } = { index: c + 1 };
           const wsCol = ws.getColumn(c + 1);
           if (wsCol?.hidden) col.hidden = true;
           columns[cid] = col;
         }
 
-        const rowsMap: Record<string, { index: number; hidden?: boolean }> = {};
+        const rowsMap: Record<string, { index: number; hidden?: boolean; frozen?: boolean }> = {};
         const rowIds: string[] = [];
         for (let r = 0; r < rowCount; r++) {
           const rid = sid();
           rowIds.push(rid);
-          const row: { index: number; hidden?: boolean } = { index: r + 1 };
+          const row: { index: number; hidden?: boolean; frozen?: boolean } = { index: r + 1 };
           const wsRow = ws.getRow(r + 1);
           if (wsRow?.hidden) row.hidden = true;
           rowsMap[rid] = row;
+        }
+
+        // Import frozen pane information
+        const frozenView = Array.isArray(ws.views) && ws.views.find((v: any) => v.state === 'frozen') as any;
+        if (frozenView) {
+          const xSplit: number = typeof frozenView.xSplit === 'number' ? frozenView.xSplit : 0;
+          const ySplit: number = typeof frozenView.ySplit === 'number' ? frozenView.ySplit : 0;
+          for (let c = 0; c < xSplit && c < colIds.length; c++) columns[colIds[c]].frozen = true;
+          for (let r = 0; r < ySplit && r < rowIds.length; r++) rowsMap[rowIds[r]].frozen = true;
         }
 
         const sheetHidden = ws.state === 'hidden' || ws.state === 'veryHidden';

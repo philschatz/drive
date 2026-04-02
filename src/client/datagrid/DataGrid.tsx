@@ -281,6 +281,16 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
     return offsets;
   }, [frozenColCount, columnDefs]);
 
+  const frozenRowOffsets = useMemo(() => {
+    const offsets: number[] = [];
+    let acc = ROW_HEIGHT; // thead height
+    for (let i = 0; i < frozenRowCount; i++) {
+      offsets.push(acc);
+      acc += ROW_HEIGHT;
+    }
+    return offsets;
+  }, [frozenRowCount]);
+
   // Sheet ordering for tabs — derived from lightweight metadata
   const sheetOrder = useMemo(() => {
     if (!meta?.sheets) return [];
@@ -398,6 +408,49 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
       broadcastRef.current('focusedField', ['sheets', currentSheetId!, 'cells', `${visibleRowIds[row]}:${visibleColIds[col]}`]);
     }
   }, [visibleRowIds, visibleColIds, currentSheetId]);
+
+  const scrollCellIntoView = useCallback((col: number, row: number) => {
+    const el = tableRef.current;
+    if (!el) return;
+
+    // Vertical: account for sticky header + frozen rows
+    const thead = el.querySelector('thead');
+    const headerHeight = thead ? thead.getBoundingClientRect().height : ROW_HEIGHT;
+    const frozenRowsHeight = frozenRowCount * ROW_HEIGHT;
+    const stickyTop = headerHeight + frozenRowsHeight;
+
+    const cellTop = row * ROW_HEIGHT;
+    const cellBottom = cellTop + ROW_HEIGHT;
+    const visibleTop = el.scrollTop + stickyTop;
+    const visibleBottom = el.scrollTop + el.clientHeight;
+
+    if (cellTop < visibleTop) {
+      el.scrollTop = Math.max(0, cellTop - stickyTop);
+    } else if (cellBottom > visibleBottom) {
+      el.scrollTop = cellBottom - el.clientHeight;
+    }
+
+    // Horizontal: account for sticky row header + frozen columns
+    const ROW_HEADER_WIDTH = 48;
+    const frozenColsWidth = frozenColOffsets.length > 0
+      ? frozenColOffsets[frozenColOffsets.length - 1] - ROW_HEADER_WIDTH + ((columnDefs[frozenColCount - 1]?.width as number) || 100)
+      : 0;
+    const stickyLeft = ROW_HEADER_WIDTH + frozenColsWidth;
+
+    let cellLeft = ROW_HEADER_WIDTH;
+    for (let i = 0; i < col; i++) {
+      cellLeft += (columnDefs[i]?.width as number) || 100;
+    }
+    const cellRight = cellLeft + ((columnDefs[col]?.width as number) || 100);
+    const visibleLeft = el.scrollLeft + stickyLeft;
+    const visibleRight = el.scrollLeft + el.clientWidth;
+
+    if (cellLeft < visibleLeft) {
+      el.scrollLeft = Math.max(0, cellLeft - stickyLeft);
+    } else if (cellRight > visibleRight) {
+      el.scrollLeft = cellRight - el.clientWidth;
+    }
+  }, [columnDefs, frozenRowCount, frozenColCount, frozenColOffsets]);
 
   // Compute normalized selection rectangle
   const selectionRange = useMemo(() => {
@@ -779,14 +832,15 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
       else if (e.key === 'ArrowDown') nr = Math.min(row + 1, visibleRowIds.length - 1);
       else if (e.key === 'ArrowUp') nr = Math.max(row - 1, 0);
       setSelectedCell([nc, nr]);
+      scrollCellIntoView(nc, nr);
       return;
     }
 
     let newCol = col, newRow = row;
     if (e.key === 'ArrowRight' || e.key === 'Tab') { e.preventDefault(); newCol = Math.min(col + 1, visibleColIds.length - 1); }
-    else if (e.key === 'ArrowLeft') { newCol = Math.max(col - 1, 0); }
-    else if (e.key === 'ArrowDown') { newRow = Math.min(row + 1, visibleRowIds.length - 1); }
-    else if (e.key === 'ArrowUp') { newRow = Math.max(row - 1, 0); }
+    else if (e.key === 'ArrowLeft') { e.preventDefault(); newCol = Math.max(col - 1, 0); }
+    else if (e.key === 'ArrowDown') { e.preventDefault(); newRow = Math.min(row + 1, visibleRowIds.length - 1); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); newRow = Math.max(row - 1, 0); }
     else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey) {
       if (spillTargetsRef.current.has(`${currentSheetId}:${visibleRowIds[row]}:${visibleColIds[col]}`)) return;
       e.preventDefault();
@@ -799,8 +853,9 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
 
     if (newCol !== col || newRow !== row) {
       selectCell(newCol, newRow);
+      scrollCellIntoView(newCol, newRow);
     }
-  }, [editingCell, selectedCell, selectionAnchor, selectionRange, visibleColIds, visibleRowIds, startEditing, selectCell, cancelEdit]);
+  }, [editingCell, selectedCell, selectionAnchor, selectionRange, visibleColIds, visibleRowIds, startEditing, selectCell, cancelEdit, scrollCellIntoView]);
 
   useEffect(() => {
     const el = tableRef.current;
@@ -1439,13 +1494,14 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
                 {(() => {
                   const totalRows = visibleRowIds.length;
                   const firstVisible = Math.floor(scrollTop / ROW_HEIGHT);
-                  const startRow = Math.max(0, firstVisible - OVERSCAN);
+                  // Always render frozen rows (they're sticky and must stay in the DOM)
+                  const startRow = Math.max(frozenRowCount, firstVisible - OVERSCAN);
                   const visibleCount = Math.ceil(viewportHeight / ROW_HEIGHT);
                   const endRow = Math.min(totalRows, firstVisible + visibleCount + OVERSCAN);
                   return (
                     <>
-                      {startRow > 0 && (
-                        <tr style={{ height: startRow * ROW_HEIGHT + 'px' }}>
+                      {startRow > frozenRowCount && (
+                        <tr style={{ height: (startRow - frozenRowCount) * ROW_HEIGHT + 'px' }}>
                           <td colSpan={visibleColIds.length + 1} />
                         </tr>
                       )}
@@ -1459,7 +1515,7 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
                   }
                   const isFrozenRow = ri < frozenRowCount;
                   const isLastFrozenRow = ri === frozenRowCount - 1;
-                  const frozenRowTop = isFrozenRow ? ri * ROW_HEIGHT + ROW_HEIGHT : undefined; // +ROW_HEIGHT for thead
+                  const frozenRowTop = isFrozenRow ? frozenRowOffsets[ri] : undefined;
                   const rowGap = rowHiddenGaps.find(g => g.beforeVisualIndex === ri);
                   return (
                     <>
@@ -1470,7 +1526,7 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
                           </td>
                         </tr>
                       )}
-                    <tr key={rowId} style={isFrozenRow ? { position: 'sticky', top: frozenRowTop, zIndex: 1 } : undefined}>
+                    <tr key={rowId}>
                       <td
                         className={'datagrid-row-header' + (isRowSelected ? ' selected' : '') + dropClass + (isLastFrozenRow ? ' frozen-row-last' : '')}
                         style={isFrozenRow ? { position: 'sticky', left: 0, top: frozenRowTop, zIndex: 3 } : undefined}
@@ -1537,10 +1593,28 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
                           cellStyle.borderRight = ci === clipboardSource.maxCol ? dash : none;
                         }
 
+                        // Frozen cell positioning (highest priority — overlays everything)
+                        const isFrozenCol = ci < frozenColCount;
+                        const isLastFrozenCol = ci === frozenColCount - 1;
+                        if (isFrozenCol || isFrozenRow) {
+                          cellStyle.position = 'sticky';
+                          if (!cellStyle.background) cellStyle.background = '#fff';
+                          if (isFrozenCol) {
+                            cellStyle.left = `${frozenColOffsets[ci]}px`;
+                          }
+                          if (isFrozenRow) {
+                            cellStyle.top = `${frozenRowTop}px`;
+                          }
+                          // z-index: frozen col+row intersection > frozen row > frozen col > normal
+                          cellStyle.zIndex = isFrozenCol && isFrozenRow ? '3' : '2';
+                        }
+
+                        const frozenClass = (isLastFrozenCol ? ' frozen-col-last' : '') + (isLastFrozenRow ? ' frozen-row-last' : '');
+
                         return (
                           <td
                             key={colId}
-                            className={'datagrid-cell' + (isSelected && !refInfo && !isEditing ? ' selected' : '') + (inRange && isMultiSelect ? ' in-range' : '') + (inAutofillTarget ? ' autofill-target' : '') + (isRowSelected || selectedCols.has(ci) ? ' header-selected' : '') + (peers ? ' peer-focused' : '') + (refInfo ? ' formula-ref-highlight' : '') + (isMcSource ? ' dist-source' : mcStats ? ' dist-dependent' : '') + (spillTargetsRef.current.has(`${effectiveSheetId}:${rowId}:${colId}`) ? ' spill-target' : '') + (isEvaluating ? ' evaluating' : '')}
+                            className={'datagrid-cell' + (isSelected && !refInfo && !isEditing ? ' selected' : '') + (inRange && isMultiSelect ? ' in-range' : '') + (inAutofillTarget ? ' autofill-target' : '') + (isRowSelected || selectedCols.has(ci) ? ' header-selected' : '') + (peers ? ' peer-focused' : '') + (refInfo ? ' formula-ref-highlight' : '') + (isMcSource ? ' dist-source' : mcStats ? ' dist-dependent' : '') + (spillTargetsRef.current.has(`${effectiveSheetId}:${rowId}:${colId}`) ? ' spill-target' : '') + (isEvaluating ? ' evaluating' : '') + frozenClass}
                             style={Object.keys(cellStyle).length > 0 ? cellStyle : undefined}
                             title={mcStats ? `μ=${mcStats.mean.toFixed(2)} σ=${mcStats.stdev.toFixed(2)} [P5=${mcStats.p5.toFixed(2)}, P95=${mcStats.p95.toFixed(2)}]` : peers ? `Peer ${peers.peerId.slice(0, 8)}` : undefined}
                             data-cell-col={ci}

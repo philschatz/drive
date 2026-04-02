@@ -167,6 +167,65 @@
   padding: 2px 4px;
 }
 
+/* Unhide buttons for hidden columns/rows */
+.datagrid-col-unhide {
+  background: #e9ecef;
+  cursor: pointer;
+  width: 16px;
+  min-width: 16px;
+  max-width: 16px;
+  padding: 0;
+  text-align: center;
+  color: #868e96;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+.datagrid-col-unhide:hover {
+  background: #d0ebff;
+  color: #1971c2;
+}
+
+.datagrid-row-unhide-tr {
+  height: 16px;
+}
+.datagrid-row-unhide {
+  background: #e9ecef;
+  cursor: pointer;
+  padding: 0;
+  text-align: center;
+  color: #868e96;
+  height: 16px;
+}
+.datagrid-row-unhide:hover {
+  background: #d0ebff;
+  color: #1971c2;
+}
+
+/* Frozen column/row boundary indicators — use pseudo-elements instead of
+   borders because border-collapse: collapse causes shared borders to scroll
+   away with the non-frozen neighbor cell. */
+.frozen-col-last::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: -1px;
+  bottom: 0;
+  width: 3px;
+  background: #adb5bd;
+  pointer-events: none;
+}
+.frozen-row-last::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  bottom: -1px;
+  right: 0;
+  height: 3px;
+  background: #adb5bd;
+  pointer-events: none;
+}
+
 /* Selected headers */
 .datagrid-row-header.selected,
 .datagrid-col-header.selected {
