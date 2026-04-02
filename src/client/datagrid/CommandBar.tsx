@@ -82,8 +82,8 @@ function MenuEntry({ entry }: { entry: ResolvedEntry }) {
   // Items with an icon: use MenubarItem and indicate checked via icon styling (keeps alignment)
   if (entry.isChecked !== undefined && entry.icon) {
     return (
-      <MenubarItem disabled={!entry.isEnabled} onSelect={entry.execute}>
-        <span className={`material-symbols-outlined mr-2 rounded-sm ${entry.isChecked ? 'bg-foreground text-background' : ''}`}>{entry.icon}</span>
+      <MenubarItem disabled={!entry.isEnabled} onSelect={entry.execute} style={entry.style}>
+        <span className={`mr-2 rounded-sm ${entry.isChecked ? 'material-symbols-outlined icon-filled' : 'material-symbols-outlined'}`}>{entry.icon}</span>
         {entry.label}
         {entry.shortcut && <MenubarShortcut>{entry.shortcut}</MenubarShortcut>}
       </MenubarItem>
@@ -97,6 +97,7 @@ function MenuEntry({ entry }: { entry: ResolvedEntry }) {
         checked={entry.isChecked}
         disabled={!entry.isEnabled}
         onCheckedChange={entry.execute}
+        style={entry.style}
       >
         {entry.label}
         {entry.shortcut && <MenubarShortcut>{entry.shortcut}</MenubarShortcut>}
@@ -105,7 +106,7 @@ function MenuEntry({ entry }: { entry: ResolvedEntry }) {
   }
 
   return (
-    <MenubarItem disabled={!entry.isEnabled} onSelect={entry.execute}>
+    <MenubarItem disabled={!entry.isEnabled} onSelect={entry.execute} style={entry.style}>
       {entry.icon && <span className="material-symbols-outlined mr-2">{entry.icon}</span>}
       {entry.label}
       {entry.shortcut && <MenubarShortcut>{entry.shortcut}</MenubarShortcut>}

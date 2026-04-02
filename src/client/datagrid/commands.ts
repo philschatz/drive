@@ -170,6 +170,8 @@ export type ResolvedEntry =
       isChecked?: boolean;
       danger?: boolean;
       toolbarDividerBefore?: boolean;
+      /** Inline CSS for the menu item (e.g. fontFamily for font previews). */
+      style?: Record<string, string>;
       execute(): void;
     }
   | {
@@ -775,15 +777,14 @@ const rowPlugin: GridPlugin = {
     },
   ],
   slots: {
-    'edit-menu': [
-      { kind: 'separator' },
-      { kind: 'command', id: 'delete-rows' },
-      { kind: 'command', id: 'move-rows-up' },
-      { kind: 'command', id: 'move-rows-down' },
-    ],
     'insert-menu': [
-      { kind: 'command', id: 'insert-row-above' },
-      { kind: 'command', id: 'insert-row-below' },
+      { kind: 'submenu', id: 'rows-submenu', label: 'Rows', icon: 'table_rows',
+        resolve: (state, ctx) => ({
+          kind: 'submenu', id: 'rows-submenu', label: 'Rows', icon: 'table_rows',
+          isEnabled: true,
+          children: resolveCommands(['insert-row-above', 'insert-row-below', null, 'move-rows-up', 'move-rows-down', null, 'delete-rows'], state, ctx),
+        }),
+      },
     ],
     toolbar: [
       { kind: 'command', id: 'insert-row-above', toolbarDividerBefore: true, label: 'Insert row above' },
@@ -949,15 +950,14 @@ const columnPlugin: GridPlugin = {
     },
   ],
   slots: {
-    'edit-menu': [
-      { kind: 'command', id: 'delete-cols' },
-      { kind: 'command', id: 'move-cols-left' },
-      { kind: 'command', id: 'move-cols-right' },
-    ],
     'insert-menu': [
-      { kind: 'separator' },
-      { kind: 'command', id: 'insert-col-left' },
-      { kind: 'command', id: 'insert-col-right' },
+      { kind: 'submenu', id: 'cols-submenu', label: 'Columns', icon: 'view_column',
+        resolve: (state, ctx) => ({
+          kind: 'submenu', id: 'cols-submenu', label: 'Columns', icon: 'view_column',
+          isEnabled: true,
+          children: resolveCommands(['insert-col-left', 'insert-col-right', null, 'move-cols-left', 'move-cols-right', null, 'delete-cols'], state, ctx),
+        }),
+      },
     ],
     toolbar: [
       { kind: 'command', id: 'insert-col-left', label: 'Insert Column Left' },
@@ -1212,6 +1212,7 @@ function buildFontFamilySubmenu(state: GridCommandState, ctx: GridCommandContext
       ...FONT_FAMILIES.map(f => ({
         kind: 'command' as const, id: `font-${f}`, label: f, isEnabled: state.hasSelection,
         isChecked: state.currentCellFormat?.fontFamily === f,
+        style: { fontFamily: f },
         execute: () => applyFormatToSelection(ctx, { fontFamily: f }),
       })),
     ],
@@ -1404,9 +1405,13 @@ const formattingPlugin: GridPlugin = {
       { kind: 'submenu', id: 'number-format', label: 'Number format', icon: 'tag', resolve: buildNumberFormatSubmenu },
       { kind: 'submenu', id: 'borders', label: 'Borders', icon: 'border_all', resolve: buildBordersSubmenu },
       { kind: 'separator' },
-      { kind: 'command', id: 'align-left' },
-      { kind: 'command', id: 'align-center' },
-      { kind: 'command', id: 'align-right' },
+      { kind: 'submenu', id: 'alignment', label: 'Alignment', icon: 'format_align_left',
+        resolve: (state, ctx) => ({
+          kind: 'submenu', id: 'alignment', label: 'Alignment', icon: 'format_align_left',
+          isEnabled: state.hasSelection,
+          children: resolveCommands(['align-left', 'align-center', 'align-right'], state, ctx),
+        }),
+      },
       { kind: 'separator' },
       { kind: 'command', id: 'clear-formatting' },
       { kind: 'separator' },
@@ -1634,6 +1639,28 @@ export function commitAutofill(
 // ============================================================
 // useGridCommands hook
 // ============================================================
+
+/** Resolve a list of command IDs (null = separator) into ResolvedEntry[]. */
+function resolveCommands(
+  ids: (string | null)[],
+  state: GridCommandState,
+  ctx: GridCommandContext,
+): ResolvedEntry[] {
+  return ids.map((id): ResolvedEntry => {
+    if (id === null) return { kind: 'separator' };
+    const cmd = COMMAND_REGISTRY.get(id);
+    if (!cmd) throw new Error(`Unknown command id: "${id}"`);
+    const rawLabel = cmd.defaultLabel;
+    const label = typeof rawLabel === 'function' ? rawLabel(state) : rawLabel;
+    const isEnabled = cmd.isEnabled(state);
+    const isChecked = cmd.toggle ? cmd.toggle.isChecked(state) : undefined;
+    const shortcut = cmd.shortcuts?.[0] ? shortcutDisplay(cmd.shortcuts[0]) : undefined;
+    return {
+      kind: 'command', id: cmd.id, label, icon: cmd.icon, isEnabled, isChecked,
+      shortcut, danger: cmd.danger, execute: () => cmd.execute(state, ctx),
+    };
+  });
+}
 
 function resolveSlot(
   slotId: SlotId,

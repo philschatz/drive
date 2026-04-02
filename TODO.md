@@ -25,9 +25,7 @@ temporarily remove filtering the doc list by access level. I am curious what hap
 
 Move source editor validation errors and history navigation to be the same as all the other editors
 
-Support pinning rows/columns, hiding rows/columns, changing the width of rows/columns with a popup prompt. Each of these should have a context menu, a menu bar menu, extra validation (that if there is a row/column freeze and that's a field on the row(s)/column(s) then all rows/columns have that frozen flag, not just the last row/column)
-
-Datagrid: Include all toolbar buttons (including font choice) in the main menu. In fact, make each command required to be in the main menu. Also, add a search button that allows filtering the main menu and toolbar so users can find the item they want.
+Support pinning rows/columns, hiding rows/columns, changing the width of rows/columns with a popup prompt. Each of these should have a context menu, a menu bar menu, extra validation (that if there is a row/column freeze and that's a field on the row(s)/column(s) then all rows/columns have that frozen flag, not just the last row/column). Also, hide hidden rows and columns. Labeling should skip if there are hidden ones. Ideally place an unhide/expand button where rows or columns are skipped
 
 BUG: If an admin user deletes the doc (revokes their access) and someone adds them back in, their edits do not show up but should. Also, they do not seem to see that they have regained permissions (a generic share link is present on the top bar instead of their role)
 
