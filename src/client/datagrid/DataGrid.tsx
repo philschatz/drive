@@ -189,14 +189,97 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
     return sortedEntries(currentSheet.rows).map(([id]: [string, any]) => id);
   }, [currentSheet?.rows]);
 
+  // Visible (non-hidden) row/col IDs — used for rendering and selection
+  const visibleColIds = useMemo(() => {
+    if (!currentSheet?.columns) return [];
+    return sortedColIds.filter(id => !currentSheet.columns[id]?.hidden);
+  }, [currentSheet?.columns, sortedColIds]);
+
+  const visibleRowIds = useMemo(() => {
+    if (!currentSheet?.rows) return [];
+    return sortedRowIds.filter(id => !currentSheet.rows[id]?.hidden);
+  }, [currentSheet?.rows, sortedRowIds]);
+
+  // Maps visible index → original (full sorted) index for label computation
+  const visibleColOriginalIndices = useMemo(() => {
+    return visibleColIds.map(id => sortedColIds.indexOf(id));
+  }, [visibleColIds, sortedColIds]);
+
+  const visibleRowOriginalIndices = useMemo(() => {
+    return visibleRowIds.map(id => sortedRowIds.indexOf(id));
+  }, [visibleRowIds, sortedRowIds]);
+
+  // Hidden-gap indicators: detect where hidden rows/cols exist between visible ones
+  const colHiddenGaps = useMemo(() => {
+    const gaps: Array<{ beforeVisualIndex: number; hiddenIds: string[] }> = [];
+    for (let ci = 0; ci <= visibleColIds.length; ci++) {
+      const prevOrig = ci === 0 ? -1 : visibleColOriginalIndices[ci - 1];
+      const nextOrig = ci < visibleColIds.length ? visibleColOriginalIndices[ci] : sortedColIds.length;
+      if (nextOrig - prevOrig > 1) {
+        const hiddenIds: string[] = [];
+        for (let o = prevOrig + 1; o < nextOrig; o++) hiddenIds.push(sortedColIds[o]);
+        gaps.push({ beforeVisualIndex: ci, hiddenIds });
+      }
+    }
+    return gaps;
+  }, [visibleColIds, visibleColOriginalIndices, sortedColIds]);
+
+  const rowHiddenGaps = useMemo(() => {
+    const gaps: Array<{ beforeVisualIndex: number; hiddenIds: string[] }> = [];
+    for (let ri = 0; ri <= visibleRowIds.length; ri++) {
+      const prevOrig = ri === 0 ? -1 : visibleRowOriginalIndices[ri - 1];
+      const nextOrig = ri < visibleRowIds.length ? visibleRowOriginalIndices[ri] : sortedRowIds.length;
+      if (nextOrig - prevOrig > 1) {
+        const hiddenIds: string[] = [];
+        for (let o = prevOrig + 1; o < nextOrig; o++) hiddenIds.push(sortedRowIds[o]);
+        gaps.push({ beforeVisualIndex: ri, hiddenIds });
+      }
+    }
+    return gaps;
+  }, [visibleRowIds, visibleRowOriginalIndices, sortedRowIds]);
+
+  // Frozen row/col counts (contiguous from the start of visible items)
+  const frozenColCount = useMemo(() => {
+    if (!currentSheet?.columns) return 0;
+    let count = 0;
+    for (const id of visibleColIds) {
+      if (currentSheet.columns[id]?.frozen) count++;
+      else break;
+    }
+    return count;
+  }, [visibleColIds, currentSheet?.columns]);
+
+  const frozenRowCount = useMemo(() => {
+    if (!currentSheet?.rows) return 0;
+    let count = 0;
+    for (const id of visibleRowIds) {
+      if (currentSheet.rows[id]?.frozen) count++;
+      else break;
+    }
+    return count;
+  }, [visibleRowIds, currentSheet?.rows]);
+
   const formatCache = useMemo(() => {
     return buildFormatCache(currentSheet?.formats, sortedRowIds, sortedColIds);
   }, [currentSheet?.formats, sortedRowIds, sortedColIds]);
 
   const columnDefs = useMemo(() => {
     if (!currentSheet?.columns) return [];
-    return sortedEntries(currentSheet.columns).map(([id, col]: [string, any]) => ({ id, ...col }));
+    return sortedEntries(currentSheet.columns)
+      .filter(([, col]: [string, any]) => !col.hidden)
+      .map(([id, col]: [string, any]) => ({ id, ...col }));
   }, [currentSheet?.columns]);
+
+  // Cumulative offsets for frozen columns (for CSS sticky left values)
+  const frozenColOffsets = useMemo(() => {
+    const offsets: number[] = [];
+    let acc = 48; // row header width
+    for (let i = 0; i < frozenColCount; i++) {
+      offsets.push(acc);
+      acc += columnDefs[i]?.width || 100;
+    }
+    return offsets;
+  }, [frozenColCount, columnDefs]);
 
   // Sheet ordering for tabs — derived from lightweight metadata
   const sheetOrder = useMemo(() => {
@@ -246,13 +329,16 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
   // Write a cell value to the Automerge doc and send to HF worker for immediate evaluation.
   const commitCellValue = useCallback((col: number, row: number, value: string) => {
     if (!canEditRef.current || !docId) return;
-    if (col >= sortedColIds.length || row >= sortedRowIds.length || !currentSheetId) return;
-    const rowId = sortedRowIds[row];
-    const colId = sortedColIds[col];
+    if (col >= visibleColIds.length || row >= visibleRowIds.length || !currentSheetId) return;
+    const rowId = visibleRowIds[row];
+    const colId = visibleColIds[col];
     const cellKey = `${rowId}:${colId}`;
     const sid = currentSheetId;
+    // A1 conversion uses original position in full sorted list
+    const origRow = sortedRowIds.indexOf(rowId);
+    const origCol = sortedColIds.indexOf(colId);
     const stored = value.startsWith('=')
-      ? a1ToInternal(value, row, col, sortedRowIds, sortedColIds, sheetIdLookup, sheetRowColLookup)
+      ? a1ToInternal(value, origRow, origCol, sortedRowIds, sortedColIds, sheetIdLookup, sheetRowColLookup)
       : value;
     updateDoc(docId, (d, sid, cellKey, stored) => {
       const existing = d.sheets[sid].cells[cellKey];
@@ -263,21 +349,24 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
     // Send to HF worker for immediate formula re-evaluation
     hfBridgeRef.current?.setCellContents(sid, rowId, colId, stored);
     setTick(t => t + 1);
-  }, [sortedColIds, sortedRowIds, currentSheetId, sheetIdLookup, sheetRowColLookup, docId]);
+  }, [visibleColIds, visibleRowIds, sortedColIds, sortedRowIds, currentSheetId, sheetIdLookup, sheetRowColLookup, docId]);
 
   // Start editing a cell
   const startEditing = useCallback((col: number, row: number) => {
     if (!canEditRef.current) return;
     const sh = activeSheetRef.current;
     if (!sh || !currentSheetId) return;
-    const rowId = sortedRowIds[row];
-    const colId = sortedColIds[col];
+    const rowId = visibleRowIds[row];
+    const colId = visibleColIds[col];
     if (spillTargetsRef.current.has(`${currentSheetId}:${rowId}:${colId}`)) return;
     const raw = sh.cells[`${rowId}:${colId}`]?.value || '';
-    const display = raw.startsWith('=') ? internalToA1(raw, row, col, sortedRowIds, sortedColIds, sheetNameLookup, sheetRowColLookup) : raw;
+    // A1 display uses original position in full sorted list
+    const origRow = sortedRowIds.indexOf(rowId);
+    const origCol = sortedColIds.indexOf(colId);
+    const display = raw.startsWith('=') ? internalToA1(raw, origRow, origCol, sortedRowIds, sortedColIds, sheetNameLookup, sheetRowColLookup) : raw;
     setEditingCell([col, row]);
     setEditValue(display);
-  }, [sortedColIds, sortedRowIds, currentSheetId, sheetNameLookup, sheetRowColLookup]);
+  }, [visibleColIds, visibleRowIds, sortedColIds, sortedRowIds, currentSheetId, sheetNameLookup, sheetRowColLookup]);
 
   // Commit editing
   const commitEdit = useCallback(() => {
@@ -305,10 +394,10 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
     setSelectedRows(new Set());
     setSelectedCols(new Set());
     tableRef.current?.focus();
-    if (broadcastRef.current && row < sortedRowIds.length && col < sortedColIds.length) {
-      broadcastRef.current('focusedField', ['sheets', currentSheetId!, 'cells', `${sortedRowIds[row]}:${sortedColIds[col]}`]);
+    if (broadcastRef.current && row < visibleRowIds.length && col < visibleColIds.length) {
+      broadcastRef.current('focusedField', ['sheets', currentSheetId!, 'cells', `${visibleRowIds[row]}:${visibleColIds[col]}`]);
     }
-  }, [sortedRowIds, sortedColIds, currentSheetId]);
+  }, [visibleRowIds, visibleColIds, currentSheetId]);
 
   // Compute normalized selection rectangle
   const selectionRange = useMemo(() => {
@@ -469,8 +558,8 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
       const finalWidth = Math.max(40, startWidth + me.clientX - startX);
       setResizingCol(null);
 
-      if (ci < sortedColIds.length && currentSheetId) {
-        const colId = sortedColIds[ci];
+      if (ci < visibleColIds.length && currentSheetId) {
+        const colId = visibleColIds[ci];
         const sid = currentSheetId;
         mutate((d, sid, colId, finalWidth) => { d.sheets[sid].columns[colId].width = finalWidth; }, [sid, colId, finalWidth]);
       }
@@ -479,11 +568,11 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
     document.body.style.cursor = 'col-resize';
     document.addEventListener('mousemove', onMouseMove);
     document.addEventListener('mouseup', onMouseUp);
-  }, [columnDefs, sortedColIds, mutate, currentSheetId]);
+  }, [columnDefs, visibleColIds, mutate, currentSheetId]);
 
   const autoFitColumn = useCallback((ci: number) => {
     const container = tableRef.current;
-    if (!container || ci >= sortedColIds.length || !currentSheetId) return;
+    if (!container || ci >= visibleColIds.length || !currentSheetId) return;
     const cells = container.querySelectorAll<HTMLElement>(`td[data-cell-col="${ci}"] > span`);
     if (cells.length === 0) return;
     const canvas = document.createElement('canvas');
@@ -497,10 +586,25 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
       const w = ctx.measureText(cell.textContent || '').width + padding + 2;
       if (w > maxWidth) maxWidth = w;
     });
-    const colId = sortedColIds[ci];
+    const colId = visibleColIds[ci];
     const sid = currentSheetId;
     mutate((d, sid, colId, width) => { d.sheets[sid].columns[colId].width = width; }, [sid, colId, Math.ceil(maxWidth)]);
-  }, [sortedColIds, mutate, currentSheetId]);
+  }, [visibleColIds, mutate, currentSheetId]);
+
+  // Unhide specific hidden rows/columns (used by gap buttons)
+  const unhideColumns = useCallback((ids: string[]) => {
+    if (!currentSheetId || !canEditRef.current) return;
+    mutate((d, sid, ids) => {
+      for (const id of ids) delete d.sheets[sid].columns[id].hidden;
+    }, [currentSheetId, ids]);
+  }, [mutate, currentSheetId]);
+
+  const unhideRows = useCallback((ids: string[]) => {
+    if (!currentSheetId || !canEditRef.current) return;
+    mutate((d, sid, ids) => {
+      for (const id of ids) delete d.sheets[sid].rows[id].hidden;
+    }, [mutate, currentSheetId]);
+  }, [mutate, currentSheetId]);
 
   // -- Sheet management handlers --
 
@@ -670,21 +774,21 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
       e.preventDefault();
       if (!selectionAnchor) setSelectionAnchor([col, row]);
       let nc = col, nr = row;
-      if (e.key === 'ArrowRight') nc = Math.min(col + 1, sortedColIds.length - 1);
+      if (e.key === 'ArrowRight') nc = Math.min(col + 1, visibleColIds.length - 1);
       else if (e.key === 'ArrowLeft') nc = Math.max(col - 1, 0);
-      else if (e.key === 'ArrowDown') nr = Math.min(row + 1, sortedRowIds.length - 1);
+      else if (e.key === 'ArrowDown') nr = Math.min(row + 1, visibleRowIds.length - 1);
       else if (e.key === 'ArrowUp') nr = Math.max(row - 1, 0);
       setSelectedCell([nc, nr]);
       return;
     }
 
     let newCol = col, newRow = row;
-    if (e.key === 'ArrowRight' || e.key === 'Tab') { e.preventDefault(); newCol = Math.min(col + 1, sortedColIds.length - 1); }
+    if (e.key === 'ArrowRight' || e.key === 'Tab') { e.preventDefault(); newCol = Math.min(col + 1, visibleColIds.length - 1); }
     else if (e.key === 'ArrowLeft') { newCol = Math.max(col - 1, 0); }
-    else if (e.key === 'ArrowDown') { newRow = Math.min(row + 1, sortedRowIds.length - 1); }
+    else if (e.key === 'ArrowDown') { newRow = Math.min(row + 1, visibleRowIds.length - 1); }
     else if (e.key === 'ArrowUp') { newRow = Math.max(row - 1, 0); }
     else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey) {
-      if (spillTargetsRef.current.has(`${currentSheetId}:${sortedRowIds[row]}:${sortedColIds[col]}`)) return;
+      if (spillTargetsRef.current.has(`${currentSheetId}:${visibleRowIds[row]}:${visibleColIds[col]}`)) return;
       e.preventDefault();
       setSelectionAnchor(null);
       setEditingCell([col, row]);
@@ -696,7 +800,7 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
     if (newCol !== col || newRow !== row) {
       selectCell(newCol, newRow);
     }
-  }, [editingCell, selectedCell, selectionAnchor, selectionRange, sortedColIds, sortedRowIds, startEditing, selectCell, cancelEdit]);
+  }, [editingCell, selectedCell, selectionAnchor, selectionRange, visibleColIds, visibleRowIds, startEditing, selectCell, cancelEdit]);
 
   useEffect(() => {
     const el = tableRef.current;
@@ -832,15 +936,15 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
       if (sep === -1) continue;
       const rowId = cellKey.slice(0, sep);
       const colId = cellKey.slice(sep + 1);
-      const col = sortedColIds.indexOf(colId);
-      const row = sortedRowIds.indexOf(rowId);
+      const col = visibleColIds.indexOf(colId);
+      const row = visibleRowIds.indexOf(rowId);
       if (col >= 0 && row >= 0) {
         const key = `${col}:${row}`;
         if (!map[key]) map[key] = { color: peerColor(peer.peerId), peerId: peer.peerId };
       }
     }
     return map;
-  }, [peerStates, sortedColIds, sortedRowIds, currentSheetId]);
+  }, [peerStates, visibleColIds, visibleRowIds, currentSheetId]);
 
   // Load document, init presence, and set up HF bridge
   useEffect(() => {
@@ -931,16 +1035,16 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
 
   // Resolve pending cell selection once row/col IDs are available
   useEffect(() => {
-    if (sortedRowIds.length === 0 || sortedColIds.length === 0) return;
+    if (visibleRowIds.length === 0 || visibleColIds.length === 0) return;
     const pending = pendingCellRef.current;
     if (pending) {
-      const row = sortedRowIds.indexOf(pending.rowId);
-      const col = sortedColIds.indexOf(pending.colId);
+      const row = visibleRowIds.indexOf(pending.rowId);
+      const col = visibleColIds.indexOf(pending.colId);
       if (row < 0 || col < 0) { pendingCellRef.current = null; return; }
       setSelectedCell([col, row]);
       if (pending.anchorRowId && pending.anchorColId) {
-        const ar = sortedRowIds.indexOf(pending.anchorRowId);
-        const ac = sortedColIds.indexOf(pending.anchorColId);
+        const ar = visibleRowIds.indexOf(pending.anchorRowId);
+        const ac = visibleColIds.indexOf(pending.anchorColId);
         if (ar >= 0 && ac >= 0) setSelectionAnchor([ac, ar]);
       }
       pendingCellRef.current = null;
@@ -948,28 +1052,28 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
       // Default to first cell when no cell specified in URL
       setSelectedCell([0, 0]);
     }
-  }, [sortedRowIds, sortedColIds]);
+  }, [visibleRowIds, visibleColIds]);
 
   // Sync cell/range selection to URL via replaceState
   useEffect(() => {
     if (!docId || !currentSheetId) return;
     const base = window.location.href.split('#')[0];
     const sheetBase = `${base}#/datagrids/${docId}/sheets/${currentSheetId}`;
-    if (!selectedCell || sortedRowIds.length === 0 || sortedColIds.length === 0) {
+    if (!selectedCell || visibleRowIds.length === 0 || visibleColIds.length === 0) {
       window.history.replaceState(null, '', sheetBase);
       return;
     }
     const [col, row] = selectedCell;
-    if (row >= sortedRowIds.length || col >= sortedColIds.length) return;
-    let url = `${sheetBase}/cells/${sortedRowIds[row]}:${sortedColIds[col]}`;
+    if (row >= visibleRowIds.length || col >= visibleColIds.length) return;
+    let url = `${sheetBase}/cells/${visibleRowIds[row]}:${visibleColIds[col]}`;
     if (selectionAnchor) {
       const [ac, ar] = selectionAnchor;
-      if (ar < sortedRowIds.length && ac < sortedColIds.length) {
-        url += `?anchor=${sortedRowIds[ar]}:${sortedColIds[ac]}`;
+      if (ar < visibleRowIds.length && ac < visibleColIds.length) {
+        url += `?anchor=${visibleRowIds[ar]}:${visibleColIds[ac]}`;
       }
     }
     window.history.replaceState(null, '', url);
-  }, [selectedCell, selectionAnchor, sortedRowIds, sortedColIds, currentSheetId, docId]);
+  }, [selectedCell, selectionAnchor, visibleRowIds, visibleColIds, currentSheetId, docId]);
 
   // Handle sheetId prop changes from back/forward navigation
   useEffect(() => {
@@ -1007,39 +1111,42 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
   const formulaBarValue = useMemo(() => {
     if (!selectedCell || !currentSheet) return '';
     const [col, row] = selectedCell;
-    if (row >= sortedRowIds.length || col >= sortedColIds.length) return '';
-    const rowId = sortedRowIds[row];
-    const colId = sortedColIds[col];
+    if (row >= visibleRowIds.length || col >= visibleColIds.length) return '';
+    const rowId = visibleRowIds[row];
+    const colId = visibleColIds[col];
     const spillKey = `${effectiveSheetId}:${rowId}:${colId}`;
     if (spillTargetsRef.current.has(spillKey)) {
       const computed = computedValuesRef.current?.get(spillKey);
       return computed != null ? String(computed) : '';
     }
     const raw = currentSheet.cells[`${rowId}:${colId}`]?.value || '';
-    return raw.startsWith('=') ? internalToA1(raw, row, col, sortedRowIds, sortedColIds, sheetNameLookup, sheetRowColLookup) : raw;
-  }, [selectedCell, currentSheet, sortedRowIds, sortedColIds, sheetNameLookup, sheetRowColLookup, effectiveSheetId]);
+    // A1 display uses original position in full sorted list
+    const origRow = sortedRowIds.indexOf(rowId);
+    const origCol = sortedColIds.indexOf(colId);
+    return raw.startsWith('=') ? internalToA1(raw, origRow, origCol, sortedRowIds, sortedColIds, sheetNameLookup, sheetRowColLookup) : raw;
+  }, [selectedCell, currentSheet, visibleRowIds, visibleColIds, sortedRowIds, sortedColIds, sheetNameLookup, sheetRowColLookup, effectiveSheetId]);
 
   // Cell address label (e.g. "A1", "A1:C3", "2:5", "A:C")
   const cellLabel = useMemo(() => {
     if (selectedRows.size > 0) {
       const rows = [...selectedRows].sort((a, b) => a - b);
-      const min = rows[0] + 1;
-      const max = rows[rows.length - 1] + 1;
+      const min = visibleRowOriginalIndices[rows[0]] + 1;
+      const max = visibleRowOriginalIndices[rows[rows.length - 1]] + 1;
       return min === max ? `${min}:${min}` : `${min}:${max}`;
     }
     if (selectedCols.size > 0) {
       const cols = [...selectedCols].sort((a, b) => a - b);
-      const min = colIndexToLetter(cols[0]);
-      const max = colIndexToLetter(cols[cols.length - 1]);
+      const min = colIndexToLetter(visibleColOriginalIndices[cols[0]]);
+      const max = colIndexToLetter(visibleColOriginalIndices[cols[cols.length - 1]]);
       return min === max ? `${min}:${min}` : `${min}:${max}`;
     }
     if (!selectedCell) return '';
     const [col, row] = selectedCell;
     if (selectionRange && isMultiSelect) {
-      return `${colIndexToLetter(selectionRange.minCol)}${selectionRange.minRow + 1}:${colIndexToLetter(selectionRange.maxCol)}${selectionRange.maxRow + 1}`;
+      return `${colIndexToLetter(visibleColOriginalIndices[selectionRange.minCol])}${visibleRowOriginalIndices[selectionRange.minRow] + 1}:${colIndexToLetter(visibleColOriginalIndices[selectionRange.maxCol])}${visibleRowOriginalIndices[selectionRange.maxRow] + 1}`;
     }
-    return `${colIndexToLetter(col)}${row + 1}`;
-  }, [selectedCell, selectedRows, selectedCols, selectionRange, isMultiSelect]);
+    return `${colIndexToLetter(visibleColOriginalIndices[col])}${visibleRowOriginalIndices[row] + 1}`;
+  }, [selectedCell, selectedRows, selectedCols, selectionRange, isMultiSelect, visibleColOriginalIndices, visibleRowOriginalIndices]);
 
   const formulaNames = CUSTOM_FN_NAMES;
 
@@ -1091,8 +1198,11 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
 
   const currentCellFormat = useMemo(() => {
     if (!selectedCell) return undefined;
-    return formatCache.get(`${selectedCell[1]}:${selectedCell[0]}`);
-  }, [selectedCell, formatCache]);
+    const origRow = visibleRowOriginalIndices[selectedCell[1]];
+    const origCol = visibleColOriginalIndices[selectedCell[0]];
+    if (origRow == null || origCol == null) return undefined;
+    return formatCache.get(`${origRow}:${origCol}`);
+  }, [selectedCell, formatCache, visibleRowOriginalIndices, visibleColOriginalIndices]);
 
   const commandState: GridCommandState = {
     canUndo,
@@ -1114,6 +1224,8 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
     currentSheetId: currentSheetId ?? '',
     sortedRowIds,
     sortedColIds,
+    visibleRowIds,
+    visibleColIds,
     selectedCell,
     selectionAnchor,
     currentRowIndices,
@@ -1222,7 +1334,7 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
                   const cell = editingCell;
                   commitEdit();
                   if (cell) {
-                    const nextRow = Math.min(cell[1] + 1, sortedRowIds.length - 1);
+                    const nextRow = Math.min(cell[1] + 1, visibleRowIds.length - 1);
                     selectCell(cell[0], nextRow);
                   }
                   tableRef.current?.focus();
@@ -1235,7 +1347,7 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
                   const cell = editingCell;
                   commitEdit();
                   if (cell) {
-                    const nextCol = Math.min(cell[0] + 1, sortedColIds.length - 1);
+                    const nextCol = Math.min(cell[0] + 1, visibleColIds.length - 1);
                     selectCell(nextCol, cell[1]);
                   }
                   tableRef.current?.focus();
@@ -1266,7 +1378,7 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
           {/* Distribution stats panel */}
           {(() => {
             if (!mcResults || !selectedCell) return null;
-            const cellKey = `${effectiveSheetId}:${sortedRowIds[selectedCell[1]]}:${sortedColIds[selectedCell[0]]}`;
+            const cellKey = `${effectiveSheetId}:${visibleRowIds[selectedCell[1]]}:${visibleColIds[selectedCell[0]]}`;
             const stats = mcResults.cells.get(cellKey);
             if (!stats) return null;
             return <DistributionPanel stats={stats} isSource={mcResults.sources.has(cellKey)} />;
@@ -1280,7 +1392,7 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
             <table className="datagrid-table" style={{ width: columnDefs.reduce((sum, col, i) => sum + ((resizingCol?.index === i ? resizingCol.width : col.width) || 100), 48) }}>
               <thead>
                 <tr>
-                  <th className="datagrid-row-header datagrid-corner-header" />
+                  <th className="datagrid-row-header datagrid-corner-header" style={frozenColCount > 0 || frozenRowCount > 0 ? { position: 'sticky', left: 0, top: 0, zIndex: 4 } : undefined} />
                   {columnDefs.map((col, ci) => {
                     const isColSelected = selectedCols.has(ci);
                     let dropClass = '';
@@ -1288,26 +1400,43 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
                       if (dropIndicator.index === ci) dropClass = ' drop-left';
                       else if (dropIndicator.index === ci + 1 && ci === columnDefs.length - 1) dropClass = ' drop-right';
                     }
+                    const isFrozenCol = ci < frozenColCount;
+                    const isLastFrozenCol = ci === frozenColCount - 1;
+                    const gap = colHiddenGaps.find(g => g.beforeVisualIndex === ci);
+                    const frozenStyle = isFrozenCol ? { position: 'sticky' as const, left: frozenColOffsets[ci], zIndex: 3 } : undefined;
                     return (
-                      <th
-                        key={col.id}
-                        className={'datagrid-col-header' + (isColSelected ? ' selected' : '') + dropClass}
-                        style={{ width: (resizingCol?.index === ci ? resizingCol.width : col.width) || 100 }}
-                        data-col-index={ci}
-                        onClick={(e: any) => handleColHeaderClick(ci, e)}
-                        onContextMenu={(e: any) => handleColContextMenu(ci, e)}
-                        onMouseDown={(e: any) => handleHeaderMouseDown('col', ci, e)}
-                      >
-                        {colIndexToLetter(ci)}
-                        <div className="col-resize-handle" onMouseDown={(e: any) => handleResizeMouseDown(ci, e)} onDblClick={(e: any) => { e.stopPropagation(); autoFitColumn(ci); }} />
-                      </th>
+                      <>
+                        {gap && (
+                          <th key={`unhide-col-${ci}`} className="datagrid-col-unhide" onClick={() => unhideColumns(gap.hiddenIds)} title={`Show ${gap.hiddenIds.length} hidden column${gap.hiddenIds.length > 1 ? 's' : ''}`}>
+                            <span className="material-symbols-outlined" style={{ fontSize: '0.75rem' }}>unfold_more</span>
+                          </th>
+                        )}
+                        <th
+                          key={col.id}
+                          className={'datagrid-col-header' + (isColSelected ? ' selected' : '') + dropClass + (isLastFrozenCol ? ' frozen-col-last' : '')}
+                          style={{ width: (resizingCol?.index === ci ? resizingCol.width : col.width) || 100, ...frozenStyle }}
+                          data-col-index={ci}
+                          onClick={(e: any) => handleColHeaderClick(ci, e)}
+                          onContextMenu={(e: any) => handleColContextMenu(ci, e)}
+                          onMouseDown={(e: any) => handleHeaderMouseDown('col', ci, e)}
+                        >
+                          {colIndexToLetter(visibleColOriginalIndices[ci])}
+                          <div className="col-resize-handle" onMouseDown={(e: any) => handleResizeMouseDown(ci, e)} onDblClick={(e: any) => { e.stopPropagation(); autoFitColumn(ci); }} />
+                        </th>
+                      </>
                     );
                   })}
+                  {/* Trailing unhide button if columns are hidden at the end */}
+                  {colHiddenGaps.find(g => g.beforeVisualIndex === columnDefs.length) && (
+                    <th className="datagrid-col-unhide" onClick={() => unhideColumns(colHiddenGaps.find(g => g.beforeVisualIndex === columnDefs.length)!.hiddenIds)}>
+                      <span className="material-symbols-outlined" style={{ fontSize: '0.75rem' }}>unfold_more</span>
+                    </th>
+                  )}
                 </tr>
               </thead>
               <tbody>
                 {(() => {
-                  const totalRows = sortedRowIds.length;
+                  const totalRows = visibleRowIds.length;
                   const firstVisible = Math.floor(scrollTop / ROW_HEIGHT);
                   const startRow = Math.max(0, firstVisible - OVERSCAN);
                   const visibleCount = Math.ceil(viewportHeight / ROW_HEIGHT);
@@ -1316,36 +1445,49 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
                     <>
                       {startRow > 0 && (
                         <tr style={{ height: startRow * ROW_HEIGHT + 'px' }}>
-                          <td colSpan={sortedColIds.length + 1} />
+                          <td colSpan={visibleColIds.length + 1} />
                         </tr>
                       )}
-                      {sortedRowIds.slice(startRow, endRow).map((rowId, offset) => {
+                      {visibleRowIds.slice(startRow, endRow).map((rowId, offset) => {
                   const ri = startRow + offset;
                   const isRowSelected = selectedRows.has(ri);
                   let dropClass = '';
                   if (dropIndicator?.type === 'row') {
                     if (dropIndicator.index === ri) dropClass = ' drop-above';
-                    else if (dropIndicator.index === ri + 1 && ri === sortedRowIds.length - 1) dropClass = ' drop-below';
+                    else if (dropIndicator.index === ri + 1 && ri === visibleRowIds.length - 1) dropClass = ' drop-below';
                   }
+                  const isFrozenRow = ri < frozenRowCount;
+                  const isLastFrozenRow = ri === frozenRowCount - 1;
+                  const frozenRowTop = isFrozenRow ? ri * ROW_HEIGHT + ROW_HEIGHT : undefined; // +ROW_HEIGHT for thead
+                  const rowGap = rowHiddenGaps.find(g => g.beforeVisualIndex === ri);
                   return (
-                    <tr key={rowId}>
+                    <>
+                      {rowGap && (
+                        <tr key={`unhide-row-${ri}`} className="datagrid-row-unhide-tr">
+                          <td className="datagrid-row-unhide" colSpan={visibleColIds.length + 1} onClick={() => unhideRows(rowGap.hiddenIds)} title={`Show ${rowGap.hiddenIds.length} hidden row${rowGap.hiddenIds.length > 1 ? 's' : ''}`}>
+                            <span className="material-symbols-outlined" style={{ fontSize: '0.75rem' }}>unfold_more</span>
+                          </td>
+                        </tr>
+                      )}
+                    <tr key={rowId} style={isFrozenRow ? { position: 'sticky', top: frozenRowTop, zIndex: 1 } : undefined}>
                       <td
-                        className={'datagrid-row-header' + (isRowSelected ? ' selected' : '') + dropClass}
+                        className={'datagrid-row-header' + (isRowSelected ? ' selected' : '') + dropClass + (isLastFrozenRow ? ' frozen-row-last' : '')}
+                        style={isFrozenRow ? { position: 'sticky', left: 0, top: frozenRowTop, zIndex: 3 } : undefined}
                         data-row-index={ri}
                         onClick={(e: any) => handleRowHeaderClick(ri, e)}
                         onContextMenu={(e: any) => handleRowContextMenu(ri, e)}
                         onMouseDown={(e: any) => handleHeaderMouseDown('row', ri, e)}
                       >
-                        {ri + 1}
+                        {visibleRowOriginalIndices[ri] + 1}
                       </td>
-                      {sortedColIds.map((colId, ci) => {
+                      {visibleColIds.map((colId, ci) => {
                         const isSelected = selectedCell && selectedCell[0] === ci && selectedCell[1] === ri;
                         const isEditing = editingCell && editingCell[0] === ci && editingCell[1] === ri;
                         const peers = peerCellMap[`${ci}:${ri}`];
                         const refInfo = refHighlightMap.get(`${ci}:${ri}`);
                         const rawValue = currentSheet?.cells[`${rowId}:${colId}`]?.value || '';
                         let display = getDisplayValue(computedValues, rawValue, effectiveSheetId ?? '', rowId, colId);
-                        const cellFmt = formatCache.get(`${ri}:${ci}`);
+                        const cellFmt = formatCache.get(`${visibleRowOriginalIndices[ri]}:${visibleColOriginalIndices[ci]}`);
                         const mcKey = `${effectiveSheetId}:${rowId}:${colId}`;
                         const isEvaluating = rawValue.startsWith('=') && !computedValues?.has(mcKey);
                         const mcStats = mcResults?.cells.get(mcKey);
@@ -1428,7 +1570,7 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
                                   onHighlightsChange={setFormulaRefHighlights}
                                   onCommit={() => {
                                     commitEdit();
-                                    const nextRow = Math.min(ri + 1, sortedRowIds.length - 1);
+                                    const nextRow = Math.min(ri + 1, visibleRowIds.length - 1);
                                     selectCell(ci, nextRow);
                                     tableRef.current?.focus();
                                   }}
@@ -1438,7 +1580,7 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
                                   }}
                                   onTab={() => {
                                     commitEdit();
-                                    const nextCol = Math.min(ci + 1, sortedColIds.length - 1);
+                                    const nextCol = Math.min(ci + 1, visibleColIds.length - 1);
                                     selectCell(nextCol, ri);
                                     tableRef.current?.focus();
                                   }}
@@ -1458,7 +1600,7 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
                                 {(() => {
                                   // Formula preview — show last computed value from worker
                                   if (!editValue.startsWith('=') || !effectiveSheetId) return null;
-                                  const previewKey = `${effectiveSheetId}:${sortedRowIds[editingCell![1]]}:${sortedColIds[editingCell![0]]}`;
+                                  const previewKey = `${effectiveSheetId}:${visibleRowIds[editingCell![1]]}:${visibleColIds[editingCell![0]]}`;
                                   const cached = computedValues.get(previewKey);
                                   return cached != null ? <div className="cell-eval-tooltip">{String(cached)}</div> : null;
                                 })()}
@@ -1483,11 +1625,12 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
                         );
                       })}
                     </tr>
+                    </>
                   );
                 })}
                       {endRow < totalRows && (
                         <tr style={{ height: (totalRows - endRow) * ROW_HEIGHT + 'px' }}>
-                          <td colSpan={sortedColIds.length + 1} />
+                          <td colSpan={visibleColIds.length + 1} />
                         </tr>
                       )}
                     </>

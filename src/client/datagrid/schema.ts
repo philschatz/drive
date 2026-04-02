@@ -8,12 +8,14 @@ export interface DataGridColumn {
   name: string;
   width?: number;
   hidden?: boolean;
+  frozen?: boolean;
 }
 
 export interface DataGridRow {
   index: number;
   height?: number;
   hidden?: boolean;
+  frozen?: boolean;
 }
 
 export interface DataGridBorder {
@@ -92,12 +94,14 @@ const dataGridColumnSchema = obj({
   name: str({ optional: true }),
   width: num({ min: 0, optional: true }),
   hidden: bool({ optional: true }),
+  frozen: bool({ optional: true }),
 });
 
 const dataGridRowSchema = obj({
   index: num({ min: 0 }),
   height: num({ min: 0, optional: true }),
   hidden: bool({ optional: true }),
+  frozen: bool({ optional: true }),
 });
 
 const dataGridBorderSchema = obj({

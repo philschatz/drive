@@ -73,6 +73,8 @@ export interface GridCommandContext {
   currentSheetId: string;
   sortedRowIds: string[];
   sortedColIds: string[];
+  visibleRowIds: string[];
+  visibleColIds: string[];
   selectedCell: [number, number] | null;
   selectionAnchor: [number, number] | null;
   currentRowIndices: number[];
@@ -124,6 +126,7 @@ export type SlotId =
   | 'edit-menu'
   | 'insert-menu'
   | 'format-menu'
+  | 'view-menu'
   | 'toolbar'
   | 'cell-ctx'
   | 'row-ctx'
@@ -775,6 +778,27 @@ const rowPlugin: GridPlugin = {
         setContextMenu(null);
       },
     },
+    {
+      id: 'set-row-height',
+      defaultLabel: 'Set row height\u2026',
+      icon: 'height',
+      isEnabled: s => rowIndices(s).length > 0,
+      execute: (s, ctx) => {
+        const indices = rowIndices(s);
+        const ids = indices.map(i => ctx.visibleRowIds[i]).filter(Boolean);
+        if (ids.length === 0) return;
+        const sh = ctxSheet(ctx.sheet, ctx);
+        const currentHeight = sh?.rows[ids[0]]?.height || 28;
+        const input = window.prompt('Row height (px):', String(currentHeight));
+        if (input === null) return;
+        const height = Math.max(16, Math.min(500, parseInt(input, 10)));
+        if (isNaN(height)) return;
+        ctx.mutate((d, sid, ids, height) => {
+          for (const id of ids) d.sheets[sid].rows[id].height = height;
+        }, [ctx.currentSheetId, ids, height]);
+        ctx.setContextMenu(null);
+      },
+    },
   ],
   slots: {
     'insert-menu': [
@@ -796,6 +820,8 @@ const rowPlugin: GridPlugin = {
       { kind: 'separator' },
       { kind: 'command', id: 'move-rows-up' },
       { kind: 'command', id: 'move-rows-down' },
+      { kind: 'separator' },
+      { kind: 'command', id: 'set-row-height' },
       { kind: 'separator' },
       { kind: 'command', id: 'delete-rows' },
     ],
@@ -948,6 +974,27 @@ const columnPlugin: GridPlugin = {
         setContextMenu(null);
       },
     },
+    {
+      id: 'set-col-width',
+      defaultLabel: 'Set column width\u2026',
+      icon: 'width',
+      isEnabled: s => colIndices(s).length > 0,
+      execute: (s, ctx) => {
+        const indices = colIndices(s);
+        const ids = indices.map(i => ctx.visibleColIds[i]).filter(Boolean);
+        if (ids.length === 0) return;
+        const sh = ctxSheet(ctx.sheet, ctx);
+        const currentWidth = sh?.columns[ids[0]]?.width || 100;
+        const input = window.prompt('Column width (px):', String(currentWidth));
+        if (input === null) return;
+        const width = Math.max(20, Math.min(2000, parseInt(input, 10)));
+        if (isNaN(width)) return;
+        ctx.mutate((d, sid, ids, width) => {
+          for (const id of ids) d.sheets[sid].columns[id].width = width;
+        }, [ctx.currentSheetId, ids, width]);
+        ctx.setContextMenu(null);
+      },
+    },
   ],
   slots: {
     'insert-menu': [
@@ -969,6 +1016,8 @@ const columnPlugin: GridPlugin = {
       { kind: 'separator' },
       { kind: 'command', id: 'move-cols-left' },
       { kind: 'command', id: 'move-cols-right' },
+      { kind: 'separator' },
+      { kind: 'command', id: 'set-col-width' },
       { kind: 'separator' },
       { kind: 'command', id: 'delete-cols' },
     ],
@@ -1437,7 +1486,190 @@ const formattingPlugin: GridPlugin = {
   },
 };
 
-const ALL_PLUGINS: GridPlugin[] = [historyPlugin, clipboardPlugin, rowPlugin, columnPlugin, sheetPlugin, formattingPlugin];
+// ============================================================
+// Visibility & Freeze plugin
+// ============================================================
+
+const visibilityPlugin: GridPlugin = {
+  id: 'visibility',
+  commands: [
+    {
+      id: 'hide-rows',
+      defaultLabel: s => {
+        const n = rowIndices(s).length;
+        return n > 1 ? `Hide ${n} rows` : 'Hide row';
+      },
+      icon: 'visibility_off',
+      isEnabled: s => rowIndices(s).length > 0,
+      execute: (s, ctx) => {
+        const indices = rowIndices(s);
+        const ids = indices.map(i => ctx.visibleRowIds[i]).filter(Boolean);
+        if (ids.length === 0) return;
+        ctx.mutate((d, sid, ids) => {
+          for (const id of ids) d.sheets[sid].rows[id].hidden = true;
+        }, [ctx.currentSheetId, ids]);
+        ctx.setSelectedRows(new Set());
+        ctx.setContextMenu(null);
+      },
+    },
+    {
+      id: 'hide-cols',
+      defaultLabel: s => {
+        const n = colIndices(s).length;
+        return n > 1 ? `Hide ${n} columns` : 'Hide column';
+      },
+      icon: 'visibility_off',
+      isEnabled: s => colIndices(s).length > 0,
+      execute: (s, ctx) => {
+        const indices = colIndices(s);
+        const ids = indices.map(i => ctx.visibleColIds[i]).filter(Boolean);
+        if (ids.length === 0) return;
+        ctx.mutate((d, sid, ids) => {
+          for (const id of ids) d.sheets[sid].columns[id].hidden = true;
+        }, [ctx.currentSheetId, ids]);
+        ctx.setSelectedCols(new Set());
+        ctx.setContextMenu(null);
+      },
+    },
+    {
+      id: 'unhide-all-rows',
+      defaultLabel: 'Unhide all rows',
+      icon: 'visibility',
+      isEnabled: () => true,
+      execute: (_, ctx) => {
+        const sh = ctxSheet(ctx.sheet, ctx);
+        if (!sh) return;
+        const ids = Object.entries(sh.rows).filter(([, r]: [string, any]) => r.hidden).map(([id]) => id);
+        if (ids.length === 0) return;
+        ctx.mutate((d, sid, ids) => {
+          for (const id of ids) delete d.sheets[sid].rows[id].hidden;
+        }, [ctx.currentSheetId, ids]);
+      },
+    },
+    {
+      id: 'unhide-all-cols',
+      defaultLabel: 'Unhide all columns',
+      icon: 'visibility',
+      isEnabled: () => true,
+      execute: (_, ctx) => {
+        const sh = ctxSheet(ctx.sheet, ctx);
+        if (!sh) return;
+        const ids = Object.entries(sh.columns).filter(([, c]: [string, any]) => c.hidden).map(([id]) => id);
+        if (ids.length === 0) return;
+        ctx.mutate((d, sid, ids) => {
+          for (const id of ids) delete d.sheets[sid].columns[id].hidden;
+        }, [ctx.currentSheetId, ids]);
+      },
+    },
+    {
+      id: 'freeze-rows',
+      defaultLabel: 'Freeze rows',
+      icon: 'push_pin',
+      isEnabled: s => rowIndices(s).length > 0,
+      execute: (s, ctx) => {
+        const sh = ctxSheet(ctx.sheet, ctx);
+        if (!sh) return;
+        const indices = rowIndices(s);
+        const maxVisIdx = Math.max(...indices);
+        const freezeUpToId = ctx.visibleRowIds[maxVisIdx];
+        if (!freezeUpToId) return;
+        const allEntries = sortedEntries(sh.rows);
+        const freezeUpToOrigIdx = allEntries.findIndex(([id]) => id === freezeUpToId);
+        const idsToFreeze: string[] = [];
+        const idsToUnfreeze: string[] = [];
+        for (let i = 0; i < allEntries.length; i++) {
+          if (i <= freezeUpToOrigIdx) idsToFreeze.push(allEntries[i][0]);
+          else idsToUnfreeze.push(allEntries[i][0]);
+        }
+        ctx.mutate((d, sid, idsToFreeze, idsToUnfreeze) => {
+          for (const id of idsToFreeze) d.sheets[sid].rows[id].frozen = true;
+          for (const id of idsToUnfreeze) delete d.sheets[sid].rows[id].frozen;
+        }, [ctx.currentSheetId, idsToFreeze, idsToUnfreeze]);
+        ctx.setContextMenu(null);
+      },
+    },
+    {
+      id: 'unfreeze-rows',
+      defaultLabel: 'Unfreeze rows',
+      icon: 'push_pin',
+      isEnabled: () => true,
+      execute: (_, ctx) => {
+        const sh = ctxSheet(ctx.sheet, ctx);
+        if (!sh) return;
+        const ids = Object.entries(sh.rows).filter(([, r]: [string, any]) => r.frozen).map(([id]) => id);
+        if (ids.length === 0) return;
+        ctx.mutate((d, sid, ids) => {
+          for (const id of ids) delete d.sheets[sid].rows[id].frozen;
+        }, [ctx.currentSheetId, ids]);
+      },
+    },
+    {
+      id: 'freeze-cols',
+      defaultLabel: 'Freeze columns',
+      icon: 'push_pin',
+      isEnabled: s => colIndices(s).length > 0,
+      execute: (s, ctx) => {
+        const sh = ctxSheet(ctx.sheet, ctx);
+        if (!sh) return;
+        const indices = colIndices(s);
+        const maxVisIdx = Math.max(...indices);
+        const freezeUpToId = ctx.visibleColIds[maxVisIdx];
+        if (!freezeUpToId) return;
+        const allEntries = sortedEntries(sh.columns);
+        const freezeUpToOrigIdx = allEntries.findIndex(([id]) => id === freezeUpToId);
+        const idsToFreeze: string[] = [];
+        const idsToUnfreeze: string[] = [];
+        for (let i = 0; i < allEntries.length; i++) {
+          if (i <= freezeUpToOrigIdx) idsToFreeze.push(allEntries[i][0]);
+          else idsToUnfreeze.push(allEntries[i][0]);
+        }
+        ctx.mutate((d, sid, idsToFreeze, idsToUnfreeze) => {
+          for (const id of idsToFreeze) d.sheets[sid].columns[id].frozen = true;
+          for (const id of idsToUnfreeze) delete d.sheets[sid].columns[id].frozen;
+        }, [ctx.currentSheetId, idsToFreeze, idsToUnfreeze]);
+        ctx.setContextMenu(null);
+      },
+    },
+    {
+      id: 'unfreeze-cols',
+      defaultLabel: 'Unfreeze columns',
+      icon: 'push_pin',
+      isEnabled: () => true,
+      execute: (_, ctx) => {
+        const sh = ctxSheet(ctx.sheet, ctx);
+        if (!sh) return;
+        const ids = Object.entries(sh.columns).filter(([, c]: [string, any]) => c.frozen).map(([id]) => id);
+        if (ids.length === 0) return;
+        ctx.mutate((d, sid, ids) => {
+          for (const id of ids) delete d.sheets[sid].columns[id].frozen;
+        }, [ctx.currentSheetId, ids]);
+      },
+    },
+  ],
+  slots: {
+    'row-ctx': [
+      { kind: 'separator' },
+      { kind: 'command', id: 'hide-rows' },
+      { kind: 'command', id: 'freeze-rows' },
+      { kind: 'command', id: 'unfreeze-rows' },
+    ],
+    'col-ctx': [
+      { kind: 'separator' },
+      { kind: 'command', id: 'hide-cols' },
+      { kind: 'command', id: 'freeze-cols' },
+      { kind: 'command', id: 'unfreeze-cols' },
+    ],
+    'view-menu': [
+      { kind: 'command', id: 'unhide-all-rows' },
+      { kind: 'command', id: 'unhide-all-cols' },
+      { kind: 'separator' },
+      { kind: 'command', id: 'unfreeze-rows' },
+      { kind: 'command', id: 'unfreeze-cols' },
+    ],
+  },
+};
+
+const ALL_PLUGINS: GridPlugin[] = [historyPlugin, clipboardPlugin, rowPlugin, columnPlugin, sheetPlugin, formattingPlugin, visibilityPlugin];
 
 const COMMAND_REGISTRY = new Map<string, GridCommand>();
 for (const plugin of ALL_PLUGINS) {
@@ -1467,6 +1699,7 @@ const SLOT_LISTS: Record<SlotId, SlotEntry[]> = {
   'edit-menu': buildSlotList('edit-menu'),
   'insert-menu': buildSlotList('insert-menu'),
   'format-menu': buildSlotList('format-menu'),
+  'view-menu': buildSlotList('view-menu'),
   toolbar: buildSlotList('toolbar'),
   'cell-ctx': buildSlotList('cell-ctx'),
   'row-ctx': buildSlotList('row-ctx'),
@@ -1711,6 +1944,7 @@ export function useGridCommands(
     { menuId: 'edit-menu', triggerLabel: 'Edit', entries: resolveSlot('edit-menu', state, ctx) },
     { menuId: 'insert-menu', triggerLabel: 'Insert', entries: resolveSlot('insert-menu', state, ctx) },
     { menuId: 'format-menu', triggerLabel: 'Format', entries: resolveSlot('format-menu', state, ctx) },
+    { menuId: 'view-menu', triggerLabel: 'View', entries: resolveSlot('view-menu', state, ctx) },
   ];
 
   function dispatchKey(e: KeyboardEvent, isMod: boolean): boolean {
