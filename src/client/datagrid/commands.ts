@@ -7,6 +7,9 @@ import {
   getEffectiveRange, type ClipboardEntry, type CellRange,
 } from './clipboard';
 import type { DataGridDocument, DataGridCell, DataGridCellFormat } from './schema';
+import {
+  FONT_FAMILIES, FONT_SIZES, NUMBER_FORMATS, PRESET_COLORS, BORDER_PRESETS,
+} from './FormattingToolbar';
 
 // ============================================================
 // Shortcut — canonical keyboard shortcut definition
@@ -135,6 +138,14 @@ export type SlotEntry =
       label?: string | ((s: GridCommandState) => string);
       icon?: string;
       toolbarDividerBefore?: boolean;
+    }
+  | {
+      kind: 'submenu';
+      id: string;
+      label: string;
+      icon?: string;
+      toolbarDividerBefore?: boolean;
+      resolve(state: GridCommandState, ctx: GridCommandContext): ResolvedEntry & { kind: 'submenu' };
     };
 
 export interface GridPlugin {
@@ -160,12 +171,33 @@ export type ResolvedEntry =
       danger?: boolean;
       toolbarDividerBefore?: boolean;
       execute(): void;
+    }
+  | {
+      kind: 'submenu';
+      id: string;
+      label: string;
+      icon?: string;
+      isEnabled: boolean;
+      currentValueLabel?: string;
+      toolbarDividerBefore?: boolean;
+      children: ResolvedEntry[];
     };
 
 export interface ResolvedMenu {
   menuId: SlotId;
   triggerLabel: string;
   entries: ResolvedEntry[];
+}
+
+export interface SearchableEntry {
+  id: string;
+  label: string;
+  /** e.g. "Format > Font family" */
+  group: string;
+  icon?: string;
+  shortcut?: string;
+  isEnabled: boolean;
+  execute(): void;
 }
 
 export interface GridCommandsApi {
@@ -175,6 +207,8 @@ export interface GridCommandsApi {
   rowCtx: ResolvedEntry[];
   colCtx: ResolvedEntry[];
   sheetCtx: ResolvedEntry[];
+  /** Flat deduplicated list of all searchable commands + submenu children. */
+  allSearchable: SearchableEntry[];
   /** Call from handleKeyDown after navigation keys. Returns true if the event was handled. */
   dispatchKey(e: KeyboardEvent, isMod: boolean): boolean;
   /** Execute the paste command with optional native ClipboardEvent data. */
@@ -741,6 +775,12 @@ const rowPlugin: GridPlugin = {
     },
   ],
   slots: {
+    'edit-menu': [
+      { kind: 'separator' },
+      { kind: 'command', id: 'delete-rows' },
+      { kind: 'command', id: 'move-rows-up' },
+      { kind: 'command', id: 'move-rows-down' },
+    ],
     'insert-menu': [
       { kind: 'command', id: 'insert-row-above' },
       { kind: 'command', id: 'insert-row-below' },
@@ -909,6 +949,11 @@ const columnPlugin: GridPlugin = {
     },
   ],
   slots: {
+    'edit-menu': [
+      { kind: 'command', id: 'delete-cols' },
+      { kind: 'command', id: 'move-cols-left' },
+      { kind: 'command', id: 'move-cols-right' },
+    ],
     'insert-menu': [
       { kind: 'separator' },
       { kind: 'command', id: 'insert-col-left' },
@@ -1152,6 +1197,107 @@ function clearFormatFromSelection(ctx: GridCommandContext): void {
 }
 
 // ============================================================
+// Submenu builders for formatting toolbar items
+// ============================================================
+
+function buildFontFamilySubmenu(state: GridCommandState, ctx: GridCommandContext): ResolvedEntry & { kind: 'submenu' } {
+  return {
+    kind: 'submenu', id: 'font-family', label: 'Font family', icon: 'font_download',
+    isEnabled: state.hasSelection,
+    currentValueLabel: state.currentCellFormat?.fontFamily || 'Default',
+    children: [
+      { kind: 'command', id: 'font-default', label: 'Default', isEnabled: state.hasSelection,
+        isChecked: !state.currentCellFormat?.fontFamily,
+        execute: () => applyFormatToSelection(ctx, { fontFamily: undefined }) },
+      ...FONT_FAMILIES.map(f => ({
+        kind: 'command' as const, id: `font-${f}`, label: f, isEnabled: state.hasSelection,
+        isChecked: state.currentCellFormat?.fontFamily === f,
+        execute: () => applyFormatToSelection(ctx, { fontFamily: f }),
+      })),
+    ],
+  };
+}
+
+function buildFontSizeSubmenu(state: GridCommandState, ctx: GridCommandContext): ResolvedEntry & { kind: 'submenu' } {
+  return {
+    kind: 'submenu', id: 'font-size', label: 'Font size', icon: 'format_size',
+    isEnabled: state.hasSelection,
+    currentValueLabel: state.currentCellFormat?.fontSize ? String(state.currentCellFormat.fontSize) : 'Default',
+    children: [
+      { kind: 'command', id: 'font-size-default', label: 'Default', isEnabled: state.hasSelection,
+        isChecked: !state.currentCellFormat?.fontSize,
+        execute: () => applyFormatToSelection(ctx, { fontSize: undefined }) },
+      ...FONT_SIZES.map(s => ({
+        kind: 'command' as const, id: `font-size-${s}`, label: String(s), isEnabled: state.hasSelection,
+        isChecked: state.currentCellFormat?.fontSize === s,
+        execute: () => applyFormatToSelection(ctx, { fontSize: s }),
+      })),
+    ],
+  };
+}
+
+function buildTextColorSubmenu(state: GridCommandState, ctx: GridCommandContext): ResolvedEntry & { kind: 'submenu' } {
+  return {
+    kind: 'submenu', id: 'text-color', label: 'Text color', icon: 'format_color_text',
+    isEnabled: state.hasSelection,
+    children: PRESET_COLORS.map(c => ({
+      kind: 'command' as const, id: `text-color-${c}`, label: c, isEnabled: state.hasSelection,
+      isChecked: state.currentCellFormat?.textColor === c,
+      execute: () => applyFormatToSelection(ctx, { textColor: c }),
+    })),
+  };
+}
+
+function buildBgColorSubmenu(state: GridCommandState, ctx: GridCommandContext): ResolvedEntry & { kind: 'submenu' } {
+  return {
+    kind: 'submenu', id: 'bg-color', label: 'Fill color', icon: 'format_color_fill',
+    isEnabled: state.hasSelection,
+    children: PRESET_COLORS.map(c => ({
+      kind: 'command' as const, id: `bg-color-${c}`, label: c, isEnabled: state.hasSelection,
+      isChecked: state.currentCellFormat?.bgColor === c,
+      execute: () => applyFormatToSelection(ctx, { bgColor: c }),
+    })),
+  };
+}
+
+function buildNumberFormatSubmenu(state: GridCommandState, ctx: GridCommandContext): ResolvedEntry & { kind: 'submenu' } {
+  return {
+    kind: 'submenu', id: 'number-format', label: 'Number format', icon: 'tag',
+    isEnabled: state.hasSelection,
+    currentValueLabel: NUMBER_FORMATS.find(f => f.value === (state.currentCellFormat?.numFmt || 'auto'))?.label || 'Automatic',
+    children: NUMBER_FORMATS.map(f => ({
+      kind: 'command' as const, id: `num-fmt-${f.value}`, label: f.label, isEnabled: state.hasSelection,
+      isChecked: (state.currentCellFormat?.numFmt || 'auto') === f.value,
+      execute: () => applyFormatToSelection(ctx, { numFmt: f.value === 'auto' ? undefined : f.value }),
+    })),
+  };
+}
+
+function buildBordersSubmenu(state: GridCommandState, ctx: GridCommandContext): ResolvedEntry & { kind: 'submenu' } {
+  return {
+    kind: 'submenu', id: 'borders', label: 'Borders', icon: 'border_all',
+    isEnabled: state.hasSelection,
+    children: BORDER_PRESETS.map(preset => ({
+      kind: 'command' as const, id: `border-${preset.icon}`, label: preset.label, icon: preset.icon,
+      isEnabled: state.hasSelection,
+      execute: () => {
+        const patch: Partial<DataGridCellFormat> = {};
+        const allSides = ['borderTop', 'borderBottom', 'borderLeft', 'borderRight'] as const;
+        const sideSet = new Set(preset.sides);
+        for (const side of allSides) {
+          if (sideSet.has(side)) {
+            (patch as any)[side] = { style: 'thin', color: '#000000' };
+          } else {
+            (patch as any)[side] = undefined;
+          }
+        }
+        applyFormatToSelection(ctx, patch);
+      },
+    })),
+  };
+}
+
+// ============================================================
 // Formatting plugin
 // ============================================================
 
@@ -1249,6 +1395,15 @@ const formattingPlugin: GridPlugin = {
       { kind: 'command', id: 'toggle-underline' },
       { kind: 'command', id: 'toggle-strikethrough' },
       { kind: 'separator' },
+      { kind: 'submenu', id: 'font-family', label: 'Font family', icon: 'font_download', resolve: buildFontFamilySubmenu },
+      { kind: 'submenu', id: 'font-size', label: 'Font size', icon: 'format_size', resolve: buildFontSizeSubmenu },
+      { kind: 'separator' },
+      { kind: 'submenu', id: 'text-color', label: 'Text color', icon: 'format_color_text', resolve: buildTextColorSubmenu },
+      { kind: 'submenu', id: 'bg-color', label: 'Fill color', icon: 'format_color_fill', resolve: buildBgColorSubmenu },
+      { kind: 'separator' },
+      { kind: 'submenu', id: 'number-format', label: 'Number format', icon: 'tag', resolve: buildNumberFormatSubmenu },
+      { kind: 'submenu', id: 'borders', label: 'Borders', icon: 'border_all', resolve: buildBordersSubmenu },
+      { kind: 'separator' },
       { kind: 'command', id: 'align-left' },
       { kind: 'command', id: 'align-center' },
       { kind: 'command', id: 'align-right' },
@@ -1262,6 +1417,12 @@ const formattingPlugin: GridPlugin = {
       { kind: 'command', id: 'toggle-italic' },
       { kind: 'command', id: 'toggle-underline' },
       { kind: 'command', id: 'toggle-strikethrough' },
+      { kind: 'submenu', id: 'font-family', label: 'Font family', icon: 'font_download', toolbarDividerBefore: true, resolve: buildFontFamilySubmenu },
+      { kind: 'submenu', id: 'font-size', label: 'Font size', icon: 'format_size', resolve: buildFontSizeSubmenu },
+      { kind: 'submenu', id: 'text-color', label: 'Text color', icon: 'format_color_text', resolve: buildTextColorSubmenu },
+      { kind: 'submenu', id: 'bg-color', label: 'Fill color', icon: 'format_color_fill', resolve: buildBgColorSubmenu },
+      { kind: 'submenu', id: 'number-format', label: 'Number format', icon: 'tag', toolbarDividerBefore: true, resolve: buildNumberFormatSubmenu },
+      { kind: 'submenu', id: 'borders', label: 'Borders', icon: 'border_all', resolve: buildBordersSubmenu },
     ],
     'cell-ctx': [
       { kind: 'separator' },
@@ -1481,6 +1642,7 @@ function resolveSlot(
 ): ResolvedEntry[] {
   return SLOT_LISTS[slotId].map((entry): ResolvedEntry => {
     if (entry.kind === 'separator') return { kind: 'separator' };
+    if (entry.kind === 'submenu') return entry.resolve(state, ctx);
 
     const cmd = COMMAND_REGISTRY.get(entry.id);
     if (!cmd) throw new Error(`Unknown command id: "${entry.id}"`);
@@ -1546,5 +1708,37 @@ export function useGridCommands(
     ctx.pasteEvent = undefined;
   }
 
-  return { toolbar, menus, cellCtx, rowCtx, colCtx, sheetCtx, dispatchKey, executePaste };
+  // Build flat searchable list from all menus
+  const allSearchable: SearchableEntry[] = [];
+  const seen = new Set<string>();
+  for (const menu of menus) {
+    for (const entry of menu.entries) {
+      if (entry.kind === 'command' && !seen.has(entry.id)) {
+        seen.add(entry.id);
+        allSearchable.push({
+          id: entry.id, label: entry.label, group: menu.triggerLabel,
+          icon: entry.icon, shortcut: entry.shortcut, isEnabled: entry.isEnabled, execute: entry.execute,
+        });
+      } else if (entry.kind === 'submenu') {
+        if (!seen.has(entry.id)) {
+          seen.add(entry.id);
+          // Add parent as a non-executable group header (skip)
+        }
+        for (const child of entry.children) {
+          if (child.kind === 'command') {
+            const childId = `${entry.id}/${child.id}`;
+            if (!seen.has(childId)) {
+              seen.add(childId);
+              allSearchable.push({
+                id: childId, label: child.label, group: `${menu.triggerLabel} > ${entry.label}`,
+                icon: child.icon, isEnabled: child.isEnabled, execute: child.execute,
+              });
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return { toolbar, menus, cellCtx, rowCtx, colCtx, sheetCtx, allSearchable, dispatchKey, executePaste };
 }

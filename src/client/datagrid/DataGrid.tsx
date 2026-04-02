@@ -6,9 +6,8 @@ import { EditorTitleBar } from '../shared/EditorTitleBar';
 import type { PeerFieldInfo } from '../shared/presence';
 import { useGridCommands, commitReorder, commitAutofill, type GridCommandState, type GridCommandContext } from './commands';
 import { CommandMenuBar, CommandToolbar, CommandContextMenuContent } from './CommandBar';
-import { FormattingToolbar } from './FormattingToolbar';
+import { CommandSearch } from './CommandSearch';
 import { ConditionalFormatPanel } from './ConditionalFormatPanel';
-import { applyFormatToSelection } from './commands';
 import { ContextMenu, ContextMenuTrigger } from '@/components/ui/context-menu';
 import {
   sortedEntries, colIndexToLetter, shortId,
@@ -1200,12 +1199,8 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
           <CommandMenuBar menus={commands.menus} />
 
           <div className="flex items-center gap-1 mb-1 flex-wrap">
+            <CommandSearch entries={commands.allSearchable} />
             <CommandToolbar entries={commands.toolbar} />
-            <FormattingToolbar
-              currentFormat={currentCellFormat}
-              hasSelection={commandState.hasSelection}
-              onFormatChange={(patch) => applyFormatToSelection(commandCtx, patch)}
-            />
           </div>
 
           {/* Formula bar — shows a CodeMirror editor once a cell is selected,

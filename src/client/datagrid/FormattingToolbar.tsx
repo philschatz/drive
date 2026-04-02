@@ -11,14 +11,14 @@ import type { DataGridCellFormat } from './schema';
 // Preset data
 // ============================================================
 
-const FONT_FAMILIES = [
+export const FONT_FAMILIES = [
   'Arial', 'Courier New', 'Georgia', 'Helvetica', 'Times New Roman', 'Verdana',
   'Trebuchet MS', 'Comic Sans MS', 'Impact', 'Lucida Console',
 ];
 
-const FONT_SIZES = [8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 36, 48, 72];
+export const FONT_SIZES = [8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 36, 48, 72];
 
-const NUMBER_FORMATS: { label: string; value: string }[] = [
+export const NUMBER_FORMATS: { label: string; value: string }[] = [
   { label: 'Automatic', value: 'auto' },
   { label: 'Number', value: '#,##0.00' },
   { label: 'Currency', value: '$#,##0.00' },
@@ -28,7 +28,7 @@ const NUMBER_FORMATS: { label: string; value: string }[] = [
   { label: 'Text', value: '@' },
 ];
 
-const PRESET_COLORS = [
+export const PRESET_COLORS = [
   '#000000', '#434343', '#666666', '#999999', '#b7b7b7', '#cccccc', '#d9d9d9', '#efefef', '#f3f3f3', '#ffffff',
   '#980000', '#ff0000', '#ff9900', '#ffff00', '#00ff00', '#00ffff', '#4a86e8', '#0000ff', '#9900ff', '#ff00ff',
   '#e6b8af', '#f4cccc', '#fce5cd', '#fff2cc', '#d9ead3', '#d0e0e3', '#c9daf8', '#cfe2f3', '#d9d2e9', '#ead1dc',
@@ -36,7 +36,7 @@ const PRESET_COLORS = [
   '#cc4125', '#e06666', '#f6b26b', '#ffd966', '#93c47d', '#76a5af', '#6d9eeb', '#6fa8dc', '#8e7cc3', '#c27ba0',
 ];
 
-const BORDER_PRESETS: { label: string; icon: string; sides: string[] }[] = [
+export const BORDER_PRESETS: { label: string; icon: string; sides: string[] }[] = [
   { label: 'All borders', icon: 'border_all', sides: ['borderTop', 'borderBottom', 'borderLeft', 'borderRight'] },
   { label: 'Outer borders', icon: 'border_outer', sides: ['borderTop', 'borderBottom', 'borderLeft', 'borderRight'] },
   { label: 'No borders', icon: 'border_clear', sides: [] },
@@ -154,7 +154,7 @@ export function FormattingToolbar({ currentFormat, hasSelection, onFormatChange 
 // ColorPicker
 // ============================================================
 
-function ColorPicker({ value, onChange, icon, title, disabled }: {
+export function ColorPicker({ value, onChange, icon, title, disabled }: {
   value?: string;
   onChange: (color: string) => void;
   icon: string;
@@ -202,7 +202,7 @@ function ColorPicker({ value, onChange, icon, title, disabled }: {
 // BorderPicker
 // ============================================================
 
-function BorderPicker({ onApply, disabled }: {
+export function BorderPicker({ onApply, disabled }: {
   onApply: (sides: string[]) => void;
   disabled?: boolean;
 }) {

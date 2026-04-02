@@ -120,6 +120,44 @@ function MenubarShortcut({
   );
 }
 
+const MenubarSub = MenubarPrimitive.Sub;
+
+function MenubarSubTrigger({
+  className,
+  children,
+  ...props
+}: React.ComponentPropsWithoutRef<typeof MenubarPrimitive.SubTrigger>) {
+  return (
+    <MenubarPrimitive.SubTrigger
+      className={cn(
+        "relative flex cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-none select-none focus:bg-accent focus:text-accent-foreground data-[state=open]:bg-accent data-[state=open]:text-accent-foreground",
+        className
+      )}
+      {...props}
+    >
+      {children}
+      <svg className="ml-auto h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+    </MenubarPrimitive.SubTrigger>
+  );
+}
+
+function MenubarSubContent({
+  className,
+  ...props
+}: React.ComponentPropsWithoutRef<typeof MenubarPrimitive.SubContent>) {
+  return (
+    <MenubarPrimitive.Portal>
+      <MenubarPrimitive.SubContent
+        className={cn(
+          "z-50 min-w-[14rem] overflow-hidden rounded-md border bg-popover p-1 text-popover-foreground shadow-md data-[state=open]:animate-in data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2",
+          className
+        )}
+        {...props}
+      />
+    </MenubarPrimitive.Portal>
+  );
+}
+
 export {
   Menubar,
   MenubarMenu,
@@ -129,4 +167,7 @@ export {
   MenubarCheckboxItem,
   MenubarSeparator,
   MenubarShortcut,
+  MenubarSub,
+  MenubarSubTrigger,
+  MenubarSubContent,
 };
