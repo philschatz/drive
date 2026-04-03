@@ -69,7 +69,7 @@ export function Home({ path }: { path?: string }) {
   const [importStatus, setImportStatus] = useState<{ label: string; progress: number } | null>(null);
   const connected = useConnectionStatus();
   const repoPeers = usePeerList();
-  const showUnencrypted = localStorage.getItem('showUnencrypted') !== 'false';
+  const showUnencrypted = localStorage.getItem('showUnencrypted') === 'true';
   const createSecure = !showUnencrypted;
 
   useEffect(() => { document.title = 'Automerge Documents'; }, []);
