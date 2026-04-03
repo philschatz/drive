@@ -172,6 +172,10 @@ function getOrCreateEntry(docId: string, handle: any): DocEntry {
     entry = { handle, pinnedVersion: null, subscriptions: new Map(), presence: null, validationSubscribed: false };
     docRegistry.set(docId, entry);
     handle.on('change', () => { pushToSubscriptions(docId); });
+    // Some automerge-repo versions also emit 'doc' for remote changes
+    if (typeof handle.on === 'function') {
+      handle.on('doc', () => { pushToSubscriptions(docId); });
+    }
     // Drain subscriptions that were registered before the doc was opened
     const pending = pendingSubs.get(docId);
     if (pending) {
