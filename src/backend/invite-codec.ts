@@ -1,7 +1,8 @@
 /**
  * Node.js port of src/client/invite/invite-codec.ts.
  *
- * Format: the 32-byte seed, base64url-encoded (~43 chars).
+ * Format: 32-byte seed, optionally followed by the inviter's agent ID bytes,
+ * all base64url-encoded.
  */
 
 function toBase64url(buf: Buffer): string {
@@ -13,16 +14,24 @@ function fromBase64url(b64url: string): Buffer {
   return Buffer.from(b64, 'base64');
 }
 
-export function encodeInvitePayload(seed: Uint8Array): string {
+export function encodeInvitePayload(seed: Uint8Array, inviterAgentId?: Uint8Array): string {
+  if (inviterAgentId && inviterAgentId.length > 0) {
+    const combined = new Uint8Array(32 + inviterAgentId.length);
+    combined.set(seed, 0);
+    combined.set(inviterAgentId, 32);
+    return toBase64url(Buffer.from(combined));
+  }
   return toBase64url(Buffer.from(seed));
 }
 
-export function decodeInvitePayload(b64url: string): { seed: Uint8Array } {
+export function decodeInvitePayload(b64url: string): { seed: Uint8Array; inviterAgentId?: Uint8Array } {
   const buf = fromBase64url(b64url);
-  if (buf.length !== 32) {
-    throw new Error(`Invalid invite payload: expected 32-byte seed, got ${buf.length} bytes`);
+  if (buf.length < 32) {
+    throw new Error(`Invalid invite payload: expected at least 32 bytes, got ${buf.length} bytes`);
   }
-  return { seed: new Uint8Array(buf) };
+  const seed = new Uint8Array(buf.slice(0, 32));
+  const inviterAgentId = buf.length > 32 ? new Uint8Array(buf.slice(32)) : undefined;
+  return { seed, inviterAgentId };
 }
 
 /**

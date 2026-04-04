@@ -18,6 +18,8 @@ import { Button } from '@/components/ui/button';
 import { addDocId, getDocEntry } from '@/doc-storage';
 import { claimInvite } from '../shared/keyhive-api';
 import { decodeInvitePayload } from './invite-codec';
+import { bytesToBase64 } from '../keyhive-ops';
+import { getContactName, setContactName } from '../contact-names';
 
 interface InvitePageProps {
   docId?: string;
@@ -41,6 +43,10 @@ export function InvitePage({ docId, docType, inviteKey }: InvitePageProps) {
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
   const [claiming, setClaiming] = useState(false);
+  const [inviterAgentId, setInviterAgentId] = useState<string | null>(null);
+  const [inviterName, setInviterName] = useState('');
+  const [nameSaved, setNameSaved] = useState(false);
+  const [resolvedRoute, setResolvedRoute] = useState('');
 
   const doClaim = useCallback(async () => {
     if (!docId || !inviteKey) {
@@ -52,7 +58,15 @@ export function InvitePage({ docId, docType, inviteKey }: InvitePageProps) {
 
     try {
       setStatus('Decoding invite...');
-      const { seed } = decodeInvitePayload(inviteKey);
+      const { seed, inviterAgentId: inviterIdBytes } = decodeInvitePayload(inviteKey);
+
+      if (inviterIdBytes) {
+        const agentId = bytesToBase64(inviterIdBytes);
+        setInviterAgentId(agentId);
+        // Pre-fill if we already have a name for this contact
+        const existing = getContactName(agentId);
+        if (existing) setInviterName(existing);
+      }
 
       setStatus('Syncing keys from relay...');
       await claimInvite(Array.from(seed), docId);
@@ -67,16 +81,38 @@ export function InvitePage({ docId, docType, inviteKey }: InvitePageProps) {
       });
 
       setDone(true);
-      setStatus('Invite claimed! Redirecting...');
-      setTimeout(() => {
-        window.location.hash = docRoute(docId, resolvedType);
-      }, 800);
+      setResolvedRoute(docRoute(docId, resolvedType));
+
+      // If no inviter info, redirect immediately
+      if (!inviterIdBytes) {
+        setStatus('Invite claimed! Redirecting...');
+        setTimeout(() => {
+          window.location.hash = docRoute(docId, resolvedType);
+        }, 800);
+      }
     } catch (err: any) {
       setError(err.message || 'Failed to claim invite');
     } finally {
       setClaiming(false);
     }
   }, [docId, docType, inviteKey]);
+
+  const handleSaveName = () => {
+    if (inviterAgentId && inviterName.trim()) {
+      setContactName(inviterAgentId, inviterName.trim());
+    }
+    setNameSaved(true);
+    setTimeout(() => {
+      window.location.hash = resolvedRoute;
+    }, 400);
+  };
+
+  const handleSkip = () => {
+    setNameSaved(true);
+    setTimeout(() => {
+      window.location.hash = resolvedRoute;
+    }, 400);
+  };
 
   const started = status || error || done || claiming;
 
@@ -103,6 +139,32 @@ export function InvitePage({ docId, docType, inviteKey }: InvitePageProps) {
             </Button>
             <Button variant="outline" onClick={() => { window.location.hash = '/'; }}>
               Go home
+            </Button>
+          </div>
+        </div>
+      ) : done && inviterAgentId && !nameSaved ? (
+        <div>
+          <p className="text-sm text-green-600 font-medium mb-4">
+            <span className="material-symbols-outlined align-middle mr-1" style={{ fontSize: 16 }}>check_circle</span>
+            Access granted
+          </p>
+          <p className="text-sm text-muted-foreground mb-3">Name the person who invited you so you can recognize them later.</p>
+          <div className="mb-4">
+            <input
+              className="w-full text-sm p-2 rounded border border-border"
+              value={inviterName}
+              onInput={(e: any) => setInviterName(e.currentTarget.value)}
+              onKeyDown={(e: any) => { if (e.key === 'Enter') handleSaveName(); }}
+              placeholder="Enter a name..."
+              autoFocus
+            />
+          </div>
+          <div className="flex gap-2 justify-center">
+            <Button variant="default" onClick={handleSaveName} disabled={!inviterName.trim()}>
+              Save
+            </Button>
+            <Button variant="outline" onClick={handleSkip}>
+              Skip
             </Button>
           </div>
         </div>

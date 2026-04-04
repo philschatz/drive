@@ -1,7 +1,8 @@
 /**
  * Encode/decode invite payloads.
  *
- * Format: the 32-byte seed, base64url-encoded (~43 chars).
+ * Format: 32-byte seed, optionally followed by the inviter's agent ID bytes,
+ * all base64url-encoded.
  */
 
 function toBase64url(bytes: Uint8Array): string {
@@ -18,16 +19,24 @@ function fromBase64url(b64url: string): Uint8Array {
   return bytes;
 }
 
-/** Encode an invite payload — seed only. */
-export function encodeInvitePayload(seed: Uint8Array): string {
+/** Encode an invite payload — seed + optional inviter agent ID. */
+export function encodeInvitePayload(seed: Uint8Array, inviterAgentId?: Uint8Array): string {
+  if (inviterAgentId && inviterAgentId.length > 0) {
+    const combined = new Uint8Array(32 + inviterAgentId.length);
+    combined.set(seed, 0);
+    combined.set(inviterAgentId, 32);
+    return toBase64url(combined);
+  }
   return toBase64url(seed);
 }
 
-/** Decode an invite payload. Returns the 32-byte seed. */
-export function decodeInvitePayload(b64url: string): { seed: Uint8Array } {
-  const seed = fromBase64url(b64url);
-  if (seed.length !== 32) {
-    throw new Error(`Invalid invite payload: expected 32-byte seed, got ${seed.length} bytes`);
+/** Decode an invite payload. Returns the 32-byte seed and optional inviter agent ID. */
+export function decodeInvitePayload(b64url: string): { seed: Uint8Array; inviterAgentId?: Uint8Array } {
+  const bytes = fromBase64url(b64url);
+  if (bytes.length < 32) {
+    throw new Error(`Invalid invite payload: expected at least 32 bytes, got ${bytes.length}`);
   }
-  return { seed };
+  const seed = bytes.slice(0, 32);
+  const inviterAgentId = bytes.length > 32 ? bytes.slice(32) : undefined;
+  return { seed, inviterAgentId };
 }

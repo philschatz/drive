@@ -15,6 +15,8 @@ there is a bug where Bob cannot delete members. Alice creates the document, gran
 
 is presence information also encrypted through keyhive?
 
+If the Issuer can know the claimers identity when they accept the invite and add their identity to the keyhive graph then add a
+
 Eventually, move the hyperformula evaluation into the worker too, make the UI smart enough to only request visible cells (using the row and column ids)
 
 when linking a device, allow setting a custom name. By default include the operating system and browser

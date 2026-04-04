@@ -1267,7 +1267,8 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
       const members = await khOps.getDocMembers(khDocId);
       const { encodeInvitePayload } = await import('./invite/invite-codec');
       const seed = new Uint8Array(result.inviteKeyBytes);
-      const inviteUrl = `${appBaseUrl}#/invite/${msg.docId}/${msg.docType}/${encodeInvitePayload(seed)}`;
+      const inviterAgentId = new Uint8Array(result.inviterAgentIdBytes);
+      const inviteUrl = `${appBaseUrl}#/invite/${msg.docId}/${msg.docType}/${encodeInvitePayload(seed, inviterAgentId)}`;
       const { addInviteRecord } = await import('./invite-storage');
       await addInviteRecord({
         id: Date.now().toString(),

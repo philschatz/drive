@@ -212,7 +212,7 @@ export class KeyhiveOps {
   async generateInvite(
     docId: string,
     role: string,
-  ): Promise<{ inviteKeyBytes: number[]; groupId: string; inviteSignerAgentId: string }> {
+  ): Promise<{ inviteKeyBytes: number[]; groupId: string; inviteSignerAgentId: string; inviterAgentIdBytes: number[] }> {
     const doc = this.khDocuments.get(docId);
     if (!doc) throw new Error('Document not found. Re-enable sharing.');
     const seed = crypto.getRandomValues(new Uint8Array(32));
@@ -232,7 +232,9 @@ export class KeyhiveOps {
     await this.kh.addMember(inviteAgent, doc.toMembered(), access, []);
     await this.fx.persist();
     this.fx.syncKeyhive();
-    return { inviteKeyBytes: Array.from(seed) as number[], groupId: '', inviteSignerAgentId };
+    const me = await this.kh.individual;
+    const inviterAgentIdBytes = Array.from(me.id.toBytes()) as number[];
+    return { inviteKeyBytes: Array.from(seed) as number[], groupId: '', inviteSignerAgentId, inviterAgentIdBytes };
   }
 
   /** Claim an invite using an already-initialized invite keyhive (from relay sync). */
