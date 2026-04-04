@@ -78,19 +78,23 @@ export function InvitePage({ docId, docType, inviteKey }: InvitePageProps) {
     }
   }, [docId, docType, inviteKey]);
 
-  // Auto-start on first render
-  if (!status && !error && !done && !claiming) {
-    doClaim();
-  }
+  const started = status || error || done || claiming;
 
   return (
     <div className="max-w-md mx-auto p-8 text-center">
       <h1 className="text-xl font-bold mb-4">
         <span className="material-symbols-outlined align-middle mr-1" style={{ fontSize: 24 }}>link</span>
-        Accepting Invite
+        {started ? 'Accepting Invite' : 'Accept Invite'}
       </h1>
 
-      {error ? (
+      {!started ? (
+        <div>
+          <p className="text-sm text-muted-foreground mb-4">You've been invited to collaborate on a document.</p>
+          <Button variant="default" onClick={doClaim}>
+            Accept Invite
+          </Button>
+        </div>
+      ) : error ? (
         <div className="text-destructive mb-4">
           <p className="mb-2">{error}</p>
           <div className="flex gap-2 justify-center">
