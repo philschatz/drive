@@ -345,6 +345,10 @@ export class KeyhiveNetworkAdapter extends NetworkAdapter {
   private eventBytes: Map<string, Uint8Array> = new Map();
   private eventCborBytes: Map<string, Uint8Array> = new Map();
 
+  // Optional relay log callback for debugging
+  private _onLogEntry?: (entry: { id: number; ts: number; dir: 'sent' | 'recv'; message: any }) => void;
+  private _logIdCounter = 0;
+
   constructor(
     private networkAdapter: NetworkAdapter,
     private contactCard: ContactCard,
@@ -464,6 +468,28 @@ export class KeyhiveNetworkAdapter extends NetworkAdapter {
 
   whenReady(): Promise<void> {
     return this.networkAdapter.whenReady();
+  }
+
+  setLogCallback(cb: (entry: { id: number; ts: number; dir: 'sent' | 'recv'; message: any }) => void): void {
+    this._onLogEntry = cb;
+  }
+
+  private _logMsg(dir: 'sent' | 'recv', message: Message, extra?: Record<string, unknown>): void {
+    if (!this._onLogEntry) return;
+    try {
+      const msg: any = { type: message.type, senderId: message.senderId };
+      if ((message as any).targetId) msg.targetId = (message as any).targetId;
+      if ((message as any).documentId) msg.documentId = (message as any).documentId;
+      if (message.data) {
+        if (message.data.length > 0 && message.data[0] === ENC_ENCRYPTED) {
+          msg.data = `[encrypted: ${message.data.length} bytes]`;
+        } else {
+          msg.data = `[decrypted: ${message.data.length} bytes]`;
+        }
+      }
+      if (extra) Object.assign(msg, extra);
+      this._onLogEntry({ id: ++this._logIdCounter, ts: Date.now(), dir, message: msg });
+    } catch { /* never let logging break the app */ }
   }
 
   isBatching(): boolean {
@@ -626,6 +652,7 @@ export class KeyhiveNetworkAdapter extends NetworkAdapter {
         }
       }
       const shouldEncrypt = isDocMessage;
+      this._logMsg('sent', message, { willEncrypt: shouldEncrypt, plaintextBytes: data.length });
       if (automergeDocId && (message.type === "sync" || message.type === "change")) {
       }
       let hashBuf: ArrayBuffer | undefined;

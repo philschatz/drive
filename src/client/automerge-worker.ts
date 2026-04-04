@@ -5,6 +5,7 @@ import { KeyhiveOps, bytesToBase64, errMsg } from './keyhive-ops';
 import { populateDocRepoMap, setDocRepo, getDocRepo, repoFor as _repoFor, findInRepos } from './repo-routing';
 import { isDiscoverable } from './doc-discovery';
 import { LRU } from './lru-cache';
+import { decode as cborDecode } from 'cbor-x';
 // hashStr and QueryCacheEntry are also exported from idb-storage for main-thread use.
 // Defined inline here to avoid adding a static import that may affect worker module loading.
 function hashStr(s: string): string {
@@ -78,7 +79,9 @@ export type WorkerToMain =
   | { type: 'doc-list-updated'; list: Array<{ id: string; type?: string; name?: string; encrypted?: boolean; sharingGroupId?: string }> }
   | { type: 'contact-names-updated'; names: Record<string, string> }
   // Keyhive state changed (membership/access may have changed)
-  | { type: 'kh-state-changed' };
+  | { type: 'kh-state-changed' }
+  // Relay message log
+  | { type: 'relay-log'; entry: { id: number; ts: number; dir: 'sent' | 'recv'; message: any } };
 
 // Queue messages that arrive while WASM is initializing
 const pendingMessages: MessageEvent[] = [];
@@ -490,6 +493,91 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
             ? 'wss://auto-relay-436046666a53.herokuapp.com'
             : `ws://${self.location?.hostname || 'localhost'}:${self.location?.port || 3000}`
         );
+
+        // --- Relay message logging (wire-level interception) ---
+        const ENC_ENCRYPTED_FLAG = 0x01;
+        let relayLogId = 0;
+
+        function summarizeForLog(val: unknown): unknown {
+          if (val instanceof Uint8Array) {
+            if (val.length === 0) return '[0 bytes]';
+            if (val[0] === ENC_ENCRYPTED_FLAG) return `[encrypted: ${val.length} bytes]`;
+            return `[binary: ${val.length} bytes]`;
+          }
+          if (Array.isArray(val)) {
+            if (val.length > 0 && val[0] instanceof Uint8Array) return `[${val.length} binary items]`;
+            return val.length > 10 ? `[array: ${val.length} items]` : val.map(summarizeForLog);
+          }
+          if (val && typeof val === 'object') {
+            const out: Record<string, unknown> = {};
+            for (const [k, v] of Object.entries(val)) out[k] = summarizeForLog(v);
+            return out;
+          }
+          return val;
+        }
+
+        function decodeMessageForLog(msg: any): any {
+          const entry: any = { type: msg.type };
+          if (msg.senderId) entry.senderId = msg.senderId;
+          if (msg.targetId) entry.targetId = msg.targetId;
+          if (msg.documentId) entry.documentId = msg.documentId;
+          if (msg.peerMetadata) entry.peerMetadata = msg.peerMetadata;
+          if (msg.supportedProtocolVersions) entry.supportedProtocolVersions = msg.supportedProtocolVersions;
+          if (msg.selectedProtocolVersion) entry.selectedProtocolVersion = msg.selectedProtocolVersion;
+
+          if (msg.data && msg.data instanceof Uint8Array && msg.data.length > 0) {
+            try {
+              const decoded = cborDecode(msg.data);
+              if (decoded && typeof decoded === 'object' && decoded.signed instanceof Uint8Array) {
+                // KeyhiveMessageData: { contactCard: string, signed: Uint8Array }
+                const signedEntry: any = { signed: `[signed: ${decoded.signed.length} bytes]` };
+                if (decoded.contactCard) signedEntry.contactCard = decoded.contactCard;
+                // For keyhive message types, try to decode the signed payload
+                // The Signed wrapper is a WASM type — we can't extract payload without WASM,
+                // but we show the outer structure
+                entry.data = signedEntry;
+              } else {
+                // Some other CBOR structure — summarize it
+                entry.data = summarizeForLog(decoded);
+              }
+            } catch {
+              // Not valid CBOR
+              if (msg.data[0] === ENC_ENCRYPTED_FLAG) {
+                entry.data = `[encrypted: ${msg.data.length} bytes]`;
+              } else {
+                entry.data = `[binary: ${msg.data.length} bytes]`;
+              }
+            }
+          } else if (msg.data) {
+            entry.data = `[${msg.data.byteLength ?? msg.data.length ?? 0} bytes]`;
+          }
+          return entry;
+        }
+
+        function postRelayLog(dir: 'sent' | 'recv', msg: any) {
+          try {
+            const entry = { id: ++relayLogId, ts: Date.now(), dir, message: decodeMessageForLog(msg) };
+            (self as any).postMessage({ type: 'relay-log', entry } satisfies WorkerToMain);
+          } catch { /* never let logging break the app */ }
+        }
+
+        // Monkey-patch send — intercepts the Message object before CBOR encoding
+        const origSend = secureWs.send.bind(secureWs);
+        (secureWs as any).send = (message: any) => {
+          postRelayLog('sent', message);
+          return origSend(message);
+        };
+
+        // Monkey-patch receiveMessage — intercepts raw bytes from the WebSocket
+        const origReceive = secureWs.receiveMessage.bind(secureWs);
+        (secureWs as any).receiveMessage = (bytes: Uint8Array) => {
+          try {
+            const decoded = cborDecode(new Uint8Array(bytes));
+            postRelayLog('recv', decoded);
+          } catch { /* ignore decode errors for logging */ }
+          return origReceive(bytes);
+        };
+        // --- End relay message logging ---
 
         khIntegration = await khBridge.initializeAutomergeRepoKeyhive({
           storage: secureStorage,
