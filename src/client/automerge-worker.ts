@@ -498,15 +498,21 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
         const ENC_ENCRYPTED_FLAG = 0x01;
         let relayLogId = 0;
 
+        function toBase64(bytes: Uint8Array): string {
+          let binary = '';
+          for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+          const b64 = btoa(binary);
+          return b64.length > 256 ? b64.slice(0, 256) + '...' : b64;
+        }
+
         function summarizeForLog(val: unknown): unknown {
           if (val instanceof Uint8Array) {
             if (val.length === 0) return '[0 bytes]';
-            if (val[0] === ENC_ENCRYPTED_FLAG) return `[encrypted: ${val.length} bytes]`;
-            return `[binary: ${val.length} bytes]`;
+            if (val[0] === ENC_ENCRYPTED_FLAG) return { _encrypted: true, bytes: val.length };
+            return { bytes: val.length, base64: toBase64(val) };
           }
           if (Array.isArray(val)) {
-            if (val.length > 0 && val[0] instanceof Uint8Array) return `[${val.length} binary items]`;
-            return val.length > 10 ? `[array: ${val.length} items]` : val.map(summarizeForLog);
+            return val.map(item => summarizeForLog(item));
           }
           if (val && typeof val === 'object') {
             const out: Record<string, unknown> = {};
@@ -524,32 +530,34 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
           if (msg.peerMetadata) entry.peerMetadata = msg.peerMetadata;
           if (msg.supportedProtocolVersions) entry.supportedProtocolVersions = msg.supportedProtocolVersions;
           if (msg.selectedProtocolVersion) entry.selectedProtocolVersion = msg.selectedProtocolVersion;
+          // ephemeral message fields
+          if (msg.count !== undefined) entry.count = msg.count;
+          if (msg.sessionId) entry.sessionId = msg.sessionId;
 
           if (msg.data && msg.data instanceof Uint8Array && msg.data.length > 0) {
             try {
               const decoded = cborDecode(msg.data);
               if (decoded && typeof decoded === 'object' && decoded.signed instanceof Uint8Array) {
                 // KeyhiveMessageData: { contactCard: string, signed: Uint8Array }
-                const signedEntry: any = { signed: `[signed: ${decoded.signed.length} bytes]` };
+                const signedEntry: any = {
+                  signed: { _signed: true, bytes: decoded.signed.length, base64: toBase64(decoded.signed) },
+                };
                 if (decoded.contactCard) signedEntry.contactCard = decoded.contactCard;
-                // For keyhive message types, try to decode the signed payload
-                // The Signed wrapper is a WASM type — we can't extract payload without WASM,
-                // but we show the outer structure
                 entry.data = signedEntry;
               } else {
-                // Some other CBOR structure — summarize it
+                // Some other CBOR structure — include full decoded content
                 entry.data = summarizeForLog(decoded);
               }
             } catch {
-              // Not valid CBOR
+              // Not valid CBOR — include raw bytes
               if (msg.data[0] === ENC_ENCRYPTED_FLAG) {
-                entry.data = `[encrypted: ${msg.data.length} bytes]`;
+                entry.data = { _encrypted: true, bytes: msg.data.length };
               } else {
-                entry.data = `[binary: ${msg.data.length} bytes]`;
+                entry.data = { bytes: msg.data.length, base64: toBase64(msg.data) };
               }
             }
           } else if (msg.data) {
-            entry.data = `[${msg.data.byteLength ?? msg.data.length ?? 0} bytes]`;
+            entry.data = { bytes: msg.data.byteLength ?? msg.data.length ?? 0 };
           }
           return entry;
         }
@@ -647,6 +655,11 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
             // Notify main thread so useAccess/Home can re-check access levels
             (self as any).postMessage({ type: 'kh-state-changed' } satisfies WorkerToMain);
           },
+        });
+
+        // Wire up keyhive adapter-level relay logging (decrypted/keyhive protocol messages)
+        khIntegration.networkAdapter.setLogCallback((entry) => {
+          (self as any).postMessage({ type: 'relay-log', entry } satisfies WorkerToMain);
         });
 
         khOps = new KeyhiveOps(khIntegration.keyhive, khBridge as any, {

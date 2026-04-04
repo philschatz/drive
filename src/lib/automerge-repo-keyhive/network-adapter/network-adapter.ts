@@ -474,17 +474,75 @@ export class KeyhiveNetworkAdapter extends NetworkAdapter {
     this._onLogEntry = cb;
   }
 
+  private static _toBase64(bytes: Uint8Array): string {
+    let binary = '';
+    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+    return btoa(binary);
+  }
+
+  private static _truncBase64(bytes: Uint8Array): string {
+    const b64 = KeyhiveNetworkAdapter._toBase64(bytes);
+    return b64.length > 256 ? b64.slice(0, 256) + '...' : b64;
+  }
+
+  private static _summarizeVal(val: unknown, depth: number = 0): unknown {
+    if (val instanceof Uint8Array) {
+      // Try to CBOR-decode binary blobs (e.g. event bytes inside found/ops arrays)
+      if (depth < 3 && val.length > 2) {
+        try {
+          const inner = decode(val);
+          if (inner && typeof inner === 'object') {
+            return KeyhiveNetworkAdapter._summarizeVal(inner, depth + 1);
+          }
+        } catch { /* not CBOR, fall through */ }
+      }
+      return { bytes: val.length, base64: KeyhiveNetworkAdapter._truncBase64(val) };
+    }
+    if (Array.isArray(val)) {
+      return val.map(v => KeyhiveNetworkAdapter._summarizeVal(v, depth));
+    }
+    if (val && typeof val === 'object') {
+      const out: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(val)) {
+        // Clip large arrays on known fields to keep log entries manageable
+        if (Array.isArray(v) && v.length > 20 && (k === 'found' || k === 'pending' || k === 'requested' || k === 'ops')) {
+          const clipped = v.slice(0, 20).map(item => KeyhiveNetworkAdapter._summarizeVal(item, depth));
+          (clipped as any).push(`... +${v.length - 20} more`);
+          out[k] = clipped;
+        } else {
+          out[k] = KeyhiveNetworkAdapter._summarizeVal(v, depth);
+        }
+      }
+      return out;
+    }
+    return val;
+  }
+
   private _logMsg(dir: 'sent' | 'recv', message: Message, extra?: Record<string, unknown>): void {
     if (!this._onLogEntry) return;
     try {
       const msg: any = { type: message.type, senderId: message.senderId };
       if ((message as any).targetId) msg.targetId = (message as any).targetId;
       if ((message as any).documentId) msg.documentId = (message as any).documentId;
-      if (message.data) {
-        if (message.data.length > 0 && message.data[0] === ENC_ENCRYPTED) {
-          msg.data = `[encrypted: ${message.data.length} bytes]`;
+      // Copy extra fields that some message types carry at the top level
+      if ((message as any).count !== undefined) msg.count = (message as any).count;
+      if ((message as any).sessionId !== undefined) msg.sessionId = (message as any).sessionId;
+      if (message.data && message.data.length > 0) {
+        const isEnc = message.data[0] === ENC_ENCRYPTED;
+        if (isEnc) {
+          msg.data = { _encrypted: true, bytes: message.data.length };
         } else {
-          msg.data = `[decrypted: ${message.data.length} bytes]`;
+          // Try to CBOR-decode the plaintext payload to show structured content
+          try {
+            const decoded = decode(message.data);
+            msg.data = { _decrypted: true, payload: KeyhiveNetworkAdapter._summarizeVal(decoded) };
+          } catch {
+            msg.data = {
+              _decrypted: true,
+              bytes: message.data.length,
+              base64: KeyhiveNetworkAdapter._toBase64(message.data),
+            };
+          }
         }
       }
       if (extra) Object.assign(msg, extra);
@@ -770,6 +828,7 @@ export class KeyhiveNetworkAdapter extends NetworkAdapter {
       this.peerHasWriteAccess(message.senderId, docId)
     );
     if (hasAccess) {
+      this._logMsg('recv', message)
       this.emit("message", message);
     } else {
       console.warn(`[AMRepoKeyhive] DROPPED sync message from ${message.senderId} for doc ${docId} (insufficient access)`);
@@ -841,6 +900,7 @@ export class KeyhiveNetworkAdapter extends NetworkAdapter {
                         return;
                       }
                       message.data = decrypted;
+                      this._logMsg('recv', message, { decryptedBytes: decrypted.length });
                       if (message.type === "sync" || message.type === "request") {
                         void this.checkAccessAndEmit(message);
                       } else {
@@ -926,6 +986,9 @@ export class KeyhiveNetworkAdapter extends NetworkAdapter {
     }
     message.data = keyhiveMessageData.signed.payload;
     console.log(`[AMRepoKeyhive] handleKeyhiveMessage: type=${message.type} from=${message.senderId}`);
+
+    // Log keyhive protocol message with decoded payload
+    this._logMsg('recv', message, { hasContactCard: !!keyhiveMessageData.contactCard });
 
     if (message.type === "keyhive-sync-request") {
       await this.sendKeyhiveSyncResponse(message, metrics);

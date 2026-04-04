@@ -19,6 +19,8 @@ If the Issuer can know the claimers identity when they accept the invite and add
 
 Eventually, move the hyperformula evaluation into the worker too, make the UI smart enough to only request visible cells (using the row and column ids)
 
+add support for https://jsoncanvas.org
+
 when linking a device, allow setting a custom name. By default include the operating system and browser
 
 actually, implement things in such a way that adding a device does not require adding the device to all documents. Instead, all documents should have a group representing the user so adding a device should just add it to the group instead of adding it to all the documents. That way, if the user is added to other documents by another process, the device has access to those documents too

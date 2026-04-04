@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'preact/hooks';
+import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import { useRelayLog, type RelayLogEntry } from '../worker-api';
 import './relay-log.css';
 
@@ -19,14 +19,14 @@ function highlightJson(val: unknown, indent: number = 0): preact.JSX.Element {
     return <span className="json-number">{val}</span>;
   }
   if (typeof val === 'string') {
-    // Annotate encrypted / decrypted / binary markers
-    if (val.startsWith('[encrypted:')) {
+    // Annotate bracket markers (legacy or summary strings)
+    if (val.startsWith('[encrypted')) {
       return <span className="json-encrypted">{val}</span>;
     }
-    if (val.startsWith('[decrypted]') || val.startsWith('[decrypted:')) {
+    if (val.startsWith('[decrypted')) {
       return <span className="json-decrypted">{val}</span>;
     }
-    if (val.startsWith('[signed:') || val.startsWith('[binary:') || val.match(/^\[\d+ bytes\]$/)) {
+    if (val.startsWith('[signed:') || val.startsWith('[binary:') || val.match(/^\[\d+ (?:bytes|items)\]$/)) {
       return <span className="json-binary">{val}</span>;
     }
     return <span className="json-string">"{val}"</span>;
@@ -48,7 +48,23 @@ function highlightJson(val: unknown, indent: number = 0): preact.JSX.Element {
     );
   }
   if (typeof val === 'object') {
-    const entries = Object.entries(val);
+    const obj = val as Record<string, unknown>;
+    // Special rendering for annotated binary payloads
+    if (obj._encrypted === true) {
+      return <span className="json-encrypted">[encrypted: {obj.bytes as number} bytes]</span>;
+    }
+    if (obj._signed === true && typeof obj.base64 === 'string') {
+      return (
+        <span>
+          <span className="json-binary">[signed: {obj.bytes as number} bytes] {obj.base64 as string}</span>
+        </span>
+      );
+    }
+    // { bytes, base64 } — opaque binary that couldn't be decoded
+    if (typeof obj.bytes === 'number' && typeof obj.base64 === 'string' && Object.keys(obj).length === 2) {
+      return <span className="json-binary">[{obj.bytes as number} bytes] {obj.base64 as string}</span>;
+    }
+    const entries = Object.entries(obj).filter(([k]) => !k.startsWith('_'));
     if (entries.length === 0) return <span>{'{}'}</span>;
     const pad = '  '.repeat(indent + 1);
     const closePad = '  '.repeat(indent);
@@ -89,9 +105,18 @@ function rollupEntries(entries: RelayLogEntry[]): DisplayEntry[] {
   return out;
 }
 
+function entriesToText(entries: RelayLogEntry[]): string {
+  return entries.map(e => {
+    const dir = e.dir === 'sent' ? '↑' : '↓';
+    const type = e.message?.type ?? 'unknown';
+    return `${formatLogTime(e.ts)} ${dir} ${type} ${JSON.stringify(e.message, null, 2)}`;
+  }).join('\n');
+}
+
 export function RelayLogPanel() {
   const [entries, clear] = useRelayLog();
   const [collapsed, setCollapsed] = useState(true);
+  const [copied, setCopied] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -111,7 +136,14 @@ export function RelayLogPanel() {
         <strong>Relay Log</strong>
         <span className="relay-log-count">{entries.length}</span>
         {!collapsed && entries.length > 0 && (
-          <button className="relay-log-clear" onClick={clear}>clear</button>
+          <>
+            <button className="relay-log-clear" onClick={() => {
+              navigator.clipboard.writeText(entriesToText(entries));
+              setCopied(true);
+              setTimeout(() => setCopied(false), 1500);
+            }}>{copied ? 'copied!' : 'copy'}</button>
+            <button className="relay-log-clear" onClick={clear}>clear</button>
+          </>
         )}
       </div>
       {!collapsed && (
