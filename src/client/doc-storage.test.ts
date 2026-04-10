@@ -229,7 +229,7 @@ describe('dispatch message shape', () => {
   it('simulated IDB round-trip preserves all metadata needed for reload', () => {
     // When the worker stores metadata to IDB and reloads on refresh, all fields
     // must survive. This is critical because:
-    // - encrypted → determines repo routing (secure vs insecure)
+    // - encrypted → always true for keyhive documents
     // - type/name → shown on homepage before doc subscription resolves
     const posted: any[] = [];
     setDocListDispatch((msgType, docId, metadata) => {

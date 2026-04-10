@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'preact/hooks';
 import type { PeerState } from '../shared/automerge';
 import { openDoc, subscribeQuery, updateDoc, getDocHistory, debugGetVersionPatches, setDocVersion } from '../worker-api';
-import { getDocEntry } from '../doc-storage';
 import { peerColor, peerDisplayName, initPresence, type PresenceState } from '../shared/presence';
 import { EditorTitleBar } from '../shared/EditorTitleBar';
 import { HistorySlider } from '../shared/HistorySlider';
@@ -230,9 +229,7 @@ export function SourceViewer({ docId, rest }: { docId?: string; rest?: string; p
 
     (async () => {
       setLoadProgress(0);
-      const entry = getDocEntry(docId);
       await openDoc(docId, {
-        secure: entry?.encrypted,
         onProgress: (pct) => { if (mounted) setLoadProgress(pct); },
       });
       if (!mounted) return;

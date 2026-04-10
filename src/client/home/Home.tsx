@@ -70,8 +70,6 @@ export function Home({ path }: { path?: string }) {
   const [importStatus, setImportStatus] = useState<{ label: string; progress: number } | null>(null);
   const connected = useConnectionStatus();
   const repoPeers = usePeerList();
-  const showUnencrypted = localStorage.getItem('showUnencrypted') === 'true';
-  const createSecure = !showUnencrypted;
 
   useEffect(() => { document.title = 'Automerge Documents'; }, []);
 
@@ -164,8 +162,8 @@ export function Home({ path }: { path?: string }) {
     const name = prompt('Calendar name:', 'Untitled');
     if (name === null) return;
     const resolvedName = name || 'Untitled';
-    const { docId } = await createDoc({ '@type': 'Calendar', name: resolvedName, events: {} }, createSecure);
-    addDocId(docId, { type: 'Calendar', name: resolvedName, encrypted: createSecure });
+    const { docId } = await createDoc({ '@type': 'Calendar', name: resolvedName, events: {} });
+    addDocId(docId, { type: 'Calendar', name: resolvedName, encrypted: true });
     window.location.hash = viewPathForType('Calendar', docId);
   };
 
@@ -173,8 +171,8 @@ export function Home({ path }: { path?: string }) {
     const name = prompt('Task list name:', 'Untitled');
     if (name === null) return;
     const resolvedName = name || 'Untitled';
-    const { docId } = await createDoc({ '@type': 'TaskList', name: resolvedName, tasks: {} }, createSecure);
-    addDocId(docId, { type: 'TaskList', name: resolvedName, encrypted: createSecure });
+    const { docId } = await createDoc({ '@type': 'TaskList', name: resolvedName, tasks: {} });
+    addDocId(docId, { type: 'TaskList', name: resolvedName, encrypted: true });
     window.location.hash = viewPathForType('TaskList', docId);
   };
 
@@ -199,8 +197,8 @@ export function Home({ path }: { path?: string }) {
           cells: {},
         },
       },
-    }, createSecure);
-    addDocId(docId, { type: 'DataGrid', name: resolvedName, encrypted: createSecure });
+    });
+    addDocId(docId, { type: 'DataGrid', name: resolvedName, encrypted: true });
     window.location.hash = viewPathForType('DataGrid', docId);
   };
 
@@ -234,8 +232,8 @@ export function Home({ path }: { path?: string }) {
 
       // Create the document before parsing
       setImportStatus({ label: 'Creating document...', progress: 0 });
-      const { docId } = await createDoc({ '@type': 'DataGrid', name, sheets: {} }, createSecure);
-      addDocId(docId, { type: 'DataGrid', name, encrypted: createSecure });
+      const { docId } = await createDoc({ '@type': 'DataGrid', name, sheets: {} });
+      addDocId(docId, { type: 'DataGrid', name, encrypted: true });
 
       setImportStatus({ label: 'Reading file...', progress: 2 });
       await new Promise(r => setTimeout(r, 0));
@@ -717,10 +715,10 @@ export function Home({ path }: { path?: string }) {
       const data = JSON.parse(text);
       if (!data || typeof data !== 'object') throw new Error('Invalid JSON: expected an object');
       const name = data.name || file.name.replace(/\.json$/i, '') || 'Imported';
-      const { docId } = await createDoc(data, createSecure);
+      const { docId } = await createDoc(data);
       const type = (data['@type'] === 'Calendar' || data['@type'] === 'TaskList' || data['@type'] === 'DataGrid')
         ? data['@type'] as DocType : 'unknown';
-      addDocId(docId, { type, name, encrypted: createSecure });
+      addDocId(docId, { type, name, encrypted: true });
       window.location.hash = viewPathForType(type, docId);
     } catch (err: any) {
       setError('Import failed: ' + err.message);
@@ -745,8 +743,8 @@ export function Home({ path }: { path?: string }) {
       const calName = file.name.replace(/\.ics$/i, '') || 'Imported';
       const events: Record<string, any> = {};
       for (const { uid, event } of parsed) events[uid] = event;
-      const { docId } = await createDoc({ '@type': 'Calendar', name: calName, events }, createSecure);
-      addDocId(docId, { type: 'Calendar', name: calName, encrypted: createSecure });
+      const { docId } = await createDoc({ '@type': 'Calendar', name: calName, events });
+      addDocId(docId, { type: 'Calendar', name: calName, encrypted: true });
       setImportStatus(null);
       window.location.hash = viewPathForType('Calendar', docId);
     } catch (err: any) {
@@ -872,20 +870,6 @@ export function Home({ path }: { path?: string }) {
             <DropdownMenuItem onSelect={() => jsonInputRef.current?.click()}>
               <span className="material-symbols-outlined">code</span> Import .json
             </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem
-              onSelect={(e) => {
-                e.preventDefault();
-                const next = !showUnencrypted;
-                localStorage.setItem('showUnencrypted', String(next));
-                location.reload();
-              }}
-              title="Enable unencrypted documents and the insecure sync server"
-            >
-              <span className="material-symbols-outlined">{showUnencrypted ? 'check_box' : 'check_box_outline_blank'}</span>
-              <span className="material-symbols-outlined" style={{ fontSize: '1rem' }}>{showUnencrypted ? 'visibility' : 'lock'}</span>
-              Unencrypted
-            </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
         <input type="file" ref={icsInputRef} accept=".ics,text/calendar" style={{ display: 'none' }} onChange={handleImportIcs as any} />
@@ -895,17 +879,16 @@ export function Home({ path }: { path?: string }) {
 
       <div className="flex flex-col">
         {sortedEntries.map(entry => {
-          const disabled = !showUnencrypted && !entry.encrypted;
           const noEntryAccess = entry.encrypted && entry.access === null;
           const viewPath = viewPathForType(entry.type, entry.documentId);
           const icon = iconForType(entry.type);
           return (
             <div
               key={entry.documentId}
-              className={`flex items-center gap-2 py-1 px-1 flex-nowrap border-b border-border${disabled ? ' opacity-40 pointer-events-none' : ''}`}
+              className="flex items-center gap-2 py-1 px-1 flex-nowrap border-b border-border"
             >
-              <span className="material-symbols-outlined" style={{ width: '1rem', textAlign: 'center', color: '#999', fontSize: '0.9rem' }} title={entry.encrypted ? 'Encrypted' : 'Unencrypted'}>
-                {entry.encrypted ? 'lock' : 'visibility'}
+              <span className="material-symbols-outlined" style={{ width: '1rem', textAlign: 'center', color: '#999', fontSize: '0.9rem' }} title="Encrypted">
+                lock
               </span>
               <span className="material-symbols-outlined" style={{ width: '1.2rem', textAlign: 'center', color: '#666' }}>{icon}</span>
               <a href={viewPath} className="text-sm flex-1 hover:underline flex items-center gap-1" style={noEntryAccess ? { textDecoration: 'line-through', opacity: 0.6 } : undefined}>

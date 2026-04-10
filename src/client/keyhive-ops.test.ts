@@ -1401,7 +1401,7 @@ describe('KeyhiveOps', () => {
       const { ops, kh } = await createOps();
 
       // Pass random bytes that don't correspond to any keyhive document
-      // (simulates an insecure-repo doc being upgraded to shared)
+      // (simulates a doc with an unknown keyhive ID)
       const fakeBytes = crypto.getRandomValues(new Uint8Array(32));
       const docsBefore = await kh.reachableDocs();
       const { khDocId } = await ops.enableSharing('am-doc-1', fakeBytes);

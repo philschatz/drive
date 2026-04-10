@@ -11,7 +11,7 @@ import type { PresenceState, PeerState } from '@automerge/automerge-repo';
 import type { InviteRecord } from './invite-storage';
 import { deepAssign } from '../shared/deep-assign';
 import { idbGet, hashStr, type QueryCacheEntry } from './idb-storage';
-import { getDocEntry, setDocListDispatch, applyDocListFromWorker } from './doc-storage';
+import { setDocListDispatch, applyDocListFromWorker } from './doc-storage';
 import { setContactNamesDispatch, applyContactNamesFromWorker } from './contact-names';
 
 // Re-export for convenience
@@ -41,10 +41,12 @@ setContactNamesDispatch((type, agentId, name) => {
   worker.postMessage(msg);
 });
 
+// Clean up legacy localStorage key from when insecure mode existed
+localStorage.removeItem('showUnencrypted');
+
 const initMsg = {
   type: 'init' as const,
   appBaseUrl: window.location.origin + window.location.pathname,
-  enableInsecureRepo: localStorage.getItem('showUnencrypted') !== 'false',
 };
 console.log('[main] → send', initMsg.type, initMsg);
 worker.postMessage(initMsg);
@@ -71,10 +73,9 @@ const connectionListeners = new Set<ConnectionListener>();
 let workerPeerCount = 0;
 let workerPeers: string[] = [];
 
-type WsStatusListener = (repo: 'secure' | 'insecure', connected: boolean) => void;
+type WsStatusListener = (connected: boolean) => void;
 const wsStatusListeners = new Set<WsStatusListener>();
-let wsSecureConnected = false;
-let wsInsecureConnected = false;
+let wsConnected = false;
 
 type PeerListListener = (peers: string[]) => void;
 const peerListListeners = new Set<PeerListListener>();
@@ -172,9 +173,8 @@ worker.onmessage = (e: MessageEvent<WorkerToMain>) => {
       for (const fn of peerListListeners) fn(workerPeers);
       break;
     case 'ws-status':
-      if (msg.repo === 'secure') wsSecureConnected = msg.connected;
-      else wsInsecureConnected = msg.connected;
-      for (const fn of wsStatusListeners) fn(msg.repo, msg.connected);
+      wsConnected = msg.connected;
+      for (const fn of wsStatusListeners) fn(msg.connected);
       break;
 
     // --- Doc storage / contact names ---
@@ -284,18 +284,16 @@ export function useConnectionStatus(): boolean {
  * Returns WebSocket connection status for a specific document's repo.
  * Unlike useConnectionStatus (which tracks peers), this tracks the raw WS open/close state.
  */
-export function useWsStatus(docId: string): boolean {
-  const encrypted = getDocEntry(docId)?.encrypted;
-  const [connected, setConnected] = useState(() => encrypted ? wsSecureConnected : wsInsecureConnected);
+export function useWsStatus(_docId: string): boolean {
+  const [connected, setConnected] = useState(() => wsConnected);
 
   useEffect(() => {
-    const listener: WsStatusListener = (repo, isConnected) => {
-      const relevant = encrypted ? repo === 'secure' : repo === 'insecure';
-      if (relevant) setConnected(isConnected);
+    const listener: WsStatusListener = (isConnected) => {
+      setConnected(isConnected);
     };
     wsStatusListeners.add(listener);
     return () => { wsStatusListeners.delete(listener); };
-  }, [encrypted]);
+  }, []);
 
   return connected;
 }
@@ -338,8 +336,8 @@ export const HOME_SUMMARY_QUERY =
 
 // ── Document mutations ──────────────────────────────────────────────────────
 
-export function createDoc(initialJson: any, secure = true): Promise<{ docId: string }> {
-  return request<{ docId: string }>('create-doc', { initialJson, secure });
+export function createDoc(initialJson: any): Promise<{ docId: string }> {
+  return request<{ docId: string }>('create-doc', { initialJson });
 }
 
 /**
@@ -348,19 +346,19 @@ export function createDoc(initialJson: any, secure = true): Promise<{ docId: str
  */
 export function openDoc(
   docId: string,
-  opts?: { secure?: boolean; onProgress?: (pct: number, message: string) => void },
-): Promise<{ docId: string; secure?: boolean }> {
-  const { secure, onProgress } = opts ?? {};
+  opts?: { onProgress?: (pct: number, message: string) => void },
+): Promise<{ docId: string }> {
+  const { onProgress } = opts ?? {};
   return workerReady.then(() => {
     const id = ++nextId;
     if (onProgress) openDocProgressCallbacks.set(id, onProgress);
-    return new Promise<{ docId: string; secure?: boolean }>((resolve, reject) => {
+    return new Promise<{ docId: string }>((resolve, reject) => {
       pending.set(id, {
         resolve: (v) => { openDocProgressCallbacks.delete(id); resolve(v); },
         reject: (e) => { openDocProgressCallbacks.delete(id); reject(e); },
         sent: performance.now(), type: 'open-doc',
       });
-      const msg = { type: 'open-doc' as const, id, docId, secure };
+      const msg = { type: 'open-doc' as const, id, docId };
       console.log('[main] → send', msg.type, msg);
       worker.postMessage(msg);
     });

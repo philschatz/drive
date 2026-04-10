@@ -3,7 +3,7 @@ import '@schedule-x/theme-default/dist/index.css';
 import './calendar.css';
 import type { PeerState } from '../shared/automerge';
 import { openDoc, subscribeQuery, updateDoc, queryDoc, deepAssign } from '../worker-api';
-import { getDocEntry, getDocList } from '../doc-storage';
+import { getDocList } from '../doc-storage';
 import { initPresence, type PresenceState } from '../shared/presence';
 import { EditorTitleBar } from '../shared/EditorTitleBar';
 import type { CalendarEvent } from './schema';
@@ -154,9 +154,8 @@ export function AllCalendars({ path }: { path?: string }) {
       const loaded: LoadedCalendar[] = [];
       await Promise.all(allIds.map(async (id) => {
         try {
-          const entry = getDocEntry(id);
           const timeout = new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), 3000));
-          await Promise.race([openDoc(id, { secure: entry?.encrypted }), timeout]);
+          await Promise.race([openDoc(id), timeout]);
           const { result: doc } = await queryDoc(id, initQuery);
           if (!doc || doc['@type'] !== 'Calendar') return;
           if (!mounted) return;

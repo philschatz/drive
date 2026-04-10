@@ -2,7 +2,6 @@ import { deepAssign } from '../shared/deep-assign';
 import { syncToTarget } from '../shared/sync-to-target';
 import { validateDocument } from '../shared/schemas';
 import { KeyhiveOps, bytesToBase64, errMsg } from './keyhive-ops';
-import { populateDocRepoMap, setDocRepo, getDocRepo, repoFor as _repoFor, findInRepos } from './repo-routing';
 import { isDiscoverable } from './doc-discovery';
 import { LRU } from './lru-cache';
 import { decode as cborDecode } from 'cbor-x';
@@ -16,10 +15,10 @@ function hashStr(s: string): string {
 interface QueryCacheEntry { result: any; json: string; lastModified?: number; heads: string[] }
 
 export type MainToWorker =
-  | { type: 'init'; appBaseUrl: string; enableInsecureRepo: boolean }
+  | { type: 'init'; appBaseUrl: string }
   | { type: 'query'; id: number; docId: string; filter: string }
   // New worker-owned doc API
-  | { type: 'create-doc'; id: number; initialJson: any; secure: boolean }
+  | { type: 'create-doc'; id: number; initialJson: any }
   | { type: 'update-doc'; id: number; docId: string; fnSource: string; args: unknown[] }
   | { type: 'subscribe-query'; subId: number; docId: string; filter: string }
   | { type: 'unsubscribe-query'; subId: number }
@@ -52,7 +51,7 @@ export type MainToWorker =
   | { type: 'kh-get-known-contacts'; id: number; excludeDocId?: string }
   | { type: 'kh-claim-invite'; id: number; inviteSeed: number[]; docId: string }
   | { type: 'kh-dismiss-invite'; id: number; inviteId: string; docId: string }
-  | { type: 'open-doc'; id: number; docId: string; secure?: boolean }
+  | { type: 'open-doc'; id: number; docId: string }
   | { type: 'subscribe-validation'; docId: string }
   | { type: 'unsubscribe-validation'; docId: string }
   | { type: 'hf-port'; port: MessagePort };
@@ -66,7 +65,7 @@ export type WorkerToMain =
   | { type: 'error'; message: string }
   | { type: 'peer-connected'; peerCount: number; peers: string[] }
   | { type: 'peer-disconnected'; peerCount: number; peers: string[] }
-  | { type: 'ws-status'; repo: 'secure' | 'insecure'; connected: boolean }
+  | { type: 'ws-status'; connected: boolean }
   // New worker-owned doc API responses
   | { type: 'result'; id: number; result?: any; error?: string }
   | { type: 'query-result'; subId: number; result: any; heads: string[]; lastModified?: number; error?: string }
@@ -112,7 +111,6 @@ try {
 }
 
 let secureRepo: InstanceType<typeof Repo> | null = null;
-let insecureRepo: InstanceType<typeof Repo> | null = null;
 let khIntegration: InstanceType<typeof khBridge.AutomergeRepoKeyhive> | null = null;
 let khOps: KeyhiveOps | null = null;
 let setNextDocId: ((bytes: Uint8Array) => void) | null = null;
@@ -134,9 +132,10 @@ function resolveKhDocId(automergeDocId: string): string {
  */
 let loadingDocId: string | null = null;
 
-/** Pick the correct repo for a given docId based on the docRepoMap. */
-function getRepo(docId: string): InstanceType<typeof Repo> {
-  return _repoFor(docId, secureRepo, insecureRepo);
+/** Return the (only) repo. */
+function getRepo(): InstanceType<typeof Repo> {
+  if (!secureRepo) throw new Error('Secure repo not initialized');
+  return secureRepo;
 }
 
 // --- Doc registry for worker-owned subscriptions ---
@@ -162,7 +161,7 @@ const pendingSubs = new Map<string, Map<number, SubInfo>>();
 async function getOrLoadHandle(docId: string): Promise<any> {
   const existing = docRegistry.get(docId);
   if (existing) return existing.handle;
-  const r = getRepo(docId);
+  const r = getRepo();
   loadingDocId = docId;
   const handle = await r.find(docId as any);
   loadingDocId = null;
@@ -374,7 +373,6 @@ async function checkForNewKeyhiveDocs() {
       const khDocIdB64 = bytesToBase64(khDocIdObj.toBytes());
       console.log(`[worker] checkForNewKeyhiveDocs: discovered new doc ${amDocId} (kh=${khDocIdB64})`);
       khIntegration!.networkAdapter.registerDoc(amDocId, khDocIdObj);
-      setDocRepo(amDocId, 'secure');
       list.unshift({ id: amDocId, encrypted: true });
       knownIds.add(amDocId);
       changed = true;
@@ -426,9 +424,7 @@ async function checkForNewKeyhiveDocs() {
 }
 
 function postStatus() {
-  const securePeers = secureRepo ? secureRepo.peers : [];
-  const insecurePeers = insecureRepo ? insecureRepo.peers : [];
-  const peers = [...securePeers, ...insecurePeers];
+  const peers = secureRepo ? secureRepo.peers : [];
   const peerCount = peers.length;
   (self as any).postMessage({ type: peerCount > 0 ? 'peer-connected' : 'peer-disconnected', peerCount, peers } satisfies WorkerToMain);
 }
@@ -440,45 +436,6 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
   if (msg.type === 'init') {
     try {
       console.log('[worker] init message received');
-
-      // --- Optionally create insecure repo ---
-      if (msg.enableInsecureRepo) {
-        const insecureStorage = new IndexedDBStorageAdapter('automerge-insecure');
-        const insecureWs = new BrowserWebSocketClientAdapter('wss://sync.automerge.org');
-        const insecureSubduction = {
-          storage: {},
-          removeSedimentree() {},
-          connectDiscover() {},
-          disconnectAll() {},
-          disconnectFromPeer() {},
-          syncAll() { return Promise.resolve({ entries() { return []; } }); },
-          syncWithAllPeers() { return Promise.resolve(new Map()); },
-          getBlobs(_sedimentreeId: any) {
-            if (!loadingDocId || !insecureRepo?.storageSubsystem) return Promise.resolve([]);
-            return insecureRepo.storageSubsystem.loadDocData(loadingDocId)
-              .then((data: Uint8Array | null) => data ? [data] : []);
-          },
-          addCommit() { return Promise.resolve(undefined); },
-          addFragment() { return Promise.resolve(undefined); },
-        };
-        insecureRepo = new Repo({
-          network: [insecureWs],
-          storage: insecureStorage,
-          subduction: insecureSubduction,
-          peerId: crypto.randomUUID() as any,
-        } as any);
-        const insecureNs = insecureRepo.networkSubsystem;
-        insecureNs.on('peer', postStatus);
-        insecureNs.on('peer-disconnected', postStatus);
-        // Monitor WS open/close directly for connection status
-        const origInsecureOpen = insecureWs.onOpen;
-        const origInsecureClose = insecureWs.onClose;
-        insecureWs.onOpen = () => { origInsecureOpen(); (self as any).postMessage({ type: 'ws-status', repo: 'insecure', connected: true } satisfies WorkerToMain); };
-        insecureWs.onClose = () => { origInsecureClose(); (self as any).postMessage({ type: 'ws-status', repo: 'insecure', connected: false } satisfies WorkerToMain); };
-        console.log('[worker] insecure repo created');
-      } else {
-        console.log('[worker] insecure repo disabled by user setting');
-      }
 
       // --- Create secure repo ---
       try {
@@ -615,10 +572,6 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
               console.log(`[worker] secure getBlobs: skip (loadingDocId=${loadingDocId}, ss=${!!secureRepo?.storageSubsystem})`);
               return Promise.resolve([]);
             }
-            if (getDocRepo(loadingDocId) !== 'secure') {
-              console.log(`[worker] secure getBlobs: skip (docRepo=${getDocRepo(loadingDocId)} for ${loadingDocId})`);
-              return Promise.resolve([]);
-            }
             const docId = loadingDocId;
             return secureRepo.storageSubsystem.loadDocData(docId)
               .then((data: Uint8Array | null) => {
@@ -677,8 +630,8 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
         // Monitor WS open/close directly for connection status
         const origSecureOpen = secureWs.onOpen;
         const origSecureClose = secureWs.onClose;
-        secureWs.onOpen = () => { origSecureOpen(); (self as any).postMessage({ type: 'ws-status', repo: 'secure', connected: true } satisfies WorkerToMain); };
-        secureWs.onClose = () => { origSecureClose(); (self as any).postMessage({ type: 'ws-status', repo: 'secure', connected: false } satisfies WorkerToMain); };
+        secureWs.onOpen = () => { origSecureOpen(); (self as any).postMessage({ type: 'ws-status', connected: true } satisfies WorkerToMain); };
+        secureWs.onClose = () => { origSecureClose(); (self as any).postMessage({ type: 'ws-status', connected: false } satisfies WorkerToMain); };
 
         console.log('[worker] secure repo created, peerId:', khIntegration.peerId);
 
@@ -809,7 +762,6 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
               }
             }
           }
-          populateDocRepoMap(earlyList);
           (self as any).postMessage({ type: 'doc-list-updated', list: earlyList } satisfies WorkerToMain);
           const earlyNames = (await idbGetDocs<Record<string, string>>('contact-names')) ?? {};
           (self as any).postMessage({ type: 'contact-names-updated', names: earlyNames } satisfies WorkerToMain);
@@ -854,9 +806,8 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
         }
       }
 
-      const primaryRepo = secureRepo ?? insecureRepo;
       console.log('[worker] init complete');
-      (self as any).postMessage({ type: 'ready', peerId: primaryRepo.peerId } satisfies WorkerToMain);
+      (self as any).postMessage({ type: 'ready', peerId: secureRepo!.peerId } satisfies WorkerToMain);
     } catch (err: any) {
       console.error('[worker] init failed:', err);
       (self as any).postMessage({ type: 'error', message: errMsg(err) } satisfies WorkerToMain);
@@ -867,48 +818,31 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
 
   if (msg.type === 'create-doc') {
     try {
-      let handle: any;
-      if (msg.secure) {
-        if (!secureRepo || !khOps || !setNextDocId) throw new Error('Secure repo not available');
-        // Create the keyhive document first (no co-parents, correct access model).
-        // Then create the automerge document using the keyhive doc_id as its ID
-        // so that recipients can look up the keyhive doc from the automerge URL.
-        const { docIdBytes } = await khOps.createKeyhiveDoc();
-        setNextDocId(docIdBytes);
-        handle = await secureRepo.create2(msg.initialJson);
-        // Add to IDB BEFORE enableSharing so checkForNewKeyhiveDocs (triggered
-        // by keyhive sync during enableSharing) sees it as already known.
-        {
-          const { idbGet: idbGetList, idbSet: idbSetList } = await import('./idb-storage');
-          type S = { id: string; [k: string]: any };
-          const earlyList = (await idbGetList<S[]>('automerge-doc-ids')) ?? [];
-          earlyList.unshift({ id: handle.documentId, encrypted: true });
-          await idbSetList('automerge-doc-ids', earlyList);
-          (self as any).postMessage({ type: 'doc-list-updated', list: earlyList } satisfies WorkerToMain);
-        }
-        await khOps.enableSharing(handle.documentId, docIdBytes);
-      } else {
-        if (!insecureRepo) throw new Error('Insecure repo not available');
-        handle = insecureRepo.create(msg.initialJson);
-        // Add to IDB immediately so the doc is visible on the home page
-        {
-          const { idbGet: idbGetList, idbSet: idbSetList } = await import('./idb-storage');
-          type S = { id: string; [k: string]: any };
-          const earlyList = (await idbGetList<S[]>('automerge-doc-ids')) ?? [];
-          earlyList.unshift({ id: handle.documentId, encrypted: false });
-          await idbSetList('automerge-doc-ids', earlyList);
-          (self as any).postMessage({ type: 'doc-list-updated', list: earlyList } satisfies WorkerToMain);
-        }
+      if (!secureRepo || !khOps || !setNextDocId) throw new Error('Secure repo not available');
+      // Create the keyhive document first (no co-parents, correct access model).
+      // Then create the automerge document using the keyhive doc_id as its ID
+      // so that recipients can look up the keyhive doc from the automerge URL.
+      const { docIdBytes } = await khOps.createKeyhiveDoc();
+      setNextDocId(docIdBytes);
+      const handle = await secureRepo.create2(msg.initialJson);
+      // Add to IDB BEFORE enableSharing so checkForNewKeyhiveDocs (triggered
+      // by keyhive sync during enableSharing) sees it as already known.
+      {
+        const { idbGet: idbGetList, idbSet: idbSetList } = await import('./idb-storage');
+        type S = { id: string; [k: string]: any };
+        const earlyList = (await idbGetList<S[]>('automerge-doc-ids')) ?? [];
+        earlyList.unshift({ id: handle.documentId, encrypted: true });
+        await idbSetList('automerge-doc-ids', earlyList);
+        (self as any).postMessage({ type: 'doc-list-updated', list: earlyList } satisfies WorkerToMain);
       }
+      await khOps.enableSharing(handle.documentId, docIdBytes);
       const docId = handle.documentId;
-      setDocRepo(docId, msg.secure ? 'secure' : 'insecure');
       // Repo.create() registers the save listener AFTER the initial handle.update(),
       // so the first heads-changed event is missed and the initial doc is never persisted.
       // Explicitly save to ensure the initial data survives a refresh.
-      const repo = msg.secure ? secureRepo : insecureRepo;
       const doc = handle.doc();
-      if (repo?.storageSubsystem && doc) {
-        repo.storageSubsystem.saveDoc(docId, doc).then(() => {
+      if (secureRepo.storageSubsystem && doc) {
+        secureRepo.storageSubsystem.saveDoc(docId, doc).then(() => {
           console.log(`[worker] create-doc: saveDoc OK for ${docId}`);
         }).catch((err: any) => {
           console.error(`[worker] create-doc: saveDoc FAILED for ${docId}:`, err);
@@ -925,12 +859,9 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
     const progress = (pct: number, message: string) =>
       post.postMessage({ type: 'open-doc-progress', id: msg.id, pct, message } satisfies WorkerToMain);
     try {
-      // Record secure hint in docRepoMap if provided
-      if (msg.secure !== undefined) {
-        setDocRepo(msg.docId, msg.secure ? 'secure' : 'insecure');
-      } else if (khOps && khBridge && khIntegration) {
-        // No local entry — check if our keyhive already knows about this doc
-        // (e.g. we were added as a member by someone else)
+      // Check if our keyhive already knows about this doc
+      // (e.g. we were added as a member by someone else)
+      if (khOps && khBridge && khIntegration) {
         try {
           const automergeUrl = `automerge:${msg.docId}`;
           const khDocId = khBridge.docIdFromAutomergeUrl(automergeUrl as any);
@@ -939,34 +870,24 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
             const khDocIdB64 = bytesToBase64(doc.id.toBytes());
             khOps.khDocuments.set(khDocIdB64, doc);
             khIntegration.networkAdapter.registerDoc(msg.docId, khDocId);
-            setDocRepo(msg.docId, 'secure');
           }
         } catch (err) {
           console.warn('[worker] Failed to check keyhive for doc:', errMsg(err));
         }
       }
       progress(10, 'Finding document\u2026');
-      let handle: any;
-      if (getDocRepo(msg.docId) === undefined) {
-        // Unknown repo — try both and use whichever becomes ready first.
-        // This handles shared secure docs where keyhive hasn't synced yet.
-        const result = await findInRepos(msg.docId, secureRepo, insecureRepo);
-        handle = result.handle;
-      } else {
-        handle = await getOrLoadHandle(msg.docId);
-      }
+      const handle = await getOrLoadHandle(msg.docId);
       getOrCreateEntry(msg.docId, handle);
       progress(50, 'Loading document data\u2026');
       const isReady = handle.isReady ? handle.isReady() : false;
-      const secure = getDocRepo(msg.docId) === 'secure';
       if (isReady) {
         progress(100, 'Ready');
-        post.postMessage({ type: 'result', id: msg.id, result: { docId: msg.docId, secure } } satisfies WorkerToMain);
+        post.postMessage({ type: 'result', id: msg.id, result: { docId: msg.docId } } satisfies WorkerToMain);
       } else {
         // Wait for doc data to arrive
         handle.whenReady().then(() => {
           progress(100, 'Ready');
-          post.postMessage({ type: 'result', id: msg.id, result: { docId: msg.docId, secure } } satisfies WorkerToMain);
+          post.postMessage({ type: 'result', id: msg.id, result: { docId: msg.docId } } satisfies WorkerToMain);
         }).catch((err: any) => {
           post.postMessage({ type: 'result', id: msg.id, error: errMsg(err) } satisfies WorkerToMain);
         });
