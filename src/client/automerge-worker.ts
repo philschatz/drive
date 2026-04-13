@@ -579,11 +579,21 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
         // so the automerge doc ID = keyhive doc ID.
         let nextDocIdBytes: Uint8Array | null = null;
         setNextDocId = (bytes: Uint8Array) => { nextDocIdBytes = bytes; };
+        // shareConfig gates which docs are announced/accessible to each peer
+        // based on keyhive membership. Prevents leaking unshared doc IDs.
+        const khAccessCheck = async (peerId: string, docId: string | undefined): Promise<boolean> => {
+          if (!docId) return false;
+          return (khIntegration!.networkAdapter as any).peerHasAnyAccess(peerId, docId);
+        };
         secureRepo = new Repo({
           network: [khIntegration.networkAdapter],
           storage: secureStorage,
           subduction: realSubduction,
           peerId: khIntegration.peerId,
+          shareConfig: {
+            announce: khAccessCheck,
+            access: khAccessCheck as (peer: string, doc: string) => Promise<boolean>,
+          },
           idFactory: async () => {
             if (!nextDocIdBytes) throw new Error('nextDocIdBytes not set before create2');
             const bytes = nextDocIdBytes;

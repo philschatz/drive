@@ -17,12 +17,7 @@ function describeData(data: unknown): string {
   return `[encrypted, unknown size]`;
 }
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-function logMessage(_dir: '←' | '→', _peerId: string, _message: any) {
-  // Temporarily disabled
-  return;
-}
-function _logMessageImpl(dir: '←' | '→', peerId: string, message: any) {
+function logMessage(dir: '←' | '→', peerId: string, message: any) {
   const type = message.type ?? '?';
   const parts = [`[relay] ${dir} ${shortId(peerId)} ${type}`];
 

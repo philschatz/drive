@@ -821,6 +821,30 @@ export class KeyhiveNetworkAdapter extends NetworkAdapter {
     }
   }
 
+  /**
+   * Returns true if the peer has any keyhive access (Read, Write, or Admin) to the doc.
+   * Used by the Repo's shareConfig to decide whether to announce/share a document.
+   * Unshared docs (not registered in docMap) are private — returns false.
+   */
+  async peerHasAnyAccess(peerId: PeerId, automergeDocId: string): Promise<boolean> {
+    const khDocId = this.docMap.get(automergeDocId);
+    if (!khDocId) {
+      // Not registered with keyhive — document is private to this peer
+      return false;
+    }
+    try {
+      const senderIdentifiers = this.identifiersForPeer(peerId);
+      for (const id of senderIdentifiers) {
+        const access = await this.keyhive.accessForDoc(id, khDocId);
+        if (access) return true;
+      }
+      return false;
+    } catch (err) {
+      console.warn(`[AMRepoKeyhive] peerHasAnyAccess failed for ${peerId} on ${automergeDocId}:`, err);
+      return false;
+    }
+  }
+
   // Async wrapper that checks write access before emitting a sync message
   private async checkAccessAndEmit(message: Message): Promise<void> {
     const docId = (message as any).documentId as string;
