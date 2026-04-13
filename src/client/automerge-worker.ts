@@ -91,15 +91,18 @@ let Repo: any, IndexedDBStorageAdapter: any, Automerge: any;
 let BrowserWebSocketClientAdapter: any;
 let PresenceClass: any;
 let khBridge: typeof import('../lib/automerge-repo-keyhive/index') | null = null;
+let subductionBridge: typeof import('@automerge/automerge-repo-subduction-bridge') | null = null;
+let subductionModule: typeof import('@automerge/automerge-subduction') | null = null;
 try {
   console.log('[worker] importing modules...');
-  await import('@automerge/automerge-subduction'); // Initialize subduction WASM before Repo construction
+  subductionModule = await import('@automerge/automerge-subduction'); // Initialize subduction WASM before Repo construction
   const repoModule: any = await import('@automerge/automerge-repo');
   Repo = repoModule.Repo;
   PresenceClass = repoModule.Presence;
   console.log('[worker] Repo imported');
   ({ IndexedDBStorageAdapter } = await import('@automerge/automerge-repo-storage-indexeddb'));
   ({ BrowserWebSocketClientAdapter } = await import('@automerge/automerge-repo-network-websocket'));
+  subductionBridge = await import('@automerge/automerge-repo-subduction-bridge');
   Automerge = await import('@automerge/automerge');
   console.log('[worker] importing keyhive bridge...');
   khBridge = await import('../lib/automerge-repo-keyhive/index');
@@ -122,15 +125,6 @@ function resolveKhDocId(automergeDocId: string): string {
   const khDocIdObj = khBridge!.docIdFromAutomergeUrl(`automerge:${automergeDocId}` as any);
   return bytesToBase64(khDocIdObj.toBytes());
 }
-
-/**
- * The docId currently being loaded via getOrLoadHandle → repo.find().
- * getBlobs receives a sedimentreeId but toDocumentId() truncates 32-byte
- * keyhive IDs to 16 bytes, producing the wrong storage key. Instead of
- * reverse-mapping, we stash the docId before calling find() so getBlobs
- * can read it directly.
- */
-let loadingDocId: string | null = null;
 
 /** Return the (only) repo. */
 function getRepo(): InstanceType<typeof Repo> {
@@ -162,9 +156,7 @@ async function getOrLoadHandle(docId: string): Promise<any> {
   const existing = docRegistry.get(docId);
   if (existing) return existing.handle;
   const r = getRepo();
-  loadingDocId = docId;
   const handle = await r.find(docId as any);
-  loadingDocId = null;
   return handle;
 }
 
@@ -555,33 +547,33 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
           syncRequestInterval: 2000,
         });
 
-        const noopSubduction = {
-          storage: {},
-          removeSedimentree() {},
-          connectDiscover() {},
-          disconnectAll() {},
-          disconnectFromPeer() {},
-          syncAll() { return Promise.resolve({ entries() { return []; } }); },
-          syncWithAllPeers() { return Promise.resolve(new Map()); },
-          // Only load from storage for docs the current identity owns —
-          // i.e., docs that were in the IDB doc list at init (which is
-          // keyhive-verified). This prevents loading another user's data
-          // from shared IndexedDB.
-          getBlobs(_sedimentreeId: any) {
-            if (!loadingDocId || !secureRepo?.storageSubsystem) {
-              console.log(`[worker] secure getBlobs: skip (loadingDocId=${loadingDocId}, ss=${!!secureRepo?.storageSubsystem})`);
-              return Promise.resolve([]);
-            }
-            const docId = loadingDocId;
-            return secureRepo.storageSubsystem.loadDocData(docId)
-              .then((data: Uint8Array | null) => {
-                console.log(`[worker] secure getBlobs(${docId}): ${data ? data.length + ' bytes' : 'null'}`);
-                return data ? [data] : [];
-              });
-          },
-          addCommit() { return Promise.resolve(undefined); },
-          addFragment() { return Promise.resolve(undefined); },
-        };
+        // Set up real Subduction via the bridge package.
+        // SubductionStorageBridge wraps IndexedDBStorageAdapter as SedimentreeStorage,
+        // and Subduction.hydrate recovers state from storage.
+        let realSubduction: any;
+        try {
+          const result = await subductionBridge!.setupSubduction({
+            subductionModule: subductionModule! as any,
+            signer: await (subductionModule as any).WebCryptoSigner.setup(),
+            storageAdapter: new IndexedDBStorageAdapter('subduction-secure'),
+          });
+          realSubduction = result.subduction;
+          console.log('[worker] Subduction initialized');
+        } catch (err: any) {
+          console.warn('[worker] Subduction init failed, falling back to noop:', errMsg(err));
+          realSubduction = {
+            storage: {},
+            removeSedimentree() {},
+            connectDiscover() {},
+            disconnectAll() {},
+            disconnectFromPeer() {},
+            syncAll() { return Promise.resolve({ entries() { return []; } }); },
+            syncWithAllPeers() { return Promise.resolve(new Map()); },
+            getBlobs() { return Promise.resolve([]); },
+            addCommit() { return Promise.resolve(undefined); },
+            addFragment() { return Promise.resolve(undefined); },
+          };
+        }
         // Slot for pre-generated keyhive doc IDs. enableSharing creates the
         // keyhive doc first, sets nextDocIdBytes, then create2() consumes it
         // so the automerge doc ID = keyhive doc ID.
@@ -590,7 +582,7 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
         secureRepo = new Repo({
           network: [khIntegration.networkAdapter],
           storage: secureStorage,
-          subduction: noopSubduction,
+          subduction: realSubduction,
           peerId: khIntegration.peerId,
           idFactory: async () => {
             if (!nextDocIdBytes) throw new Error('nextDocIdBytes not set before create2');
@@ -627,6 +619,10 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
         const secureNs = secureRepo.networkSubsystem;
         secureNs.on('peer', postStatus);
         secureNs.on('peer-disconnected', postStatus);
+
+        // --- Subduction peer connections (disabled while debugging sync) ---
+        // TODO: Wire up NetworkAdapterConnection + connectTransport/acceptTransport
+        // when Subduction handshake issues are resolved.
         // Monitor WS open/close directly for connection status
         const origSecureOpen = secureWs.onOpen;
         const origSecureClose = secureWs.onClose;
@@ -1035,42 +1031,17 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
     }
   }
 
+  // --- Presence temporarily disabled ---
   if (msg.type === 'subscribe-presence') {
-    try {
-      const handle = await getOrLoadHandle(msg.docId);
-      const entry = getOrCreateEntry(msg.docId, handle);
-      if (!entry.presence) {
-        const presence = new PresenceClass({ handle });
-        presence.start({ initialState: { viewing: true, focusedField: null }, heartbeatMs: 5000, peerTtlMs: 15000 });
-        const sendPresence = () => {
-          const peers = { ...presence.getPeerStates().value };
-          (self as any).postMessage({ type: 'update-presence', docId: msg.docId, peers } satisfies WorkerToMain);
-        };
-        presence.on('update', sendPresence);
-        presence.on('goodbye', sendPresence);
-        presence.on('snapshot', sendPresence);
-        entry.presence = presence;
-      }
-    } catch (err: any) {
-      console.warn('[worker] presence-subscribe failed:', errMsg(err));
-    }
+    // no-op
   }
 
   if (msg.type === 'unsubscribe-presence') {
-    const entry = docRegistry.get(msg.docId);
-    if (entry?.presence) {
-      entry.presence.stop();
-      entry.presence = null;
-    }
+    // no-op
   }
 
   if (msg.type === 'set-presence') {
-    const entry = docRegistry.get(msg.docId);
-    if (entry?.presence) {
-      for (const [key, value] of Object.entries(msg.state)) {
-        entry.presence.broadcast(key, value);
-      }
-    }
+    // no-op
   }
 
   // --- Doc list mutations (IDB-backed) ---

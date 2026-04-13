@@ -38,6 +38,7 @@
     "@automerge/automerge-repo-network-websocket": "^2.6.0-subduction.4",
     "@automerge/automerge-repo-storage-indexeddb": "^2.6.0-subduction.4",
     "@automerge/automerge-repo-storage-nodefs": "^2.6.0-subduction.4",
+    "@automerge/automerge-repo-subduction-bridge": "^2.6.0-subduction.5",
     "@automerge/automerge-subduction": "^0.5.0-alpha.1",
     "@codemirror/autocomplete": "^6.20.0",
     "@codemirror/language": "^6.12.2",
