@@ -589,11 +589,30 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
         // so the automerge doc ID = keyhive doc ID.
         let nextDocIdBytes: Uint8Array | null = null;
         setNextDocId = (bytes: Uint8Array) => { nextDocIdBytes = bytes; };
+        // shareConfig gates which docs are announced to which peers based on
+        // keyhive membership. A doc not yet registered with keyhive (e.g. just
+        // created, not yet shared) is not announced to anyone. Once Alice
+        // shares with Bob via keyhive, Bob appears as a member, and the keyhive
+        // bridge calls repo.shareConfigChanged() — at that point the doc
+        // starts being announced to Bob.
+        const khAccessCheck = async (peerId: string, docId: string | undefined): Promise<boolean> => {
+          if (!docId) return false;
+          if (peerId.startsWith('relay-')) return false;
+          try {
+            return await (khIntegration!.networkAdapter as any).peerHasAnyAccess(peerId, docId);
+          } catch {
+            return false;
+          }
+        };
         secureRepo = new Repo({
           network: [khIntegration.networkAdapter],
           storage: secureStorage,
           subduction: realSubduction,
           peerId: khIntegration.peerId,
+          shareConfig: {
+            announce: khAccessCheck,
+            access: khAccessCheck as (peer: string, doc: string) => Promise<boolean>,
+          },
           idFactory: async () => {
             if (!nextDocIdBytes) throw new Error('nextDocIdBytes not set before create2');
             const bytes = nextDocIdBytes;
