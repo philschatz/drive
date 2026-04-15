@@ -29,15 +29,34 @@ const worker = new Worker(
   { type: 'module' },
 );
 
+// Log only diagnostically useful outgoing messages (skip routine traffic).
+function logSend(msg: { type: string } & Record<string, any>): void {
+  const quiet = msg.type === 'query'
+    || msg.type === 'subscribe-query'
+    || msg.type === 'unsubscribe-query'
+    || msg.type === 'subscribe-presence'
+    || msg.type === 'unsubscribe-presence'
+    || msg.type === 'set-presence'
+    || msg.type === 'subscribe-validation'
+    || msg.type === 'unsubscribe-validation'
+    || msg.type === 'open-doc'
+    || msg.type === 'kh-get-my-access'
+    || msg.type === 'add-doc-to-list'
+    || msg.type === 'remove-doc-from-list'
+    || msg.type === 'set-contact-name'
+    || msg.type === 'remove-contact-name';
+  if (!quiet) console.log('[main] → send', msg.type, msg);
+}
+
 // Wire up dispatch hooks (avoids circular imports with doc-storage / contact-names)
 setDocListDispatch((msgType, docId, metadata) => {
   const msg = { type: msgType, docId, metadata };
-  console.log('[main] → send', msg.type, msg);
+  logSend(msg);
   worker.postMessage(msg);
 });
 setContactNamesDispatch((type, agentId, name) => {
   const msg = { type, agentId, ...(name !== undefined ? { name } : {}) };
-  console.log('[main] → send', msg.type, msg);
+  logSend(msg);
   worker.postMessage(msg);
 });
 
@@ -112,7 +131,7 @@ function request<T>(type: string, payload: Record<string, any> = {}): Promise<T>
     return new Promise<T>((resolve, reject) => {
       pending.set(id, { resolve, reject, sent: performance.now(), type });
       const msg = { type, id, ...payload };
-      console.log('[main] → send', msg.type, msg);
+      logSend(msg);
       worker.postMessage(msg);
     });
   });
@@ -121,7 +140,7 @@ function request<T>(type: string, payload: Record<string, any> = {}): Promise<T>
 function fire(type: string, payload: Record<string, any> = {}): void {
   workerReady.then(() => {
     const msg = { type, ...payload };
-    console.log('[main] → send', msg.type, msg);
+    logSend(msg);
     worker.postMessage(msg);
   });
 }
@@ -145,7 +164,13 @@ export function onKeyhiveStateChanged(fn: () => void): () => void {
 
 worker.onmessage = (e: MessageEvent<WorkerToMain>) => {
   const msg = e.data;
-  console.log('[main] ← recv', msg.type, msg);
+  // Skip routine traffic; keep diagnostically useful events.
+  const quiet = msg.type === 'relay-log'
+    || msg.type === 'result'
+    || msg.type === 'query-result'
+    || msg.type === 'update-presence'
+    || msg.type === 'open-doc-progress';
+  if (!quiet) console.log('[main] ← recv', msg.type, msg);
 
   switch (msg.type) {
     // --- Lifecycle ---
@@ -359,7 +384,7 @@ export function openDoc(
         sent: performance.now(), type: 'open-doc',
       });
       const msg = { type: 'open-doc' as const, id, docId };
-      console.log('[main] → send', msg.type, msg);
+      logSend(msg);
       worker.postMessage(msg);
     });
   });
@@ -454,7 +479,7 @@ export function queryDoc(
     return new Promise((resolve, reject) => {
       pending.set(id, { resolve, reject, sent: performance.now(), type: 'query' });
       const msg = { type: 'query' as const, id, docId, filter };
-      console.log('[main] → send', msg.type, msg);
+      logSend(msg);
       worker.postMessage(msg);
     });
   });

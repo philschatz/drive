@@ -396,11 +396,19 @@ export class KeyhiveNetworkAdapter extends NetworkAdapter {
       if (this.peerId && payload.peerId == this.peerId) {
         return;
       }
+      // Skip the relay's own peer ID — it isn't a keyhive identity, so keyhive
+      // sync attempts to it will never succeed and just create noise.
+      if (typeof payload.peerId === "string" && payload.peerId.startsWith("relay-")) {
+        return;
+      }
       this.emit("peer-candidate", payload);
       this.peers.set(payload.peerId, new Peer());
     });
 
     networkAdapter.on("peer-disconnected", (payload) => {
+      if (typeof payload.peerId === "string" && payload.peerId.startsWith("relay-")) {
+        return;
+      }
       this.emit("peer-disconnected", payload);
       this.peers.delete(payload.peerId);
       if (!this.opCache) {
@@ -705,6 +713,7 @@ export class KeyhiveNetworkAdapter extends NetworkAdapter {
       if (isDocMessage && targetId) {
         const peer = this.peers.get(targetId);
         if (peer && !peer.keyhiveSynced) {
+          console.warn(`[AMRepoKeyhive] DROPPING ${message.type} to ${targetId} for doc ${automergeDocId}: keyhiveSynced=false`);
           this.pending.fire(seqNumber, () => {});
           return;
         }
@@ -1009,7 +1018,12 @@ export class KeyhiveNetworkAdapter extends NetworkAdapter {
       }
     }
     message.data = keyhiveMessageData.signed.payload;
-    console.log(`[AMRepoKeyhive] handleKeyhiveMessage: type=${message.type} from=${message.senderId}`);
+    // Only log non-routine keyhive protocol messages. keyhive-sync-check is a
+    // heartbeat (very noisy), and keyhive-sync-request is sent on every retry.
+    // Keep confirmation/response/ops since those are diagnostically useful.
+    if (message.type !== 'keyhive-sync-check' && message.type !== 'keyhive-sync-request') {
+      console.log(`[AMRepoKeyhive] handleKeyhiveMessage: type=${message.type} from=${message.senderId}`);
+    }
 
     // Log keyhive protocol message with decoded payload
     this._logMsg('recv', message, { hasContactCard: !!keyhiveMessageData.contactCard });
@@ -1148,9 +1162,13 @@ export class KeyhiveNetworkAdapter extends NetworkAdapter {
               targetId: targetId,
               data: data,
             };
-            console.log(
-              `[AMRepoKeyhive] Sending FULL keyhive sync request to ${targetId} with ${opHashes.length} hashes and ${pendingOpHashes.length} pending`
-            );
+            // Retries repeat frequently — only log when pending events exist
+            // (signals keyhive state that may block sync).
+            if (pendingOpHashes.length > 0) {
+              console.log(
+                `[AMRepoKeyhive] keyhive-sync-request to ${targetId}: ${opHashes.length} hashes, ${pendingOpHashes.length} pending`
+              );
+            }
             this.send(message, maybeContactCard);
           }
         }

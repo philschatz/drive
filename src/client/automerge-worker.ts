@@ -119,6 +119,14 @@ let khOps: KeyhiveOps | null = null;
 let setNextDocId: ((bytes: Uint8Array) => void) | null = null;
 let appBaseUrl = '';
 
+/**
+ * The docId currently being loaded via getOrLoadHandle → repo.find().
+ * noopSubduction.getBlobs uses this to read from the right storage key
+ * (toDocumentId() truncates keyhive's 32-byte IDs to 16 bytes, so we
+ * stash the original here instead of reverse-mapping).
+ */
+let loadingDocId: string | null = null;
+
 /** Derive the keyhive doc-ID (base64) from an automerge doc-ID.
  *  Works because the automerge binary doc-ID bytes ARE the keyhive doc_id bytes. */
 function resolveKhDocId(automergeDocId: string): string {
@@ -156,8 +164,13 @@ async function getOrLoadHandle(docId: string): Promise<any> {
   const existing = docRegistry.get(docId);
   if (existing) return existing.handle;
   const r = getRepo();
-  const handle = await r.find(docId as any);
-  return handle;
+  loadingDocId = docId;
+  try {
+    const handle = await r.find(docId as any);
+    return handle;
+  } finally {
+    loadingDocId = null;
+  }
 }
 
 function getOrCreateEntry(docId: string, handle: any): DocEntry {
@@ -547,53 +560,40 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
           syncRequestInterval: 2000,
         });
 
-        // Set up real Subduction via the bridge package.
-        // SubductionStorageBridge wraps IndexedDBStorageAdapter as SedimentreeStorage,
-        // and Subduction.hydrate recovers state from storage.
-        let realSubduction: any;
-        try {
-          const result = await subductionBridge!.setupSubduction({
-            subductionModule: subductionModule! as any,
-            signer: await (subductionModule as any).WebCryptoSigner.setup(),
-            storageAdapter: new IndexedDBStorageAdapter('subduction-secure'),
-          });
-          realSubduction = result.subduction;
-          console.log('[worker] Subduction initialized');
-        } catch (err: any) {
-          console.warn('[worker] Subduction init failed, falling back to noop:', errMsg(err));
-          realSubduction = {
-            storage: {},
-            removeSedimentree() {},
-            connectDiscover() {},
-            disconnectAll() {},
-            disconnectFromPeer() {},
-            syncAll() { return Promise.resolve({ entries() { return []; } }); },
-            syncWithAllPeers() { return Promise.resolve(new Map()); },
-            getBlobs() { return Promise.resolve([]); },
-            addCommit() { return Promise.resolve(undefined); },
-            addFragment() { return Promise.resolve(undefined); },
-          };
-        }
+        // Using noopSubduction for now: real Subduction needs peer transports wired up
+        // (Phase 3.3) before it provides any benefit, and without them its getBlobs
+        // returns empty (data is in the old automerge-secure storage).
+        const realSubduction = {
+          storage: {},
+          removeSedimentree() {},
+          connectDiscover() {},
+          disconnectAll() {},
+          disconnectFromPeer() {},
+          syncAll() { return Promise.resolve({ entries() { return []; } }); },
+          syncWithAllPeers() { return Promise.resolve(new Map()); },
+          // Load from the old storage for docs the current identity owns —
+          // i.e., docs that were in the IDB doc list at init (keyhive-verified).
+          getBlobs(_sedimentreeId: any) {
+            if (!loadingDocId || !secureRepo?.storageSubsystem) {
+              return Promise.resolve([]);
+            }
+            const docId = loadingDocId;
+            return secureRepo.storageSubsystem.loadDocData(docId)
+              .then((data: Uint8Array | null) => data ? [data] : []);
+          },
+          addCommit() { return Promise.resolve(undefined); },
+          addFragment() { return Promise.resolve(undefined); },
+        };
         // Slot for pre-generated keyhive doc IDs. enableSharing creates the
         // keyhive doc first, sets nextDocIdBytes, then create2() consumes it
         // so the automerge doc ID = keyhive doc ID.
         let nextDocIdBytes: Uint8Array | null = null;
         setNextDocId = (bytes: Uint8Array) => { nextDocIdBytes = bytes; };
-        // shareConfig gates which docs are announced/accessible to each peer
-        // based on keyhive membership. Prevents leaking unshared doc IDs.
-        const khAccessCheck = async (peerId: string, docId: string | undefined): Promise<boolean> => {
-          if (!docId) return false;
-          return (khIntegration!.networkAdapter as any).peerHasAnyAccess(peerId, docId);
-        };
         secureRepo = new Repo({
           network: [khIntegration.networkAdapter],
           storage: secureStorage,
           subduction: realSubduction,
           peerId: khIntegration.peerId,
-          shareConfig: {
-            announce: khAccessCheck,
-            access: khAccessCheck as (peer: string, doc: string) => Promise<boolean>,
-          },
           idFactory: async () => {
             if (!nextDocIdBytes) throw new Error('nextDocIdBytes not set before create2');
             const bytes = nextDocIdBytes;
