@@ -1450,7 +1450,19 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
             <table className="datagrid-table" style={{ width: columnDefs.reduce((sum, col, i) => sum + ((resizingCol?.index === i ? resizingCol.width : col.width) || 100), 48) }}>
               <thead>
                 <tr>
-                  <th className="datagrid-row-header datagrid-corner-header" style={frozenColCount > 0 || frozenRowCount > 0 ? { position: 'sticky', left: 0, top: 0, zIndex: 4 } : undefined} />
+                  <th
+                    className="datagrid-row-header datagrid-corner-header"
+                    style={frozenColCount > 0 || frozenRowCount > 0 ? { position: 'sticky', left: 0, top: 0, zIndex: 4 } : undefined}
+                    title="Select all cells"
+                    onClick={() => {
+                      if (visibleColIds.length === 0 || visibleRowIds.length === 0) return;
+                      setContextMenu(null);
+                      setSelectedRows(new Set());
+                      setSelectedCols(new Set());
+                      setSelectedCell([0, 0]);
+                      setSelectionAnchor([visibleColIds.length - 1, visibleRowIds.length - 1]);
+                    }}
+                  />
                   {columnDefs.map((col, ci) => {
                     const isColSelected = selectedCols.has(ci);
                     let dropClass = '';

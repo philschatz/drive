@@ -118,6 +118,11 @@
   left: 0;
   z-index: 3;
   background: #f1f3f5;
+  cursor: pointer;
+}
+
+.datagrid-corner-header:hover {
+  background: #e9ecef;
 }
 
 /* Column headers */

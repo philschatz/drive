@@ -1,11 +1,12 @@
 {
   "version": "0.2.0",
   "configurations": [
+
     {
       "name": "Dev Server",
       "type": "node",
       "request": "launch",
-      "runtimeArgs": ["--inspect", "node_modules/.bin/vite", "dev", "--port", "3000"],
+      "runtimeArgs": ["--inspect", "node_modules/.bin/vite", "dev", "--port", "3000", "--host"],
       "console": "integratedTerminal",
       "skipFiles": ["<node_internals>/**"]
     },
