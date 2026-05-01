@@ -9,7 +9,7 @@
 
 import HyperFormula, { CellValueDetailedType } from 'hyperformula';
 import { registerCustomFunctions, getDistributionRegistry, clearDistributionRegistry, hfConfig, addGoogleSheetsNamedExpressions } from './hf-functions';
-import { buildSheetData, cellToHfValue, sortedEntries, internalToA1 } from './helpers';
+import { buildSheetData, cellToHfValue, sortedEntries, internalToA1, a1ToInternal } from './helpers';
 import { runMonteCarlo, type MCResults } from './monte-carlo';
 import { sampleDistribution, computeStats, type DistributionInfo, type DistributionStats } from './distributions';
 
@@ -343,7 +343,7 @@ function evaluateCondFormats(activeInfo: SheetInfo) {
   for (const rule of pendingCondFormatRules) {
     if (rule.conditionType !== 'customFormula' || !rule.conditionValue) continue;
 
-    const formula = rule.conditionValue; // internal format
+    const formula = rule.conditionValue; // R1C1 (relative to each target cell)
     const matches: string[] = [];
 
     for (const range of rule.ranges) {
@@ -355,8 +355,11 @@ function evaluateCondFormats(activeInfo: SheetInfo) {
 
       for (let r = rStart; r <= rEnd; r++) {
         for (let c = cStart; c <= cEnd; c++) {
-          // Convert internal formula to A1 at this cell's position
-          const a1Formula = internalToA1(formula, r, c, rows, cols, undefined, undefined, true);
+          // Re-anchor R1C1 offsets to this cell, then serialize to A1 for HyperFormula.
+          // a1ToInternal parses R1C1 with (r, c) as anchor so R[0]C[0] resolves to the
+          // current cell; internalToA1 produces the absolute A1 address to evaluate.
+          const canonical = a1ToInternal(formula, r, c, rows, cols);
+          const a1Formula = internalToA1(canonical, r, c, rows, cols, undefined, undefined, true);
           try {
             hf.setCellContents({ sheet: 0, col: tmpCol, row: tmpRow }, a1Formula);
             const val = hf.getCellValue({ sheet: 0, col: tmpCol, row: tmpRow });

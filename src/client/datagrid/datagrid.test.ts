@@ -1449,3 +1449,56 @@ describe('paste with formulas', () => {
   });
 
 });
+
+// ─── Conditional format customFormula (R1C1) ─────────────────────────────────
+// The worker's evaluateCondFormats uses this pipeline for each cell (r, c):
+//   const canonical = a1ToInternal(storedR1C1, r, c, rows, cols);
+//   const a1Formula = internalToA1(canonical, r, c, rows, cols, undefined, undefined, true);
+// a1Formula is placed in a temporary HyperFormula cell to evaluate the rule.
+// These tests lock in that the re-anchor shifts per-cell correctly.
+describe('conditional format customFormula (R1C1)', () => {
+  const rowIds = ['r0', 'r1', 'r2', 'r3', 'r4'];
+  const colIds = ['c0', 'c1', 'c2', 'c3', 'c4', 'c5'];
+
+  /** Simulate the worker's re-anchor pipeline for one cell. */
+  function reanchor(r1c1: string, r: number, c: number): string {
+    const canonical = a1ToInternal(r1c1, r, c, rowIds, colIds);
+    return internalToA1(canonical, r, c, rowIds, colIds, undefined, undefined, true);
+  }
+
+  it('regression: =RC>10 re-anchors to the exact cell at each (r, c)', () => {
+    // This is the bug: today every cell in the range evaluates against the
+    // same anchor cell. After the fix, RC resolves to (r, c) for each cell.
+    expect(reanchor('=RC>10', 0, 0)).toBe('=A1>10');
+    expect(reanchor('=RC>10', 2, 2)).toBe('=C3>10');
+    expect(reanchor('=RC>10', 4, 3)).toBe('=D5>10');
+    expect(reanchor('=RC>10', 1, 5)).toBe('=F2>10');
+  });
+
+  it('offset: =R[-1]C>0 resolves to the cell directly above at each (r, c)', () => {
+    expect(reanchor('=R[-1]C>0', 2, 2)).toBe('=C2>0');
+    expect(reanchor('=R[-1]C>0', 3, 0)).toBe('=A3>0');
+  });
+
+  it('offset: =RC[1] resolves to the cell immediately to the right', () => {
+    expect(reanchor('=RC[1]', 0, 0)).toBe('=B1');
+    expect(reanchor('=RC[1]', 2, 3)).toBe('=E3');
+  });
+
+  it('absolute: =R1C1>10 always resolves to the same A1 cell', () => {
+    expect(reanchor('=R1C1>10', 0, 0)).toBe('=$A$1>10');
+    expect(reanchor('=R1C1>10', 3, 4)).toBe('=$A$1>10');
+    expect(reanchor('=R1C1>10', 2, 2)).toBe('=$A$1>10');
+  });
+
+  it('mixed: =R1C stays on row 1 but tracks the current column', () => {
+    expect(reanchor('=R1C', 3, 5)).toBe('=F$1');
+    expect(reanchor('=R1C', 0, 0)).toBe('=A$1');
+  });
+
+  it('mixed: =RC1 stays in column A but tracks the current row', () => {
+    expect(reanchor('=RC1', 2, 4)).toBe('=$A3');
+    expect(reanchor('=RC1', 0, 0)).toBe('=$A1');
+  });
+});
+

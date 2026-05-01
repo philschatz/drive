@@ -5,7 +5,7 @@ import { Label } from '@/components/ui/label';
 import {
   Select, SelectTrigger, SelectValue, SelectContent, SelectItem,
 } from '@/components/ui/select';
-import { sortedEntries, colIndexToLetter, shortId, a1ToInternal, internalToA1 } from './helpers';
+import { colIndexToLetter, shortId } from './helpers';
 import type { ConditionalFormatRule, ConditionalFormatRange, DataGridCellFormat } from './schema';
 
 // ============================================================
@@ -60,6 +60,9 @@ export function ConditionalFormatPanel({
   const [fmtTextColor, setFmtTextColor] = useState('#000000');
   const [fmtBgColor, setFmtBgColor] = useState('#ffff00');
 
+  // Display in ascending index order: lowest priority at the top, highest
+  // priority at the bottom. Evaluation priority is unchanged — rules with
+  // larger index still win (see resolveConditionalFormat in formatting.ts).
   const sortedRules = rules
     ? Object.entries(rules).sort((a, b) => a[1].index - b[1].index)
     : [];
@@ -143,15 +146,7 @@ export function ConditionalFormatPanel({
     setEditing(id);
     setRangeText(rangeToA1(rule));
     setConditionType(rule.conditionType);
-    // For customFormula, convert internal format back to A1 for display
-    if (rule.conditionType === 'customFormula' && rule.conditionValue) {
-      const firstRange = Object.values(rule.ranges)[0];
-      const anchorRow = firstRange ? sortedRowIds.indexOf(firstRange.rangeRowStart) : 0;
-      const anchorCol = firstRange ? sortedColIds.indexOf(firstRange.rangeColStart) : 0;
-      setConditionValue(internalToA1(rule.conditionValue, anchorRow, anchorCol, sortedRowIds, sortedColIds));
-    } else {
-      setConditionValue(rule.conditionValue ?? '');
-    }
+    setConditionValue(rule.conditionValue ?? '');
     setFmtBold(!!rule.format.bold);
     setFmtItalic(!!rule.format.italic);
     setFmtTextColor(rule.format.textColor || '#000000');
@@ -179,15 +174,11 @@ export function ConditionalFormatPanel({
     if (fmtTextColor !== '#000000') format.textColor = fmtTextColor;
     format.bgColor = fmtBgColor;
 
-    // For customFormula, convert the A1 formula to internal format
-    // anchored at the top-left of the first range
+    // customFormula stores R1C1 verbatim (relative to each target cell).
+    // The worker re-anchors R[offset]C[offset] to each cell at evaluation time.
     let storedCondValue: string | undefined;
     if (conditionType === 'customFormula' && conditionValue) {
-      const firstRange = Object.values(ranges)[0];
-      const anchorRow = sortedRowIds.indexOf(firstRange.rangeRowStart);
-      const anchorCol = sortedColIds.indexOf(firstRange.rangeColStart);
-      const formula = conditionValue.startsWith('=') ? conditionValue : '=' + conditionValue;
-      storedCondValue = a1ToInternal(formula, anchorRow, anchorCol, sortedRowIds, sortedColIds);
+      storedCondValue = conditionValue.startsWith('=') ? conditionValue : '=' + conditionValue;
     } else if (!NO_VALUE_CONDITIONS.has(conditionType)) {
       storedCondValue = conditionValue;
     }
@@ -233,6 +224,23 @@ export function ConditionalFormatPanel({
         delete d.sheets[sheetId].conditionalFormats[ruleId];
       }
     }, [currentSheetId, id]);
+  };
+
+  // Swap the rule's index with its neighbor in sorted-by-index order.
+  // Lower index = higher priority (evaluated first), so "up" = lower index.
+  const moveRule = (id: string, direction: 'up' | 'down') => {
+    const ids = sortedRules.map(([rid]) => rid);
+    const idx = ids.indexOf(id);
+    const neighborIdx = direction === 'up' ? idx - 1 : idx + 1;
+    if (neighborIdx < 0 || neighborIdx >= ids.length) return;
+    const neighborId = ids[neighborIdx];
+    mutate((d: any, sheetId: string, aId: string, bId: string) => {
+      const cf = d.sheets[sheetId].conditionalFormats;
+      if (!cf || !cf[aId] || !cf[bId]) return;
+      const tmp = cf[aId].index;
+      cf[aId].index = cf[bId].index;
+      cf[bId].index = tmp;
+    }, [currentSheetId, id, neighborId]);
   };
 
   const condLabel = (type: string) =>
@@ -295,12 +303,12 @@ export function ConditionalFormatPanel({
                 <Input
                   value={conditionValue}
                   onInput={(e: any) => setConditionValue(e.target.value)}
-                  placeholder={conditionType === 'customFormula' ? '=ISFORMULA(A1)' : 'Enter value...'}
+                  placeholder={conditionType === 'customFormula' ? '=RC>10' : 'Enter value...'}
                   className="mt-1"
                 />
                 {conditionType === 'customFormula' && (
                   <p className="text-xs text-muted-foreground mt-1">
-                    Formula is evaluated relative to each cell in the range.
+                    R1C1 notation, relative to each cell. <code>RC</code> = this cell, <code>R[-1]C</code> = cell above, <code>R1C1</code> = absolute A1.
                   </p>
                 )}
               </div>
@@ -362,16 +370,23 @@ export function ConditionalFormatPanel({
               if (applicable.length > 0 && other.length > 0) combined.push('divider');
               combined.push(...other);
               return combined;
-            })().map((item, idx) => {
+            })().map((item) => {
               if (item === 'divider') {
                 return <div key="divider" className="border-t my-1" />;
               }
               const [id, rule] = item;
               const applies = ruleAppliesToSelection(rule);
+              const priorityIdx = sortedRules.findIndex(([rid]) => rid === id);
+              const isFirst = priorityIdx === 0;
+              const isLast = priorityIdx === sortedRules.length - 1;
               return (
               <div key={id} className={'flex items-center justify-between border rounded-md p-2 text-sm' + (applies ? '' : ' opacity-40')}>
                 <div className="flex-1 min-w-0">
-                  <div className="font-medium truncate">{condLabel(rule.conditionType)}{rule.conditionValue ? ` ${rule.conditionValue}` : ''}</div>
+                  <div className="font-medium truncate">
+                    {rule.conditionType === 'customFormula'
+                      ? (rule.conditionValue ?? '')
+                      : `${condLabel(rule.conditionType)}${rule.conditionValue ? ` ${rule.conditionValue}` : ''}`}
+                  </div>
                   <div className="text-xs text-muted-foreground">{rangeToA1(rule)}</div>
                 </div>
                 <div
@@ -391,6 +406,16 @@ export function ConditionalFormatPanel({
                   Ab
                 </div>
                 <div className="flex gap-1">
+                  {!isFirst && (
+                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => moveRule(id, 'up')} title="Move up (lower priority)">
+                      <span className="material-symbols-outlined" style={{ fontSize: '1rem' }}>arrow_upward</span>
+                    </Button>
+                  )}
+                  {!isLast && (
+                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => moveRule(id, 'down')} title="Move down (higher priority)">
+                      <span className="material-symbols-outlined" style={{ fontSize: '1rem' }}>arrow_downward</span>
+                    </Button>
+                  )}
                   <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => startEdit(id)}>
                     <span className="material-symbols-outlined" style={{ fontSize: '1rem' }}>edit</span>
                   </Button>

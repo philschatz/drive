@@ -1584,6 +1584,12 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
                             if (condCss) Object.assign(cellStyle, condCss);
                           }
                         }
+                        // Auto-right-align numeric values if no explicit alignment is set
+                        // (numeric check uses the pre-numFmt display — after numFmt, values
+                        // like "$1,234.00" would not parse as Number).
+                        if (!cellStyle.textAlign && display !== '' && !isNaN(Number(display))) {
+                          cellStyle.textAlign = 'right';
+                        }
                         // Apply number formatting AFTER conditional format resolution
                         if (cellFmt?.numFmt) display = formatDisplayValue(display, cellFmt.numFmt);
                         // UI overlays (peer, ref-highlight, clipboard) override formatting

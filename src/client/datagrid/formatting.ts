@@ -289,8 +289,9 @@ export function resolveConditionalFormat(
   if (rowIdx === -1 || colIdx === -1) return undefined;
 
   const cellKey = `${rowId}:${colId}`;
+  // Higher index = higher priority: newly-added rules take precedence.
   const sorted = Object.entries(rules)
-    .sort((a, b) => a[1].index - b[1].index);
+    .sort((a, b) => b[1].index - a[1].index);
 
   for (const [ruleId, rule] of sorted) {
     if (!cellInAnyRange(rule.ranges, rowIdx, colIdx, rowIds, colIds)) continue;
