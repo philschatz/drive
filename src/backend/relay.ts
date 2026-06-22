@@ -32,8 +32,130 @@ function describeData(data: unknown): string {
   return `[unknown size]`;
 }
 
+/**
+ * Extract the signed payload from a keyhive `Signed` blob without loading the
+ * keyhive WASM module (which the relay deliberately avoids).
+ *
+ * `Signed::to_bytes()` is `bincode::serialize(Signed<Vec<u8>>)`. With bincode's
+ * default config (little-endian, fixed-width lengths) and the struct field order
+ * `payload, issuer, signature`, the layout is:
+ *   [u64-LE payload length][payload bytes][32-byte issuer][64-byte signature]
+ * Since `payload` is first, we can slice it off using just the leading length.
+ */
+function extractSignedPayload(signedBytes: Uint8Array): Uint8Array | undefined {
+  if (signedBytes.length < 8) return undefined;
+  const view = new DataView(
+    signedBytes.buffer,
+    signedBytes.byteOffset,
+    signedBytes.byteLength
+  );
+  const len = Number(view.getBigUint64(0, true));
+  if (len < 0 || 8 + len > signedBytes.length) return undefined;
+  return signedBytes.subarray(8, 8 + len);
+}
+
+// Prefix byte keyhive uses to mark a signed payload as encrypted document
+// content (mirrors ENC_ENCRYPTED in the keyhive network adapter's messages.ts).
+const ENC_ENCRYPTED = 0x01;
+
+function isBytes(v: unknown): v is Uint8Array {
+  return v instanceof Uint8Array || Buffer.isBuffer(v);
+}
+
+// Render an array-of-byte-strings field as a count (the contents are op hashes
+// or full event blobs — only their cardinality is meaningful at the relay).
+function count(arr: unknown): number {
+  return Array.isArray(arr) ? arr.length : 0;
+}
+
+// Format the inner (post-envelope) payload according to the message type. Every
+// keyhive payload is CBOR; sync/change payloads are an encryption-prefixed blob.
+function describePayload(type: string, payload: Uint8Array): string {
+  switch (type) {
+    case 'keyhive-sync-check': {
+      const d = decode(payload) as { myTotal?: number; beliefOfTheirTotal?: number };
+      return `check{myTotal=${d.myTotal}, beliefOfTheirTotal=${d.beliefOfTheirTotal}}`;
+    }
+    case 'keyhive-sync-request': {
+      const d = decode(payload) as { found?: unknown[]; pending?: unknown[] };
+      return `request{found=${count(d.found)}, pending=${count(d.pending)}}`;
+    }
+    case 'keyhive-sync-response': {
+      const d = decode(payload) as {
+        requested?: unknown[]; found?: unknown[]; senderTotal?: number; receiverTotal?: number;
+      };
+      return `response{requested=${count(d.requested)}, found=${count(d.found)}, senderTotal=${d.senderTotal}, receiverTotal=${d.receiverTotal}}`;
+    }
+    case 'keyhive-sync-ops': {
+      const d = decode(payload) as
+        | unknown[]
+        | { ops?: unknown[]; senderTotal?: number; receiverTotal?: number };
+      // Legacy path encodes a bare array; current path encodes an object.
+      if (Array.isArray(d)) return `ops{ops=${d.length}}`;
+      return `ops{ops=${count(d.ops)}, senderTotal=${d.senderTotal}, receiverTotal=${d.receiverTotal}}`;
+    }
+    case 'keyhive-sync-confirmation': {
+      const d = decode(payload) as { myTotalForThem?: number; theirTotalForMe?: number };
+      return `confirmation{myTotalForThem=${d.myTotalForThem}, theirTotalForMe=${d.theirTotalForMe}}`;
+    }
+    case 'sync':
+    case 'change': {
+      if (payload.length === 0) return '[empty]';
+      // Document content is encrypted; we can only confirm the encryption marker
+      // and show a sanitized peek at the ciphertext for correlation.
+      const head = sanitizeAscii(payload.subarray(0, 10));
+      const tail = sanitizeAscii(payload.subarray(Math.max(0, payload.length - 10)));
+      if (payload[0] === ENC_ENCRYPTED) {
+        return `[encrypted, ${payload.length} bytes, "${head}…${tail}"]`;
+      }
+      const prefix = payload[0].toString(16).padStart(2, '0');
+      return `[plaintext?! prefix=0x${prefix}, ${payload.length} bytes, "${head}…${tail}"]`;
+    }
+    default:
+      return describeData(payload);
+  }
+}
+
+/**
+ * Decode a keyhive message envelope and describe its contents.
+ *
+ * Every keyhive-adapter message wraps `data` as CBOR `{ contactCard, signed }`,
+ * where `signed` is a `Signed` blob over the real payload. We peel both layers
+ * (see extractSignedPayload) and format the payload per message type. The
+ * contact card and signer are always carried in the envelope, so we note their
+ * presence rather than decoding them.
+ */
+function describeMessageData(type: string, data: unknown): string {
+  if (!isBytes(data)) return describeData(data);
+
+  let envelope: { contactCard?: string; signed?: unknown };
+  try {
+    envelope = decode(data) as { contactCard?: string; signed?: unknown };
+  } catch {
+    return describeData(data);
+  }
+  if (!envelope || !isBytes(envelope.signed)) return describeData(data);
+
+  const payload = extractSignedPayload(envelope.signed);
+  if (!payload) return describeData(data);
+
+  let body: string;
+  try {
+    body = describePayload(type, payload);
+  } catch {
+    body = describeData(payload);
+  }
+
+  // Note (don't decode) the envelope-level signer and optional contact card.
+  const notes = ['signer'];
+  if (envelope.contactCard && envelope.contactCard.length > 0) notes.push('card');
+  return `${body} +(${notes.join(', ')})`;
+}
+
 function logMessage(dir: '←' | '→', peerId: string, message: any) {
   const type = message.type ?? '?';
+  // TODO: temporary — ephemeral messages are too noisy; skip logging them.
+  if (type === 'ephemeral') return;
   const parts = [`[relay] ${dir} ${shortId(peerId)} ${type}`];
 
   if (message.senderId) parts.push(`from=${shortId(message.senderId)}`);
@@ -43,7 +165,7 @@ function logMessage(dir: '←' | '→', peerId: string, message: any) {
   if (message.sessionId) parts.push(`session=${message.sessionId}`);
 
   if (message.data != null) {
-    parts.push(`data=${describeData(message.data)}`);
+    parts.push(`data=${describeMessageData(type, message.data)}`);
   }
 
   if (message.peerMetadata) {
