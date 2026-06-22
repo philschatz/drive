@@ -76,10 +76,31 @@ function describeByteList(arr: unknown): string {
   return `${arr.length} [${shown.join(', ')}${more}]`;
 }
 
+// JSON-stringify a decoded CBOR value for logging: byte strings become hex
+// previews, bigints become decimal, and the whole thing is length-capped.
+function stringifyValue(value: unknown): string {
+  const MAX = 300;
+  try {
+    const json = JSON.stringify(value, (_k, v) => {
+      if (isBytes(v)) return `<${hexPreview(v)}>`;
+      if (typeof v === 'bigint') return v.toString();
+      return v;
+    });
+    if (json === undefined) return String(value);
+    return json.length > MAX ? `${json.slice(0, MAX)}…` : json;
+  } catch {
+    return String(value);
+  }
+}
+
 // Format the inner (post-envelope) payload according to the message type. Every
 // keyhive payload is CBOR; sync/change payloads are an encryption-prefixed blob.
 function describePayload(type: string, payload: Uint8Array): string {
   switch (type) {
+    case 'ephemeral': {
+      // The broadcast payload (e.g. presence state) is CBOR-encoded.
+      return `ephemeral=${stringifyValue(decode(payload))}`;
+    }
     case 'keyhive-sync-check': {
       const d = decode(payload) as { myTotal?: number; beliefOfTheirTotal?: number };
       return `check{myTotal=${d.myTotal}, beliefOfTheirTotal=${d.beliefOfTheirTotal}}`;
