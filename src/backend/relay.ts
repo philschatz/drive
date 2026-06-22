@@ -7,14 +7,29 @@ const encoder = new Encoder({ tagUint8Array: false, useRecords: false });
 const RELAY_PEER_ID = `relay-${Math.random().toString(36).slice(2, 10)}`;
 
 function shortId(id: string): string {
-  return id.length > 16 ? id.slice(0, 12) + '...' : id;
+  return id.length > 8 ? id.slice(0, 6) + '…' : id;
+}
+
+// Render bytes as printable ASCII, replacing non-printable/high bytes with '.'
+function sanitizeAscii(bytes: Uint8Array): string {
+  return Array.from(bytes)
+    .map((b) => (b >= 0x20 && b <= 0x7e ? String.fromCharCode(b) : '.'))
+    .join('');
 }
 
 function describeData(data: unknown): string {
   if (data instanceof Uint8Array || Buffer.isBuffer(data)) {
-    return `[encrypted, ${data.length} bytes]`;
+    const prefix = sanitizeAscii(data.subarray(0, 10));
+    const suffix = sanitizeAscii(data.subarray(Math.max(0, data.length - 10)));
+    // Simple FNV-1a 32-bit checksum for cheap payload fingerprinting
+    let hash = 0x811c9dc5;
+    for (const b of data) {
+      hash = (Math.imul(hash ^ b, 0x01000193) >>> 0);
+    }
+    const checksum = hash.toString(16).padStart(8, '0');
+    return `[hash=${checksum} ${data.length} bytes, "${prefix}…${suffix}"]`;
   }
-  return `[encrypted, unknown size]`;
+  return `[unknown size]`;
 }
 
 function logMessage(dir: '←' | '→', peerId: string, message: any) {
