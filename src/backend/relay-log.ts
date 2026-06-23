@@ -182,7 +182,7 @@ function describeMessageData(type: string, data: unknown): string {
 }
 
 export function logMessage(dir: '←' | '→', peerId: string, message: any) {
-  const type = message.type ?? '?';
+  const type = message.type ?? message;
   const parts = [`[relay] ${dir} ${shortId(peerId)} ${type}`];
 
   if (message.senderId) parts.push(`from=${shortId(message.senderId)}`);

@@ -1390,6 +1390,162 @@ describe('KeyhiveOps', () => {
       expect(bDocs.length).toBeGreaterThan(0);
     });
 
+    it('Bob sees his own group in the member list, not just Alice', async () => {
+      const { ops: opsA, kh: khA } = await createOps();
+      const { ops: opsB, kh: khB } = await createOps();
+
+      const { automergeDocIdBytes } = await createDocForSharing(opsA);
+      const { khDocId, bobGroupId } = await addFriendAndMember({
+        opsA, khA, opsB, khB,
+        automergeDocId: 'am-doc-members',
+        automergeDocIdBytes,
+      });
+
+      // Alice's panel is correct; Bob's panel should show the same members:
+      // Alice (admin) AND Bob's own group (the share target).
+      const membersOnBob = await opsB.getDocMembers(khDocId);
+      const ids = membersOnBob.map((m) => m.agentId);
+      expect(ids).toContain(bobGroupId);
+    });
+
+    // KNOWN BUG (it.failing): when a doc is shared with Bob's GROUP, a member
+    // cannot decrypt it after the real per-agent network sync. The network
+    // adapter's getEventHashesForAgent (utilities.ts) sends, per peer, only
+    // eventsForAgent(individual) + that individual's keyOps() — which does NOT
+    // carry the doc-level CGKA key material a group member needs. Result in the
+    // app: "EncryptError/DecryptError: ShareKey not found" and Bob's Share panel
+    // shows only Alice, never himself. (A full-archive sync works — see the
+    // passing tests above — so this is a sync-completeness gap, not core logic.)
+    // This test PASSES while the bug exists and will FAIL (alerting us) once the
+    // per-agent sync is fixed to include the needed group/doc key ops.
+    it.failing('group-shared doc: a group member can decrypt after faithful per-agent sync', async () => {
+      const { ops: opsA, kh: khA } = await createOps();
+      const { ops: opsB, kh: khB } = await createOps();
+
+      const { khDocId } = await opsA.enableSharing('am-doc-sharekey');
+      const bobGroupId = await opsB.ensureUserGroup({ create: true });
+
+      const cardA = await khA.contactCard();
+      const cardB = await khB.contactCard();
+      const indBonA = await khA.receiveContactCard(cardB);
+      await khB.receiveContactCard(cardA);
+
+      // Alice obtains Bob's group ops (she can share).
+      await khA.ingestArchive(await khB.toArchive());
+      await opsA.addMember(bobGroupId!, khDocId, 'edit');
+
+      // Faithful per-agent wire payload Alice → Bob (events + individual keyOps only).
+      const collect = async (kh: any, agents: any[]) => {
+        const byHash = new Map<string, Uint8Array>();
+        for (const agent of agents) {
+          const ev: Map<Uint8Array, Uint8Array> = await kh.eventsForAgent(agent);
+          ev.forEach((v, k) => byHash.set(k.toString(), v));
+          const ko: Map<Uint8Array, Uint8Array> = await agent.keyOps();
+          ko.forEach((v, k) => byHash.set(k.toString(), v));
+        }
+        return [...byHash.values()];
+      };
+      const aliceAgent = (await khA.individual).toAgent();
+      const payload = await collect(khA, [aliceAgent, indBonA.toAgent()]);
+      await khB.ingestEventsBytes(payload);
+
+      // Alice encrypts; Bob must be able to decrypt (needs the doc's ShareKey).
+      const docA = opsA.khDocuments.get(khDocId);
+      const plaintext = new TextEncoder().encode('shared with bob group');
+      const ref = new ChangeId(crypto.getRandomValues(new Uint8Array(32)));
+      const enc = await khA.tryEncryptArchive(docA!, ref, [], plaintext);
+
+      const docB = await khB.getDocument(docA.doc_id);
+      expect(docB).toBeDefined();
+      const decrypted = await khB.tryDecrypt(docB!, enc.encrypted_content());
+      expect(new Uint8Array(decrypted)).toEqual(plaintext);
+    });
+
+    it('Alice grants Bob (individual) access via his group — the sync access-gate sees it', async () => {
+      // peerHasAnyAccess / peerHasWriteAccess gate sync on Alice's side using
+      // keyhive.accessForDoc(bobIndividualId, doc). If that returns null because
+      // Alice's keyhive does not resolve Bob's individual's access THROUGH his
+      // group, Alice silently drops ALL sync to Bob — Bob sees Alice but never
+      // himself. Verify accessForDoc resolves transitively on the GRANTER side.
+      const { ops: opsA, kh: khA } = await createOps();
+      const { ops: opsB, kh: khB } = await createOps();
+
+      const { automergeDocIdBytes } = await createDocForSharing(opsA);
+      await addFriendAndMember({
+        opsA, khA, opsB, khB,
+        automergeDocId: 'am-doc-gate',
+        automergeDocIdBytes,
+      });
+
+      const bobIndividualId = new Identifier((await khB.individual).id.toBytes());
+      const khDocIdObj = new DocumentId(automergeDocIdBytes);
+      const access = await khA.accessForDoc(bobIndividualId, khDocIdObj);
+      expect(access).toBeDefined();
+      expect(access).not.toBeNull();
+    });
+
+    it('per-agent sync delivers the group delegation so Bob sees his group as a member', async () => {
+      const { ops: opsA, kh: khA } = await createOps();
+      const { ops: opsB, kh: khB } = await createOps();
+
+      const { khDocId } = await opsA.enableSharing('am-doc-repro');
+      const bobGroupId = await opsB.ensureUserGroup({ create: true });
+
+      // Card exchange (add friend, both directions).
+      const cardA = await khA.contactCard();
+      const cardB = await khB.contactCard();
+      const indBonA = await khA.receiveContactCard(cardB);
+      await khB.receiveContactCard(cardA);
+
+      // Alice obtains Bob's group ops (the bug report confirms Alice CAN share,
+      // so by this point her keyhive resolves Bob's group).
+      await khA.ingestArchive(await khB.toArchive());
+      await opsA.addMember(bobGroupId!, khDocId, 'edit');
+
+      // Faithful per-agent sync — exactly what the network adapter transfers:
+      // the union of eventsForAgent(self) and eventsForAgent(remote individual),
+      // NOT a full archive. This is the real wire payload Bob receives.
+      const aliceAgent = (await khA.individual).toAgent();
+      const bobAgentOnAlice = indBonA.toAgent();
+      const evMap = new Map<string, Uint8Array>();
+      for (const agent of [aliceAgent, bobAgentOnAlice]) {
+        const ev: Map<Uint8Array, Uint8Array> = await khA.eventsForAgent(agent);
+        ev.forEach((v, k) => evMap.set(k.toString(), v));
+      }
+      await khB.ingestEventsBytes([...evMap.values()]);
+
+      const membersOnBob = await opsB.getDocMembers(khDocId);
+      expect(membersOnBob.map((m) => m.agentId)).toContain(bobGroupId);
+    });
+
+    it('per-agent sync delivers Bob group ops to Alice so she can share with the group', async () => {
+      const { ops: opsA, kh: khA } = await createOps();
+      const { ops: opsB, kh: khB } = await createOps();
+
+      const { khDocId } = await opsA.enableSharing('am-doc-probe');
+      const bobGroupId = await opsB.ensureUserGroup({ create: true });
+
+      const cardA = await khA.contactCard();
+      const cardB = await khB.contactCard();
+      await khA.receiveContactCard(cardB);
+      const indAonB = await khB.receiveContactCard(cardA);
+
+      // Bob → Alice per-agent sync (union of eventsForAgent), NO full archive.
+      const bobAgent = (await khB.individual).toAgent();
+      const aliceAgentOnBob = indAonB.toAgent();
+      const evMap = new Map<string, Uint8Array>();
+      for (const agent of [bobAgent, aliceAgentOnBob]) {
+        const ev: Map<Uint8Array, Uint8Array> = await khB.eventsForAgent(agent);
+        ev.forEach((v, k) => evMap.set(k.toString(), v));
+      }
+      await khA.ingestEventsBytes([...evMap.values()]);
+
+      // Can Alice now resolve + share with Bob's group?
+      await opsA.addMember(bobGroupId!, khDocId, 'edit');
+      const members = await opsA.getDocMembers(khDocId);
+      expect(members.map((m) => m.agentId)).toContain(bobGroupId);
+    });
+
     it('enableSharing reuses existing keyhive doc from createKeyhiveDoc', async () => {
       const { ops, kh } = await createOps();
 

@@ -205,8 +205,28 @@ export function Settings({ path }: { path?: string }) {
         ) : identity ? (
           <div className="text-sm space-y-1">
             <div className="flex items-center gap-2">
+              <span className="text-muted-foreground">User Group ID:</span>
+              {identity.userGroupId ? (
+                <code
+                  className="bg-muted px-1.5 py-0.5 rounded text-xs font-mono cursor-pointer"
+                  title={`${identity.userGroupId} (click to copy)`}
+                  onClick={() => navigator.clipboard.writeText(identity.userGroupId!)}
+                >
+                  {identity.userGroupId.slice(0, 16)}...
+                </code>
+              ) : (
+                <span className="text-xs text-muted-foreground italic">
+                  Not created yet — add a friend or link a device
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
               <span className="text-muted-foreground">Device ID:</span>
-              <code className="bg-muted px-1.5 py-0.5 rounded text-xs font-mono">
+              <code
+                className="bg-muted px-1.5 py-0.5 rounded text-xs font-mono cursor-pointer"
+                title={`${identity.deviceId} (click to copy)`}
+                onClick={() => navigator.clipboard.writeText(identity.deviceId)}
+              >
                 {identity.deviceId.slice(0, 16)}...
               </code>
             </div>
