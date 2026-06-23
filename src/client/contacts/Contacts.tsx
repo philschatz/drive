@@ -57,11 +57,13 @@ export function Contacts({ path }: { path?: string }) {
 
         for (const m of members) {
           if (m.isMe) continue;
-          if (!m.isIndividual && !m.isGroup) continue;
+          // Sharing is group-only: a contact is always a user-group. Skip non-group
+          // members (e.g. unrevoked invite temp identities) — they aren't contacts.
+          if (!m.isGroup) continue;
 
           let entry = map.get(m.agentId);
           if (!entry) {
-            entry = { agentId: m.agentId, isGroup: m.isGroup, docs: [] };
+            entry = { agentId: m.agentId, isGroup: true, docs: [] };
             map.set(m.agentId, entry);
           }
           entry.docs.push({
@@ -73,11 +75,12 @@ export function Contacts({ path }: { path?: string }) {
         }
       }
 
-      // Include named contacts that aren't members of any document yet
+      // Include named contacts that aren't members of any document yet. Names are
+      // keyed by user-group id, so every stored contact is a group.
       const allNames = getAllContactNames();
-      for (const agentId of Object.keys(allNames)) {
-        if (!map.has(agentId)) {
-          map.set(agentId, { agentId, isGroup: false, docs: [] });
+      for (const groupId of Object.keys(allNames)) {
+        if (!map.has(groupId)) {
+          map.set(groupId, { agentId: groupId, isGroup: true, docs: [] });
         }
       }
 

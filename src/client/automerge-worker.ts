@@ -1267,16 +1267,21 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
   if (msg.type === 'kh-receive-contact-card') {
     try {
       if (!khOps) throw new Error('Keyhive not available');
-      const result = await khOps.receiveContactCard(msg.cardJson);
-      // For a friend (not a device link), remember which user-group is theirs so we
-      // can share documents with their whole user (all their devices) later.
-      if (!msg.isDevice && !result.isOwnCard && msg.userGroupId) {
-        const { idbGet, idbSet } = await import('./idb-storage');
-        const map = (await idbGet<Record<string, string>>('contact-groups')) ?? {};
-        map[result.agentId] = msg.userGroupId;
-        await idbSet('contact-groups', map);
+      // A friend is always a user-group (sharing is group-only). A friend link
+      // with no group id is not a group — reject it. Device links are exempt
+      // (they legitimately add an individual device to your own group).
+      if (!msg.isDevice && !msg.userGroupId) {
+        throw new Error('This contact is not a group — ask them to open Settings and show a fresh friend QR/link.');
       }
-      (self as any).postMessage({ type: 'result', id: msg.id, result } satisfies WorkerToMain);
+      const result = await khOps.receiveContactCard(msg.cardJson);
+      // We identify a friend by their user-group id (their share target), never by
+      // a bare individual device id. The group id is what the client persists as
+      // the contact (its name), so surface it back alongside the individual.
+      (self as any).postMessage({
+        type: 'result',
+        id: msg.id,
+        result: { ...result, userGroupId: msg.isDevice ? null : msg.userGroupId },
+      } satisfies WorkerToMain);
     } catch (err: any) {
       (self as any).postMessage({ type: 'result', id: msg.id, error: errMsg(err) } satisfies WorkerToMain);
     }
@@ -1311,10 +1316,10 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
       if (!khOps) throw new Error('Keyhive not available');
       const { idbGet } = await import('./idb-storage');
       const contactNames = (await idbGet<Record<string, string>>('contact-names')) ?? {};
-      const contactAgentIds = Object.keys(contactNames);
-      const contactGroups = (await idbGet<Record<string, string>>('contact-groups')) ?? {};
+      // Contacts are keyed by user-group id (sharing is group-only).
+      const contactGroupIds = Object.keys(contactNames);
       const excludeKhDocId = msg.excludeDocId ? resolveKhDocId(msg.excludeDocId) : undefined;
-      const result = await khOps.getKnownContacts(excludeKhDocId, contactAgentIds, contactGroups);
+      const result = await khOps.getKnownContacts(excludeKhDocId, contactGroupIds);
       (self as any).postMessage({ type: 'result', id: msg.id, result } satisfies WorkerToMain);
     } catch (err: any) {
       (self as any).postMessage({ type: 'result', id: msg.id, error: errMsg(err) } satisfies WorkerToMain);

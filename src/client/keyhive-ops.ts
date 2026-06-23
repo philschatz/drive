@@ -490,17 +490,12 @@ export class KeyhiveOps {
 
   async getKnownContacts(
     excludeDocId?: string,
-    contactAgentIds?: string[],
-    contactGroups?: Record<string, string>,
+    contactGroupIds?: string[],
   ): Promise<MemberInfo[]> {
     const me = await this.kh.individual;
     const myAgentStr = me.toAgent().toString();
-    const myAgentId = bytesToBase64(me.id.toBytes());
-    const groups = contactGroups ?? {};
+    const myGroupId = await this.fx.getUserGroupId();
     const seen = new Map<string, MemberInfo>();
-    // Track group ids already represented so a friend isn't listed twice (once as a
-    // bare individual, once via the group already on a shared doc).
-    const seenGroupIds = new Set<string>();
 
     const excludeSet = new Set<string>();
     if (excludeDocId) {
@@ -508,6 +503,9 @@ export class KeyhiveOps {
       for (const m of excludeMembers) excludeSet.add(m.agentId);
     }
 
+    // Group members already sharing a document. Sharing is group-only, so only
+    // group members are surfaced as contacts; individuals (e.g. unrevoked invite
+    // temp identities) are skipped.
     const reachable = await this.kh.reachableDocs();
     for (const summary of reachable) {
       let members: any[];
@@ -518,63 +516,41 @@ export class KeyhiveOps {
         continue;
       }
       for (const m of members) {
+        if (!m.who.isGroup()) continue;
         if (m.who.toString() === myAgentStr) continue;
         const agentId = bytesToBase64(m.who.id.toBytes());
+        if (agentId === myGroupId) continue;
         if (excludeSet.has(agentId)) continue;
         if (seen.has(agentId)) continue;
-        if (m.who.isGroup()) {
-          seen.set(agentId, {
-            agentId,
-            displayId: m.who.toString(),
-            role: m.can.toString(),
-            isIndividual: false,
-            isGroup: true,
-            isMe: false,
-            groupId: agentId,
-          });
-          seenGroupIds.add(agentId);
-        } else if (m.who.isIndividual()) {
-          const groupId = groups[agentId];
-          seen.set(agentId, {
-            agentId,
-            displayId: m.who.toString(),
-            role: m.can.toString(),
-            isIndividual: true,
-            isGroup: false,
-            isMe: false,
-            groupId,
-          });
-          if (groupId) seenGroupIds.add(groupId);
-        }
+        seen.set(agentId, {
+          agentId,
+          displayId: m.who.toString(),
+          role: m.can.toString(),
+          isIndividual: false,
+          isGroup: true,
+          isMe: false,
+          groupId: agentId,
+        });
       }
     }
 
-    // Also include contacts from the friend list who aren't yet members of any document
-    if (contactAgentIds) {
-      for (const agentId of contactAgentIds) {
-        if (agentId === myAgentId) continue;
-        if (excludeSet.has(agentId)) continue;
-        if (seen.has(agentId)) continue;
-        const groupId = groups[agentId];
-        if (groupId && (excludeSet.has(groupId) || seenGroupIds.has(groupId))) continue;
-        try {
-          const id = new this.bridge.Identifier(base64ToBytes(agentId));
-          const agent = await this.kh.getAgent(id);
-          if (agent && agent.isIndividual()) {
-            seen.set(agentId, {
-              agentId,
-              displayId: agent.toString(),
-              role: '',
-              isIndividual: true,
-              isGroup: false,
-              isMe: false,
-              groupId,
-            });
-            if (groupId) seenGroupIds.add(groupId);
-          }
-        } catch {
-          // Agent not found in keyhive — skip
-        }
+    // Also include contacts from the friend list who aren't yet members of any
+    // document. A stored contact is always a user-group (its id is the group id).
+    if (contactGroupIds) {
+      for (const groupId of contactGroupIds) {
+        if (groupId === myGroupId) continue;
+        if (excludeSet.has(groupId)) continue;
+        if (seen.has(groupId)) continue;
+        const group = await this.getGroupById(groupId);
+        seen.set(groupId, {
+          agentId: groupId,
+          displayId: group ? group.toAgent().toString() : groupId,
+          role: '',
+          isIndividual: false,
+          isGroup: true,
+          isMe: false,
+          groupId,
+        });
       }
     }
 
@@ -596,24 +572,20 @@ export class KeyhiveOps {
 
   /**
    * Resolve a base64 id to the Agent to add to a document ACL.
-   * Prefers a user Group (so all of a user's devices get access), then an existing
-   * doc member, then falls back to an Individual (legacy shares / invite temp ids).
+   * Sharing is group-only: resolve a user Group (so all of a user's devices get
+   * access), or an agent already a member of this document. Anything else is
+   * rejected — we no longer share with a bare Individual device.
    */
   private async resolveShareAgent(doc: any, idB64: string): Promise<any> {
-    const bytes = base64ToBytes(idB64);
-    // 1. A user Group (mine or a contact's) — preferred share target.
+    // 1. A user Group (mine or a contact's) — the only valid share target.
     const group = await this.getGroupById(idB64);
     if (group) return group.toAgent();
     // 2. Already a member of this document.
     try {
       return await this.findAgentByIdBytes(doc, idB64);
     } catch {
-      // not yet a member — fall through
+      // not a member and not a group — reject
     }
-    // 3. Individual fallback (legacy individual shares, invite temp identities).
-    const id = new this.bridge.Identifier(bytes);
-    const found = await this.kh.getAgent(id);
-    if (found) return found;
     throw new Error('Agent not found');
   }
 

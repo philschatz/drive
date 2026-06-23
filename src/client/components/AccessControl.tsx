@@ -202,11 +202,15 @@ export function AccessControl({ docId, docType, access: accessProp }: AccessCont
   const handleAdd = async () => {
     const contact = contacts.find(c => c.agentId === selectedContact);
     if (!contact) return;
+    // Sharing is group-only: every contact's share target is their user Group so
+    // all their devices get access. A contact with no known group can't be shared.
+    if (!contact.groupId) {
+      setError('This contact has no group — please re-add them as a friend.');
+      return;
+    }
     setLoading(true);
     try {
-      // Share with the contact's user (Group) so all their devices get access;
-      // fall back to the individual id only for legacy contacts without a known group.
-      await addMember(contact.groupId ?? contact.agentId, docId, inviteRole);
+      await addMember(contact.groupId, docId, inviteRole);
       await refresh();
     } catch (err: any) {
       setError(err.message);

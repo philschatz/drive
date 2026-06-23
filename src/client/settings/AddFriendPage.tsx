@@ -67,7 +67,9 @@ function decodeFriendData(b64url: string): { cardJson: string; displayName?: str
 export function AddFriendPage({ cardData }: AddFriendPageProps) {
   const [status, setStatus] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const [agentId, setAgentId] = useState<string | null>(null);
+  // A contact is identified by its user-group id (its share target), never by a
+  // bare individual device id.
+  const [contactGroupId, setContactGroupId] = useState<string | null>(null);
   const [name, setName] = useState('');
   const [saved, setSaved] = useState(false);
   const [processing, setProcessing] = useState(false);
@@ -83,6 +85,9 @@ export function AddFriendPage({ cardData }: AddFriendPageProps) {
     try {
       setStatus('Decoding contact card...');
       const { cardJson, displayName, userGroupId } = decodeFriendData(cardData);
+      if (!userGroupId) {
+        throw new Error('This contact is not a group \u2014 ask them to open Settings and show a fresh friend QR/link.');
+      }
 
       setStatus('Adding contact...');
       const result = await receiveContactCard(cardJson, { userGroupId });
@@ -90,7 +95,8 @@ export function AddFriendPage({ cardData }: AddFriendPageProps) {
         setError("This is your own contact card. Share this link with a friend \u2014 don't open it yourself.");
         return;
       }
-      setAgentId(result.agentId);
+      // Identify the contact by its user-group id, never the individual device id.
+      setContactGroupId(result.userGroupId ?? userGroupId);
       if (displayName) setName(displayName);
 
       setStatus('Contact added. Give them a name so you can recognize them later.');
@@ -102,15 +108,15 @@ export function AddFriendPage({ cardData }: AddFriendPageProps) {
   }, [cardData]);
 
   const handleSave = () => {
-    if (!agentId) return;
+    if (!contactGroupId) return;
     if (name.trim()) {
-      setContactName(agentId, name.trim());
+      setContactName(contactGroupId, name.trim());
     }
     setSaved(true);
   };
 
   // Auto-start on first render
-  if (!status && !error && !agentId && !processing) {
+  if (!status && !error && !contactGroupId && !processing) {
     doReceive();
   }
 
@@ -146,7 +152,7 @@ export function AddFriendPage({ cardData }: AddFriendPageProps) {
             Home
           </Button>
         </div>
-      ) : agentId ? (
+      ) : contactGroupId ? (
         <div>
           <p className="text-sm text-green-600 font-medium mb-4">
             <span className="material-symbols-outlined align-middle mr-1" style={{ fontSize: 16 }}>check_circle</span>

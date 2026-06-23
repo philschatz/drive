@@ -1295,15 +1295,20 @@ describe('KeyhiveOps', () => {
       // keyhive doc created by the idFactory instead of generating a duplicate.
       const { khDocId } = await opsA.enableSharing(automergeDocId, automergeDocIdBytes);
 
+      // Bob mints his personal user-group (its id travels with a friend link);
+      // sharing is group-only, so Alice shares with that group.
+      const bobGroupId = await opsB.ensureUserGroup({ create: true });
+
       // Bidirectional contact card exchange (add friend)
       const cardA = await khA.contactCard();
       const cardB = await khB.contactCard();
-      const indBonA = await khA.receiveContactCard(cardB);
+      await khA.receiveContactCard(cardB);
       await khB.receiveContactCard(cardA);
 
-      // Alice adds Bob as member via the direct addMember path
-      const bobAgentId = bytesToBase64(indBonA.id.toBytes());
-      await opsA.addMember(bobAgentId, khDocId, role);
+      // Alice ingests Bob's archive so Bob's group ops resolve in her keyhive,
+      // then adds Bob's group as a member via the direct addMember path.
+      await khA.ingestArchive(await khB.toArchive());
+      await opsA.addMember(bobGroupId!, khDocId, role);
 
       // Sync keyhive state from Alice → Bob (simulates network sync)
       const archiveA = await khA.toArchive();
@@ -1315,7 +1320,7 @@ describe('KeyhiveOps', () => {
       aEventsForB.forEach((v: Uint8Array) => arr.push(v));
       await khB.ingestEventsBytes(arr);
 
-      return { khDocId, bobAgentId };
+      return { khDocId, bobGroupId };
     }
 
     it('addMember calls forceResyncAllPeers to trigger doc sync to the new member', async () => {
@@ -1527,18 +1532,13 @@ describe('KeyhiveOps', () => {
       expect(groupMember!.isIndividual).toBe(false);
     });
 
-    it('addMember still resolves an individual id (legacy shares keep working)', async () => {
+    it('addMember rejects a bare individual id (sharing is group-only)', async () => {
       const { ops: a } = await createOps();
       const { ops: b } = await createOps();
       const bAgentId = await learnAgent(a, b);
       const { khDocId } = await a.enableSharing('doc-indiv');
 
-      await a.addMember(bAgentId, khDocId, 'read');
-      const members = await a.getDocMembers(khDocId);
-      const indivMember = members.find((m) => m.agentId === bAgentId);
-      expect(indivMember).toBeDefined();
-      expect(indivMember!.isIndividual).toBe(true);
-      expect(indivMember!.isGroup).toBe(false);
+      await expect(a.addMember(bAgentId, khDocId, 'read')).rejects.toThrow('Agent not found');
     });
 
     it('linkDevice: admin adds the peer; a groupless peer adopts the group id', async () => {
@@ -1560,16 +1560,16 @@ describe('KeyhiveOps', () => {
       expect(await b.getUserGroupId()).toBe(aGroupId);
     });
 
-    it('getKnownContacts attaches the contact-group id as the share target', async () => {
+    it('getKnownContacts lists a stored contact as their user-group', async () => {
       const { ops: a } = await createOps();
-      const { ops: b } = await createOps();
-      const bAgentId = await learnAgent(a, b);
-      const fakeGroupId = bytesToBase64(crypto.getRandomValues(new Uint8Array(32)));
+      // A stored contact is identified by its user-group id (sharing is group-only).
+      const groupId = bytesToBase64(crypto.getRandomValues(new Uint8Array(32)));
 
-      const contacts = await a.getKnownContacts(undefined, [bAgentId], { [bAgentId]: fakeGroupId });
-      const entry = contacts.find((c) => c.agentId === bAgentId);
+      const contacts = await a.getKnownContacts(undefined, [groupId]);
+      const entry = contacts.find((c) => c.agentId === groupId);
       expect(entry).toBeDefined();
-      expect(entry!.groupId).toBe(fakeGroupId);
+      expect(entry!.isGroup).toBe(true);
+      expect(entry!.groupId).toBe(groupId);
     });
   });
 });

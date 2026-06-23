@@ -579,7 +579,7 @@ export function getContactCard(): Promise<string> {
 export function receiveContactCard(
   cardJson: string,
   opts?: { isDevice?: boolean; userGroupId?: string | null },
-): Promise<{ agentId: string; isOwnCard: boolean }> {
+): Promise<{ agentId: string; isOwnCard: boolean; userGroupId: string | null }> {
   return khRequest('kh-receive-contact-card', { cardJson, isDevice: opts?.isDevice, userGroupId: opts?.userGroupId });
 }
 
