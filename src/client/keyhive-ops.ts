@@ -350,6 +350,8 @@ export class KeyhiveOps {
   async addMember(agentIdB64: string, docId: string, role: string): Promise<true> {
     const doc = this.khDocuments.get(docId);
     if (!doc) throw new Error('Document not found');
+    // Sharing a document ensures the user-group exists and administers the doc.
+    await this.assignGroupAsAdmin(doc);
     const agent = await this.resolveShareAgent(doc, agentIdB64);
     const access = this.bridge.Access.tryFromString(role);
     if (!access) throw new Error(`Invalid role: ${role}`);
@@ -437,6 +439,8 @@ export class KeyhiveOps {
   ): Promise<{ inviteKeyBytes: number[]; groupId: string; inviteSignerAgentId: string; inviterAgentIdBytes: number[] }> {
     const doc = this.khDocuments.get(docId);
     if (!doc) throw new Error('Document not found. Re-enable sharing.');
+    // Sharing a document ensures the user-group exists and administers the doc.
+    await this.assignGroupAsAdmin(doc);
     const seed = crypto.getRandomValues(new Uint8Array(32));
     const inviteSigner = this.bridge.Signer.memorySignerFromBytes(seed);
     const store = this.bridge.CiphertextStore.newInMemory();
