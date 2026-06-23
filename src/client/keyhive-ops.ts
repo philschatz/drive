@@ -153,6 +153,9 @@ export class KeyhiveOps {
       this.userGroup = group;
       this.userGroupIdCache = id;
       await this.fx.setUserGroupId(id);
+      // The user-group administers the user's documents: make it an admin of
+      // every document this device already owns/can reach.
+      await this.adoptGroupOwnershipForAllDocs(group);
       await this.fx.persist();
       this.fx.syncKeyhive();
       return id;
@@ -168,6 +171,47 @@ export class KeyhiveOps {
       }
     }
     return id;
+  }
+
+  /**
+   * Make the personal user-group an admin co-owner of a document (idempotent).
+   * The creating device cannot be removed (its root delegation is permanent in
+   * keyhive), but the group as admin means all of the user's devices administer
+   * the doc via group membership.
+   */
+  private async addGroupAsAdmin(doc: any, group: any): Promise<void> {
+    const groupIdB64 = bytesToBase64(group.groupId.toBytes());
+    const members = await this.kh.docMemberCapabilities(doc.doc_id);
+    if (members.some((m: any) => bytesToBase64(m.who.id.toBytes()) === groupIdB64)) {
+      return; // already a member
+    }
+    const admin = this.bridge.Access.tryFromString('admin');
+    if (!admin) return;
+    await this.kh.addMember(group.toAgent(), doc.toMembered(), admin, []);
+  }
+
+  /** Ensure the user-group exists, then make it an admin of the given document. */
+  private async assignGroupAsAdmin(doc: any): Promise<void> {
+    const groupId = await this.ensureUserGroup({ create: true });
+    if (!groupId) return;
+    const group = await this.getGroupById(groupId);
+    if (!group) return;
+    await this.addGroupAsAdmin(doc, group);
+    await this.fx.persist();
+    this.fx.syncKeyhive();
+  }
+
+  /** Add the user-group as admin to every document this device can reach. */
+  private async adoptGroupOwnershipForAllDocs(group: any): Promise<void> {
+    const reachable = await this.kh.reachableDocs();
+    for (const summary of reachable) {
+      try {
+        const doc = await this.kh.getDocument(summary.doc.doc_id);
+        if (doc) await this.addGroupAsAdmin(doc, group);
+      } catch {
+        // skip docs with incomplete CGKA state
+      }
+    }
   }
 
   /** Add a device (by its individual agentId) to the personal user-group. Idempotent; admin-only. */
@@ -352,6 +396,8 @@ export class KeyhiveOps {
     const doc = await this.kh.generateDocument([], ref, []);
     const khDocId = bytesToBase64(doc.id.toBytes());
     this.khDocuments.set(khDocId, doc);
+    // The user-group administers every document this user creates.
+    await this.assignGroupAsAdmin(doc);
     return { khDocId, docIdBytes: doc.doc_id.toBytes() };
   }
 
@@ -378,6 +424,8 @@ export class KeyhiveOps {
     const khDocId = bytesToBase64(doc.id.toBytes());
     this.khDocuments.set(khDocId, doc);
     this.fx.registerDoc(automergeDocId, doc.doc_id);
+    // The user-group administers every document this user shares.
+    await this.assignGroupAsAdmin(doc);
     await this.fx.persist();
     this.fx.syncKeyhive();
     return { khDocId, groupId: '' };

@@ -19,7 +19,7 @@ import {
   Encrypted,
   Archive,
 } from '@keyhive/keyhive/slim';
-import { KeyhiveOps, KeyhiveBridge, KeyhiveOpsSideEffects, bytesToBase64 } from './keyhive-ops';
+import { KeyhiveOps, KeyhiveBridge, KeyhiveOpsSideEffects, bytesToBase64, base64ToBytes } from './keyhive-ops';
 
 initKeyhiveWasm();
 
@@ -203,8 +203,10 @@ describe('KeyhiveOps', () => {
       expect(ops.khDocuments.has(result.khDocId)).toBe(true);
       expect(fx.calls.registerDoc.length).toBe(1);
       expect(fx.calls.registerDoc[0][0]).toBe('automerge-doc-123');
-      expect(fx.calls.persist.length).toBe(1);
-      expect(fx.calls.syncKeyhive.length).toBe(1);
+      // enableSharing also mints the user-group and makes it doc admin, so it
+      // persists/syncs more than once now.
+      expect(fx.calls.persist.length).toBeGreaterThanOrEqual(1);
+      expect(fx.calls.syncKeyhive.length).toBeGreaterThanOrEqual(1);
     });
   });
 
@@ -649,7 +651,8 @@ describe('KeyhiveOps', () => {
       const bCard = await khB.contactCard();
       await khA.receiveContactCard(bCard);
       const membersAfterSync = await opsA.getDocMembers(khDocId);
-      const bOnA = membersAfterSync.find(m => !m.isMe && m.agentId !== invite.inviteSignerAgentId);
+      // Exclude Alice's own user-group (now an admin co-owner) — we want B.
+      const bOnA = membersAfterSync.find(m => !m.isMe && !m.isGroup && m.agentId !== invite.inviteSignerAgentId);
       expect(bOnA).toBeDefined();
       expect(bOnA!.role).toBe('Edit');
     });
@@ -1686,6 +1689,51 @@ describe('KeyhiveOps', () => {
       expect(groupMember).toBeDefined();
       expect(groupMember!.isGroup).toBe(true);
       expect(groupMember!.isIndividual).toBe(false);
+    });
+
+    it('a group can co-own a doc as admin; the creating device cannot be revoked (keyhive constraint)', async () => {
+      // The user-group CAN be added as an admin co-owner of a document. But the
+      // CREATING device gets a root delegation (proof: None) that roots the
+      // document's authority, and keyhive only accepts a revocation of a root
+      // delegation if it is signed by the DOCUMENT's own key — which no device
+      // holds. So a device's attempt to revoke its own root membership silently
+      // no-ops. Net: "remove the device as admin" is not achievable for a doc
+      // the device created. This test documents that constraint.
+      const { ops, kh } = await createOps();
+      const groupId = await ops.ensureUserGroup({ create: true });
+      const group = await kh.getGroup(GroupId.fromBytes(base64ToBytes(groupId!)));
+      expect(group).toBeDefined();
+
+      const ref = new ChangeId(new Uint8Array(32));
+      const doc = await kh.generateDocument([], ref, []);
+
+      const admin = Access.tryFromString('admin')!;
+      await kh.addMember(group!.toAgent(), doc.toMembered(), admin, []);
+
+      const me = await kh.individual;
+      const myIdB64 = bytesToBase64(me.id.toBytes());
+      const before = await kh.docMemberCapabilities(doc.doc_id);
+      const deviceMember = before.find((m: any) => bytesToBase64(m.who.id.toBytes()) === myIdB64);
+      expect(deviceMember).toBeDefined();
+      // Attempt to revoke the creating device — silently ignored (root delegation).
+      await kh.revokeMember(deviceMember!.who, true, doc.toMembered());
+
+      const members = await kh.docMemberCapabilities(doc.doc_id);
+      const ids = members.map((m: any) => bytesToBase64(m.who.id.toBytes()));
+      // The group IS an admin co-owner...
+      expect(ids).toContain(groupId);
+      // ...but the creating device remains (cannot be revoked).
+      expect(ids).toContain(myIdB64);
+
+      // The group grants its members access too: the device has Admin and the
+      // doc still encrypts/decrypts.
+      const access = await kh.accessForDoc(new Identifier(me.id.toBytes()), doc.doc_id);
+      expect(access?.toString()).toBe('Admin');
+      const pt = new TextEncoder().encode('group co-owned doc');
+      const eref = new ChangeId(crypto.getRandomValues(new Uint8Array(32)));
+      const enc = await kh.tryEncryptArchive(doc, eref, [], pt);
+      const dec = await kh.tryDecrypt(doc, enc.encrypted_content());
+      expect(new Uint8Array(dec)).toEqual(pt);
     });
 
     it('addMember rejects a bare individual id (sharing is group-only)', async () => {
