@@ -61,13 +61,13 @@ export function Contacts({ path }: { path?: string }) {
           if (m.isMe) continue;
           // Sharing is group-only: a contact is always a user-group. Skip non-group
           // members (e.g. unrevoked invite temp identities) — they aren't contacts.
-          if (!m.isGroup) continue;
+          if (m.type !== 'group') throw new Error('BUG');
 
           let entry = map.get(m.agentId);
           if (!entry) {
-            entry = { agentId: m.agentId, isGroup: true, docs: [], deviceIds: m.deviceIds ?? [] };
+            entry = { agentId: m.agentId, isGroup: true, docs: [], deviceIds: m.deviceIds };
             map.set(m.agentId, entry);
-          } else if (m.deviceIds && m.deviceIds.length > entry.deviceIds.length) {
+          } else if (m.deviceIds.length > entry.deviceIds.length) {
             // Different docs may have synced different amounts of the group's ops;
             // keep the most complete device list seen.
             entry.deviceIds = m.deviceIds;
@@ -76,7 +76,7 @@ export function Contacts({ path }: { path?: string }) {
             docId: doc.id,
             docName: doc.name || doc.id.slice(0, 8),
             docType: (doc.type || 'unknown') as DocType,
-            role: m.role.toLowerCase(),
+            role: m.role ?? 'unknown',
           });
         }
       }
@@ -162,17 +162,15 @@ export function Contacts({ path }: { path?: string }) {
                   {contact.isGroup ? 'group' : 'smartphone'}
                 </span>
                 <EditableName agentId={contact.agentId} />
-                {contact.deviceIds.length > 0 && (
-                  <span
-                    className="inline-flex items-center gap-0.5 text-xs text-muted-foreground"
-                    title={`Devices:\n${contact.deviceIds
-                      .map(id => getContactName(id) || `${id.slice(0, 8)}…`)
-                      .join('\n')}`}
-                  >
-                    <span className="material-symbols-outlined" style={{ fontSize: 14 }}>smartphone</span>
-                    {contact.deviceIds.length}
-                  </span>
-                )}
+                <span
+                  className="inline-flex items-center gap-0.5 text-xs text-muted-foreground"
+                  title={`Devices:\n${contact.deviceIds
+                    .map(id => getContactName(id) || `${id.slice(0, 8)}…`)
+                    .join('\n')}`}
+                >
+                  <span className="material-symbols-outlined" style={{ fontSize: 14 }}>smartphone</span>
+                  {contact.deviceIds.length}
+                </span>
                 <button
                   className="inline-flex items-center justify-center h-6 w-6 rounded-md text-destructive hover:bg-destructive/10 ml-auto"
                   title="Remove contact"

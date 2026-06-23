@@ -50,19 +50,40 @@ export interface KeyhiveBridge {
   ContactCard: { fromJson(json: string): any };
 }
 
-export interface MemberInfo {
+/** Access level a member has on a document. */
+export type MemberRole = 'read' | 'edit' | 'admin';
+
+interface MemberInfoBase {
   agentId: string;
   displayId: string;
-  role: string;
-  isIndividual: boolean;
-  isGroup: boolean;
+  /** Access level for the document. Absent for contacts not yet on any document. */
+  role?: MemberRole;
   isMe: boolean;
-  /** For an individual contact, the base64 id of their user Group (share target), if known. */
+}
+
+/** A single device (or a temporary invite identity). */
+export interface IndividualMemberInfo extends MemberInfoBase {
+  type: 'individual';
+  /** The base64 id of this device's owning user-group (its share target), if known. */
   groupId?: string;
-  /** This individual device is also a member of a group that has access to the doc (redundant — hidden in the UI). */
-  inGroup?: boolean;
-  /** For a group member, the base64 agent ids of the devices in that group (empty if its ops haven't synced). */
-  deviceIds?: string[];
+}
+
+/** A user-group — all of a user's devices, addressed as one share target. */
+export interface GroupMemberInfo extends MemberInfoBase {
+  type: 'group';
+  /** Base64 agent ids of the devices in this group (empty if its ops haven't synced). */
+  deviceIds: string[];
+}
+
+export type MemberInfo = IndividualMemberInfo | GroupMemberInfo;
+
+/** Normalize a keyhive Access string (e.g. "Admin") into a MemberRole. */
+function toMemberRole(can: string): MemberRole {
+  switch (can.toLowerCase()) {
+    case 'admin': return 'admin';
+    case 'edit': return 'edit';
+    default: return 'read';
+  }
 }
 
 export class KeyhiveOps {
@@ -339,8 +360,8 @@ export class KeyhiveOps {
     // (the current device reads as Active, not Individual — same reason
     // listGroupDevices unshifts self), so we collect every non-group sub-member.
     // Groups whose ops haven't synced won't resolve — they report no devices.
-    // Used both to hide devices already covered by a group (inGroup) and to
-    // report each group's device list/count to the UI.
+    // Used both to filter out devices already covered by a group and to report
+    // each group's device list/count to the UI.
     const groupDevices = new Map<string, string[]>();
     for (const m of members) {
       if (!m.who.isGroup()) continue;
@@ -356,22 +377,23 @@ export class KeyhiveOps {
     }
     const groupedDeviceIds = new Set<string>([...groupDevices.values()].flat());
 
-    return members.map((m: any) => {
-      const agentId = bytesToBase64(m.who.id.toBytes());
-      const isGroup = m.who.isGroup();
-      return {
-        agentId,
-        displayId: m.who.toString(),
-        role: m.can.toString(),
-        isIndividual: m.who.isIndividual(),
-        isGroup,
-        // "Me" is this device or my own user-group (not every group I belong to).
-        isMe: m.who.toString() === myAgentStr || (isGroup && agentId === myUserGroupId),
-        // Hide any non-group member (device) already covered by a present group.
-        inGroup: !isGroup && groupedDeviceIds.has(agentId),
-        deviceIds: isGroup ? (groupDevices.get(agentId) ?? []) : undefined,
-      };
-    });
+    return members
+      .map((m: any): MemberInfo => {
+        const agentId = bytesToBase64(m.who.id.toBytes());
+        const isGroup = m.who.isGroup();
+        const base = {
+          agentId,
+          displayId: m.who.toString(),
+          role: toMemberRole(m.can.toString()),
+          // "Me" is this device or my own user-group (not every group I belong to).
+          isMe: m.who.toString() === myAgentStr || (isGroup && agentId === myUserGroupId),
+        };
+        return isGroup
+          ? { ...base, type: 'group', deviceIds: groupDevices.get(agentId) ?? [] }
+          : { ...base, type: 'individual' };
+      })
+      // Hide devices already covered by a present group — the group stands in for them.
+      .filter((m: MemberInfo) => !(m.type === 'individual' && groupedDeviceIds.has(m.agentId)));
   }
 
   async getMyAccess(khDocId: string): Promise<string | null> {
@@ -613,11 +635,10 @@ export class KeyhiveOps {
         seen.set(agentId, {
           agentId,
           displayId: m.who.toString(),
-          role: m.can.toString(),
-          isIndividual: false,
-          isGroup: true,
+          role: toMemberRole(m.can.toString()),
+          type: 'group',
           isMe: false,
-          groupId: agentId,
+          deviceIds: [],
         });
       }
     }
@@ -633,11 +654,9 @@ export class KeyhiveOps {
         seen.set(groupId, {
           agentId: groupId,
           displayId: group ? group.toAgent().toString() : groupId,
-          role: '',
-          isIndividual: false,
-          isGroup: true,
+          type: 'group',
           isMe: false,
-          groupId,
+          deviceIds: [],
         });
       }
     }

@@ -546,20 +546,32 @@ export interface IdentityInfo {
   devices?: DeviceInfo[];
 }
 
-export interface MemberInfo {
+/** Access level a member has on a document. */
+export type MemberRole = 'read' | 'edit' | 'admin';
+
+interface MemberInfoBase {
   agentId: string;
   displayId: string;
-  role: string;
-  isIndividual: boolean;
-  isGroup: boolean;
+  /** Access level for the document. Absent for contacts not yet on any document. */
+  role?: MemberRole;
   isMe: boolean;
-  /** For an individual contact, the base64 id of their user Group (share target), if known. */
-  groupId?: string;
-  /** This individual device is also a member of a group that has access to the doc (redundant — hidden in the UI). */
-  inGroup?: boolean;
-  /** For a group member, the base64 agent ids of the devices in that group (empty if its ops haven't synced). */
-  deviceIds?: string[];
 }
+
+/** A single device (or a temporary invite identity). */
+export interface IndividualMemberInfo extends MemberInfoBase {
+  type: 'individual';
+  /** The base64 id of this device's owning user-group (its share target), if known. */
+  groupId?: string;
+}
+
+/** A user-group — all of a user's devices, addressed as one share target. */
+export interface GroupMemberInfo extends MemberInfoBase {
+  type: 'group';
+  /** Base64 agent ids of the devices in this group (empty if its ops haven't synced). */
+  deviceIds: string[];
+}
+
+export type MemberInfo = IndividualMemberInfo | GroupMemberInfo;
 
 /** A contact card plus the sender's user-group id, for QR/URL linking & sharing. */
 export interface LinkPayload {

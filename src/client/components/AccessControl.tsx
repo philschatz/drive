@@ -99,8 +99,6 @@ export function AccessControl({ docId, docType, access: accessProp }: AccessCont
   const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
 
   const isAdmin = myAccess?.toLowerCase() === 'admin';
-  // Hide devices already covered by a group that has access — the group row stands in for them.
-  const visibleMembers = members.filter(m => !m.inGroup);
 
   const checkInvites = useCallback(async (currentMembers?: MemberInfo[], currentInvites?: InviteRecord[]) => {
     const resolved = currentMembers && currentInvites
@@ -142,9 +140,8 @@ export function AccessControl({ docId, docType, access: accessProp }: AccessCont
 
     if (membersResult.status === 'fulfilled') {
       const { members: m, invites } = membersResult.value;
-      const normalized = m.map((member: MemberInfo) => ({ ...member, role: member.role.toLowerCase() }));
-      setMembers(normalized);
-      await checkInvites(normalized, invites);
+      setMembers(m);
+      await checkInvites(m, invites);
     }
 
     if (accessResult.status === 'fulfilled') {
@@ -204,15 +201,15 @@ export function AccessControl({ docId, docType, access: accessProp }: AccessCont
   const handleAdd = async () => {
     const contact = contacts.find(c => c.agentId === selectedContact);
     if (!contact) return;
-    // Sharing is group-only: every contact's share target is their user Group so
-    // all their devices get access. A contact with no known group can't be shared.
-    if (!contact.groupId) {
+    // Sharing is group-only: every contact is a user-group, so adding the group
+    // gives all of that user's devices access.
+    if (contact.type !== 'group') {
       setError('This contact has no group — please re-add them as a friend.');
       return;
     }
     setLoading(true);
     try {
-      await addMember(contact.groupId, docId, inviteRole);
+      await addMember(contact.agentId, docId, inviteRole);
       await refresh();
     } catch (err: any) {
       setError(err.message);
@@ -258,17 +255,17 @@ export function AccessControl({ docId, docType, access: accessProp }: AccessCont
           {/* Members list */}
           <div className="mt-4">
             <h3 className="text-sm font-medium mb-2">Members</h3>
-            {visibleMembers.length === 0 && (
+            {members.length === 0 && (
               <p className="text-xs text-muted-foreground">No members found.</p>
             )}
-            {visibleMembers.map(member => (
+            {members.map(member => (
               <div key={member.agentId} className="flex items-center gap-2 py-1.5 border-b border-border">
                 <span
                   className="material-symbols-outlined text-muted-foreground"
                   style={{ fontSize: 16 }}
-                  title={member.isGroup ? 'User (all their devices)' : 'Single device'}
+                  title={member.type === 'group' ? 'User (all their devices)' : 'Single device'}
                 >
-                  {member.isGroup ? 'group' : 'smartphone'}
+                  {member.type === 'group' ? 'group' : 'smartphone'}
                 </span>
                 <EditableName
                   agentId={member.agentId}
@@ -276,7 +273,7 @@ export function AccessControl({ docId, docType, access: accessProp }: AccessCont
                 />
                 {isAdmin ? (
                   <div className="flex items-center gap-1">
-                    <Select value={member.role} onValueChange={(val: string) => handleChangeRole(member.agentId, val)}>
+                    <Select value={member.role ?? 'read'} onValueChange={(val: string) => handleChangeRole(member.agentId, val)}>
                       <SelectTrigger className="h-7 text-xs w-20">
                         <SelectValue />
                       </SelectTrigger>
@@ -312,42 +309,42 @@ export function AccessControl({ docId, docType, access: accessProp }: AccessCont
                   then you can share documents with them.
                 </p>
               ) : (
-              <div className="flex items-center gap-2 mb-3">
-                <Select value={selectedContact} onValueChange={setSelectedContact}>
-                  <SelectTrigger className="h-8 text-xs flex-1">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {[...contacts]
-                      .map(c => ({ contact: c, name: getContactName(c.agentId) }))
-                      .sort((a, b) => {
-                        if (a.name && !b.name) return -1;
-                        if (!a.name && b.name) return 1;
-                        const aKey = a.name || a.contact.agentId;
-                        const bKey = b.name || b.contact.agentId;
-                        return aKey.localeCompare(bKey);
-                      })
-                      .map(({ contact: c, name }) => (
-                        <SelectItem key={c.agentId} value={c.agentId} className={name ? '' : 'text-muted-foreground'} title={c.agentId}>
-                          {name || `${c.agentId.slice(0, 8)}…`}
-                        </SelectItem>
-                      ))}
-                  </SelectContent>
-                </Select>
-                <Select value={inviteRole} onValueChange={setInviteRole}>
-                  <SelectTrigger className="h-8 text-xs w-24">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="read">Read</SelectItem>
-                    <SelectItem value="edit">Edit</SelectItem>
-                    <SelectItem value="admin">Admin</SelectItem>
-                  </SelectContent>
-                </Select>
-                <Button size="sm" onClick={handleAdd} disabled={loading || !selectedContact}>
-                  Add
-                </Button>
-              </div>
+                <div className="flex items-center gap-2 mb-3">
+                  <Select value={selectedContact} onValueChange={setSelectedContact}>
+                    <SelectTrigger className="h-8 text-xs flex-1">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {[...contacts]
+                        .map(c => ({ contact: c, name: getContactName(c.agentId) }))
+                        .sort((a, b) => {
+                          if (a.name && !b.name) return -1;
+                          if (!a.name && b.name) return 1;
+                          const aKey = a.name || a.contact.agentId;
+                          const bKey = b.name || b.contact.agentId;
+                          return aKey.localeCompare(bKey);
+                        })
+                        .map(({ contact: c, name }) => (
+                          <SelectItem key={c.agentId} value={c.agentId} className={name ? '' : 'text-muted-foreground'} title={c.agentId}>
+                            {name || `${c.agentId.slice(0, 8)}…`}
+                          </SelectItem>
+                        ))}
+                    </SelectContent>
+                  </Select>
+                  <Select value={inviteRole} onValueChange={setInviteRole}>
+                    <SelectTrigger className="h-8 text-xs w-24">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="read">Read</SelectItem>
+                      <SelectItem value="edit">Edit</SelectItem>
+                      <SelectItem value="admin">Admin</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <Button size="sm" onClick={handleAdd} disabled={loading || !selectedContact}>
+                    Add
+                  </Button>
+                </div>
               )}
 
               {/* Per-invite status list */}

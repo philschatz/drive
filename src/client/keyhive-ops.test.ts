@@ -652,9 +652,9 @@ describe('KeyhiveOps', () => {
       await khA.receiveContactCard(bCard);
       const membersAfterSync = await opsA.getDocMembers(khDocId);
       // Exclude Alice's own user-group (now an admin co-owner) — we want B.
-      const bOnA = membersAfterSync.find(m => !m.isMe && !m.isGroup && m.agentId !== invite.inviteSignerAgentId);
+      const bOnA = membersAfterSync.find(m => !m.isMe && m.type !== 'group' && m.agentId !== invite.inviteSignerAgentId);
       expect(bOnA).toBeDefined();
-      expect(bOnA!.role).toBe('Edit');
+      expect(bOnA!.role).toBe('edit');
     });
 
     it('cross-peer encryption works after temp member revocation', async () => {
@@ -1068,7 +1068,7 @@ describe('KeyhiveOps', () => {
       // Owner should be admin
       const me = members.find(m => m.isMe);
       expect(me).toBeDefined();
-      expect(me!.role).toBe('Admin');
+      expect(me!.role).toBe('admin');
     });
   });
 
@@ -1687,11 +1687,10 @@ describe('KeyhiveOps', () => {
       const members = await ops.getDocMembers(khDocId);
       const groupMember = members.find((m) => m.agentId === groupId);
       expect(groupMember).toBeDefined();
-      expect(groupMember!.isGroup).toBe(true);
-      expect(groupMember!.isIndividual).toBe(false);
+      expect(groupMember!.type).toBe('group');
     });
 
-    it('getDocMembers marks the user-group as "me" and flags grouped devices as inGroup', async () => {
+    it('getDocMembers marks the user-group as "me", reports its devices, and hides grouped devices', async () => {
       const { ops } = await createOps();
       const groupId = await ops.ensureUserGroup({ create: true });
       // enableSharing makes the user-group an admin co-owner; the creating device
@@ -1703,17 +1702,17 @@ describe('KeyhiveOps', () => {
 
       const groupMember = members.find((m) => m.agentId === groupId);
       expect(groupMember).toBeDefined();
+      expect(groupMember!.type).toBe('group');
       expect(groupMember!.isMe).toBe(true); // own user-group reads as "you"
-      expect(groupMember!.inGroup).toBeFalsy(); // groups are never hidden
       // The group reports its device members (here: just the creating device).
-      expect(groupMember!.deviceIds).toContain(myAgentId);
+      if (groupMember!.type === 'group') {
+        expect(groupMember!.deviceIds).toContain(myAgentId);
+      }
 
-      // The current device is a doc member (and a member of its own user-group),
-      // so it is flagged for hiding. keyhive represents self as the Active agent,
-      // so it is not isIndividual — match on agentId.
-      const deviceMember = members.find((m) => m.agentId === myAgentId && !m.isGroup);
-      expect(deviceMember).toBeDefined();
-      expect(deviceMember!.inGroup).toBe(true); // device is covered by the user-group → hidden
+      // The current device is covered by its own user-group, so getDocMembers
+      // filters it out — only the group stands in for it.
+      const deviceMember = members.find((m) => m.type === 'individual' && m.agentId === myAgentId);
+      expect(deviceMember).toBeUndefined();
     });
 
     it('a group can co-own a doc as admin; the creating device cannot be revoked (keyhive constraint)', async () => {
@@ -1797,8 +1796,7 @@ describe('KeyhiveOps', () => {
       const contacts = await a.getKnownContacts(undefined, [groupId]);
       const entry = contacts.find((c) => c.agentId === groupId);
       expect(entry).toBeDefined();
-      expect(entry!.isGroup).toBe(true);
-      expect(entry!.groupId).toBe(groupId);
+      expect(entry!.type).toBe('group'); // a contact is the user-group; its agentId is the share target
     });
   });
 });

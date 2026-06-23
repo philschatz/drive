@@ -111,7 +111,7 @@ describe('AccessControl', () => {
   it('does not show "no access" message when access is granted', async () => {
     mockGetMyAccess.mockResolvedValue('Admin');
     mockGetDocMembers.mockResolvedValue({
-      members: [{ agentId: 'a1', displayId: 'a1', role: 'Admin', isIndividual: true, isGroup: false, isMe: true }],
+      members: [{ agentId: 'a1', displayId: 'a1', role: 'admin', type: 'individual', isMe: true }],
       invites: [],
     });
     mockGetKnownContacts.mockResolvedValue([]);
