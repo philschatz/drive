@@ -59,6 +59,8 @@ export interface MemberInfo {
   isMe: boolean;
   /** For an individual contact, the base64 id of their user Group (share target), if known. */
   groupId?: string;
+  /** This individual device is also a member of a group that has access to the doc (redundant — hidden in the UI). */
+  inGroup?: boolean;
 }
 
 export class KeyhiveOps {
@@ -328,14 +330,41 @@ export class KeyhiveOps {
     const members = await this.kh.docMemberCapabilities(docId);
     const me = await this.kh.individual;
     const myAgentStr = me.toAgent().toString();
-    return members.map((m: any) => ({
-      agentId: bytesToBase64(m.who.id.toBytes()),
-      displayId: m.who.toString(),
-      role: m.can.toString(),
-      isIndividual: m.who.isIndividual(),
-      isGroup: m.who.isGroup(),
-      isMe: m.who.toString() === myAgentStr,
-    }));
+    const myUserGroupId = await this.fx.getUserGroupId();
+
+    // Devices already covered by a group that has access to this doc are
+    // redundant; flag them so the UI can hide them. Expand each group member to
+    // its device members. A device is collected whether keyhive represents it as
+    // an Individual or as the Active self-agent (the current device reads as
+    // Active, not Individual — same reason listGroupDevices unshifts self), so we
+    // collect every non-group sub-member. Groups whose ops haven't synced won't
+    // resolve — their devices simply aren't hidden.
+    const groupedDeviceIds = new Set<string>();
+    for (const m of members) {
+      if (!m.who.isGroup()) continue;
+      const group = await this.getGroupById(bytesToBase64(m.who.id.toBytes()));
+      if (!group) continue;
+      const subMembers = await group.members();
+      for (const gm of subMembers) {
+        if (!gm.who.isGroup()) groupedDeviceIds.add(bytesToBase64(gm.who.id.toBytes()));
+      }
+    }
+
+    return members.map((m: any) => {
+      const agentId = bytesToBase64(m.who.id.toBytes());
+      const isGroup = m.who.isGroup();
+      return {
+        agentId,
+        displayId: m.who.toString(),
+        role: m.can.toString(),
+        isIndividual: m.who.isIndividual(),
+        isGroup,
+        // "Me" is this device or my own user-group (not every group I belong to).
+        isMe: m.who.toString() === myAgentStr || (isGroup && agentId === myUserGroupId),
+        // Hide any non-group member (device) already covered by a present group.
+        inGroup: !isGroup && groupedDeviceIds.has(agentId),
+      };
+    });
   }
 
   async getMyAccess(khDocId: string): Promise<string | null> {

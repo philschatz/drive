@@ -99,6 +99,8 @@ export function AccessControl({ docId, docType, access: accessProp }: AccessCont
   const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
 
   const isAdmin = myAccess?.toLowerCase() === 'admin';
+  // Hide devices already covered by a group that has access — the group row stands in for them.
+  const visibleMembers = members.filter(m => !m.inGroup);
 
   const checkInvites = useCallback(async (currentMembers?: MemberInfo[], currentInvites?: InviteRecord[]) => {
     const resolved = currentMembers && currentInvites
@@ -256,10 +258,10 @@ export function AccessControl({ docId, docType, access: accessProp }: AccessCont
           {/* Members list */}
           <div className="mt-4">
             <h3 className="text-sm font-medium mb-2">Members</h3>
-            {members.length === 0 && (
+            {visibleMembers.length === 0 && (
               <p className="text-xs text-muted-foreground">No members found.</p>
             )}
-            {members.map(member => (
+            {visibleMembers.map(member => (
               <div key={member.agentId} className="flex items-center gap-2 py-1.5 border-b border-border">
                 <span
                   className="material-symbols-outlined text-muted-foreground"

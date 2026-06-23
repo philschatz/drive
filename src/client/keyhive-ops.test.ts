@@ -1691,6 +1691,29 @@ describe('KeyhiveOps', () => {
       expect(groupMember!.isIndividual).toBe(false);
     });
 
+    it('getDocMembers marks the user-group as "me" and flags grouped devices as inGroup', async () => {
+      const { ops } = await createOps();
+      const groupId = await ops.ensureUserGroup({ create: true });
+      // enableSharing makes the user-group an admin co-owner; the creating device
+      // is both a root doc member and a member of its own user-group.
+      const { khDocId } = await ops.enableSharing('doc-grouped-devices');
+      const myAgentId = (await ops.getIdentity()).agentId;
+
+      const members = await ops.getDocMembers(khDocId);
+
+      const groupMember = members.find((m) => m.agentId === groupId);
+      expect(groupMember).toBeDefined();
+      expect(groupMember!.isMe).toBe(true); // own user-group reads as "you"
+      expect(groupMember!.inGroup).toBeFalsy(); // groups are never hidden
+
+      // The current device is a doc member (and a member of its own user-group),
+      // so it is flagged for hiding. keyhive represents self as the Active agent,
+      // so it is not isIndividual — match on agentId.
+      const deviceMember = members.find((m) => m.agentId === myAgentId && !m.isGroup);
+      expect(deviceMember).toBeDefined();
+      expect(deviceMember!.inGroup).toBe(true); // device is covered by the user-group → hidden
+    });
+
     it('a group can co-own a doc as admin; the creating device cannot be revoked (keyhive constraint)', async () => {
       // The user-group CAN be added as an admin co-owner of a document. But the
       // CREATING device gets a root delegation (proof: None) that roots the

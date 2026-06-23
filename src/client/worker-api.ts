@@ -555,6 +555,8 @@ export interface MemberInfo {
   isMe: boolean;
   /** For an individual contact, the base64 id of their user Group (share target), if known. */
   groupId?: string;
+  /** This individual device is also a member of a group that has access to the doc (redundant — hidden in the UI). */
+  inGroup?: boolean;
 }
 
 /** A contact card plus the sender's user-group id, for QR/URL linking & sharing. */
