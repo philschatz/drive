@@ -24,7 +24,7 @@ const relay = new WebSocketRelay();
 wss.on('connection', (ws) => relay.handleConnection(ws));
 
 const server = app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Automerge Documents (production): http://localhost:${PORT}`);
+  console.log(`Automerge Documents (production): http://0.0.0.0:${PORT}`);
 });
 
 server.on('upgrade', (req, socket, head) => {

@@ -818,7 +818,7 @@ export class KeyhiveNetworkAdapter extends NetworkAdapter {
         return false;
       }
       const accessStr = access.toString();
-      const canWrite = accessStr === "Admin" || accessStr === "Write";
+      const canWrite = accessStr === "Admin" || accessStr === "Edit";
       if (!canWrite) {
         console.warn(`[AMRepoKeyhive] Peer ${senderId} has ${accessStr} access on doc ${automergeDocId} — blocking sync`);
       }

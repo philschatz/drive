@@ -14,8 +14,10 @@ import {
   ChangeId,
   DocumentId,
   Identifier,
+  GroupId,
   ContactCard,
   Encrypted,
+  Archive,
 } from '@keyhive/keyhive/slim';
 import { KeyhiveOps, KeyhiveBridge, KeyhiveOpsSideEffects, bytesToBase64 } from './keyhive-ops';
 
@@ -25,6 +27,7 @@ const bridge: KeyhiveBridge = {
   ChangeId,
   DocumentId,
   Identifier,
+  GroupId,
   Signer,
   CiphertextStore,
   Keyhive,
@@ -41,6 +44,7 @@ function noopSideEffects(): KeyhiveOpsSideEffects & { calls: Record<string, any[
     findDoc: [],
     saveEventBytes: [],
   };
+  let userGroupId: string | null = null;
   return {
     calls,
     persist: async () => { calls.persist.push([]); },
@@ -49,6 +53,8 @@ function noopSideEffects(): KeyhiveOpsSideEffects & { calls: Record<string, any[
     forceResyncAllPeers: () => { calls.forceResyncAllPeers.push([]); },
     findDoc: (d) => { calls.findDoc.push([d]); },
     saveEventBytes: async (e) => { calls.saveEventBytes.push([e]); },
+    getUserGroupId: async () => userGroupId,
+    setUserGroupId: async (id) => { userGroupId = id; },
   };
 }
 
@@ -207,14 +213,14 @@ describe('KeyhiveOps', () => {
       const { ops } = await createOps();
       const { khDocId } = await ops.enableSharing('doc-1');
 
-      const result = await ops.generateInvite(khDocId, 'write');
+      const result = await ops.generateInvite(khDocId, 'edit');
       expect(result.inviteKeyBytes).toHaveLength(32);
       expect(result.inviteSignerAgentId).toBeDefined();
     });
 
     it('throws for unknown document', async () => {
       const { ops } = await createOps();
-      await expect(ops.generateInvite('nonexistent', 'write')).rejects.toThrow('Document not found');
+      await expect(ops.generateInvite('nonexistent', 'edit')).rejects.toThrow('Document not found');
     });
 
     it('throws for invalid role', async () => {
@@ -231,7 +237,7 @@ describe('KeyhiveOps', () => {
 
       // A enables sharing and generates invite
       const { khDocId } = await opsA.enableSharing('doc-1');
-      const invite = await opsA.generateInvite(khDocId, 'write');
+      const invite = await opsA.generateInvite(khDocId, 'edit');
 
       // B claims via archive (simulates seed-only flow)
       const result = await claimViaArchive(opsA, opsB, invite.inviteKeyBytes, 'doc-1');
@@ -248,7 +254,7 @@ describe('KeyhiveOps', () => {
       const { ops: opsB, fx: fxB } = await createOps();
 
       const { khDocId } = await opsA.enableSharing('doc-1');
-      const invite = await opsA.generateInvite(khDocId, 'write');
+      const invite = await opsA.generateInvite(khDocId, 'edit');
       await claimViaArchive(opsA, opsB, invite.inviteKeyBytes, 'doc-1');
 
       // claimInviteWithKeyhive must persist each event individually so
@@ -267,12 +273,12 @@ describe('KeyhiveOps', () => {
       const { ops: opsB } = await createOps();
 
       const { khDocId } = await opsA.enableSharing('doc-1');
-      const invite = await opsA.generateInvite(khDocId, 'write');
+      const invite = await opsA.generateInvite(khDocId, 'edit');
       const result = await claimViaArchive(opsA, opsB, invite.inviteKeyBytes);
 
       // getMyAccess should return the override, not Admin
       const access = await opsB.getMyAccess(result.khDocId);
-      expect(access).toBe('Write');
+      expect(access).toBe('Edit');
     });
 
     it('claimant can encrypt after claiming (CGKA ownership works)', async () => {
@@ -280,7 +286,7 @@ describe('KeyhiveOps', () => {
       const { ops: opsB } = await createOps();
 
       const { khDocId } = await opsA.enableSharing('doc-1');
-      const invite = await opsA.generateInvite(khDocId, 'write');
+      const invite = await opsA.generateInvite(khDocId, 'edit');
       await claimViaArchive(opsA, opsB, invite.inviteKeyBytes);
 
       // B can self-encrypt
@@ -303,7 +309,7 @@ describe('KeyhiveOps', () => {
       const { ops: opsB, kh: khB } = await createOps();
 
       const { khDocId } = await opsA.enableSharing('doc-1');
-      const invite = await opsA.generateInvite(khDocId, 'write');
+      const invite = await opsA.generateInvite(khDocId, 'edit');
       await claimViaArchive(opsA, opsB, invite.inviteKeyBytes, 'doc-1');
 
       // Step 1: Sync B→A so A knows about B
@@ -340,7 +346,7 @@ describe('KeyhiveOps', () => {
       const { ops: opsB, kh: khB } = await createOps();
 
       const { khDocId } = await opsA.enableSharing('doc-1');
-      const invite = await opsA.generateInvite(khDocId, 'write');
+      const invite = await opsA.generateInvite(khDocId, 'edit');
       await claimViaArchive(opsA, opsB, invite.inviteKeyBytes, 'doc-1');
 
       // Sync B→A
@@ -386,7 +392,7 @@ describe('KeyhiveOps', () => {
       const { ops: opsB, kh: khB } = await createOps();
 
       const { khDocId } = await opsA.enableSharing('doc-1');
-      const invite = await opsA.generateInvite(khDocId, 'write');
+      const invite = await opsA.generateInvite(khDocId, 'edit');
       await claimViaArchive(opsA, opsB, invite.inviteKeyBytes, 'doc-1');
 
       // A encrypts BEFORE any sync with B
@@ -412,7 +418,7 @@ describe('KeyhiveOps', () => {
       const { ops: opsB, kh: khB } = await createOps();
 
       const { khDocId } = await opsA.enableSharing('doc-1');
-      const invite = await opsA.generateInvite(khDocId, 'write');
+      const invite = await opsA.generateInvite(khDocId, 'edit');
       await claimViaArchive(opsA, opsB, invite.inviteKeyBytes, 'doc-1');
 
       // A encrypts before sync
@@ -458,7 +464,7 @@ describe('KeyhiveOps', () => {
       const { ops: opsB, kh: khB } = await createOps();
 
       const { khDocId } = await opsA.enableSharing('doc-1');
-      const invite = await opsA.generateInvite(khDocId, 'write');
+      const invite = await opsA.generateInvite(khDocId, 'edit');
       await claimViaArchive(opsA, opsB, invite.inviteKeyBytes, 'doc-1');
 
       const ENC_ENCRYPTED = 0x01;
@@ -538,7 +544,7 @@ describe('KeyhiveOps', () => {
       const { ops: opsB, kh: khB } = await createOps();
 
       const { khDocId } = await opsA.enableSharing('doc-1');
-      const invite = await opsA.generateInvite(khDocId, 'write');
+      const invite = await opsA.generateInvite(khDocId, 'edit');
       await claimViaArchive(opsA, opsB, invite.inviteKeyBytes, 'doc-1');
 
       // Keyhive sync: B→A then A→B
@@ -586,7 +592,7 @@ describe('KeyhiveOps', () => {
       const { ops: opsB, kh: khB } = await createOps();
 
       const { khDocId } = await opsA.enableSharing('doc-1');
-      const invite = await opsA.generateInvite(khDocId, 'write');
+      const invite = await opsA.generateInvite(khDocId, 'edit');
       await claimViaArchive(opsA, opsB, invite.inviteKeyBytes, 'doc-1');
 
       // B encrypts
@@ -615,7 +621,7 @@ describe('KeyhiveOps', () => {
       const { ops: opsB, kh: khB } = await createOps();
 
       const { khDocId } = await opsA.enableSharing('doc-1');
-      const invite = await opsA.generateInvite(khDocId, 'write');
+      const invite = await opsA.generateInvite(khDocId, 'edit');
 
       // Before claim: temp invite member should be in the member list
       const membersBefore = await opsA.getDocMembers(khDocId);
@@ -645,7 +651,7 @@ describe('KeyhiveOps', () => {
       const membersAfterSync = await opsA.getDocMembers(khDocId);
       const bOnA = membersAfterSync.find(m => !m.isMe && m.agentId !== invite.inviteSignerAgentId);
       expect(bOnA).toBeDefined();
-      expect(bOnA!.role).toBe('Write');
+      expect(bOnA!.role).toBe('Edit');
     });
 
     it('cross-peer encryption works after temp member revocation', async () => {
@@ -653,7 +659,7 @@ describe('KeyhiveOps', () => {
       const { ops: opsB, kh: khB } = await createOps();
 
       const { khDocId } = await opsA.enableSharing('doc-1');
-      const invite = await opsA.generateInvite(khDocId, 'write');
+      const invite = await opsA.generateInvite(khDocId, 'edit');
       await claimViaArchive(opsA, opsB, invite.inviteKeyBytes, 'doc-1');
 
       // Sync: A ingests B's archive so A knows about B
@@ -1101,8 +1107,8 @@ describe('KeyhiveOps', () => {
       const { ops: opsC } = await createOps();
 
       const { khDocId } = await opsA.enableSharing('doc-1');
-      const inviteB = await opsA.generateInvite(khDocId, 'write');
-      const inviteC = await opsA.generateInvite(khDocId, 'write');
+      const inviteB = await opsA.generateInvite(khDocId, 'edit');
+      const inviteC = await opsA.generateInvite(khDocId, 'edit');
 
       await claimViaArchive(opsA, opsB, inviteB.inviteKeyBytes);
       await claimViaArchive(opsA, opsC, inviteC.inviteKeyBytes);
@@ -1283,7 +1289,7 @@ describe('KeyhiveOps', () => {
       automergeDocIdBytes: Uint8Array;
       role?: string;
     }) {
-      const { opsA, khA, opsB, khB, automergeDocId, automergeDocIdBytes, role = 'write' } = opts;
+      const { opsA, khA, opsB, khB, automergeDocId, automergeDocIdBytes, role = 'edit' } = opts;
 
       // Alice enables sharing — pass existing doc bytes so it reuses the
       // keyhive doc created by the idFactory instead of generating a duplicate.
@@ -1455,7 +1461,115 @@ describe('KeyhiveOps', () => {
       const bobId = new Identifier(khB.id.bytes);
       const access = await khB.accessForDoc(bobId, doc!.doc_id);
       expect(access).toBeDefined();
-      expect(access!.toString()).toBe('Write');
+      expect(access!.toString()).toBe('Edit');
+    });
+  });
+
+  // ── User-group (a "user" = a keyhive Group of device Individuals) ──────────
+  describe('user group', () => {
+    /** A learns about B by receiving B's contact card; returns B's agentId. */
+    async function learnAgent(learner: KeyhiveOps, subject: KeyhiveOps): Promise<string> {
+      const card = await subject.getContactCard();
+      const { agentId } = await learner.receiveContactCard(card);
+      return agentId;
+    }
+
+    it('ensureUserGroup({create}) mints and persists a group; getUserGroupId returns it', async () => {
+      const { ops, fx } = await createOps();
+      expect(await ops.getUserGroupId()).toBeNull();
+      const id = await ops.ensureUserGroup({ create: true });
+      expect(id).toBeTruthy();
+      expect(await ops.getUserGroupId()).toBe(id);
+      // idempotent: a second create returns the same id, doesn't mint a new group
+      const again = await ops.ensureUserGroup({ create: true });
+      expect(again).toBe(id);
+      expect(fx.calls.persist.length).toBeGreaterThan(0);
+    });
+
+    it('addDeviceToGroup adds a device and listGroupDevices lists self + the device', async () => {
+      const { ops: a } = await createOps();
+      const { ops: b } = await createOps();
+      await a.ensureUserGroup({ create: true });
+      const bAgentId = await learnAgent(a, b);
+
+      await a.addDeviceToGroup(bAgentId);
+      const devices = await a.listGroupDevices();
+      const ids = devices.map((d) => d.agentId);
+      const me = (await a.getIdentity()).agentId;
+      expect(ids).toContain(me);
+      expect(ids).toContain(bAgentId);
+      expect(devices.find((d) => d.agentId === me)?.isMe).toBe(true);
+
+      // idempotent — adding again does not duplicate
+      await a.addDeviceToGroup(bAgentId);
+      const devices2 = await a.listGroupDevices();
+      expect(devices2.filter((d) => d.agentId === bAgentId)).toHaveLength(1);
+    });
+
+    it('listGroupDevices returns just self when there is no group', async () => {
+      const { ops } = await createOps();
+      const devices = await ops.listGroupDevices();
+      expect(devices).toHaveLength(1);
+      expect(devices[0].isMe).toBe(true);
+      expect(devices[0].agentId).toBe((await ops.getIdentity()).agentId);
+    });
+
+    it('addMember resolves a group id to the Group (doc member is a group)', async () => {
+      const { ops } = await createOps();
+      const groupId = await ops.ensureUserGroup({ create: true });
+      const { khDocId } = await ops.enableSharing('doc-group');
+
+      await ops.addMember(groupId!, khDocId, 'read');
+      const members = await ops.getDocMembers(khDocId);
+      const groupMember = members.find((m) => m.agentId === groupId);
+      expect(groupMember).toBeDefined();
+      expect(groupMember!.isGroup).toBe(true);
+      expect(groupMember!.isIndividual).toBe(false);
+    });
+
+    it('addMember still resolves an individual id (legacy shares keep working)', async () => {
+      const { ops: a } = await createOps();
+      const { ops: b } = await createOps();
+      const bAgentId = await learnAgent(a, b);
+      const { khDocId } = await a.enableSharing('doc-indiv');
+
+      await a.addMember(bAgentId, khDocId, 'read');
+      const members = await a.getDocMembers(khDocId);
+      const indivMember = members.find((m) => m.agentId === bAgentId);
+      expect(indivMember).toBeDefined();
+      expect(indivMember!.isIndividual).toBe(true);
+      expect(indivMember!.isGroup).toBe(false);
+    });
+
+    it('linkDevice: admin adds the peer; a groupless peer adopts the group id', async () => {
+      const { ops: a } = await createOps();
+      const { ops: b } = await createOps();
+      const aGroupId = await a.ensureUserGroup({ create: true });
+      const aAgentId = (await a.getIdentity()).agentId;
+      const bAgentId = await learnAgent(a, b);
+
+      // A is the admin: linking B (peer has no group) adds B to A's group.
+      await a.linkDevice(bAgentId, null);
+      expect((await a.listGroupDevices()).map((d) => d.agentId)).toContain(bAgentId);
+
+      // B adopts A's group id. Give B the group ops so waitForSync resolves immediately.
+      await b.kh.ingestArchive(new Archive((await a.kh.toArchive()).toBytes()));
+      await learnAgent(b, a);
+      const res = await b.linkDevice(aAgentId, aGroupId);
+      expect(res.userGroupId).toBe(aGroupId);
+      expect(await b.getUserGroupId()).toBe(aGroupId);
+    });
+
+    it('getKnownContacts attaches the contact-group id as the share target', async () => {
+      const { ops: a } = await createOps();
+      const { ops: b } = await createOps();
+      const bAgentId = await learnAgent(a, b);
+      const fakeGroupId = bytesToBase64(crypto.getRandomValues(new Uint8Array(32)));
+
+      const contacts = await a.getKnownContacts(undefined, [bAgentId], { [bAgentId]: fakeGroupId });
+      const entry = contacts.find((c) => c.agentId === bAgentId);
+      expect(entry).toBeDefined();
+      expect(entry!.groupId).toBe(fakeGroupId);
     });
   });
 });

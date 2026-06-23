@@ -20,6 +20,10 @@ export function errMsg(err: any): string {
   return err.message || String(err);
 }
 
+function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
+  return a.length === b.length && a.every((v, i) => v === b[i]);
+}
+
 export interface KeyhiveOpsSideEffects {
   persist: () => Promise<void>;
   syncKeyhive: () => void;
@@ -27,6 +31,10 @@ export interface KeyhiveOpsSideEffects {
   forceResyncAllPeers: () => void;
   findDoc: (docId: string) => void;
   saveEventBytes: (eventBytes: Uint8Array) => Promise<void>;
+  /** Read the persisted personal user-group id (base64), or null if none. */
+  getUserGroupId: () => Promise<string | null>;
+  /** Persist the personal user-group id (base64). */
+  setUserGroupId: (id: string) => Promise<void>;
 }
 
 /** The subset of @keyhive/keyhive/slim that KeyhiveOps needs as constructors/factories. */
@@ -34,6 +42,7 @@ export interface KeyhiveBridge {
   ChangeId: new (bytes: Uint8Array) => any;
   DocumentId: new (bytes: Uint8Array) => any;
   Identifier: new (bytes: Uint8Array) => any;
+  GroupId: { fromBytes(bytes: Uint8Array): any };
   Signer: { memorySignerFromBytes(bytes: Uint8Array): any };
   CiphertextStore: { newInMemory(): any };
   Keyhive: { init(signer: any, store: any, cb: () => void): Promise<any> };
@@ -48,6 +57,8 @@ export interface MemberInfo {
   isIndividual: boolean;
   isGroup: boolean;
   isMe: boolean;
+  /** For an individual contact, the base64 id of their user Group (share target), if known. */
+  groupId?: string;
 }
 
 export class KeyhiveOps {
@@ -55,6 +66,9 @@ export class KeyhiveOps {
   bridge: KeyhiveBridge;
   khDocuments = new Map<string, any>();
   inviteAccessOverrides = new Map<string, string>();
+  /** Cached personal user-group handle, keyed by its base64 id. */
+  private userGroup: any = null;
+  private userGroupIdCache: string | null = null;
   private fx: KeyhiveOpsSideEffects;
 
   constructor(
@@ -67,12 +81,181 @@ export class KeyhiveOps {
     this.fx = sideEffects;
   }
 
-  async getIdentity(): Promise<{ deviceId: string; agentId: string }> {
+  async getIdentity(): Promise<{ deviceId: string; agentId: string; userGroupId: string | null }> {
     const me = await this.kh.individual;
     return {
       deviceId: String(this.kh.idString),
       agentId: bytesToBase64(me.id.toBytes()),
+      userGroupId: await this.fx.getUserGroupId(),
     };
+  }
+
+  // ---- User group (a "user" = a keyhive Group of device Individuals) ----
+
+  async getUserGroupId(): Promise<string | null> {
+    return this.fx.getUserGroupId();
+  }
+
+  /** Resolve a Group handle by its base64 id, or null if its ops haven't synced yet. */
+  private async getGroupById(idB64: string): Promise<any | null> {
+    try {
+      const gid = this.bridge.GroupId.fromBytes(base64ToBytes(idB64));
+      const group = await this.kh.getGroup(gid);
+      return group ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Poll for a group's ops to sync in, forcing keyhive sync between attempts. */
+  private async waitForGroup(idB64: string, timeoutMs = 60000, intervalMs = 3000): Promise<any | null> {
+    let group = await this.getGroupById(idB64);
+    const start = Date.now();
+    while (!group && Date.now() - start < timeoutMs) {
+      this.fx.syncKeyhive();
+      await new Promise((r) => setTimeout(r, intervalMs));
+      group = await this.getGroupById(idB64);
+    }
+    return group;
+  }
+
+  /** Get the cached/resolved personal user-group handle, or null if none / not yet synced. */
+  private async getUserGroup(): Promise<any | null> {
+    const id = await this.fx.getUserGroupId();
+    if (!id) return null;
+    if (this.userGroup && this.userGroupIdCache === id) return this.userGroup;
+    const group = await this.getGroupById(id);
+    if (group) {
+      this.userGroup = group;
+      this.userGroupIdCache = id;
+    }
+    return group;
+  }
+
+  /**
+   * Ensure this device has a personal user-group id.
+   * - adoptGroupId: persist that id (a freshly-linked device adopting the host's group).
+   * - create: mint a new group owned by this device (admin) if none exists yet.
+   * - waitForSync: poll kh.getGroup until the adopted group's ops arrive.
+   * Returns the resolved group id, or null if none and not creating.
+   */
+  async ensureUserGroup(opts: { create?: boolean; adoptGroupId?: string; waitForSync?: boolean } = {}): Promise<string | null> {
+    let id = await this.fx.getUserGroupId();
+
+    if (!id && opts.adoptGroupId) {
+      id = opts.adoptGroupId;
+      await this.fx.setUserGroupId(id);
+    }
+
+    if (!id && opts.create) {
+      const group = await this.kh.generateGroup([]);
+      id = bytesToBase64(group.groupId.toBytes());
+      this.userGroup = group;
+      this.userGroupIdCache = id;
+      await this.fx.setUserGroupId(id);
+      await this.fx.persist();
+      this.fx.syncKeyhive();
+      return id;
+    }
+
+    if (!id) return null;
+
+    if (opts.waitForSync) {
+      const group = await this.waitForGroup(id);
+      if (group) {
+        this.userGroup = group;
+        this.userGroupIdCache = id;
+      }
+    }
+    return id;
+  }
+
+  /** Add a device (by its individual agentId) to the personal user-group. Idempotent; admin-only. */
+  async addDeviceToGroup(deviceAgentIdB64: string): Promise<true> {
+    const group = await this.getUserGroup();
+    if (!group) throw new Error('User group not available');
+    const targetBytes = base64ToBytes(deviceAgentIdB64);
+    const members = await group.members();
+    if (members.some((m: any) => bytesEqual(m.who.id.toBytes(), targetBytes))) {
+      return true; // already a member
+    }
+    const id = new this.bridge.Identifier(targetBytes);
+    const agent = await this.kh.getAgent(id);
+    if (!agent) throw new Error('Device agent not found (contact card not yet synced)');
+    const access = this.bridge.Access.tryFromString('admin');
+    if (!access) throw new Error('Invalid access');
+    await this.kh.addMember(agent, group.toMembered(), access, []);
+    await this.fx.persist();
+    this.fx.syncKeyhive();
+    return true;
+  }
+
+  async removeDeviceFromGroup(deviceAgentIdB64: string): Promise<void> {
+    const group = await this.getUserGroup();
+    if (!group) return;
+    const targetBytes = base64ToBytes(deviceAgentIdB64);
+    const members = await group.members();
+    const found = members.find((m: any) => bytesEqual(m.who.id.toBytes(), targetBytes));
+    if (!found) return;
+    await this.kh.revokeMember(found.who, true, group.toMembered());
+    await this.fx.persist();
+    this.fx.syncKeyhive();
+  }
+
+  /**
+   * Link another device into the same user-group, given the peer's device agentId and
+   * (optionally) the group id carried over the trusted QR channel.
+   * Converges both devices onto one group, then adds the peer if we are the group admin
+   * (the non-admin side fails silently and is added by the admin's reciprocal call).
+   */
+  async linkDevice(peerAgentIdB64: string, peerGroupId?: string | null): Promise<{ userGroupId: string | null }> {
+    let myGroupId = await this.fx.getUserGroupId();
+
+    if (!myGroupId && peerGroupId) {
+      // Fresh device adopting the peer's group; the peer (admin) adds us.
+      myGroupId = await this.ensureUserGroup({ adoptGroupId: peerGroupId, waitForSync: true });
+    } else if (myGroupId && peerGroupId && myGroupId !== peerGroupId) {
+      // Both sides already have a group — converge on the lexicographically smaller id.
+      const canonical = myGroupId < peerGroupId ? myGroupId : peerGroupId;
+      if (canonical !== myGroupId) {
+        await this.fx.setUserGroupId(canonical);
+        this.userGroup = null;
+        this.userGroupIdCache = null;
+        myGroupId = await this.ensureUserGroup({ waitForSync: true });
+      }
+    } else if (!myGroupId && !peerGroupId) {
+      // Neither side has a group (e.g. paste flow with a legacy peer) — create one.
+      myGroupId = await this.ensureUserGroup({ create: true });
+    }
+
+    try {
+      await this.addDeviceToGroup(peerAgentIdB64);
+    } catch {
+      // Not the admin, or the peer's contact card hasn't synced yet — the admin side
+      // performs the add via its own reciprocal linkDevice call.
+    }
+    return { userGroupId: myGroupId };
+  }
+
+  /** List the devices in the personal user-group; [self] if there is no group yet. */
+  async listGroupDevices(): Promise<{ agentId: string; role: string; isMe: boolean }[]> {
+    const me = await this.kh.individual;
+    const myAgentId = bytesToBase64(me.id.toBytes());
+    const group = await this.getUserGroup();
+    if (!group) {
+      return [{ agentId: myAgentId, role: 'owner', isMe: true }];
+    }
+    const members = await group.members();
+    const devices = members
+      .filter((m: any) => m.who.isIndividual())
+      .map((m: any) => {
+        const agentId = bytesToBase64(m.who.id.toBytes());
+        return { agentId, role: agentId === myAgentId ? 'owner' : m.can.toString(), isMe: agentId === myAgentId };
+      });
+    if (!devices.some((d: { agentId: string }) => d.agentId === myAgentId)) {
+      devices.unshift({ agentId: myAgentId, role: 'owner', isMe: true });
+    }
+    return devices;
   }
 
   async getContactCard(): Promise<string> {
@@ -123,16 +306,7 @@ export class KeyhiveOps {
   async addMember(agentIdB64: string, docId: string, role: string): Promise<true> {
     const doc = this.khDocuments.get(docId);
     if (!doc) throw new Error('Document not found');
-    let agent: any;
-    try {
-      agent = await this.findAgentByIdBytes(doc, agentIdB64);
-    } catch {
-      // Agent not yet a member of this doc — try global lookup
-      const id = new this.bridge.Identifier(base64ToBytes(agentIdB64));
-      const found = await this.kh.getAgent(id);
-      if (!found) throw new Error('Agent not found');
-      agent = found;
-    }
+    const agent = await this.resolveShareAgent(doc, agentIdB64);
     const access = this.bridge.Access.tryFromString(role);
     if (!access) throw new Error(`Invalid role: ${role}`);
     await this.kh.addMember(agent, doc.toMembered(), access, []);
@@ -314,11 +488,19 @@ export class KeyhiveOps {
     return true;
   }
 
-  async getKnownContacts(excludeDocId?: string, contactAgentIds?: string[]): Promise<MemberInfo[]> {
+  async getKnownContacts(
+    excludeDocId?: string,
+    contactAgentIds?: string[],
+    contactGroups?: Record<string, string>,
+  ): Promise<MemberInfo[]> {
     const me = await this.kh.individual;
     const myAgentStr = me.toAgent().toString();
     const myAgentId = bytesToBase64(me.id.toBytes());
+    const groups = contactGroups ?? {};
     const seen = new Map<string, MemberInfo>();
+    // Track group ids already represented so a friend isn't listed twice (once as a
+    // bare individual, once via the group already on a shared doc).
+    const seenGroupIds = new Set<string>();
 
     const excludeSet = new Set<string>();
     if (excludeDocId) {
@@ -336,11 +518,23 @@ export class KeyhiveOps {
         continue;
       }
       for (const m of members) {
-        if (!m.who.isIndividual()) continue;
-        const agentId = bytesToBase64(m.who.id.toBytes());
         if (m.who.toString() === myAgentStr) continue;
+        const agentId = bytesToBase64(m.who.id.toBytes());
         if (excludeSet.has(agentId)) continue;
-        if (!seen.has(agentId)) {
+        if (seen.has(agentId)) continue;
+        if (m.who.isGroup()) {
+          seen.set(agentId, {
+            agentId,
+            displayId: m.who.toString(),
+            role: m.can.toString(),
+            isIndividual: false,
+            isGroup: true,
+            isMe: false,
+            groupId: agentId,
+          });
+          seenGroupIds.add(agentId);
+        } else if (m.who.isIndividual()) {
+          const groupId = groups[agentId];
           seen.set(agentId, {
             agentId,
             displayId: m.who.toString(),
@@ -348,7 +542,9 @@ export class KeyhiveOps {
             isIndividual: true,
             isGroup: false,
             isMe: false,
+            groupId,
           });
+          if (groupId) seenGroupIds.add(groupId);
         }
       }
     }
@@ -359,6 +555,8 @@ export class KeyhiveOps {
         if (agentId === myAgentId) continue;
         if (excludeSet.has(agentId)) continue;
         if (seen.has(agentId)) continue;
+        const groupId = groups[agentId];
+        if (groupId && (excludeSet.has(groupId) || seenGroupIds.has(groupId))) continue;
         try {
           const id = new this.bridge.Identifier(base64ToBytes(agentId));
           const agent = await this.kh.getAgent(id);
@@ -370,7 +568,9 @@ export class KeyhiveOps {
               isIndividual: true,
               isGroup: false,
               isMe: false,
+              groupId,
             });
+            if (groupId) seenGroupIds.add(groupId);
           }
         } catch {
           // Agent not found in keyhive — skip
@@ -392,6 +592,29 @@ export class KeyhiveOps {
     await this.kh.revokeMember(agent, true, doc.toMembered());
     await this.fx.persist();
     this.fx.syncKeyhive();
+  }
+
+  /**
+   * Resolve a base64 id to the Agent to add to a document ACL.
+   * Prefers a user Group (so all of a user's devices get access), then an existing
+   * doc member, then falls back to an Individual (legacy shares / invite temp ids).
+   */
+  private async resolveShareAgent(doc: any, idB64: string): Promise<any> {
+    const bytes = base64ToBytes(idB64);
+    // 1. A user Group (mine or a contact's) — preferred share target.
+    const group = await this.getGroupById(idB64);
+    if (group) return group.toAgent();
+    // 2. Already a member of this document.
+    try {
+      return await this.findAgentByIdBytes(doc, idB64);
+    } catch {
+      // not yet a member — fall through
+    }
+    // 3. Individual fallback (legacy individual shares, invite temp identities).
+    const id = new this.bridge.Identifier(bytes);
+    const found = await this.kh.getAgent(id);
+    if (found) return found;
+    throw new Error('Agent not found');
   }
 
   /** Look up an Agent from docMemberCapabilities by matching Identifier bytes (base64). */

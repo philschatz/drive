@@ -7,8 +7,9 @@ import { Button } from '@/components/ui/button';
 import { Alert } from '@/components/ui/alert';
 import {
   getIdentity,
-  getContactCard,
   receiveContactCard,
+  linkDevice,
+  getLinkPayload,
   listDevices,
   removeDevice,
   type IdentityInfo,
@@ -52,9 +53,9 @@ export function Settings({ path }: { path?: string }) {
 
   const handleShowContactCard = async () => {
     try {
-      const card = await getContactCard();
+      const { card, userGroupId } = await getLinkPayload();
       setContactCard(card);
-      setLinkDeviceUrl(buildLinkDeviceUrl(card));
+      setLinkDeviceUrl(buildLinkDeviceUrl(card, userGroupId));
     } catch (err: any) {
       setError(err.message);
     }
@@ -68,9 +69,9 @@ export function Settings({ path }: { path?: string }) {
 
   const handleShowFriendQr = async () => {
     try {
-      const card = await getContactCard();
+      const { card, userGroupId } = await getLinkPayload();
       const trimmed = displayName.trim();
-      setFriendQrUrl(buildAddFriendUrl(card, trimmed || undefined));
+      setFriendQrUrl(buildAddFriendUrl(card, trimmed || undefined, userGroupId));
     } catch (err: any) {
       setError(err.message);
     }
@@ -85,6 +86,7 @@ export function Settings({ path }: { path?: string }) {
         setError("That's your own contact card. Paste the contact card from your other device here.");
         return;
       }
+      await linkDevice(result.agentId, null);
       setMessage('Device linked successfully');
       setLinkInput('');
       await refresh();

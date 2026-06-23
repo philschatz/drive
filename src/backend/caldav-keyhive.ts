@@ -91,6 +91,7 @@ export async function initCaldavKeyhive(
     ChangeId: khBridge.ChangeId as any,
     DocumentId: khBridge.DocumentId as any,
     Identifier: khBridge.Identifier as any,
+    GroupId: { fromBytes: (bytes: Uint8Array) => (khBridge as any).GroupId.fromBytes(bytes) },
     Signer: { memorySignerFromBytes: (bytes: Uint8Array) => khBridge.Signer.memorySignerFromBytes(bytes) },
     CiphertextStore: { newInMemory: () => khBridge.CiphertextStore.newInMemory() },
     Keyhive: { init: (signer: any, store: any, cb: () => void) => khBridge.Keyhive.init(signer, store, cb) },
@@ -98,12 +99,18 @@ export async function initCaldavKeyhive(
     ContactCard: { fromJson: (json: string) => khBridge.ContactCard.fromJson(json) },
   };
 
+  // The CalDAV server participates as a single device (Individual); it does not form
+  // a multi-device user group, so the user-group side-effects are no-ops.
+  let serverUserGroupId: string | null = null;
   const khOps = new KeyhiveOps(integration.keyhive, bridge, {
     persist: () => integration.keyhiveStorage.saveKeyhiveWithHash(integration.keyhive),
     syncKeyhive: () => integration.networkAdapter.syncKeyhive(),
     registerDoc: (amDocId: string, khDocId: any) => integration.networkAdapter.registerDoc(amDocId, khDocId),
     forceResyncAllPeers: () => (integration.networkAdapter as any).forceResyncAllPeers(),
     findDoc: (docId: string) => repo.find(docId as any),
+    saveEventBytes: (eventBytes: Uint8Array) => integration.keyhiveStorage.saveEventBytesWithHash(eventBytes),
+    getUserGroupId: async () => serverUserGroupId,
+    setUserGroupId: async (groupId: string) => { serverUserGroupId = groupId; },
   });
 
   console.log('[caldav-keyhive] initialized, peerId:', integration.peerId);

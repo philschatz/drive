@@ -7,14 +7,13 @@
 import { useState, useEffect, useCallback } from 'preact/hooks';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Button } from '@/components/ui/button';
-import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from '@/components/ui/tooltip';
 import {
   getDocMembers,
   getMyAccess,
   changeRole,
   revokeMember,
-  generateInvite,
   getKnownContacts,
   addMember,
   dismissInvite,
@@ -80,7 +79,7 @@ function accessIcon(access: string | null | undefined): string {
   if (!access) return 'lock';
   switch (access) {
     case 'admin': return 'admin_panel_settings';
-    case 'write': return 'edit';
+    case 'edit': return 'edit';
     case 'read': return 'visibility';
     default: return 'lock';
   }
@@ -92,7 +91,7 @@ export function AccessControl({ docId, docType, access: accessProp }: AccessCont
   const [myAccess, setMyAccess] = useState<string | null>(accessProp ?? null);
   const [loaded, setLoaded] = useState(false);
   const [contacts, setContacts] = useState<MemberInfo[]>([]);
-  const [selectedContact, setSelectedContact] = useState<string>('__new__');
+  const [selectedContact, setSelectedContact] = useState<string>('');
   const [inviteRole, setInviteRole] = useState<string>('read');
   const [inviteStatuses, setInviteStatuses] = useState<InviteStatus[]>([]);
   const [loading, setLoading] = useState(false);
@@ -154,8 +153,8 @@ export function AccessControl({ docId, docType, access: accessProp }: AccessCont
       const c = contactsResult.value;
       setContacts(c);
       setSelectedContact(prev => {
-        if (prev === '__new__') return prev;
-        return c.some(ct => ct.agentId === prev) ? prev : (c.length > 0 ? c[0].agentId : '__new__');
+        if (prev && c.some(ct => ct.agentId === prev)) return prev;
+        return c.length > 0 ? c[0].agentId : '';
       });
     }
 
@@ -200,33 +199,15 @@ export function AccessControl({ docId, docType, access: accessProp }: AccessCont
     }
   };
 
-  const handleAddOrInvite = async () => {
-    if (selectedContact === '__new__') {
-      await handleGenerateInvite();
-      return;
-    }
+  const handleAdd = async () => {
+    const contact = contacts.find(c => c.agentId === selectedContact);
+    if (!contact) return;
     setLoading(true);
     try {
-      await addMember(selectedContact, docId, inviteRole);
+      // Share with the contact's user (Group) so all their devices get access;
+      // fall back to the individual id only for legacy contacts without a known group.
+      await addMember(contact.groupId ?? contact.agentId, docId, inviteRole);
       await refresh();
-    } catch (err: any) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleGenerateInvite = async () => {
-    setLoading(true);
-    try {
-      const result = await generateInvite(docId, inviteRole, docType ?? 'unknown');
-      // Worker built the URL and stored the invite record
-      await checkInvites();
-      const copied = await shareOrCopy(result.inviteUrl);
-      if (copied) {
-        setCopiedUrl(result.inviteUrl);
-        setTimeout(() => setCopiedUrl(null), 1500);
-      }
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -276,8 +257,12 @@ export function AccessControl({ docId, docType, access: accessProp }: AccessCont
             )}
             {members.map(member => (
               <div key={member.agentId} className="flex items-center gap-2 py-1.5 border-b border-border">
-                <span className="material-symbols-outlined text-muted-foreground" style={{ fontSize: 16 }}>
-                  {member.isGroup ? 'group' : 'person'}
+                <span
+                  className="material-symbols-outlined text-muted-foreground"
+                  style={{ fontSize: 16 }}
+                  title={member.isGroup ? 'User (all their devices)' : 'Single device'}
+                >
+                  {member.isGroup ? 'group' : 'smartphone'}
                 </span>
                 <EditableName
                   agentId={member.agentId}
@@ -291,7 +276,7 @@ export function AccessControl({ docId, docType, access: accessProp }: AccessCont
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="read">Read</SelectItem>
-                        <SelectItem value="write">Write</SelectItem>
+                        <SelectItem value="edit">Edit</SelectItem>
                         <SelectItem value="admin">Admin</SelectItem>
                       </SelectContent>
                     </Select>
@@ -314,7 +299,13 @@ export function AccessControl({ docId, docType, access: accessProp }: AccessCont
           {/* Add member section (admin only) */}
           {isAdmin && (
             <div className="mt-6">
-              <h3 className="text-sm font-medium mb-2">Add member</h3>
+              <h3 className="text-sm font-medium mb-2">Share with a contact</h3>
+              {contacts.length === 0 ? (
+                <p className="text-xs text-muted-foreground mb-3">
+                  You have no contacts yet. <a href="#/settings" className="underline">Add a friend</a> first,
+                  then you can share documents with them.
+                </p>
+              ) : (
               <div className="flex items-center gap-2 mb-3">
                 <Select value={selectedContact} onValueChange={setSelectedContact}>
                   <SelectTrigger className="h-8 text-xs flex-1">
@@ -335,8 +326,6 @@ export function AccessControl({ docId, docType, access: accessProp }: AccessCont
                           {name || `${c.agentId.slice(0, 8)}…`}
                         </SelectItem>
                       ))}
-                    {contacts.length > 0 && <SelectSeparator />}
-                    <SelectItem value="__new__">Invite new person</SelectItem>
                   </SelectContent>
                 </Select>
                 <Select value={inviteRole} onValueChange={setInviteRole}>
@@ -345,14 +334,15 @@ export function AccessControl({ docId, docType, access: accessProp }: AccessCont
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="read">Read</SelectItem>
-                    <SelectItem value="write">Write</SelectItem>
+                    <SelectItem value="edit">Edit</SelectItem>
                     <SelectItem value="admin">Admin</SelectItem>
                   </SelectContent>
                 </Select>
-                <Button size="sm" onClick={handleAddOrInvite} disabled={loading}>
-                  {selectedContact === '__new__' ? 'Generate link' : 'Add'}
+                <Button size="sm" onClick={handleAdd} disabled={loading || !selectedContact}>
+                  Add
                 </Button>
               </div>
+              )}
 
               {/* Per-invite status list */}
               {inviteStatuses.length > 0 && (

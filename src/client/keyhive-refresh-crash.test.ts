@@ -84,7 +84,7 @@ describe('keyhive refresh crash (Bob refresh → Alice encrypts → WASM panic)'
     const { ops: opsB, kh: khB, signer: signerB } = await createOps();
 
     const { khDocId: amDocId } = await opsA.enableSharing('doc-1');
-    const invite = await opsA.generateInvite(amDocId, 'write');
+    const invite = await opsA.generateInvite(amDocId, 'edit');
 
     // Bob claims via archive
     const seed = new Uint8Array(invite.inviteKeyBytes);

@@ -12,7 +12,7 @@
 import { useState, useCallback } from 'preact/hooks';
 import { Button } from '@/components/ui/button';
 import { QRCodeDisplay } from '@/components/ui/qr-code';
-import { receiveContactCard, getContactCard } from '../shared/keyhive-api';
+import { receiveContactCard, linkDevice, getLinkPayload } from '../shared/keyhive-api';
 import { deflate, inflate } from 'pako';
 
 interface LinkDevicePageProps {
@@ -34,18 +34,34 @@ function bytesToB64url(bytes: Uint8Array): string {
   return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
-function decodeCardFromUrl(b64url: string): string {
+function decodeStringFromUrl(b64url: string): string {
   return new TextDecoder().decode(inflate(b64urlToBytes(b64url)));
 }
 
-function encodeCardForUrl(cardJson: string): string {
-  const compressed = deflate(new TextEncoder().encode(cardJson));
+function encodeStringForUrl(value: string): string {
+  const compressed = deflate(new TextEncoder().encode(value));
   return bytesToB64url(compressed);
 }
 
-export function buildLinkDeviceUrl(cardJson: string): string {
+/** Build a device-link URL embedding the contact card and this user's group id. */
+export function buildLinkDeviceUrl(cardJson: string, userGroupId?: string | null): string {
   const base = window.location.origin + window.location.pathname;
-  return `${base}#/link-device/${encodeCardForUrl(cardJson)}`;
+  const payload = JSON.stringify({ card: cardJson, userGroupId: userGroupId ?? null });
+  return `${base}#/link-device/${encodeStringForUrl(payload)}`;
+}
+
+/** Decode a device-link payload, tolerating the legacy raw-card format. */
+function decodeLinkData(b64url: string): { cardJson: string; userGroupId: string | null } {
+  const raw = decodeStringFromUrl(b64url);
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && typeof parsed.card === 'string') {
+      return { cardJson: parsed.card, userGroupId: parsed.userGroupId ?? null };
+    }
+  } catch {
+    // Not the wrapper format — old-style raw card JSON
+  }
+  return { cardJson: raw, userGroupId: null };
 }
 
 export function LinkDevicePage({ cardData }: LinkDevicePageProps) {
@@ -65,7 +81,7 @@ export function LinkDevicePage({ cardData }: LinkDevicePageProps) {
 
     try {
       setStatus('Decoding contact card...');
-      const cardJson = decodeCardFromUrl(cardData);
+      const { cardJson, userGroupId: peerGroupId } = decodeLinkData(cardData);
 
       setStatus('Linking device...');
       const result = await receiveContactCard(cardJson, { isDevice: true });
@@ -74,9 +90,13 @@ export function LinkDevicePage({ cardData }: LinkDevicePageProps) {
         return;
       }
 
+      // Join the same user-group (adopting the peer's group id if we don't have one yet).
+      setStatus('Joining your user group...');
+      await linkDevice(result.agentId, peerGroupId);
+
       setStatus('Generating your contact card...');
-      const myCard = await getContactCard();
-      setMyCardUrl(buildLinkDeviceUrl(myCard));
+      const { card: myCard, userGroupId: myGroupId } = await getLinkPayload();
+      setMyCardUrl(buildLinkDeviceUrl(myCard, myGroupId));
 
       setDone(true);
       setStatus('Device linked! Now scan this QR code from the other device to complete linking.');

@@ -43,20 +43,20 @@ export function encodeCardForUrl(cardJson: string): string {
   return bytesToB64url(compressed);
 }
 
-export function buildAddFriendUrl(cardJson: string, displayName?: string): string {
-  const payload = displayName
-    ? JSON.stringify({ card: cardJson, displayName })
+export function buildAddFriendUrl(cardJson: string, displayName?: string, userGroupId?: string | null): string {
+  const payload = (displayName || userGroupId)
+    ? JSON.stringify({ card: cardJson, displayName, userGroupId: userGroupId ?? undefined })
     : cardJson;
   const base = window.location.origin + window.location.pathname;
   return `${base}#/add-friend/${encodeCardForUrl(payload)}`;
 }
 
-function decodeFriendData(b64url: string): { cardJson: string; displayName?: string } {
+function decodeFriendData(b64url: string): { cardJson: string; displayName?: string; userGroupId?: string } {
   const raw = decodeCardFromUrl(b64url);
   try {
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed === 'object' && typeof parsed.card === 'string') {
-      return { cardJson: parsed.card, displayName: parsed.displayName };
+      return { cardJson: parsed.card, displayName: parsed.displayName, userGroupId: parsed.userGroupId };
     }
   } catch {
     // Not the wrapper format — old-style raw card
@@ -82,10 +82,10 @@ export function AddFriendPage({ cardData }: AddFriendPageProps) {
 
     try {
       setStatus('Decoding contact card...');
-      const { cardJson, displayName } = decodeFriendData(cardData);
+      const { cardJson, displayName, userGroupId } = decodeFriendData(cardData);
 
       setStatus('Adding contact...');
-      const result = await receiveContactCard(cardJson);
+      const result = await receiveContactCard(cardJson, { userGroupId });
       if (result.isOwnCard) {
         setError("This is your own contact card. Share this link with a friend \u2014 don't open it yourself.");
         return;

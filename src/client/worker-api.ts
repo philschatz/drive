@@ -541,7 +541,9 @@ export interface DeviceInfo {
 export interface IdentityInfo {
   deviceId: string;
   agentId: string;
-  devices: DeviceInfo[];
+  /** This user's personal Group id (base64), or null if not yet created. */
+  userGroupId: string | null;
+  devices?: DeviceInfo[];
 }
 
 export interface MemberInfo {
@@ -551,6 +553,14 @@ export interface MemberInfo {
   isIndividual: boolean;
   isGroup: boolean;
   isMe: boolean;
+  /** For an individual contact, the base64 id of their user Group (share target), if known. */
+  groupId?: string;
+}
+
+/** A contact card plus the sender's user-group id, for QR/URL linking & sharing. */
+export interface LinkPayload {
+  card: string;
+  userGroupId: string | null;
 }
 
 // ── Keyhive API ─────────────────────────────────────────────────────────────
@@ -566,13 +576,31 @@ export function getContactCard(): Promise<string> {
 }
 
 /** Receive a contact card from another device/user. Returns the agent ID. */
-export function receiveContactCard(cardJson: string, opts?: { isDevice?: boolean }): Promise<{ agentId: string; isOwnCard: boolean }> {
-  return khRequest('kh-receive-contact-card', { cardJson, isDevice: opts?.isDevice });
+export function receiveContactCard(
+  cardJson: string,
+  opts?: { isDevice?: boolean; userGroupId?: string | null },
+): Promise<{ agentId: string; isOwnCard: boolean }> {
+  return khRequest('kh-receive-contact-card', { cardJson, isDevice: opts?.isDevice, userGroupId: opts?.userGroupId });
 }
 
 /** Get known contacts across all documents, excluding members of a specific doc. */
 export function getKnownContacts(excludeDocId: string): Promise<MemberInfo[]> {
   return khRequest('kh-get-known-contacts', { excludeDocId });
+}
+
+/** Ensure this device has a personal user-group; returns its id (base64). */
+export function ensureUserGroup(opts?: { create?: boolean; adoptGroupId?: string; waitForSync?: boolean }): Promise<{ userGroupId: string | null }> {
+  return khRequest('kh-ensure-user-group', { create: opts?.create, adoptGroupId: opts?.adoptGroupId, waitForSync: opts?.waitForSync });
+}
+
+/** Link another device into this user's group (converges groups, adds the peer if admin). */
+export function linkDevice(deviceAgentId: string, peerGroupId?: string | null): Promise<{ userGroupId: string | null }> {
+  return khRequest('kh-link-device', { deviceAgentId, peerGroupId });
+}
+
+/** Get this device's contact card plus user-group id, for building a link/share QR. */
+export function getLinkPayload(): Promise<LinkPayload> {
+  return khRequest('kh-get-link-payload');
 }
 
 /** Get all members, roles, and invite records for a document. */

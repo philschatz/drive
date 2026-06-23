@@ -33,10 +33,10 @@ describe('useAccess', () => {
   });
 
   it('returns canEdit: true when access is write', async () => {
-    mockGetMyAccess.mockResolvedValue('Write');
+    mockGetMyAccess.mockResolvedValue('Edit');
     const { result } = renderHook(() => useAccess('kh-doc-1'));
     await waitFor(() => expect(result.current.loaded).toBe(true));
-    expect(result.current).toEqual({ access: 'write', canEdit: true, loaded: true });
+    expect(result.current).toEqual({ access: 'edit', canEdit: true, loaded: true });
   });
 
   it('returns canEdit: false when access is read', async () => {
@@ -61,10 +61,10 @@ describe('useAccess', () => {
     expect(result.current.loaded).toBe(false);
     expect(result.current.canEdit).toBe(false);
 
-    await act(async () => { resolve('Write'); });
+    await act(async () => { resolve('Edit'); });
     expect(result.current.loaded).toBe(true);
     expect(result.current.canEdit).toBe(true);
-    expect(result.current.access).toBe('write');
+    expect(result.current.access).toBe('edit');
   });
 
   it('returns canEdit: false when fetch rejects', async () => {
@@ -75,10 +75,10 @@ describe('useAccess', () => {
   });
 
   it('re-fetches access when keyhive state changes', async () => {
-    mockGetMyAccess.mockResolvedValue('Write');
+    mockGetMyAccess.mockResolvedValue('Edit');
     const { result } = renderHook(() => useAccess('kh-doc-1'));
     await waitFor(() => expect(result.current.loaded).toBe(true));
-    expect(result.current.access).toBe('write');
+    expect(result.current.access).toBe('edit');
 
     // Simulate access revocation
     mockGetMyAccess.mockResolvedValue(null);

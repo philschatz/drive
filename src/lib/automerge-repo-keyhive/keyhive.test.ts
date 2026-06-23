@@ -346,7 +346,7 @@ describe('invite round-trip', () => {
     const tempAgent = tempIndividual.toAgent();
 
     // Grant write access
-    const writeAccess = Access.tryFromString('write');
+    const writeAccess = Access.tryFromString('edit');
     expect(writeAccess).toBeDefined();
     await khA.addMember(tempAgent, doc.toMembered(), writeAccess!, []);
 
@@ -420,7 +420,7 @@ async function setupInvitePair() {
   const tempKh = await Keyhive.init(inviteSigner, CiphertextStore.newInMemory(), () => {});
   const tempCard = await tempKh.contactCard();
   const tempIndividual = await khA.receiveContactCard(tempCard);
-  const writeAccess = Access.tryFromString('write')!;
+  const writeAccess = Access.tryFromString('edit')!;
   await khA.addMember(tempIndividual.toAgent(), docA.toMembered(), writeAccess, []);
 
   // --- B claims the invite ---
@@ -467,7 +467,7 @@ async function setupInvitePairBuggy() {
   const tempKh = await Keyhive.init(inviteSigner, CiphertextStore.newInMemory(), () => {});
   const tempCard = await tempKh.contactCard();
   const tempIndividual = await khA.receiveContactCard(tempCard);
-  const writeAccess = Access.tryFromString('write')!;
+  const writeAccess = Access.tryFromString('edit')!;
   await khA.addMember(tempIndividual.toAgent(), docA.toMembered(), writeAccess, []);
 
   const signerB = Signer.memorySignerFromBytes(crypto.getRandomValues(new Uint8Array(32)));
@@ -502,7 +502,7 @@ async function setupInvitePairIngestArchive() {
   const tempKh = await Keyhive.init(inviteSigner, CiphertextStore.newInMemory(), () => {});
   const tempCard = await tempKh.contactCard();
   const tempIndividual = await khA.receiveContactCard(tempCard);
-  const writeAccess = Access.tryFromString('write')!;
+  const writeAccess = Access.tryFromString('edit')!;
   await khA.addMember(tempIndividual.toAgent(), docA.toMembered(), writeAccess, []);
 
   // --- B claims the invite using production pattern (ingestArchive) ---
@@ -716,7 +716,7 @@ describe('automerge-worker patterns', () => {
     expect(reportedAccess).toBeDefined();
     // BUG: reports Admin even though invite was Write
     expect(reportedAccess!.toString()).toBe('Admin');
-    // The worker works around this with inviteAccessOverrides.set(khDocId, 'Write')
+    // The worker works around this with inviteAccessOverrides.set(khDocId, 'Edit')
   });
 
   it('tryToKeyhive CGKA ownership bug: B self-encrypt works but A→B decrypt fails', async () => {
@@ -806,7 +806,7 @@ describe('automerge-worker patterns', () => {
       const tmpIndividual = await khAdmin.receiveContactCard(tmpCard);
       // Get fresh doc + access references each time (WASM objects may be consumed)
       const doc = await khAdmin.getDocument(docId);
-      const writeAccess = Access.tryFromString('write')!;
+      const writeAccess = Access.tryFromString('edit')!;
       await khAdmin.addMember(tmpIndividual.toAgent(), doc!.toMembered(), writeAccess, []);
 
       // Claim using fixed flow
@@ -1159,7 +1159,7 @@ describe('seed-only invite flow', () => {
     // Ingest temp archive so invite events are in Alice's keyhive
     const tempArchive = await tempKh.toArchive();
     await khA.ingestArchive(tempArchive);
-    await khA.addMember(inviteIndividual.toAgent(), doc.toMembered(), Access.tryFromString('write')!, []);
+    await khA.addMember(inviteIndividual.toAgent(), doc.toMembered(), Access.tryFromString('edit')!, []);
     return { inviteSeed, doc };
   }
 
@@ -1361,7 +1361,7 @@ describe('seed-only invite flow', () => {
     const inviteIndividual = await kh.receiveContactCard(inviteCard);
     const tempArchive = await tempKh.toArchive();
     await kh.ingestArchive(tempArchive);
-    await kh.addMember(inviteIndividual.toAgent(), doc.toMembered(), Access.tryFromString('write')!, []);
+    await kh.addMember(inviteIndividual.toAgent(), doc.toMembered(), Access.tryFromString('edit')!, []);
 
     // Persist and reload (production restart)
     const archive = await kh.toArchive();
@@ -1405,7 +1405,7 @@ describe('seed-only invite flow', () => {
     const inviteCard = await tempKh.contactCard();
     const inviteIndividual = await khA.receiveContactCard(inviteCard);
     await khA.ingestArchive(await tempKh.toArchive());
-    await khA.addMember(inviteIndividual.toAgent(), doc.toMembered(), Access.tryFromString('write')!, []);
+    await khA.addMember(inviteIndividual.toAgent(), doc.toMembered(), Access.tryFromString('edit')!, []);
 
     // Archive round-trip (simulates restart)
     const archive = await khA.toArchive();
@@ -1450,7 +1450,7 @@ describe('seed-only invite flow', () => {
     const opsA = new KeyhiveOps(khA, bridge as any, fxA);
 
     const { khDocId } = await opsA.enableSharing('doc-1');
-    const invite = await opsA.generateInvite(khDocId, 'write');
+    const invite = await opsA.generateInvite(khDocId, 'edit');
     const inviteSeed = new Uint8Array(invite.inviteKeyBytes);
 
     // Bob's keyhive
@@ -1491,7 +1491,7 @@ describe('seed-only invite flow', () => {
     const opsA = new KeyhiveOps(khA, bridge as any, fxA);
 
     const { khDocId } = await opsA.enableSharing('doc-1');
-    const invite = await opsA.generateInvite(khDocId, 'write');
+    const invite = await opsA.generateInvite(khDocId, 'edit');
     const inviteSeed = new Uint8Array(invite.inviteKeyBytes);
 
     // Bob's keyhive

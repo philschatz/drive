@@ -9,6 +9,9 @@ export {
   getMyAccess,
   listDevices,
   removeDevice,
+  ensureUserGroup,
+  linkDevice,
+  getLinkPayload,
   addMember,
   revokeMember,
   changeRole,
@@ -16,4 +19,4 @@ export {
   dismissInvite,
   claimInvite,
 } from '../worker-api';
-export type { DeviceInfo, IdentityInfo, MemberInfo } from '../worker-api';
+export type { DeviceInfo, IdentityInfo, MemberInfo, LinkPayload } from '../worker-api';

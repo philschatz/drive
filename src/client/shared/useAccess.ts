@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'preact/hooks';
 import { getMyAccess, onKeyhiveStateChanged } from './keyhive-api';
 
-export type AccessLevel = 'admin' | 'write' | 'read' | 'pull' | null;
+export type AccessLevel = 'admin' | 'edit' | 'read' | 'relay' | null;
 
 const ACCESS_CACHE_KEY = 'keyhive-access-cache';
 
@@ -24,8 +24,8 @@ export function getCachedAccess(docId: string): AccessLevel {
 
 /**
  * Query the current device's keyhive access level for a document.
- * Returns the access string (admin/write/read/pull) or null if unknown/no keyhive.
- * `canEdit` is true when the access level permits writes (admin or write).
+ * Returns the access string (admin/edit/read/relay) or null if unknown/no keyhive.
+ * `canEdit` is true when the access level permits writes (admin or edit).
  * `loaded` distinguishes "still fetching" from "confirmed no access".
  * Re-fetches automatically when keyhive state changes (e.g. member added/revoked).
  */
@@ -68,6 +68,6 @@ export function useAccess(docId: string | undefined): { access: AccessLevel; can
     return { access: null, canEdit: true, loaded: true };
   }
 
-  const canEdit = access === 'admin' || access === 'write';
+  const canEdit = access === 'admin' || access === 'edit';
   return { access, canEdit, loaded };
 }

@@ -145,8 +145,12 @@ export function Contacts({ path }: { path?: string }) {
           return (
             <div key={contact.agentId} className="py-2 border-b border-border">
               <div className="flex items-center gap-2">
-                <span className="material-symbols-outlined text-muted-foreground" style={{ fontSize: 16 }}>
-                  {contact.isGroup ? 'group' : 'person'}
+                <span
+                  className="material-symbols-outlined text-muted-foreground"
+                  style={{ fontSize: 16 }}
+                  title={contact.isGroup ? 'User (all their devices)' : 'Single device'}
+                >
+                  {contact.isGroup ? 'group' : 'smartphone'}
                 </span>
                 <EditableName agentId={contact.agentId} />
                 <button

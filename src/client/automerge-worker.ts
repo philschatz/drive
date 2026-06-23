@@ -39,7 +39,7 @@ export type MainToWorker =
   // Keyhive operations
   | { type: 'kh-get-identity'; id: number }
   | { type: 'kh-get-contact-card'; id: number }
-  | { type: 'kh-receive-contact-card'; id: number; cardJson: string; isDevice?: boolean }
+  | { type: 'kh-receive-contact-card'; id: number; cardJson: string; isDevice?: boolean; userGroupId?: string | null }
   | { type: 'kh-get-doc-members'; id: number; docId: string }
   | { type: 'kh-get-my-access'; id: number; docId: string }
   | { type: 'kh-add-member'; id: number; agentId: string; docId: string; role: string }
@@ -48,6 +48,9 @@ export type MainToWorker =
   | { type: 'kh-generate-invite'; id: number; docId: string; role: string; docType: string }
   | { type: 'kh-list-devices'; id: number }
   | { type: 'kh-remove-device'; id: number; agentId: string }
+  | { type: 'kh-ensure-user-group'; id: number; create?: boolean; adoptGroupId?: string; waitForSync?: boolean }
+  | { type: 'kh-link-device'; id: number; deviceAgentId: string; peerGroupId?: string | null }
+  | { type: 'kh-get-link-payload'; id: number }
   | { type: 'kh-get-known-contacts'; id: number; excludeDocId?: string }
   | { type: 'kh-claim-invite'; id: number; inviteSeed: number[]; docId: string }
   | { type: 'kh-dismiss-invite'; id: number; inviteId: string; docId: string }
@@ -138,6 +141,62 @@ function resolveKhDocId(automergeDocId: string): string {
 function getRepo(): InstanceType<typeof Repo> {
   if (!secureRepo) throw new Error('Secure repo not initialized');
   return secureRepo;
+}
+
+// --- User-group migration: fold legacy flat 'linked-devices' into a keyhive Group ---
+let linkedDevicesMigrated = false;
+
+/** One-time: move any 'linked-devices' agentIds into the personal user-group. */
+async function migrateLinkedDevices(): Promise<void> {
+  if (linkedDevicesMigrated || !khOps) return;
+  linkedDevicesMigrated = true;
+  try {
+    const { idbGet, idbSet } = await import('./idb-storage');
+    const legacy = (await idbGet<string[]>('linked-devices')) ?? [];
+    if (legacy.length === 0) return;
+    await khOps.ensureUserGroup({ create: true });
+    const pending = new Set<string>((await idbGet<string[]>('pending-group-adds')) ?? []);
+    const remaining: string[] = [];
+    for (const agentId of legacy) {
+      try {
+        await khOps.addDeviceToGroup(agentId);
+        pending.delete(agentId);
+      } catch {
+        // Device's contact card not synced yet — retry on the next keyhive state change.
+        remaining.push(agentId);
+        pending.add(agentId);
+      }
+    }
+    await idbSet('linked-devices', remaining);
+    await idbSet('pending-group-adds', [...pending]);
+  } catch (err) {
+    console.warn('[worker] migrateLinkedDevices failed:', err);
+  }
+}
+
+/** Retry adding any devices that couldn't be added to the group earlier. */
+async function drainPendingGroupAdds(): Promise<void> {
+  if (!khOps) return;
+  try {
+    const { idbGet, idbSet } = await import('./idb-storage');
+    const pending = (await idbGet<string[]>('pending-group-adds')) ?? [];
+    if (pending.length === 0) return;
+    if (!(await khOps.getUserGroupId())) return;
+    const stillPending: string[] = [];
+    for (const agentId of pending) {
+      try {
+        await khOps.addDeviceToGroup(agentId);
+      } catch {
+        stillPending.push(agentId);
+      }
+    }
+    await idbSet('pending-group-adds', stillPending);
+    const legacy = (await idbGet<string[]>('linked-devices')) ?? [];
+    const kept = legacy.filter((id) => stillPending.includes(id));
+    if (kept.length !== legacy.length) await idbSet('linked-devices', kept);
+  } catch (err) {
+    console.warn('[worker] drainPendingGroupAdds failed:', err);
+  }
 }
 
 // --- Doc registry for worker-owned subscriptions ---
@@ -626,6 +685,8 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
             // After keyhive ingests remote ops, check for newly discovered documents
             // (e.g. Bob was added as a member by Alice — the doc should appear in Bob's list)
             void checkForNewKeyhiveDocs();
+            // Retry any device-group adds that were waiting on contact cards to sync.
+            void drainPendingGroupAdds();
             // Notify main thread so useAccess/Home can re-check access levels
             (self as any).postMessage({ type: 'kh-state-changed' } satisfies WorkerToMain);
           },
@@ -643,7 +704,18 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
           forceResyncAllPeers: () => (khIntegration!.networkAdapter as any).forceResyncAllPeers(),
           findDoc: (docId) => secureRepo!.find(docId as any),
           saveEventBytes: (eventBytes) => khIntegration!.keyhiveStorage.saveEventBytesWithHash(eventBytes),
+          getUserGroupId: async () => {
+            const { idbGet } = await import('./idb-storage');
+            return (await idbGet<string>('user-group-id')) ?? null;
+          },
+          setUserGroupId: async (groupId) => {
+            const { idbSet } = await import('./idb-storage');
+            await idbSet('user-group-id', groupId);
+          },
         });
+
+        // Fold any legacy flat linked-devices into a personal user-group (one-time).
+        void migrateLinkedDevices();
 
         const secureNs = secureRepo.networkSubsystem;
         secureNs.on('peer', postStatus);
@@ -1196,13 +1268,13 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
     try {
       if (!khOps) throw new Error('Keyhive not available');
       const result = await khOps.receiveContactCard(msg.cardJson);
-      if (msg.isDevice && !result.isOwnCard) {
+      // For a friend (not a device link), remember which user-group is theirs so we
+      // can share documents with their whole user (all their devices) later.
+      if (!msg.isDevice && !result.isOwnCard && msg.userGroupId) {
         const { idbGet, idbSet } = await import('./idb-storage');
-        const devices = (await idbGet<string[]>('linked-devices')) ?? [];
-        if (!devices.includes(result.agentId)) {
-          devices.push(result.agentId);
-          await idbSet('linked-devices', devices);
-        }
+        const map = (await idbGet<Record<string, string>>('contact-groups')) ?? {};
+        map[result.agentId] = msg.userGroupId;
+        await idbSet('contact-groups', map);
       }
       (self as any).postMessage({ type: 'result', id: msg.id, result } satisfies WorkerToMain);
     } catch (err: any) {
@@ -1240,8 +1312,9 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
       const { idbGet } = await import('./idb-storage');
       const contactNames = (await idbGet<Record<string, string>>('contact-names')) ?? {};
       const contactAgentIds = Object.keys(contactNames);
+      const contactGroups = (await idbGet<Record<string, string>>('contact-groups')) ?? {};
       const excludeKhDocId = msg.excludeDocId ? resolveKhDocId(msg.excludeDocId) : undefined;
-      const result = await khOps.getKnownContacts(excludeKhDocId, contactAgentIds);
+      const result = await khOps.getKnownContacts(excludeKhDocId, contactAgentIds, contactGroups);
       (self as any).postMessage({ type: 'result', id: msg.id, result } satisfies WorkerToMain);
     } catch (err: any) {
       (self as any).postMessage({ type: 'result', id: msg.id, error: errMsg(err) } satisfies WorkerToMain);
@@ -1251,15 +1324,7 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
   if (msg.type === 'kh-list-devices') {
     try {
       if (!khOps) throw new Error('Keyhive not available');
-      const { idbGet } = await import('./idb-storage');
-      const linkedIds = (await idbGet<string[]>('linked-devices')) ?? [];
-      const myId = (await khOps.getIdentity()).deviceId;
-      const devices: { agentId: string; role: string; isMe?: boolean }[] = [
-        { agentId: myId, role: 'owner', isMe: true },
-      ];
-      for (const id of linkedIds) {
-        devices.push({ agentId: id, role: 'linked', isMe: false });
-      }
+      const devices = await khOps.listGroupDevices();
       (self as any).postMessage({ type: 'result', id: msg.id, result: devices } satisfies WorkerToMain);
     } catch (err: any) {
       (self as any).postMessage({ type: 'result', id: msg.id, error: errMsg(err) } satisfies WorkerToMain);
@@ -1269,11 +1334,44 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
   if (msg.type === 'kh-remove-device') {
     try {
       if (!khOps) throw new Error('Keyhive not available');
-      const { idbGet, idbSet } = await import('./idb-storage');
-      const devices = (await idbGet<string[]>('linked-devices')) ?? [];
-      const updated = devices.filter(id => id !== msg.agentId);
-      await idbSet('linked-devices', updated);
+      await khOps.removeDeviceFromGroup(msg.agentId);
       (self as any).postMessage({ type: 'result', id: msg.id, result: undefined } satisfies WorkerToMain);
+    } catch (err: any) {
+      (self as any).postMessage({ type: 'result', id: msg.id, error: errMsg(err) } satisfies WorkerToMain);
+    }
+  }
+
+  if (msg.type === 'kh-ensure-user-group') {
+    try {
+      if (!khOps) throw new Error('Keyhive not available');
+      const userGroupId = await khOps.ensureUserGroup({
+        create: msg.create,
+        adoptGroupId: msg.adoptGroupId,
+        waitForSync: msg.waitForSync,
+      });
+      (self as any).postMessage({ type: 'result', id: msg.id, result: { userGroupId } } satisfies WorkerToMain);
+    } catch (err: any) {
+      (self as any).postMessage({ type: 'result', id: msg.id, error: errMsg(err) } satisfies WorkerToMain);
+    }
+  }
+
+  if (msg.type === 'kh-link-device') {
+    try {
+      if (!khOps) throw new Error('Keyhive not available');
+      const result = await khOps.linkDevice(msg.deviceAgentId, msg.peerGroupId);
+      (self as any).postMessage({ type: 'result', id: msg.id, result } satisfies WorkerToMain);
+    } catch (err: any) {
+      (self as any).postMessage({ type: 'result', id: msg.id, error: errMsg(err) } satisfies WorkerToMain);
+    }
+  }
+
+  if (msg.type === 'kh-get-link-payload') {
+    try {
+      if (!khOps) throw new Error('Keyhive not available');
+      // Ensure a personal user-group exists so its id can travel with the contact card.
+      const userGroupId = await khOps.ensureUserGroup({ create: true });
+      const card = await khOps.getContactCard();
+      (self as any).postMessage({ type: 'result', id: msg.id, result: { card, userGroupId } } satisfies WorkerToMain);
     } catch (err: any) {
       (self as any).postMessage({ type: 'result', id: msg.id, error: errMsg(err) } satisfies WorkerToMain);
     }
