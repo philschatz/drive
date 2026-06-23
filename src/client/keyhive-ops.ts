@@ -61,6 +61,8 @@ export interface MemberInfo {
   groupId?: string;
   /** This individual device is also a member of a group that has access to the doc (redundant — hidden in the UI). */
   inGroup?: boolean;
+  /** For a group member, the base64 agent ids of the devices in that group (empty if its ops haven't synced). */
+  deviceIds?: string[];
 }
 
 export class KeyhiveOps {
@@ -332,23 +334,27 @@ export class KeyhiveOps {
     const myAgentStr = me.toAgent().toString();
     const myUserGroupId = await this.fx.getUserGroupId();
 
-    // Devices already covered by a group that has access to this doc are
-    // redundant; flag them so the UI can hide them. Expand each group member to
-    // its device members. A device is collected whether keyhive represents it as
-    // an Individual or as the Active self-agent (the current device reads as
-    // Active, not Individual — same reason listGroupDevices unshifts self), so we
-    // collect every non-group sub-member. Groups whose ops haven't synced won't
-    // resolve — their devices simply aren't hidden.
-    const groupedDeviceIds = new Set<string>();
+    // Expand each group doc-member to its device members. A device is collected
+    // whether keyhive represents it as an Individual or as the Active self-agent
+    // (the current device reads as Active, not Individual — same reason
+    // listGroupDevices unshifts self), so we collect every non-group sub-member.
+    // Groups whose ops haven't synced won't resolve — they report no devices.
+    // Used both to hide devices already covered by a group (inGroup) and to
+    // report each group's device list/count to the UI.
+    const groupDevices = new Map<string, string[]>();
     for (const m of members) {
       if (!m.who.isGroup()) continue;
-      const group = await this.getGroupById(bytesToBase64(m.who.id.toBytes()));
+      const gid = bytesToBase64(m.who.id.toBytes());
+      const group = await this.getGroupById(gid);
       if (!group) continue;
       const subMembers = await group.members();
+      const ids = new Set<string>();
       for (const gm of subMembers) {
-        if (!gm.who.isGroup()) groupedDeviceIds.add(bytesToBase64(gm.who.id.toBytes()));
+        if (!gm.who.isGroup()) ids.add(bytesToBase64(gm.who.id.toBytes()));
       }
+      groupDevices.set(gid, [...ids]);
     }
+    const groupedDeviceIds = new Set<string>([...groupDevices.values()].flat());
 
     return members.map((m: any) => {
       const agentId = bytesToBase64(m.who.id.toBytes());
@@ -363,6 +369,7 @@ export class KeyhiveOps {
         isMe: m.who.toString() === myAgentStr || (isGroup && agentId === myUserGroupId),
         // Hide any non-group member (device) already covered by a present group.
         inGroup: !isGroup && groupedDeviceIds.has(agentId),
+        deviceIds: isGroup ? (groupDevices.get(agentId) ?? []) : undefined,
       };
     });
   }

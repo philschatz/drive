@@ -1705,6 +1705,8 @@ describe('KeyhiveOps', () => {
       expect(groupMember).toBeDefined();
       expect(groupMember!.isMe).toBe(true); // own user-group reads as "you"
       expect(groupMember!.inGroup).toBeFalsy(); // groups are never hidden
+      // The group reports its device members (here: just the creating device).
+      expect(groupMember!.deviceIds).toContain(myAgentId);
 
       // The current device is a doc member (and a member of its own user-group),
       // so it is flagged for hiding. keyhive represents self as the Active agent,

@@ -19,6 +19,8 @@ interface ContactEntry {
   agentId: string;
   isGroup: boolean;
   docs: ContactDocInfo[];
+  /** Base64 agent ids of the devices in this contact's user-group. */
+  deviceIds: string[];
 }
 
 export function Contacts({ path }: { path?: string }) {
@@ -63,8 +65,12 @@ export function Contacts({ path }: { path?: string }) {
 
           let entry = map.get(m.agentId);
           if (!entry) {
-            entry = { agentId: m.agentId, isGroup: true, docs: [] };
+            entry = { agentId: m.agentId, isGroup: true, docs: [], deviceIds: m.deviceIds ?? [] };
             map.set(m.agentId, entry);
+          } else if (m.deviceIds && m.deviceIds.length > entry.deviceIds.length) {
+            // Different docs may have synced different amounts of the group's ops;
+            // keep the most complete device list seen.
+            entry.deviceIds = m.deviceIds;
           }
           entry.docs.push({
             docId: doc.id,
@@ -80,7 +86,7 @@ export function Contacts({ path }: { path?: string }) {
       const allNames = getAllContactNames();
       for (const groupId of Object.keys(allNames)) {
         if (!map.has(groupId)) {
-          map.set(groupId, { agentId: groupId, isGroup: true, docs: [] });
+          map.set(groupId, { agentId: groupId, isGroup: true, docs: [], deviceIds: [] });
         }
       }
 
@@ -156,6 +162,17 @@ export function Contacts({ path }: { path?: string }) {
                   {contact.isGroup ? 'group' : 'smartphone'}
                 </span>
                 <EditableName agentId={contact.agentId} />
+                {contact.deviceIds.length > 0 && (
+                  <span
+                    className="inline-flex items-center gap-0.5 text-xs text-muted-foreground"
+                    title={`Devices:\n${contact.deviceIds
+                      .map(id => getContactName(id) || `${id.slice(0, 8)}…`)
+                      .join('\n')}`}
+                  >
+                    <span className="material-symbols-outlined" style={{ fontSize: 14 }}>smartphone</span>
+                    {contact.deviceIds.length}
+                  </span>
+                )}
                 <button
                   className="inline-flex items-center justify-center h-6 w-6 rounded-md text-destructive hover:bg-destructive/10 ml-auto"
                   title="Remove contact"

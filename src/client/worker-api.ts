@@ -557,6 +557,8 @@ export interface MemberInfo {
   groupId?: string;
   /** This individual device is also a member of a group that has access to the doc (redundant — hidden in the UI). */
   inGroup?: boolean;
+  /** For a group member, the base64 agent ids of the devices in that group (empty if its ops haven't synced). */
+  deviceIds?: string[];
 }
 
 /** A contact card plus the sender's user-group id, for QR/URL linking & sharing. */
