@@ -15,13 +15,14 @@ import {
   changeRole,
   revokeMember,
   getKnownContacts,
+  getIdentity,
   addMember,
   dismissInvite,
   onKeyhiveStateChanged,
   type MemberInfo,
 } from '../shared/keyhive-api';
 import type { InviteRecord } from '../invite-storage';
-import { getContactName } from '../contact-names';
+import { getContactName, mergeCachedContacts } from '../contact-names';
 import { QRCodeDisplay } from '@/components/ui/qr-code';
 import { EditableName } from './EditableName';
 
@@ -132,12 +133,14 @@ export function AccessControl({ docId, docType, access: accessProp }: AccessCont
   const refresh = useCallback(async () => {
     // Use allSettled so a failure in one call (e.g. getKnownContacts iterating
     // over docs with incomplete CGKA state) doesn't prevent member list display.
-    const [membersResult, accessResult, contactsResult] = await Promise.allSettled([
+    const [membersResult, accessResult, contactsResult, identityResult] = await Promise.allSettled([
       getDocMembers(docId),
       getMyAccess(docId),
       getKnownContacts(docId),
+      getIdentity(),
     ]);
 
+    const members = membersResult.status === 'fulfilled' ? membersResult.value.members : [];
     if (membersResult.status === 'fulfilled') {
       const { members: m, invites } = membersResult.value;
       setMembers(m);
@@ -149,7 +152,16 @@ export function AccessControl({ docId, docType, access: accessProp }: AccessCont
     }
 
     if (contactsResult.status === 'fulfilled') {
-      const c = contactsResult.value;
+      // Merge in locally-known (named) contacts that getKnownContacts didn't surface,
+      // so the Share panel stays consistent with Settings → Contacts even if the
+      // worker's IndexedDB view and the in-memory name cache momentarily diverge.
+      // Exclude existing members of this doc (already shared) and the current user.
+      const exclude = new Set(members.map(m => m.agentId));
+      if (identityResult.status === 'fulfilled') {
+        exclude.add(identityResult.value.agentId);
+        if (identityResult.value.userGroupId) exclude.add(identityResult.value.userGroupId);
+      }
+      const c = mergeCachedContacts(contactsResult.value, exclude);
       setContacts(c);
       setSelectedContact(prev => {
         if (prev && c.some(ct => ct.agentId === prev)) return prev;
@@ -157,7 +169,7 @@ export function AccessControl({ docId, docType, access: accessProp }: AccessCont
       });
     }
 
-    const firstError = [membersResult, accessResult, contactsResult]
+    const firstError = [membersResult, accessResult, contactsResult, identityResult]
       .find((r): r is PromiseRejectedResult => r.status === 'rejected');
     if (firstError) setError(firstError.reason?.message ?? 'Unknown error');
     setLoaded(true);

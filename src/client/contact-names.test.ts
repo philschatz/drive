@@ -2,7 +2,12 @@
  * Tests for contact-names.ts in-memory cache.
  */
 
-import { getContactName, setContactName, removeContactName, applyContactNamesFromWorker, setContactNamesDispatch } from './contact-names';
+import { getContactName, setContactName, removeContactName, applyContactNamesFromWorker, setContactNamesDispatch, mergeCachedContacts } from './contact-names';
+import type { MemberInfo } from './shared/keyhive-types';
+
+function group(agentId: string): MemberInfo {
+  return { agentId, displayId: agentId, type: 'group', isMe: false, deviceIds: [] };
+}
 
 beforeEach(() => {
   // Reset cache
@@ -45,6 +50,29 @@ describe('setContactName', () => {
     expect(getContactName('agent1')).toBe('Alice');
   });
 
+  it('resolves when persistence succeeds', async () => {
+    setContactNamesDispatch(() => Promise.resolve());
+    await expect(setContactName('agent1', 'Alice')).resolves.toBeUndefined();
+    expect(getContactName('agent1')).toBe('Alice');
+  });
+
+  it('rejects and rolls back the optimistic cache update when persistence fails', async () => {
+    setContactNamesDispatch(() => Promise.reject(new Error('storage error')));
+    await expect(setContactName('agent1', 'Alice')).rejects.toThrow('storage error');
+    // The optimistic write must not linger once persistence failed — otherwise the
+    // cache (read by Settings → Contacts) would diverge from the persisted store
+    // (read by the Share panel), which is exactly the reported bug.
+    expect(getContactName('agent1')).toBeUndefined();
+  });
+
+  it('restores the previous name when an overwrite fails to persist', async () => {
+    setContactNamesDispatch(() => Promise.resolve());
+    await setContactName('agent1', 'Alice');
+    setContactNamesDispatch(() => Promise.reject(new Error('storage error')));
+    await expect(setContactName('agent1', 'Bob')).rejects.toThrow('storage error');
+    expect(getContactName('agent1')).toBe('Alice');
+  });
+
   it('removes name when set to empty string', () => {
     const dispatch = jest.fn();
     setContactNamesDispatch(dispatch);
@@ -55,6 +83,35 @@ describe('setContactName', () => {
     setContactName('agent1', '  ');
     expect(getContactName('agent1')).toBeUndefined();
     expect(dispatch).toHaveBeenCalledWith('remove-contact-name', 'agent1');
+  });
+});
+
+describe('mergeCachedContacts', () => {
+  it('surfaces a cached contact that the keyhive view is missing (the reported bug)', () => {
+    // A just-added contact lives in the cache but the keyhive/worker-IDB view came
+    // back empty — the Share panel must still list it.
+    applyContactNamesFromWorker({ groupA: 'Alice' });
+    const merged = mergeCachedContacts([]);
+    expect(merged).toEqual([group('groupA')]);
+  });
+
+  it('does not duplicate a contact already present in the keyhive view', () => {
+    applyContactNamesFromWorker({ groupA: 'Alice' });
+    const merged = mergeCachedContacts([group('groupA')]);
+    expect(merged).toHaveLength(1);
+    expect(merged[0].agentId).toBe('groupA');
+  });
+
+  it('excludes ids already in the document and the current user', () => {
+    applyContactNamesFromWorker({ groupA: 'Alice', myGroup: 'Me', myDevice: 'My device' });
+    const merged = mergeCachedContacts([], ['myGroup', 'myDevice']);
+    expect(merged.map(c => c.agentId)).toEqual(['groupA']);
+  });
+
+  it('preserves keyhive contacts and appends cache-only ones', () => {
+    applyContactNamesFromWorker({ groupB: 'Bob' });
+    const merged = mergeCachedContacts([group('groupA')]);
+    expect(merged.map(c => c.agentId).sort()).toEqual(['groupA', 'groupB']);
   });
 });
 

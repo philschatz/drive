@@ -1,7 +1,12 @@
 /**
  * Minimal IndexedDB key-value wrapper.
  * Works in both main thread and web workers.
- * Silently no-ops if indexedDB is unavailable.
+ *
+ * A genuinely absent `indexedDB` (e.g. some test/SSR environments) is treated as an
+ * intentional no-op. Real IndexedDB failures — failing to open the database or an
+ * operation error — are NOT swallowed: they propagate to the caller so the failure
+ * is visible and handled. Swallowing them silently dropped writes and turned failed
+ * reads into empty results with no error to surface.
  */
 
 const DB_NAME = 'app-storage';
@@ -10,13 +15,14 @@ const STORE_NAME = 'keyval';
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
+/** True when IndexedDB is genuinely available in this environment. */
+function idbAvailable(): boolean {
+  return typeof indexedDB !== 'undefined';
+}
+
 function getDb(): Promise<IDBDatabase> {
   if (dbPromise) return dbPromise;
-  dbPromise = new Promise<IDBDatabase>((resolve, reject) => {
-    if (typeof indexedDB === 'undefined') {
-      reject(new Error('indexedDB not available'));
-      return;
-    }
+  const opening = new Promise<IDBDatabase>((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
     req.onupgradeneeded = () => {
       const db = req.result;
@@ -27,70 +33,61 @@ function getDb(): Promise<IDBDatabase> {
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
   });
+  // Don't cache a rejected open — a transient failure would otherwise poison every
+  // later call. Clear the cache on failure so a subsequent call can retry.
+  dbPromise = opening.catch((err) => { dbPromise = null; throw err; });
   return dbPromise;
 }
 
 export async function idbGet<T>(key: string): Promise<T | null> {
-  try {
-    const db = await getDb();
-    return new Promise((resolve, reject) => {
-      const tx = db.transaction(STORE_NAME, 'readonly');
-      const req = tx.objectStore(STORE_NAME).get(key);
-      req.onsuccess = () => resolve(req.result ?? null);
-      req.onerror = () => reject(req.error);
-    });
-  } catch {
-    return null;
-  }
+  if (!idbAvailable()) return null;
+  const db = await getDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readonly');
+    const req = tx.objectStore(STORE_NAME).get(key);
+    req.onsuccess = () => resolve(req.result ?? null);
+    req.onerror = () => reject(req.error);
+  });
 }
 
 export async function idbSet(key: string, value: unknown): Promise<void> {
-  try {
-    const db = await getDb();
-    return new Promise((resolve, reject) => {
-      const tx = db.transaction(STORE_NAME, 'readwrite');
-      const req = tx.objectStore(STORE_NAME).put(value, key);
-      req.onsuccess = () => resolve();
-      req.onerror = () => reject(req.error);
-    });
-  } catch {
-    // silently no-op
-  }
+  if (!idbAvailable()) return;
+  const db = await getDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readwrite');
+    const req = tx.objectStore(STORE_NAME).put(value, key);
+    req.onsuccess = () => resolve();
+    req.onerror = () => reject(req.error);
+  });
 }
 
 export async function idbDel(key: string): Promise<void> {
-  try {
-    const db = await getDb();
-    return new Promise((resolve, reject) => {
-      const tx = db.transaction(STORE_NAME, 'readwrite');
-      const req = tx.objectStore(STORE_NAME).delete(key);
-      req.onsuccess = () => resolve();
-      req.onerror = () => reject(req.error);
-    });
-  } catch {
-    // silently no-op
-  }
+  if (!idbAvailable()) return;
+  const db = await getDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readwrite');
+    const req = tx.objectStore(STORE_NAME).delete(key);
+    req.onsuccess = () => resolve();
+    req.onerror = () => reject(req.error);
+  });
 }
 
 /** Delete all entries whose key starts with the given prefix. */
 export async function idbDelPrefix(prefix: string): Promise<void> {
-  try {
-    const db = await getDb();
-    return new Promise((resolve, reject) => {
-      const tx = db.transaction(STORE_NAME, 'readwrite');
-      const store = tx.objectStore(STORE_NAME);
-      const req = store.openCursor();
-      req.onsuccess = () => {
-        const cursor = req.result;
-        if (!cursor) { resolve(); return; }
-        if (typeof cursor.key === 'string' && cursor.key.startsWith(prefix)) cursor.delete();
-        cursor.continue();
-      };
-      req.onerror = () => reject(req.error);
-    });
-  } catch {
-    // silently no-op
-  }
+  if (!idbAvailable()) return;
+  const db = await getDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readwrite');
+    const store = tx.objectStore(STORE_NAME);
+    const req = store.openCursor();
+    req.onsuccess = () => {
+      const cursor = req.result;
+      if (!cursor) { resolve(); return; }
+      if (typeof cursor.key === 'string' && cursor.key.startsWith(prefix)) cursor.delete();
+      cursor.continue();
+    };
+    req.onerror = () => reject(req.error);
+  });
 }
 
 /** Reset the cached connection (for tests). */

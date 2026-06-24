@@ -10,7 +10,9 @@ export function EditableName({ agentId, suffix }: { agentId: string; suffix?: an
   draftRef.current = draft;
 
   const save = () => {
-    setContactName(agentId, draftRef.current);
+    setContactName(agentId, draftRef.current).catch(err =>
+      console.error('[EditableName] Failed to save contact name:', err)
+    );
   };
 
   return (

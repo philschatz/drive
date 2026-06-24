@@ -99,7 +99,9 @@ export function InvitePage({ docId, docType, inviteKey }: InvitePageProps) {
 
   const handleSaveName = () => {
     if (inviterAgentId && inviterName.trim()) {
-      setContactName(inviterAgentId, inviterName.trim());
+      setContactName(inviterAgentId, inviterName.trim()).catch(err =>
+        console.error('[InvitePage] Failed to save contact name:', err)
+      );
     }
     setNameSaved(true);
     setTimeout(() => {

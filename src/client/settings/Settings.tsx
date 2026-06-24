@@ -63,7 +63,9 @@ export function Settings({ path }: { path?: string }) {
 
   const handleDisplayNameChange = (value: string) => {
     setDisplayName(value);
-    if (identity?.agentId) setContactName(identity.agentId, value);
+    if (identity?.agentId) setContactName(identity.agentId, value).catch(err =>
+      console.error('[Settings] Failed to save display name:', err)
+    );
     setFriendQrUrl('');
   };
 

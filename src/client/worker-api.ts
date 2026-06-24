@@ -54,11 +54,11 @@ setDocListDispatch((msgType, docId, metadata) => {
   logSend(msg);
   worker.postMessage(msg);
 });
-setContactNamesDispatch((type, agentId, name) => {
-  const msg = { type, agentId, ...(name !== undefined ? { name } : {}) };
-  logSend(msg);
-  worker.postMessage(msg);
-});
+setContactNamesDispatch((type, agentId, name) =>
+  // Route through request() so the caller can await persistence and a failed write
+  // rejects (rather than being a silent fire-and-forget that drops the data).
+  request<void>(type, { agentId, ...(name !== undefined ? { name } : {}) })
+);
 
 // Clean up legacy localStorage key from when insecure mode existed
 localStorage.removeItem('showUnencrypted');

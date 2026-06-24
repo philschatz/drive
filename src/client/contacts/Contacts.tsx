@@ -113,7 +113,11 @@ export function Contacts({ path }: { path?: string }) {
   const handleDelete = (contact: ContactEntry) => {
     const name = getContactName(contact.agentId) || contact.agentId.slice(0, 12);
     if (!confirm(`Remove contact "${name}"?`)) return;
-    removeContactName(contact.agentId);
+    removeContactName(contact.agentId).catch(err => {
+      console.error('[Contacts] Failed to remove contact:', err);
+      setError(`Failed to remove contact: ${err?.message ?? 'storage error'}`);
+      refresh();
+    });
     setContacts(prev => prev.filter(c => c.agentId !== contact.agentId));
   };
 

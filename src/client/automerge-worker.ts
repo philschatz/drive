@@ -33,9 +33,10 @@ export type MainToWorker =
   // Doc list mutations (IDB-backed)
   | { type: 'add-doc-to-list'; docId: string; [key: string]: any }
   | { type: 'remove-doc-from-list'; docId: string }
-  // Contact name mutations (IDB-backed)
-  | { type: 'set-contact-name'; agentId: string; name: string }
-  | { type: 'remove-contact-name'; agentId: string }
+  // Contact name mutations (IDB-backed). `id` correlates the result so the main
+  // thread can await persistence and surface failures instead of losing them.
+  | { type: 'set-contact-name'; id: number; agentId: string; name: string }
+  | { type: 'remove-contact-name'; id: number; agentId: string }
   // Keyhive operations
   | { type: 'kh-get-identity'; id: number }
   | { type: 'kh-get-contact-card'; id: number }
@@ -1225,8 +1226,12 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
       names[msg.agentId] = msg.name;
       await idbSet('contact-names', names);
       (self as any).postMessage({ type: 'contact-names-updated', names } satisfies WorkerToMain);
+      (self as any).postMessage({ type: 'result', id: msg.id } satisfies WorkerToMain);
     } catch (err: any) {
-      console.warn('[worker] set-contact-name failed:', errMsg(err));
+      // Surface the failure instead of swallowing it — a lost write must not look
+      // like a successful save (it would silently vanish on the next reload).
+      console.error('[worker] set-contact-name failed:', errMsg(err));
+      (self as any).postMessage({ type: 'result', id: msg.id, error: errMsg(err) } satisfies WorkerToMain);
     }
   }
 
@@ -1237,8 +1242,10 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
       delete names[msg.agentId];
       await idbSet('contact-names', names);
       (self as any).postMessage({ type: 'contact-names-updated', names } satisfies WorkerToMain);
+      (self as any).postMessage({ type: 'result', id: msg.id } satisfies WorkerToMain);
     } catch (err: any) {
-      console.warn('[worker] remove-contact-name failed:', errMsg(err));
+      console.error('[worker] remove-contact-name failed:', errMsg(err));
+      (self as any).postMessage({ type: 'result', id: msg.id, error: errMsg(err) } satisfies WorkerToMain);
     }
   }
 

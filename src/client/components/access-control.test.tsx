@@ -3,11 +3,13 @@ import { render, screen, waitFor } from '@testing-library/preact';
 let mockGetDocMembers: jest.Mock;
 let mockGetMyAccess: jest.Mock;
 let mockGetKnownContacts: jest.Mock;
+let mockGetIdentity: jest.Mock;
 
 jest.mock('../shared/keyhive-api', () => ({
   getDocMembers: (...args: any[]) => mockGetDocMembers(...args),
   getMyAccess: (...args: any[]) => mockGetMyAccess(...args),
   getKnownContacts: (...args: any[]) => mockGetKnownContacts(...args),
+  getIdentity: (...args: any[]) => mockGetIdentity(...args),
   onKeyhiveStateChanged: jest.fn(() => jest.fn()),
   changeRole: jest.fn(),
   revokeMember: jest.fn(),
@@ -18,6 +20,8 @@ jest.mock('../shared/keyhive-api', () => ({
 
 jest.mock('../contact-names', () => ({
   getContactName: () => undefined,
+  // Pass-through: these tests don't exercise the cache merge.
+  mergeCachedContacts: (fromKeyhive: any[]) => fromKeyhive,
 }));
 
 jest.mock('../invite-storage', () => ({}));
@@ -63,6 +67,7 @@ beforeEach(() => {
   mockGetDocMembers = jest.fn(() => Promise.resolve({ members: [], invites: [] }));
   mockGetMyAccess = jest.fn(() => Promise.resolve(null));
   mockGetKnownContacts = jest.fn(() => Promise.resolve([]));
+  mockGetIdentity = jest.fn(() => Promise.resolve({ deviceId: 'dev-1', agentId: 'me', userGroupId: 'my-group' }));
 });
 
 describe('AccessControl', () => {

@@ -107,10 +107,15 @@ export function AddFriendPage({ cardData }: AddFriendPageProps) {
     }
   }, [cardData]);
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!contactGroupId) return;
     if (name.trim()) {
-      setContactName(contactGroupId, name.trim());
+      try {
+        await setContactName(contactGroupId, name.trim());
+      } catch (err: any) {
+        setError(`Failed to save contact: ${err?.message ?? 'storage error'}`);
+        return;
+      }
     }
     setSaved(true);
   };
