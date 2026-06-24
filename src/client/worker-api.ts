@@ -546,32 +546,8 @@ export interface IdentityInfo {
   devices?: DeviceInfo[];
 }
 
-/** Access level a member has on a document. */
-export type MemberRole = 'read' | 'edit' | 'admin';
-
-interface MemberInfoBase {
-  agentId: string;
-  displayId: string;
-  /** Access level for the document. Absent for contacts not yet on any document. */
-  role?: MemberRole;
-  isMe: boolean;
-}
-
-/** A single device (or a temporary invite identity). */
-export interface IndividualMemberInfo extends MemberInfoBase {
-  type: 'individual';
-  /** The base64 id of this device's owning user-group (its share target), if known. */
-  groupId?: string;
-}
-
-/** A user-group — all of a user's devices, addressed as one share target. */
-export interface GroupMemberInfo extends MemberInfoBase {
-  type: 'group';
-  /** Base64 agent ids of the devices in this group (empty if its ops haven't synced). */
-  deviceIds: string[];
-}
-
-export type MemberInfo = IndividualMemberInfo | GroupMemberInfo;
+import type { MemberInfo } from './shared/keyhive-types';
+export type { MemberRole, IndividualMemberInfo, GroupMemberInfo, MemberInfo } from './shared/keyhive-types';
 
 /** A contact card plus the sender's user-group id, for QR/URL linking & sharing. */
 export interface LinkPayload {
