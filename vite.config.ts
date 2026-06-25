@@ -52,6 +52,31 @@ function automergeWasmPlugin(): Plugin {
 // which vite-plugin-wasm doesn't handle correctly in web workers.
 // Instead, we fetch the WASM binary and instantiate it manually with the
 // proper import object from the bg.js glue code.
+// automerge-repo (subduction.37) defines Repo methods named `import(...)` and
+// `export(...)` — reserved words. vite's dev import-analysis (es-module-lexer)
+// misparses the `import(` method definition as a dynamic import and corrupts the
+// module ("Unexpected token '('"), which crashes the worker. Rewrite the method
+// DEFINITIONS to equivalent string-key form (`["import"](...) {`); method calls
+// (`repo.import(x)`) and the public name are unchanged. The `(...) {` requirement
+// ensures real dynamic-import expressions are never touched.
+//
+// This must run during dep pre-bundling (not as a normal vite plugin transform,
+// which never sees pre-bundled chunks). vite 8 optimizes deps with Rolldown, so
+// it's a Rolldown plugin under optimizeDeps.rolldownOptions. automerge-repo stays
+// pre-bundled so its CommonJS deps (e.g. `debug`) keep working through interop.
+const RESERVED_METHOD_RE = /(\n\s*)(async\s+)?(import|export)(\s*\([^)]*\)\s*\{)/g;
+const renameReservedMethods = (code: string) =>
+  RESERVED_METHOD_RE.test(code) ? code.replace(RESERVED_METHOD_RE, '$1$2["$3"]$4') : code;
+
+const automergeRepoReservedMethodOptimizePlugin = {
+  name: 'automerge-repo-reserved-methods',
+  transform(code: string, id: string) {
+    if (!/@automerge[/\\]automerge-repo/.test(id) || !/\.js(\?|$)/.test(id)) return null;
+    const out = renameReservedMethods(code);
+    return out === code ? null : { code: out, map: null };
+  },
+};
+
 function keyhiveWasmPlugin(): Plugin {
   return {
     name: 'keyhive-wasm',
@@ -228,8 +253,8 @@ export default defineConfig(async () => {
     include: [
       '@preact/signals', '@preact/signals-core', 'preact/hooks', 'preact/compat', 'buffer/', 'exceljs',
       // Worker-only deps: pre-optimize at startup so vite doesn't discover them
-      // mid-load and trigger a "new dependencies optimized, reloading" cycle
-      // (which transiently fails the automerge worker on first cold start).
+      // mid-load and trigger a "new dependencies optimized, reloading" cycle on
+      // first cold start. The Rolldown optimize plugin below rewrites their reserved methods.
       '@automerge/automerge-repo', '@automerge/automerge-repo-keyhive',
       '@automerge/automerge-repo-network-websocket', '@automerge/automerge-repo-storage-indexeddb',
       'cbor-x',
@@ -239,7 +264,16 @@ export default defineConfig(async () => {
     // Pre-bundling bypasses load() hooks (esbuild doesn't use Vite plugins),
     // so without this exclusion the full 2.4 MB base64 string ends up in the
     // pre-bundled chunk and OOMs the Chromium renderer during dev-mode testing.
+    //
     exclude: ['@automerge/automerge', '@automerge/automerge-subduction', '@keyhive/keyhive'],
-  },
+    // automerge-repo (subduction.37) names Repo methods `import(...)`/`export(...)`
+    // (reserved words); without rewriting them, vite's dev import-analysis misparses
+    // `import(` as a dynamic import and corrupts the pre-bundled chunk. Fix it during
+    // pre-bundling so automerge-repo stays optimized (keeping its CJS deps like
+    // `debug` working through interop). Production (rolldown) is unaffected.
+    rolldownOptions: {
+      plugins: [automergeRepoReservedMethodOptimizePlugin as never],
+    },
+  } as never,
   };
 });
