@@ -19,14 +19,16 @@ module.exports = {
         '^(?!.*(?:setup|teardown)\\.js).+\\.js$': ['ts-jest', { useESM: false, diagnostics: false }],
       },
       transformIgnorePatterns: [
-        'node_modules/(?!(@automerge/|@keyhive/))',
+        // uuid@14 (pulled in by automerge-repo subduction.37) ships ESM only,
+        // so it must be transformed to CJS for the node/jest environment.
+        'node_modules/(?!(@automerge/|@keyhive/|uuid/))',
       ],
       moduleNameMapper: {
         '^@automerge/automerge/slim$': '<rootDir>/node_modules/@automerge/automerge/dist/cjs/fullfat_node.cjs',
         '^@automerge/automerge/slim/next$': '<rootDir>/node_modules/@automerge/automerge/dist/cjs/fullfat_node.cjs',
         '^@automerge/automerge-repo/slim$': '<rootDir>/node_modules/@automerge/automerge-repo/dist/entrypoints/slim.js',
-        '^@automerge/automerge-subduction$': '<rootDir>/node_modules/@automerge/automerge-repo/node_modules/@automerge/automerge-subduction/dist/cjs/node.cjs',
-        '^@automerge/automerge-repo-subduction-bridge$': '<rootDir>/tests/subduction-bridge-shim.js',
+        '^@automerge/automerge-subduction$': '<rootDir>/node_modules/@automerge/automerge-subduction/dist/cjs/node.cjs',
+        '^@automerge/automerge-repo-keyhive$': '<rootDir>/tests/repo-keyhive-shim.js',
         '^@keyhive/keyhive/slim$': '<rootDir>/tests/keyhive-shim.js',
         '^@keyhive/keyhive/keyhive_wasm\\.base64\\.js$': '<rootDir>/tests/keyhive-base64-shim.js',
       },

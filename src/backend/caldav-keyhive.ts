@@ -5,9 +5,9 @@
  * running in the same process via a localhost WebSocket. The server becomes
  * a proper keyhive participant and can be invited to access documents.
  *
- * Keyhive types are imported from the lib bridge (which re-exports them)
- * to avoid direct `@keyhive/keyhive/slim` imports that don't resolve under
- * the backend tsconfig's moduleResolution.
+ * Keyhive types are imported from the @automerge/automerge-repo-keyhive
+ * package (which re-exports them) to avoid direct `@keyhive/keyhive/slim`
+ * imports that don't resolve under the backend tsconfig's moduleResolution.
  */
 import { Repo } from '@automerge/automerge-repo';
 import { WebSocketClientAdapter } from '@automerge/automerge-repo-network-websocket';
@@ -16,18 +16,6 @@ import {
   KeyhiveOps,
   type KeyhiveBridge,
 } from '../client/keyhive-ops';
-
-const noopSubduction = {
-  storage: {},
-  removeSedimentree() {},
-  connectDiscover() {},
-  disconnectAll() {},
-  disconnectFromPeer() {},
-  syncAll() { return Promise.resolve({ entries() { return []; } }); },
-  getBlobs() { return Promise.resolve([]); },
-  addCommit() { return Promise.resolve(undefined); },
-  addFragment() { return Promise.resolve(undefined); },
-};
 
 export interface CaldavKeyhive {
   repo: Repo;
@@ -46,22 +34,13 @@ export async function initCaldavKeyhive(
   dataDir: string,
   wsUrl: string,
 ): Promise<CaldavKeyhive> {
-  // Dynamic import — the lib re-exports all keyhive types.
+  // Dynamic import — the package re-exports all keyhive types.
   // Cast to `any` because the `export * from "@keyhive/keyhive/slim"` re-export
   // doesn't resolve under the backend's moduleResolution setting, but the values
   // are present at runtime. The KeyhiveBridge interface provides type safety.
-  // Initialize subduction WASM (required by Repo constructor).
-  // Repo.js (ESM) imports FragmentStateStore from a nested copy of
-  // automerge-subduction. We must initialize that exact copy's WASM.
-  const { createRequire } = await import('module');
-  const repoRequire = createRequire(require.resolve('@automerge/automerge-repo'));
-  const nestedSubductionCjs = repoRequire.resolve('@automerge/automerge-subduction');
-  const nestedSubductionEsm = nestedSubductionCjs.replace('/dist/cjs/node.cjs', '/dist/esm/node.js');
-  const subductionModule = await import(nestedSubductionEsm);
-  const { setSubductionModule } = await import('@automerge/automerge-repo');
-  setSubductionModule(subductionModule);
-
-  const khBridge: any = await import('../lib/automerge-repo-keyhive/index');
+  // automerge-repo (subduction.37) constructs Subduction internally — no
+  // separate WASM-init / setSubductionModule step is needed anymore.
+  const khBridge: any = await import('@automerge/automerge-repo-keyhive');
   khBridge.initKeyhiveWasm();
 
   const storageAdapter = new NodeFSStorageAdapter(dataDir);
@@ -74,14 +53,13 @@ export async function initCaldavKeyhive(
     onlyShareWithHardcodedServerPeerId: false,
     periodicallyRequestSync: true,
     automaticArchiveIngestion: true,
-    cacheHashes: false,
+    cachingMode: 'none',
     syncRequestInterval: 2000,
   });
 
   const repo = new Repo({
     network: [integration.networkAdapter],
     storage: storageAdapter,
-    subduction: noopSubduction,
     peerId: integration.peerId,
   } as any);
 
@@ -105,8 +83,10 @@ export async function initCaldavKeyhive(
   const khOps = new KeyhiveOps(integration.keyhive, bridge, {
     persist: () => integration.keyhiveStorage.saveKeyhiveWithHash(integration.keyhive),
     syncKeyhive: () => integration.networkAdapter.syncKeyhive(),
-    registerDoc: (amDocId: string, khDocId: any) => integration.networkAdapter.registerDoc(amDocId, khDocId),
-    forceResyncAllPeers: () => (integration.networkAdapter as any).forceResyncAllPeers(),
+    // Official bridge derives the keyhive DocumentId from the automerge doc id;
+    // no explicit registration. Resync = re-evaluate shareConfig.
+    registerDoc: () => {},
+    forceResyncAllPeers: () => repo.shareConfigChanged(),
     findDoc: (docId: string) => repo.find(docId as any),
     saveEventBytes: (eventBytes: Uint8Array) => integration.keyhiveStorage.saveEventBytesWithHash(eventBytes),
     getUserGroupId: async () => serverUserGroupId,

@@ -55,6 +55,24 @@ function automergeWasmPlugin(): Plugin {
 function keyhiveWasmPlugin(): Plugin {
   return {
     name: 'keyhive-wasm',
+    transform(code, id) {
+      // @automerge/automerge-repo-keyhive's blob-interceptor (used only by the
+      // Rust/subduction-blob transport, which the drive does not use) statically
+      // imports symmetricEncrypt/symmetricDecrypt from @keyhive/keyhive/slim.
+      // The drive's pinned keyhive build doesn't export those, so the static
+      // import would fail to bundle. They are never called on the standard
+      // KeyhiveNetworkAdapter path, so append throwing stubs to satisfy the
+      // bundler. (Remove once the keyhive build exports these natively.)
+      if (id.includes('@keyhive/keyhive/pkg-slim/index') && !/export\s+(?:function|const)\s+symmetricEncrypt/.test(code)) {
+        return {
+          code: code +
+            '\nexport function symmetricEncrypt(){throw new Error("symmetricEncrypt unavailable in this keyhive build (Rust blob-interceptor path unused)");}' +
+            '\nexport function symmetricDecrypt(){throw new Error("symmetricDecrypt unavailable in this keyhive build (Rust blob-interceptor path unused)");}\n',
+          map: null,
+        };
+      }
+      return null;
+    },
     load(id) {
       if (id.includes('@keyhive/keyhive/pkg/') && id.endsWith('keyhive_wasm.js')) {
         return `

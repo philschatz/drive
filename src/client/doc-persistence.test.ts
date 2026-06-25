@@ -1,19 +1,17 @@
 /**
- * Tests for document persistence across refresh with noop subduction.
+ * Tests for document persistence across refresh.
  *
- * Three bugs combine to break persistence:
- * 1. Repo.create() registers the save listener AFTER handle.update(), missing the initial save
- * 2. The noop getBlobs returns [] so the Repo never loads from storage on refresh
- * 3. toDocumentId() truncates 32-byte keyhive IDs to 16 bytes, producing wrong storage keys
+ * Historically the drive ran a noop Subduction and worked around three bugs
+ * (late save-listener registration, getBlobs returning [], 32-byte id
+ * truncation) with explicit saveDoc + a loadingDocId getBlobs shim.
  *
- * The fixes:
- * 1. Explicit storageSubsystem.saveDoc() after create
- * 2. getBlobs reads from storageSubsystem.loadDocData(loadingDocId)
- * 3. loadingDocId is set by getOrLoadHandle before calling repo.find(), avoiding toDocumentId()
+ * automerge-repo (subduction.37) builds Subduction internally, so the Repo
+ * now persists created/edited documents and reloads them on its own — no
+ * subduction option or workarounds required. These tests verify that real
+ * behavior.
  */
 
 const { Repo } = require('@automerge/automerge-repo');
-const Automerge = require('@automerge/automerge');
 
 // --- Helpers ---
 
@@ -42,116 +40,49 @@ function inMemoryStorage() {
   };
 }
 
-/**
- * Noop subduction. If loadingDocIdRef is provided, getBlobs reads from the
- * repo's storageSubsystem using that docId (mirrors automerge-worker.ts).
- */
-function makeSubduction(opts?: { repoRef: { current: any }; loadingDocIdRef: { current: string | null } }) {
-  return {
-    storage: {},
-    removeSedimentree() {},
-    connectDiscover() {},
-    disconnectAll() {},
-    disconnectFromPeer() {},
-    syncAll() { return Promise.resolve({ entries() { return []; } }); },
-    syncWithAllPeers() { return Promise.resolve(new Map()); },
-    async getBlobs(_sedimentreeId: any) {
-      if (!opts) return [];
-      const { repoRef, loadingDocIdRef } = opts;
-      const docId = loadingDocIdRef.current;
-      if (!docId || !repoRef.current?.storageSubsystem) return [];
-      const data: Uint8Array | null = await repoRef.current.storageSubsystem.loadDocData(docId);
-      return data ? [data] : [];
-    },
-    addCommit() { return Promise.resolve(undefined); },
-    addFragment() { return Promise.resolve(undefined); },
-  };
-}
-
 const initialDoc = { '@type': 'Calendar', name: 'Test', events: {} };
 
 const repos: any[] = [];
 afterAll(async () => { for (const r of repos) try { await r.shutdown(); } catch {} });
 
-function makeRepo(storage: any, sub: any, peerId: string) {
-  const r = new Repo({ storage, subduction: sub, peerId: peerId as any } as any);
+function makeRepo(storage: any, peerId: string) {
+  const r = new Repo({ storage, peerId: peerId as any } as any);
   repos.push(r);
   return r;
 }
 
 // --- Tests ---
 
-describe('document persistence with noop subduction', () => {
-  it('Repo.create() does not persist initial doc (save listener registered too late)', async () => {
-    const repo = makeRepo(inMemoryStorage(), makeSubduction(), 'test-1');
+describe('document persistence with internal subduction (subduction.37)', () => {
+  it('Repo.create() persists the initial doc', async () => {
+    const repo = makeRepo(inMemoryStorage(), 'test-1');
     const handle = repo.create(initialDoc);
     await new Promise(r => setTimeout(r, 200));
-    expect(await repo.storageSubsystem!.loadDocData(handle.documentId)).toBeNull();
+    expect(await repo.storageSubsystem!.loadDocData(handle.documentId)).not.toBeNull();
   });
 
-  it('edits after create ARE persisted (save listener is registered by then)', async () => {
-    const repo = makeRepo(inMemoryStorage(), makeSubduction(), 'test-2');
+  it('edits after create are persisted', async () => {
+    const repo = makeRepo(inMemoryStorage(), 'test-2');
     const handle = repo.create(initialDoc);
     handle.change((d: any) => { d.name = 'Edited'; });
     await new Promise(r => setTimeout(r, 200));
     expect(await repo.storageSubsystem!.loadDocData(handle.documentId)).not.toBeNull();
   });
 
-  it('explicit saveDoc after create fixes the initial persistence gap', async () => {
-    const repo = makeRepo(inMemoryStorage(), makeSubduction(), 'test-3');
-    const handle = repo.create(initialDoc);
-    await repo.storageSubsystem!.saveDoc(handle.documentId, handle.doc());
-    expect(await repo.storageSubsystem!.loadDocData(handle.documentId)).not.toBeNull();
-  });
-
-  it('getBlobs backed by loadingDocId loads saved data on reload', async () => {
-    const storage = inMemoryStorage();
-    const repoRef: { current: any } = { current: null };
-    const loadingDocIdRef: { current: string | null } = { current: null };
-    const repo = makeRepo(storage, makeSubduction({ repoRef, loadingDocIdRef }), 'test-4');
-    repoRef.current = repo;
-
-    const handle = repo.create(initialDoc);
-    const docId = handle.documentId;
-    await repo.storageSubsystem!.saveDoc(docId, handle.doc());
-
-    // Simulate getOrLoadHandle setting loadingDocId before repo.find()
-    loadingDocIdRef.current = docId;
-    const sub = makeSubduction({ repoRef, loadingDocIdRef });
-    const blobs = await sub.getBlobs(null);
-    loadingDocIdRef.current = null;
-
-    expect(blobs.length).toBe(1);
-    const doc = Automerge.loadIncremental(Automerge.init(), blobs[0]);
-    expect((doc as any)['@type']).toBe('Calendar');
-  });
-
-  it('cross-session: new Repo loads data saved by previous Repo', async () => {
+  it('cross-session: a new Repo over the same storage reloads the saved doc', async () => {
     const storage = inMemoryStorage();
 
-    // Session 1: create + edit + save
-    const repo1 = makeRepo(storage, makeSubduction(), 'session-1');
+    // Session 1: create + edit
+    const repo1 = makeRepo(storage, 'session-1');
     const handle = repo1.create(initialDoc);
     handle.change((d: any) => { d.name = 'Edited by Alice'; });
-    const docId = handle.documentId;
-    await repo1.storageSubsystem!.saveDoc(docId, handle.doc());
+    const url = handle.url;
     await new Promise(r => setTimeout(r, 200));
     await repo1.shutdown();
 
-    // Session 2: verify data is loadable via the fixed getBlobs pattern
-    const repoRef: { current: any } = { current: null };
-    const loadingDocIdRef: { current: string | null } = { current: docId };
-    const repo2 = new Repo({
-      storage,
-      subduction: makeSubduction({ repoRef, loadingDocIdRef }),
-      peerId: 'session-2' as any,
-    } as any);
-    repos.push(repo2);
-    repoRef.current = repo2;
-
-    const blobs = await makeSubduction({ repoRef, loadingDocIdRef }).getBlobs(null);
-    expect(blobs.length).toBe(1);
-    const doc = Automerge.loadIncremental(Automerge.init(), blobs[0]);
-    expect((doc as any).name).toBe('Edited by Alice');
+    // Session 2: a fresh Repo over the same storage finds the document
+    const repo2 = makeRepo(storage, 'session-2');
+    const reloaded = await repo2.find(url);
+    expect((reloaded.doc() as any).name).toBe('Edited by Alice');
   });
 });

@@ -14,7 +14,7 @@
  * gracefully instead of letting the panic kill the worker).
  */
 
-import { initKeyhiveWasm } from '../lib/automerge-repo-keyhive';
+import { initKeyhiveWasm } from '@automerge/automerge-repo-keyhive';
 import {
   Signer,
   Keyhive,

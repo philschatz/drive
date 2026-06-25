@@ -5,7 +5,7 @@
  * side effects, verifying the business logic without worker infrastructure.
  */
 
-import { initKeyhiveWasm } from '../lib/automerge-repo-keyhive';
+import { initKeyhiveWasm } from '@automerge/automerge-repo-keyhive';
 import {
   Signer,
   Keyhive,

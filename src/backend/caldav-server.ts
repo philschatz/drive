@@ -19,19 +19,6 @@ fs.mkdirSync(dataDir, { recursive: true });
 
 const wss = new WebSocketServer({ noServer: true });
 
-const noopSubduction = {
-  storage: {},
-  removeSedimentree() {},
-  connectDiscover() {},
-  disconnectAll() {},
-  disconnectFromPeer() {},
-  syncAll() { return Promise.resolve({ entries() { return []; } }); },
-  syncWithAllPeers() { return Promise.resolve(new Map()); },
-  getBlobs() { return Promise.resolve([]); },
-  addCommit() { return Promise.resolve(undefined); },
-  addFragment() { return Promise.resolve(undefined); },
-};
-
 let relay: WebSocketRelay | null = null;
 let caldavKeyhive: CaldavKeyhive | null = null;
 
@@ -45,7 +32,6 @@ if (process.env.JEST_WORKER_ID) {
   resolveRepo!(new Repo({
     network: [wsAdapter],
     storage: storageAdapter,
-    subduction: noopSubduction,
     peerId: 'test-server' as any,
     sharePolicy: async () => true,
   } as any));
@@ -115,7 +101,6 @@ if (!process.env.JEST_WORKER_ID) {
         resolveRepo!(new Repo({
           network: [],
           storage: storageAdapter,
-          subduction: noopSubduction,
           peerId: 'caldav-server' as any,
           sharePolicy: async () => false,
         } as any));

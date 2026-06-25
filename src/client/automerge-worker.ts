@@ -94,22 +94,20 @@ self.onmessage = (e: MessageEvent) => { pendingMessages.push(e); };
 let Repo: any, IndexedDBStorageAdapter: any, Automerge: any;
 let BrowserWebSocketClientAdapter: any;
 let PresenceClass: any;
-let khBridge: typeof import('../lib/automerge-repo-keyhive/index') | null = null;
-let subductionBridge: typeof import('@automerge/automerge-repo-subduction-bridge') | null = null;
-let subductionModule: typeof import('@automerge/automerge-subduction') | null = null;
+let khBridge: typeof import('@automerge/automerge-repo-keyhive') | null = null;
 try {
   console.log('[worker] importing modules...');
-  subductionModule = await import('@automerge/automerge-subduction'); // Initialize subduction WASM before Repo construction
+  // automerge-repo (subduction.37) constructs Subduction internally — no
+  // separate WASM-init step or subduction bridge is needed anymore.
   const repoModule: any = await import('@automerge/automerge-repo');
   Repo = repoModule.Repo;
   PresenceClass = repoModule.Presence;
   console.log('[worker] Repo imported');
   ({ IndexedDBStorageAdapter } = await import('@automerge/automerge-repo-storage-indexeddb'));
   ({ BrowserWebSocketClientAdapter } = await import('@automerge/automerge-repo-network-websocket'));
-  subductionBridge = await import('@automerge/automerge-repo-subduction-bridge');
   Automerge = await import('@automerge/automerge');
   console.log('[worker] importing keyhive bridge...');
-  khBridge = await import('../lib/automerge-repo-keyhive/index');
+  khBridge = await import('@automerge/automerge-repo-keyhive');
   console.log('[worker] keyhive bridge imported (initKeyhiveWasm deferred to init handler)');
 } catch (err: any) {
   console.error('[worker] Failed to load modules:', err);
@@ -122,14 +120,6 @@ let khIntegration: InstanceType<typeof khBridge.AutomergeRepoKeyhive> | null = n
 let khOps: KeyhiveOps | null = null;
 let setNextDocId: ((bytes: Uint8Array) => void) | null = null;
 let appBaseUrl = '';
-
-/**
- * The docId currently being loaded via getOrLoadHandle → repo.find().
- * noopSubduction.getBlobs uses this to read from the right storage key
- * (toDocumentId() truncates keyhive's 32-byte IDs to 16 bytes, so we
- * stash the original here instead of reverse-mapping).
- */
-let loadingDocId: string | null = null;
 
 /** Derive the keyhive doc-ID (base64) from an automerge doc-ID.
  *  Works because the automerge binary doc-ID bytes ARE the keyhive doc_id bytes. */
@@ -224,13 +214,7 @@ async function getOrLoadHandle(docId: string): Promise<any> {
   const existing = docRegistry.get(docId);
   if (existing) return existing.handle;
   const r = getRepo();
-  loadingDocId = docId;
-  try {
-    const handle = await r.find(docId as any);
-    return handle;
-  } finally {
-    loadingDocId = null;
-  }
+  return await r.find(docId as any);
 }
 
 function getOrCreateEntry(docId: string, handle: any): DocEntry {
@@ -437,7 +421,8 @@ async function checkForNewKeyhiveDocs() {
       if (!isDiscoverable(amDocId, knownIds, dismissed)) return false;
       const khDocIdB64 = bytesToBase64(khDocIdObj.toBytes());
       console.log(`[worker] checkForNewKeyhiveDocs: discovered new doc ${amDocId} (kh=${khDocIdB64})`);
-      khIntegration!.networkAdapter.registerDoc(amDocId, khDocIdObj);
+      // No explicit registration needed: the official bridge derives the keyhive
+      // DocumentId from the automerge doc id (same bytes) on demand.
       list.unshift({ id: amDocId, encrypted: true });
       knownIds.add(amDocId);
       changed = true;
@@ -616,50 +601,33 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
           onlyShareWithHardcodedServerPeerId: false,
           periodicallyRequestSync: true,
           automaticArchiveIngestion: true,
-          cacheHashes: false,
+          cachingMode: 'none',
           syncRequestInterval: 2000,
         });
 
-        // Using noopSubduction for now: real Subduction needs peer transports wired up
-        // (Phase 3.3) before it provides any benefit, and without them its getBlobs
-        // returns empty (data is in the old automerge-secure storage).
-        const realSubduction = {
-          storage: {},
-          removeSedimentree() {},
-          connectDiscover() {},
-          disconnectAll() {},
-          disconnectFromPeer() {},
-          syncAll() { return Promise.resolve({ entries() { return []; } }); },
-          syncWithAllPeers() { return Promise.resolve(new Map()); },
-          // Load from the old storage for docs the current identity owns —
-          // i.e., docs that were in the IDB doc list at init (keyhive-verified).
-          getBlobs(_sedimentreeId: any) {
-            if (!loadingDocId || !secureRepo?.storageSubsystem) {
-              return Promise.resolve([]);
-            }
-            const docId = loadingDocId;
-            return secureRepo.storageSubsystem.loadDocData(docId)
-              .then((data: Uint8Array | null) => data ? [data] : []);
-          },
-          addCommit() { return Promise.resolve(undefined); },
-          addFragment() { return Promise.resolve(undefined); },
-        };
         // Slot for pre-generated keyhive doc IDs. enableSharing creates the
         // keyhive doc first, sets nextDocIdBytes, then create2() consumes it
         // so the automerge doc ID = keyhive doc ID.
         let nextDocIdBytes: Uint8Array | null = null;
         setNextDocId = (bytes: Uint8Array) => { nextDocIdBytes = bytes; };
         // shareConfig gates which docs are announced to which peers based on
-        // keyhive membership. A doc not yet registered with keyhive (e.g. just
-        // created, not yet shared) is not announced to anyone. Once Alice
-        // shares with Bob via keyhive, Bob appears as a member, and the keyhive
-        // bridge calls repo.shareConfigChanged() — at that point the doc
-        // starts being announced to Bob.
+        // keyhive membership. A doc the peer has no keyhive access to is not
+        // announced/shared. Once Alice shares with Bob via keyhive, Bob gains
+        // access and the keyhive bridge calls repo.shareConfigChanged() — at
+        // that point the doc starts being announced to Bob.
+        // The official bridge derives the keyhive DocumentId directly from the
+        // automerge doc id (they share the same bytes), so we just look up
+        // bestAccessForDoc for the peer's keyhive Identifier.
         const khAccessCheck = async (peerId: string, docId: string | undefined): Promise<boolean> => {
           if (!docId) return false;
           if (peerId.startsWith('relay-')) return false;
           try {
-            return await (khIntegration!.networkAdapter as any).peerHasAnyAccess(peerId, docId);
+            // peerId is "<base64 verifying key>-<suffix>"; recover the Identifier.
+            const keyB64 = khBridge!.verifyingKeyPeerIdWithoutSuffix(peerId as any);
+            const keyBytes = Uint8Array.from(atob(keyB64), (c) => c.charCodeAt(0));
+            const identifier = new khBridge!.Identifier(keyBytes);
+            const access = await khIntegration!.bestAccessForDoc(identifier, `automerge:${docId}` as any);
+            return access !== undefined;
           } catch {
             return false;
           }
@@ -667,7 +635,6 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
         secureRepo = new Repo({
           network: [khIntegration.networkAdapter],
           storage: secureStorage,
-          subduction: realSubduction,
           peerId: khIntegration.peerId,
           shareConfig: {
             announce: khAccessCheck,
@@ -693,16 +660,16 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
           },
         });
 
-        // Wire up keyhive adapter-level relay logging (decrypted/keyhive protocol messages)
-        khIntegration.networkAdapter.setLogCallback((entry) => {
-          (self as any).postMessage({ type: 'relay-log', entry } satisfies WorkerToMain);
-        });
-
         khOps = new KeyhiveOps(khIntegration.keyhive, khBridge as any, {
           persist: () => khIntegration!.keyhiveStorage.saveKeyhiveWithHash(khIntegration!.keyhive),
           syncKeyhive: () => khIntegration!.networkAdapter.syncKeyhive(),
-          registerDoc: (amDocId, khDocId) => khIntegration!.networkAdapter.registerDoc(amDocId, khDocId),
-          forceResyncAllPeers: () => (khIntegration!.networkAdapter as any).forceResyncAllPeers(),
+          // The official bridge derives the keyhive DocumentId from the automerge
+          // doc id directly, so there is no explicit doc registration step.
+          registerDoc: () => {},
+          // After a local keyhive membership change, re-evaluate shareConfig so
+          // newly-authorized peers get the doc announced (the official adapter
+          // has no explicit forceResync; shareConfigChanged is the equivalent).
+          forceResyncAllPeers: () => secureRepo!.shareConfigChanged(),
           findDoc: (docId) => secureRepo!.find(docId as any),
           saveEventBytes: (eventBytes) => khIntegration!.keyhiveStorage.saveEventBytesWithHash(eventBytes),
           getUserGroupId: async () => {
@@ -967,7 +934,8 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
           if (doc) {
             const khDocIdB64 = bytesToBase64(doc.id.toBytes());
             khOps.khDocuments.set(khDocIdB64, doc);
-            khIntegration.networkAdapter.registerDoc(msg.docId, khDocId);
+            // Official bridge maps automerge doc id -> keyhive DocumentId on demand;
+            // no explicit registerDoc needed.
           }
         } catch (err) {
           console.warn('[worker] Failed to check keyhive for doc:', errMsg(err));
