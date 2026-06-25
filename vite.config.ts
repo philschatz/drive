@@ -144,7 +144,12 @@ export default defineConfig(async () => {
   base,
   plugins: [
     wasm(),
-    preact(),
+    // @preact/preset-vite 2.10.5's `transform-hook-names` plugin does a dynamic
+    // `import("zimmerframe")`, which fails to resolve under vite 8's bundled
+    // config/plugin context ("No exports main defined") and aborts the transform
+    // on every hooks module in dev. Drop just that plugin — preact devtools and
+    // prefresh HMR still work; only the devtools hook-name labels are lost.
+    ...(preact() as Plugin[]).filter((p) => p && p.name !== 'preact:transform-hook-names'),
     tailwindcss(),
     relayPlugin(),
     radixPreactPatchPlugin(),
@@ -220,7 +225,15 @@ export default defineConfig(async () => {
     },
   },
   optimizeDeps: {
-    include: ['@preact/signals', '@preact/signals-core', 'preact/hooks', 'preact/compat', 'buffer/', 'exceljs'],
+    include: [
+      '@preact/signals', '@preact/signals-core', 'preact/hooks', 'preact/compat', 'buffer/', 'exceljs',
+      // Worker-only deps: pre-optimize at startup so vite doesn't discover them
+      // mid-load and trigger a "new dependencies optimized, reloading" cycle
+      // (which transiently fails the automerge worker on first cold start).
+      '@automerge/automerge-repo', '@automerge/automerge-repo-keyhive',
+      '@automerge/automerge-repo-network-websocket', '@automerge/automerge-repo-storage-indexeddb',
+      'cbor-x',
+    ],
     // Exclude automerge so the Vite automergeWasmPlugin load() hook can intercept
     // wasm_bindgen_output/web/index.js and replace base64 WASM with a URL fetch.
     // Pre-bundling bypasses load() hooks (esbuild doesn't use Vite plugins),

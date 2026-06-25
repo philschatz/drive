@@ -97,8 +97,12 @@ let PresenceClass: any;
 let khBridge: typeof import('@automerge/automerge-repo-keyhive') | null = null;
 try {
   console.log('[worker] importing modules...');
-  // automerge-repo (subduction.37) constructs Subduction internally — no
-  // separate WASM-init step or subduction bridge is needed anymore.
+  // automerge-repo (subduction.37) builds Subduction internally, but its
+  // constructor still calls into the subduction WASM (e.g. set_subduction_logger).
+  // Importing the non-`/slim` entry of automerge-subduction initializes that WASM
+  // as a side effect (vite aliases it to the web base64 build); the `/slim` entry
+  // the Repo uses shares the same module-scoped instance. Must run before new Repo().
+  await import('@automerge/automerge-subduction');
   const repoModule: any = await import('@automerge/automerge-repo');
   Repo = repoModule.Repo;
   PresenceClass = repoModule.Presence;
