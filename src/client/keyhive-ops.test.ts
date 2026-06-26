@@ -1264,6 +1264,48 @@ describe('KeyhiveOps', () => {
       const decrypted = await khA.tryDecrypt(docA!, enc.encrypted_content());
       expect(new Uint8Array(decrypted)).toEqual(plaintext);
     });
+
+    // The device-link handshake has two legs and the UI must tell them apart:
+    // the new device shows a return link (linked=false) and the original device
+    // shows "Linking complete" once both devices are in the group (linked=true).
+    it('linkDevice reports linked=true on the original device once both devices are in the group', async () => {
+      const { ops: opsA } = await createOps();
+      const { ops: opsB } = await createOps();
+
+      // A is the original device and owns the user-group.
+      const groupId = await opsA.ensureUserGroup({ create: true });
+      expect(groupId).not.toBeNull();
+
+      // A learns B's identity, as it would from opening B's return link.
+      const { agentId: bAgentId } = await opsA.receiveContactCard(await opsB.getContactCard());
+
+      const result = await opsA.linkDevice(bAgentId, groupId);
+      expect(result.linked).toBe(true);
+
+      // B is now a real member of the user-group (not just adopted the id).
+      const devices = await opsA.listGroupDevices();
+      expect(devices.some((d) => d.agentId === bAgentId && !d.isMe)).toBe(true);
+    });
+
+    it('linkDevice reports linked=false on the new device before the original device finishes', async () => {
+      const { ops: opsA, kh: khA } = await createOps();
+      const { ops: opsB, kh: khB } = await createOps();
+
+      // A owns the group; B will adopt its id on the first leg.
+      const groupId = await opsA.ensureUserGroup({ create: true });
+
+      // Sync A's keyhive state into B so the adopted group resolves immediately
+      // (otherwise ensureUserGroup's waitForSync would poll).
+      await khB.ingestArchive(await khA.toArchive());
+
+      // B learns A's identity, as it would from opening A's link.
+      const { agentId: aAgentId } = await opsB.receiveContactCard(await opsA.getContactCard());
+
+      const result = await opsB.linkDevice(aAgentId, groupId);
+      // B has only adopted the group id; the original device hasn't added it yet,
+      // so the handshake is not complete and the UI shows a return link.
+      expect(result.linked).toBe(false);
+    });
   });
 
   describe('direct add member (no invite link)', () => {

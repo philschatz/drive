@@ -233,6 +233,24 @@ export class KeyhiveOps {
     return true;
   }
 
+  /**
+   * Whether both this device and the peer are members of the user-group.
+   * The device-link handshake is complete once both sides are members: the new
+   * device adopts the group id first (not yet a member), then the original/admin
+   * device adds it on its reciprocal call. Used to tell the two handshake legs
+   * apart in the UI.
+   */
+  private async bothDevicesInGroup(peerAgentIdB64: string): Promise<boolean> {
+    const group = await this.getUserGroup();
+    if (!group) return false;
+    const me = await this.kh.individual;
+    const myBytes = me.id.toBytes();
+    const peerBytes = base64ToBytes(peerAgentIdB64);
+    const members = await group.members();
+    const isMember = (b: Uint8Array) => members.some((m: any) => bytesEqual(m.who.id.toBytes(), b));
+    return isMember(myBytes) && isMember(peerBytes);
+  }
+
   async removeDeviceFromGroup(deviceAgentIdB64: string): Promise<void> {
     const group = await this.getUserGroup();
     if (!group) return;
@@ -251,7 +269,7 @@ export class KeyhiveOps {
    * Converges both devices onto one group, then adds the peer if we are the group admin
    * (the non-admin side fails silently and is added by the admin's reciprocal call).
    */
-  async linkDevice(peerAgentIdB64: string, peerGroupId?: string | null): Promise<{ userGroupId: string | null }> {
+  async linkDevice(peerAgentIdB64: string, peerGroupId?: string | null): Promise<{ userGroupId: string | null; linked: boolean }> {
     let myGroupId = await this.fx.getUserGroupId();
 
     if (!myGroupId && peerGroupId) {
@@ -277,7 +295,12 @@ export class KeyhiveOps {
       // Not the admin, or the peer's contact card hasn't synced yet — the admin side
       // performs the add via its own reciprocal linkDevice call.
     }
-    return { userGroupId: myGroupId };
+
+    // The handshake is complete once both devices are members of the group. On
+    // the new device's first leg, this device isn't a member yet (the admin adds
+    // it on its reciprocal call), so this is false and the UI shows a return link.
+    const linked = await this.bothDevicesInGroup(peerAgentIdB64);
+    return { userGroupId: myGroupId, linked };
   }
 
   /** List the devices in the personal user-group; [self] if there is no group yet. */

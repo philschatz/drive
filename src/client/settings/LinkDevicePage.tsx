@@ -3,10 +3,12 @@
  *
  * URL format: /#/link-device/{base64url-encoded-contact-card}
  *
- * Flow:
- * 1. Decode the contact card from the URL
- * 2. Call receiveContactCard to link the other device
- * 3. Show this device's own contact card as a QR code for the return trip
+ * Device linking is a two-way handshake. This page handles both legs:
+ * 1. Decode the contact card from the URL and receiveContactCard / linkDevice.
+ * 2. If we are the original (admin) device, linkDevice adds the peer and the
+ *    handshake is complete — show "Linking complete".
+ * 3. Otherwise (the new device), show this device's own contact card as a return
+ *    QR code for the original device to open and finish the handshake.
  */
 
 import { useState, useCallback } from 'preact/hooks';
@@ -83,7 +85,7 @@ export function LinkDevicePage({ cardData }: LinkDevicePageProps) {
       setStatus('Decoding contact card...');
       const { cardJson, userGroupId: peerGroupId } = decodeLinkData(cardData);
 
-      setStatus('Linking device...');
+      setStatus('Linking this device...');
       const result = await receiveContactCard(cardJson, { isDevice: true });
       if (result.isOwnCard) {
         setError("This is your own device's link. Open this link on a different device to link it.");
@@ -91,15 +93,23 @@ export function LinkDevicePage({ cardData }: LinkDevicePageProps) {
       }
 
       // Join the same user-group (adopting the peer's group id if we don't have one yet).
-      setStatus('Joining your user group...');
-      await linkDevice(result.agentId, peerGroupId);
+      setStatus('Joining your account...');
+      const { linked } = await linkDevice(result.agentId, peerGroupId);
 
-      setStatus('Generating your contact card...');
-      const { card: myCard, userGroupId: myGroupId } = await getLinkPayload();
-      setMyCardUrl(buildLinkDeviceUrl(myCard, myGroupId));
-
-      setDone(true);
-      setStatus('Device linked! Now scan this QR code from the other device to complete linking.');
+      if (linked) {
+        // Both devices are now members — the handshake is complete (this is the
+        // second leg, back on the original device). No return QR needed.
+        setStatus('');
+        setDone(true);
+      } else {
+        // First leg, on the new device — produce a return link for the original
+        // device to open and finish the handshake.
+        setStatus('Generating your link...');
+        const { card: myCard, userGroupId: myGroupId } = await getLinkPayload();
+        setMyCardUrl(buildLinkDeviceUrl(myCard, myGroupId));
+        setStatus('');
+        setDone(true);
+      }
     } catch (err: any) {
       setError(err.message || 'Failed to link device');
     } finally {
@@ -136,25 +146,29 @@ export function LinkDevicePage({ cardData }: LinkDevicePageProps) {
           <p className="text-sm text-muted-foreground mb-4">{status}</p>
           {done && (
             <>
-              <p className="text-sm text-green-600 font-medium mb-4">
-                <span className="material-symbols-outlined align-middle mr-1" style={{ fontSize: 16 }}>check_circle</span>
-                Their device linked to yours
-              </p>
-              {myCardUrl && (
-                <div className="mb-4">
-                  <p className="text-xs text-muted-foreground mb-2">
-                    Scan this from the other device to link yours to theirs:
-                  </p>
-                  <div className="flex justify-center">
-                    <QRCodeDisplay url={myCardUrl} />
+              {myCardUrl ? (
+                <>
+                  <p className="text-sm font-medium mb-4">Almost done — finish on your original device</p>
+                  <div className="mb-4">
+                    <p className="text-xs text-muted-foreground mb-2">
+                      Open this link (or scan this QR code) on your original device to complete the handshake:
+                    </p>
+                    <div className="flex justify-center">
+                      <QRCodeDisplay url={myCardUrl} />
+                    </div>
+                    <input
+                      className="mt-2 text-xs p-2 rounded border border-border font-mono bg-muted w-full"
+                      value={myCardUrl}
+                      readOnly
+                      onClick={(e: any) => e.currentTarget.select()}
+                    />
                   </div>
-                  <input
-                    className="mt-2 text-xs p-2 rounded border border-border font-mono bg-muted w-full"
-                    value={myCardUrl}
-                    readOnly
-                    onClick={(e: any) => e.currentTarget.select()}
-                  />
-                </div>
+                </>
+              ) : (
+                <p className="text-sm text-green-600 font-medium mb-4">
+                  <span className="material-symbols-outlined align-middle mr-1" style={{ fontSize: 16 }}>check_circle</span>
+                  Linking complete
+                </p>
               )}
               <Button variant="outline" onClick={() => { window.location.hash = '/settings'; }}>
                 Done

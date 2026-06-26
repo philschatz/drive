@@ -586,7 +586,7 @@ export function ensureUserGroup(opts?: { create?: boolean; adoptGroupId?: string
 }
 
 /** Link another device into this user's group (converges groups, adds the peer if admin). */
-export function linkDevice(deviceAgentId: string, peerGroupId?: string | null): Promise<{ userGroupId: string | null }> {
+export function linkDevice(deviceAgentId: string, peerGroupId?: string | null): Promise<{ userGroupId: string | null; linked: boolean }> {
   return khRequest('kh-link-device', { deviceAgentId, peerGroupId });
 }
 

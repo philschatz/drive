@@ -7,8 +7,6 @@ import { Button } from '@/components/ui/button';
 import { Alert } from '@/components/ui/alert';
 import {
   getIdentity,
-  receiveContactCard,
-  linkDevice,
   getLinkPayload,
   listDevices,
   removeDevice,
@@ -27,7 +25,6 @@ export function Settings({ path }: { path?: string }) {
   const [friendQrUrl, setFriendQrUrl] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [linkDeviceUrl, setLinkDeviceUrl] = useState('');
-  const [linkInput, setLinkInput] = useState('');
   const [inviteUrl, setInviteUrl] = useState('');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
@@ -79,26 +76,6 @@ export function Settings({ path }: { path?: string }) {
     }
   };
 
-  const handleLinkDevice = async () => {
-    if (!linkInput.trim()) return;
-    setLoading(true);
-    try {
-      const result = await receiveContactCard(linkInput.trim(), { isDevice: true });
-      if (result.isOwnCard) {
-        setError("That's your own contact card. Paste the contact card from your other device here.");
-        return;
-      }
-      await linkDevice(result.agentId, null);
-      setMessage('Device linked successfully');
-      setLinkInput('');
-      await refresh();
-    } catch (err: any) {
-      setError('Failed to link device: ' + err.message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const handleRemoveDevice = async (agentId: string) => {
     try {
       await removeDevice(agentId);
@@ -109,9 +86,6 @@ export function Settings({ path }: { path?: string }) {
     }
   };
 
-  const copyContactCard = () => {
-    if (contactCard) navigator.clipboard.writeText(contactCard);
-  };
 
   const handleExport = async () => {
     try {
@@ -218,7 +192,7 @@ export function Settings({ path }: { path?: string }) {
                 </code>
               ) : (
                 <span className="text-xs text-muted-foreground italic">
-                  Not created yet — add a friend or link a device
+                  Not created yet — add a friend or add a device
                 </span>
               )}
             </div>
@@ -242,7 +216,7 @@ export function Settings({ path }: { path?: string }) {
       <section className="mb-6">
         <h2 className="text-lg font-semibold mb-2">Devices</h2>
         <p className="text-xs text-muted-foreground mb-2">
-          Each device has its own cryptographic key. Link devices to access your documents from multiple devices.
+          Each device has its own cryptographic key. Add devices so you can reach your documents from your phone, laptop, or tablet.
         </p>
         {devices.length === 0 ? (
           <p className="text-sm text-muted-foreground">No linked devices.</p>
@@ -272,17 +246,20 @@ export function Settings({ path }: { path?: string }) {
           </div>
         )}
 
-        {/* Link a device */}
+        {/* Invite another device */}
         <div className="mt-4">
-          <h3 className="text-sm font-semibold mb-2">Link a Device</h3>
+          <h3 className="text-sm font-semibold mb-2">Invite Another Device</h3>
+          <p className="text-xs text-muted-foreground mb-2">
+            Invite another device to act as you. Linking is a handshake — both devices open a link to complete it.
+          </p>
 
-          {/* Step 1: Show your contact card */}
+          {/* Show your contact card for the new device to scan */}
           <div className="mb-3">
             <p className="text-xs text-muted-foreground mb-1">
-              Share your contact card with the other device:
+              On your new device, scan this QR code or open this link:
             </p>
             <Button size="sm" variant="outline" onClick={handleShowContactCard}>
-              Show contact card
+              Show QR Code
             </Button>
             {contactCard && (
               <div className="mt-2 space-y-2">
@@ -299,37 +276,8 @@ export function Settings({ path }: { path?: string }) {
                     />
                   </div>
                 )}
-                <div className="flex items-start gap-2">
-                  <textarea
-                    className="flex-1 text-xs bg-muted p-2 rounded border border-border font-mono resize-none"
-                    rows={4}
-                    value={contactCard}
-                    readOnly
-                    onClick={(e: any) => e.currentTarget.select()}
-                  />
-                  <Button size="sm" variant="outline" onClick={copyContactCard}>Copy</Button>
-                </div>
               </div>
             )}
-          </div>
-
-          {/* Step 2: Paste the other device's contact card */}
-          <div>
-            <p className="text-xs text-muted-foreground mb-1">
-              Paste the other device's contact card:
-            </p>
-            <div className="flex items-start gap-2">
-              <textarea
-                className="flex-1 text-xs p-2 rounded border border-border font-mono resize-none"
-                rows={4}
-                value={linkInput}
-                onInput={(e: any) => setLinkInput(e.currentTarget.value)}
-                placeholder="Paste contact card JSON here..."
-              />
-              <Button size="sm" onClick={handleLinkDevice} disabled={loading || !linkInput.trim()}>
-                Link
-              </Button>
-            </div>
           </div>
         </div>
       </section>
@@ -368,7 +316,7 @@ export function Settings({ path }: { path?: string }) {
 
       {/* Navigate to URL */}
       <section className="mb-6">
-        <h2 className="text-lg font-semibold mb-2">Open Link</h2>
+        <h2 className="text-lg font-semibold mb-2">Developer: Open Link</h2>
         <p className="text-xs text-muted-foreground mb-2">
           Paste a link to navigate to it (e.g. invite or document links).
         </p>
