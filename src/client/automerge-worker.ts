@@ -1,6 +1,7 @@
 import { deepAssign } from '../shared/deep-assign';
 import { syncToTarget } from '../shared/sync-to-target';
 import { validateDocument } from '../shared/schemas';
+import { RELAY_PEER_ID } from '../shared/relay-identity';
 import { KeyhiveOps, bytesToBase64, errMsg } from './keyhive-ops';
 import { isDiscoverable } from './doc-discovery';
 import { LRU } from './lru-cache';
@@ -624,7 +625,8 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
         // bestAccessForDoc for the peer's keyhive Identifier.
         const khAccessCheck = async (peerId: string, docId: string | undefined): Promise<boolean> => {
           if (!docId) return false;
-          if (peerId.startsWith('relay-')) return false;
+          // The relay is a router, not a keyhive member — never announce docs to it.
+          if (peerId === RELAY_PEER_ID) return false;
           try {
             // peerId is "<base64 verifying key>-<suffix>"; recover the Identifier.
             const keyB64 = khBridge!.verifyingKeyPeerIdWithoutSuffix(peerId as any);

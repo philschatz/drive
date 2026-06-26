@@ -1,11 +1,10 @@
 import { WebSocket } from 'ws';
 import { Encoder, decode } from 'cbor-x';
 import { logMessage, shortId } from './relay-log';
+import { RELAY_PEER_ID } from '../shared/relay-identity';
 
 // Use the same encoder settings as @automerge/automerge-repo's cbor helper
 const encoder = new Encoder({ tagUint8Array: false, useRecords: false });
-
-const RELAY_PEER_ID = `relay-${Math.random().toString(36).slice(2, 10)}`;
 
 /**
  * Stateless WebSocket relay for identity-based message routing.
@@ -96,7 +95,12 @@ export class WebSocketRelay {
         logMessage('←', myPeerId, message);
         const targetId = message.targetId as string | undefined;
 
-        if (targetId && targetId !== RELAY_PEER_ID && this.sockets.has(targetId)) {
+        if (targetId === RELAY_PEER_ID) {
+          // Addressed to the relay's own identity. The relay is not a real
+          // participant — keyhive peers probe it (e.g. sync-request-contact-card)
+          // because it now decodes as a normal Identifier — so drop it rather
+          // than broadcasting a message nobody can act on.
+        } else if (targetId && this.sockets.has(targetId)) {
           // Unicast: deliver raw bytes to the named peer
           const targetWs = this.sockets.get(targetId)!;
           if (targetWs.readyState === WebSocket.OPEN) {
@@ -104,7 +108,7 @@ export class WebSocketRelay {
             logMessage('→', targetId, message);
           }
         } else {
-          // Broadcast: message addressed to relay or has no specific target
+          // Broadcast: message has no specific target (or the target is gone)
           for (const [pid, peerWs] of this.sockets) {
             if (pid === myPeerId || peerWs.readyState !== WebSocket.OPEN) continue;
             peerWs.send(buf);
