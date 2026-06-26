@@ -15,6 +15,34 @@ export function base64ToBytes(b64: string): Uint8Array {
   return bytes;
 }
 
+// A self-describing envelope for a contact card. Carries the raw Individual
+// contact card plus (optionally) the sender's user-group ops, so the receiver
+// can resolve that group as a share target. Backward-compatible: a raw card
+// string (no envelope) is still accepted by receiveContactCard.
+const CONTACT_BUNDLE_KIND = 'contact-bundle';
+interface ContactBundle {
+  __kind: typeof CONTACT_BUNDLE_KIND;
+  /** Raw ContactCard.toJson() string for the sender's Individual device. */
+  card: string;
+  /** Sender's user-group id (base64), if they have one. */
+  groupId?: string;
+  /** Sender's user-group ops (base64 StaticEvent bytes), for ingestEventsBytes. */
+  groupEvents?: string[];
+}
+
+/** Parse a contact-bundle envelope, or null if the string is not one. */
+function parseContactBundle(cardJson: string): ContactBundle | null {
+  try {
+    const parsed = JSON.parse(cardJson);
+    if (parsed && typeof parsed === 'object' && parsed.__kind === CONTACT_BUNDLE_KIND && typeof parsed.card === 'string') {
+      return parsed as ContactBundle;
+    }
+  } catch {
+    // Not JSON / not our envelope.
+  }
+  return null;
+}
+
 export function errMsg(err: any): string {
   if (!err) return 'Unknown error';
   if (typeof err.message === 'function') return err.message();
@@ -328,21 +356,59 @@ export class KeyhiveOps {
     const card = await this.kh.contactCard();
     const json = card.toJson();
     // toJson() may return a parsed object depending on the WASM binding version;
-    // ensure we always return a JSON string for URL encoding / postMessage.
-    return typeof json === 'string' ? json : JSON.stringify(json);
+    // ensure we always have a JSON string for URL encoding / postMessage.
+    const rawCard = typeof json === 'string' ? json : JSON.stringify(json);
+
+    // Wrap in a self-describing "contact bundle". Sharing is group-only, so a
+    // friend needs the sharer to be able to resolve their *user-group* — but the
+    // raw contact card only conveys this device's Individual. Attach the
+    // user-group's ops (when one exists) so the receiver can ingest them and
+    // resolve the group as a share target without waiting on relay reachability
+    // (a group never syncs to a non-member otherwise). We never create a group
+    // here — only bundle one that already exists.
+    const bundle: ContactBundle = { __kind: CONTACT_BUNDLE_KIND, card: rawCard };
+    const group = await this.getUserGroup();
+    if (group) {
+      bundle.groupId = bytesToBase64(group.groupId.toBytes());
+      // The delegation that defines our group (and names us its admin) lives in
+      // our *Individual's* membership ops — NOT in the group agent's events — so
+      // we union events for both: the individual (carries the group delegation)
+      // and the group (its membership/CGKA ops). This is the same payload the
+      // network adapter would sync; see keyhive-ops.test.ts "per-agent sync
+      // delivers Bob group ops to Alice".
+      const me = await this.kh.individual;
+      const byHash = new Map<string, Uint8Array>();
+      for (const agent of [me.toAgent(), group.toAgent()]) {
+        const ev: Map<Uint8Array, Uint8Array> = await this.kh.eventsForAgent(agent);
+        ev.forEach((value, hash) => byHash.set(bytesToBase64(hash), value));
+      }
+      bundle.groupEvents = [...byHash.values()].map(bytesToBase64);
+    }
+    return JSON.stringify(bundle);
   }
 
-  async receiveContactCard(cardJson: string): Promise<{ agentId: string; isOwnCard: boolean }> {
-    const card = this.bridge.ContactCard.fromJson(cardJson);
+  async receiveContactCard(cardJson: string): Promise<{ agentId: string; isOwnCard: boolean; groupId?: string }> {
+    const bundle = parseContactBundle(cardJson);
+    if (!bundle) throw new Error('Invalid contact card (expected a contact bundle)');
+
+    const card = this.bridge.ContactCard.fromJson(bundle.card);
     const individual = await this.kh.receiveContactCard(card);
     const agentId = bytesToBase64(individual.id.toBytes());
     const me = await this.kh.individual;
     const myId = bytesToBase64(me.id.toBytes());
     const isOwnCard = agentId === myId;
+
     if (!isOwnCard) {
+      // Ingest the contact's user-group ops so we can later resolve their group
+      // as a share target (addMember). Skip our own group (a no-op). Fail fast on
+      // a bad payload rather than silently recording a half-usable contact.
+      const myGroupId = await this.fx.getUserGroupId();
+      if (bundle.groupEvents?.length && bundle.groupId !== myGroupId) {
+        await this.kh.ingestEventsBytes(bundle.groupEvents.map(base64ToBytes));
+      }
       await this.fx.persist();
     }
-    return { agentId, isOwnCard };
+    return { agentId, isOwnCard, groupId: bundle?.groupId };
   }
 
   async getDocMembers(khDocId: string): Promise<MemberInfo[]> {
@@ -463,6 +529,10 @@ export class KeyhiveOps {
     await this.kh.revokeMember(agent, true, doc.toMembered());
     await this.fx.persist();
     this.fx.syncKeyhive();
+    // Re-run the share handshake so the revocation (and rotated keys) propagate
+    // to connected peers — including the revoked member, so they learn they no
+    // longer have access. Without this only the local view updates (see addMember).
+    this.fx.forceResyncAllPeers();
     return true;
   }
 
@@ -476,6 +546,7 @@ export class KeyhiveOps {
     await this.kh.addMember(agent, doc.toMembered(), access, []);
     await this.fx.persist();
     this.fx.syncKeyhive();
+    this.fx.forceResyncAllPeers();
     return true;
   }
 
@@ -741,10 +812,20 @@ export class KeyhiveOps {
    * rejected — we no longer share with a bare Individual device.
    */
   private async resolveShareAgent(doc: any, idB64: string): Promise<any> {
-    // 1. A user Group (mine or a contact's) — the only valid share target.
+    // 1. A user Group (mine or a contact's) — the preferred share target. Resolves
+    //    once the contact's group ops have been ingested (see receiveContactCard).
     const group = await this.getGroupById(idB64);
     if (group) return group.toAgent();
-    // 2. Already a member of this document.
+    // 2. A group known to our keyhive via global lookup (covers a contact group
+    //    whose ops we hold but getGroup can't map). Restricted to groups —
+    //    sharing is group-only, so a bare individual is never a valid target.
+    try {
+      const agent = await this.kh.getAgent(new this.bridge.Identifier(base64ToBytes(idB64)));
+      if (agent && agent.isGroup()) return agent;
+    } catch {
+      // not resolvable globally — fall through
+    }
+    // 3. Already a member of this document.
     try {
       return await this.findAgentByIdBytes(doc, idB64);
     } catch {

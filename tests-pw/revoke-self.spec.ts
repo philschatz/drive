@@ -5,12 +5,8 @@ import { setupSharedDoc } from './support/scenarios';
 /**
  * Revoke myself from a doc: bob removes his own access (the "remove-me-from-doc"
  * flow). bob's doc disappears and access drops, while alice retains access.
- *
- * BLOCKED (test.fixme): depends on setupSharedDoc, which can't complete until
- * direct contact-group sharing works (see friend-share.spec.ts). Re-enable once
- * the addMember global-lookup refactor lands.
  */
-test.fixme('removing myself from a doc drops my access but leaves the owner intact', async ({ browser }) => {
+test('removing myself from a doc drops my access but leaves the owner intact', async ({ browser }) => {
   const { alice, bob, docId } = await setupSharedDoc(browser, 'edit');
   try {
     // Precondition: bob has the doc.
@@ -35,9 +31,9 @@ test.fixme('removing myself from a doc drops my access but leaves the owner inta
       { label: 'bob self-revoked access', timeout: 45_000 }
     );
 
-    // alice still owns/accesses the doc.
+    // alice still owns/accesses the doc (queryDoc returns jq output as an array).
     expect(await alice.call<string | null>('getMyAccess', docId)).not.toBeNull();
-    expect((await alice.call<{ result: any }>('queryDoc', docId, '.name')).result).toBe('Shared list');
+    expect((await alice.call<{ result: any }>('queryDoc', docId, '.name')).result).toContain('Shared list');
   } finally {
     await alice.close();
     await bob.close();
