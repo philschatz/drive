@@ -13,17 +13,17 @@ test('linking a new device converges both devices onto one user-group', async ({
     deviceB = await newPeer(browser, 'deviceB');
 
     // Sanity: two fully-isolated profiles = two distinct devices.
-    const idA = await deviceA.call<{ deviceId: string; userGroupId: string | null }>('getIdentity');
-    const idB = await deviceB.call<{ deviceId: string; userGroupId: string | null }>('getIdentity');
+    const idA = await deviceA.call('getIdentity');
+    const idB = await deviceB.call('getIdentity');
     expect(idA.deviceId).not.toEqual(idB.deviceId);
 
     // Device A is the original device with an established group.
-    const a = await deviceA.call<{ card: string; userGroupId: string }>('getLinkPayload');
+    const a = await deviceA.call('getLinkPayload');
     expect(a.userGroupId).toBeTruthy();
 
     // --- Leg 1: on the NEW device, receive A's card and adopt its group ---
-    const recvA = await deviceB.call<{ agentId: string }>('receiveContactCard', a.card, { isDevice: true });
-    const leg1 = await deviceB.call<{ userGroupId: string | null; linked: boolean }>(
+    const recvA = await deviceB.call('receiveContactCard', a.card, { isDevice: true });
+    const leg1 = await deviceB.call(
       'linkDevice',
       recvA.agentId,
       a.userGroupId
@@ -31,9 +31,9 @@ test('linking a new device converges both devices onto one user-group', async ({
     expect(leg1.linked).toBe(false); // new device isn't a group member yet
 
     // --- Leg 2: back on the ORIGINAL device, receive B's card and add it ---
-    const b = await deviceB.call<{ card: string; userGroupId: string }>('getLinkPayload');
-    const recvB = await deviceA.call<{ agentId: string }>('receiveContactCard', b.card, { isDevice: true });
-    const leg2 = await deviceA.call<{ userGroupId: string | null; linked: boolean }>(
+    const b = await deviceB.call('getLinkPayload');
+    const recvB = await deviceA.call('receiveContactCard', b.card, { isDevice: true });
+    const leg2 = await deviceA.call(
       'linkDevice',
       recvB.agentId,
       b.userGroupId
@@ -42,19 +42,19 @@ test('linking a new device converges both devices onto one user-group', async ({
 
     // Both devices now report the same user-group.
     await waitFor(
-      () => deviceB.call<{ userGroupId: string | null }>('getIdentity'),
+      () => deviceB!.call('getIdentity'),
       (id) => id.userGroupId === a.userGroupId,
       { label: 'deviceB adopts shared group' }
     );
 
     // Both devices appear in each device's device list.
     await waitFor(
-      () => deviceA.call<unknown[]>('listDevices'),
+      () => deviceA!.call('listDevices'),
       (devices) => devices.length >= 2,
       { label: 'deviceA sees both devices' }
     );
     await waitFor(
-      () => deviceB.call<unknown[]>('listDevices'),
+      () => deviceB!.call('listDevices'),
       (devices) => devices.length >= 2,
       { label: 'deviceB sees both devices' }
     );

@@ -23,17 +23,18 @@ export async function setupSharedDoc(
   const alice = await newPeer(browser, 'alice');
   const bob = await newPeer(browser, 'bob');
 
-  const aliceGroup = (await alice.call<{ userGroupId: string }>('ensureUserGroup', { create: true })).userGroupId;
-  const bobGroup = (await bob.call<{ userGroupId: string }>('ensureUserGroup', { create: true })).userGroupId;
+  // `ensureUserGroup({ create: true })` always mints an id, so userGroupId is non-null here.
+  const aliceGroup = (await alice.call('ensureUserGroup', { create: true })).userGroupId!;
+  const bobGroup = (await bob.call('ensureUserGroup', { create: true })).userGroupId!;
 
-  const aliceCard = await alice.call<string>('getContactCard');
-  const bobCard = await bob.call<string>('getContactCard');
+  const aliceCard = await alice.call('getContactCard');
+  const bobCard = await bob.call('getContactCard');
 
   // Add each other as friends (the group id is what makes a contact shareable).
   await alice.call('receiveContactCard', bobCard, { userGroupId: bobGroup });
   await bob.call('receiveContactCard', aliceCard, { userGroupId: aliceGroup });
 
-  const { docId } = await alice.call<{ docId: string }>('createDoc', {
+  const { docId } = await alice.call('createDoc', {
     '@type': 'TaskList',
     name: 'Shared list',
     tasks: {},
@@ -59,7 +60,7 @@ export async function setupSharedDoc(
 
   // Wait for the membership op + key material to reach bob.
   await waitFor(
-    () => bob.call<string | null>('getMyAccess', docId),
+    () => bob.call('getMyAccess', docId),
     (access) => access?.toLowerCase() === role,
     { label: `bob gains ${role} access`, timeout: 45_000 }
   );

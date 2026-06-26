@@ -16,12 +16,12 @@ test('revoking a member applies at the authority and cuts the member off from fu
   try {
     // Precondition: bob is a member and has the synced content.
     await waitFor(
-      () => alice.call<{ members: Array<{ agentId: string }> }>('getDocMembers', docId).then((r) => r.members),
+      () => alice.call('getDocMembers', docId).then((r) => r.members),
       (members) => members.some((m) => m.agentId === bobGroup),
       { label: 'bob is a member before revoke' }
     );
     await waitFor(
-      () => bob.call<{ result: any }>('queryDoc', docId, '.name').then((r) => r.result).catch(() => null),
+      () => bob.call('queryDoc', docId, '.name').then((r) => r.result).catch(() => null),
       (result) => Array.isArray(result) && result.includes('Shared list'),
       { label: 'bob has synced content before revoke' }
     );
@@ -31,7 +31,7 @@ test('revoking a member applies at the authority and cuts the member off from fu
 
     // 1. Revocation applied at the authority: alice no longer lists bob.
     await waitFor(
-      () => alice.call<{ members: Array<{ agentId: string }> }>('getDocMembers', docId).then((r) => r.members),
+      () => alice.call('getDocMembers', docId).then((r) => r.members),
       (members) => !members.some((m) => m.agentId === bobGroup),
       { label: 'alice no longer lists bob', timeout: 45_000 }
     );
@@ -43,7 +43,7 @@ test('revoking a member applies at the authority and cuts the member off from fu
 
     // alice sees her own edit.
     await waitFor(
-      () => alice.call<{ result: any }>('queryDoc', docId, '.name').then((r) => r.result),
+      () => alice.call('queryDoc', docId, '.name').then((r) => r.result),
       (result) => Array.isArray(result) && result.includes('After revoke'),
       { label: 'alice sees her post-revoke edit' }
     );
@@ -51,7 +51,7 @@ test('revoking a member applies at the authority and cuts the member off from fu
     // 2. bob is cut off: the post-revoke edit never reaches him. Give it well
     // beyond normal sync latency, then assert bob never observes the new value.
     await new Promise((r) => setTimeout(r, 12_000));
-    const bobName = await bob.call<{ result: any }>('queryDoc', docId, '.name')
+    const bobName = await bob.call('queryDoc', docId, '.name')
       .then((r) => r.result)
       .catch(() => null);
     expect(Array.isArray(bobName) ? bobName : []).not.toContain('After revoke');

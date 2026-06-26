@@ -1,4 +1,15 @@
 import type { Browser, BrowserContext, Page } from '@playwright/test';
+import type { DriveBridge } from '../../src/client/test-bridge';
+
+/**
+ * The callable members of `window.__drive` (the worker API). Filters `DriveBridge`
+ * down to its function-valued keys, dropping non-callable members like the
+ * `workerReady` / `keyhiveReady` promises — so `peer.call` only accepts real
+ * method names and derives their argument/return types automatically.
+ */
+type DriveApi = {
+  [K in keyof DriveBridge as DriveBridge[K] extends (...args: any[]) => any ? K : never]: DriveBridge[K];
+};
 
 /**
  * A Peer is one isolated browser context (its own IndexedDB + localStorage =
@@ -14,8 +25,15 @@ export interface Peer {
   name: string;
   context: BrowserContext;
   page: Page;
-  /** Invoke window.__drive[fn](...args) in this context and return the result. */
-  call<T = any>(fn: string, ...args: any[]): Promise<T>;
+  /**
+   * Invoke window.__drive[fn](...args) in this context and return the result.
+   * `fn` is constrained to the real worker-API method names, and its arguments
+   * and return type are inferred from the method's signature (see DriveApi).
+   */
+  call<K extends keyof DriveApi>(
+    fn: K,
+    ...args: Parameters<DriveApi[K]>
+  ): Promise<Awaited<ReturnType<DriveApi[K]>>>;
   close(): Promise<void>;
 }
 
@@ -38,7 +56,10 @@ export async function newPeer(browser: Browser, name: string): Promise<Peer> {
     Promise.all([(window as any).__drive.workerReady, (window as any).__drive.keyhiveReady])
   );
 
-  const call = <T = any>(fn: string, ...args: any[]): Promise<T> =>
+  const call = <K extends keyof DriveApi>(
+    fn: K,
+    ...args: Parameters<DriveApi[K]>
+  ): Promise<Awaited<ReturnType<DriveApi[K]>>> =>
     page.evaluate(
       ({ fn, args }) => {
         const api = (window as any).__drive;
@@ -48,7 +69,7 @@ export async function newPeer(browser: Browser, name: string): Promise<Peer> {
         return Promise.resolve(api[fn](...args));
       },
       { fn, args }
-    );
+    ) as Promise<Awaited<ReturnType<DriveApi[K]>>>;
 
   return {
     name,
