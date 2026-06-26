@@ -11,6 +11,12 @@
  * 2. Send to worker which reconstructs the invite identity
  * 3. Worker ingests archive, delegates access to this device's real identity
  * 4. Add document to local storage and redirect to it
+ *
+ * WARNING — invite links may be broken: claiming grants access to this *device's*
+ * individual identity, not the user's user-group. The home page now lists docs by
+ * user-group access (see keyhive-ops `getUserGroupAccess`/`enumerateUserDocs`), so a
+ * link-claimed doc may not appear on the home page until the invite flow is
+ * refactored to grant the claimant's user-group.
  */
 
 import { useState, useCallback } from 'preact/hooks';

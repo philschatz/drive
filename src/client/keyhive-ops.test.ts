@@ -1841,4 +1841,94 @@ describe('KeyhiveOps', () => {
       expect(entry!.type).toBe('group'); // a contact is the user-group; its agentId is the share target
     });
   });
+
+  // The home page is driven by user-group access: a doc shows iff the personal
+  // user-group has at least read access, and "delete" revokes the user-group.
+  // We deliberately check the GROUP (not the device) so that revoke actually
+  // removes a self-created doc — the creating device's root delegation is
+  // permanent in keyhive and can never be revoked.
+  describe('home-page user-group access', () => {
+    it('V1: the user-group is admin of a doc it created (group-access query works)', async () => {
+      const { ops, kh, fx } = await createOps();
+      const { khDocId } = await ops.enableSharing('doc-1'); // mints user-group, makes it admin
+      const userGroupId = await fx.getUserGroupId();
+      expect(userGroupId).toBeTruthy();
+
+      const groupIdentifier = new Identifier(base64ToBytes(userGroupId!));
+      const docIdObj = new DocumentId(base64ToBytes(khDocId));
+      const access = await kh.accessForDoc(groupIdentifier, docIdObj);
+      expect(access).toBeDefined();
+      expect(access!.toString()).toBe('Admin');
+    });
+
+    it('V2: revoking the user-group removes its access (device root delegation persists)', async () => {
+      const { ops, kh, fx } = await createOps();
+      const { khDocId } = await ops.enableSharing('doc-1');
+      const userGroupId = await fx.getUserGroupId();
+      const groupIdentifier = new Identifier(base64ToBytes(userGroupId!));
+      const docIdObj = new DocumentId(base64ToBytes(khDocId));
+
+      // Group starts as admin.
+      expect((await kh.accessForDoc(groupIdentifier, docIdObj))?.toString()).toBe('Admin');
+
+      // Revoke the user-group from the doc.
+      const doc = await kh.getDocument(docIdObj);
+      expect(doc).toBeDefined();
+      const groupBytes = base64ToBytes(userGroupId!);
+      const members = await kh.docMemberCapabilities(doc!.doc_id);
+      const groupMember = members.find((m: any) => {
+        const b: Uint8Array = m.who.id.toBytes();
+        return b.length === groupBytes.length && b.every((x: number, i: number) => x === groupBytes[i]);
+      });
+      expect(groupMember).toBeDefined();
+      await kh.revokeMember(groupMember!.who, true, doc!.toMembered());
+
+      // Group access is gone — so the doc would drop off the home list.
+      const afterGroup = await kh.accessForDoc(groupIdentifier, docIdObj);
+      expect(afterGroup == null).toBe(true);
+
+      // ...but the creating device still reaches the doc via its permanent root
+      // delegation. This is exactly why we filter by group access, not device.
+      const myIdentifier = new Identifier(kh.id.bytes);
+      const afterDevice = await kh.accessForDoc(myIdentifier, docIdObj);
+      expect(afterDevice?.toString()).toBe('Admin');
+    });
+
+    it('enumerateUserDocs lists a doc the user-group can access', async () => {
+      const { ops } = await createOps();
+      const { khDocId } = await ops.enableSharing('doc-1');
+      const { accessibleKhIds, reachableKhIds } = await ops.enumerateUserDocs();
+      expect(accessibleKhIds).toContain(khDocId);
+      expect(reachableKhIds).toContain(khDocId);
+    });
+
+    it('removeMyAccess revokes the user-group so the doc is no longer accessible (but still reachable)', async () => {
+      const { ops } = await createOps();
+      const { khDocId } = await ops.enableSharing('doc-1');
+      expect(await ops.getUserGroupAccess(khDocId)).toBe('Admin');
+
+      await ops.removeMyAccess(khDocId);
+
+      // The home page filters by user-group access, so the doc now drops off the list...
+      expect(await ops.getUserGroupAccess(khDocId)).toBeNull();
+      const { accessibleKhIds, reachableKhIds } = await ops.enumerateUserDocs();
+      expect(accessibleKhIds).not.toContain(khDocId);
+      // ...even though the creating device's permanent root delegation keeps it reachable.
+      expect(reachableKhIds).toContain(khDocId);
+    });
+
+    it('keyhive doc id ↔ automerge doc id round-trips (worker home-list conversion)', async () => {
+      const repo = (await import('@automerge/automerge-repo')) as any;
+      // The worker's conversion: keyhive doc-id bytes → automerge doc id string.
+      const amDocIdFromBytes = (b: Uint8Array): string =>
+        repo.parseAutomergeUrl(repo.stringifyAutomergeUrl(b)).documentId;
+      const docBytes = crypto.getRandomValues(new Uint8Array(16)); // automerge doc id = 16-byte UUID
+      const amDocId = amDocIdFromBytes(docBytes);
+      // The automerge doc id decodes back to exactly these bytes — and those bytes ARE
+      // the keyhive DocumentId (the bridge's docIdFromAutomergeUrl returns
+      // parseAutomergeUrl(url).binaryDocumentId), so the worker's id mapping is lossless.
+      const back: Uint8Array = repo.parseAutomergeUrl(`automerge:${amDocId}`).binaryDocumentId;
+      expect(Array.from(back)).toEqual(Array.from(docBytes));
+    });
+  });
 });

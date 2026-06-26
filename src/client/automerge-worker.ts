@@ -2,8 +2,7 @@ import { deepAssign } from '../shared/deep-assign';
 import { syncToTarget } from '../shared/sync-to-target';
 import { validateDocument } from '../shared/schemas';
 import { RELAY_PEER_ID } from '../shared/relay-identity';
-import { KeyhiveOps, bytesToBase64, errMsg } from './keyhive-ops';
-import { isDiscoverable } from './doc-discovery';
+import { KeyhiveOps, bytesToBase64, base64ToBytes, errMsg } from './keyhive-ops';
 import { LRU } from './lru-cache';
 import { decode as cborDecode } from 'cbor-x';
 // hashStr and QueryCacheEntry are also exported from idb-storage for main-thread use.
@@ -33,7 +32,7 @@ export type MainToWorker =
   | { type: 'set-presence'; docId: string; state: any }
   // Doc list mutations (IDB-backed)
   | { type: 'add-doc-to-list'; docId: string;[key: string]: any }
-  | { type: 'remove-doc-from-list'; docId: string }
+  | { type: 'remove-me-from-doc'; docId: string }
   // Contact name mutations (IDB-backed). `id` correlates the result so the main
   // thread can await persistence and surface failures instead of losing them.
   | { type: 'set-contact-name'; id: number; agentId: string; name: string }
@@ -95,6 +94,8 @@ self.onmessage = (e: MessageEvent) => { pendingMessages.push(e); };
 let Repo: any, IndexedDBStorageAdapter: any, Automerge: any;
 let BrowserWebSocketClientAdapter: any;
 let PresenceClass: any;
+/** Convert keyhive doc-id bytes (== automerge BinaryDocumentId) → automerge doc id string. */
+let amDocIdFromBytes: ((bytes: Uint8Array) => string) | null = null;
 let khBridge: typeof import('@automerge/automerge-repo-keyhive') | null = null;
 try {
   console.log('[worker] importing modules...');
@@ -107,6 +108,12 @@ try {
   const repoModule: any = await import('@automerge/automerge-repo');
   Repo = repoModule.Repo;
   PresenceClass = repoModule.Presence;
+  // Keyhive doc-id bytes are the automerge BinaryDocumentId; stringify+parse is the
+  // build-portable inverse of docIdFromAutomergeUrl (binaryToDocumentId isn't exported
+  // from every entrypoint).
+  const stringifyAutomergeUrl = repoModule.stringifyAutomergeUrl;
+  const parseAutomergeUrl = repoModule.parseAutomergeUrl;
+  amDocIdFromBytes = (bytes: Uint8Array) => parseAutomergeUrl(stringifyAutomergeUrl(bytes)).documentId;
   console.log('[worker] Repo imported');
   ({ IndexedDBStorageAdapter } = await import('@automerge/automerge-repo-storage-indexeddb'));
   ({ BrowserWebSocketClientAdapter } = await import('@automerge/automerge-repo-network-websocket'));
@@ -425,78 +432,90 @@ function pushValidation(docId: string, doc: any) {
 }
 
 /**
- * After keyhive ingests remote ops, check if any new documents were shared
- * with us. We detect this by scanning pendingDecrypt — encrypted messages
- * we've received but couldn't decrypt because the doc wasn't registered yet.
- * After keyhive ingestion, getDocument() may now succeed for these docs.
+ * Reconcile the home doc list to equal the set of documents the current user's
+ * personal user-group can access (at least read). This is the home page's source
+ * of truth: it runs at init and whenever keyhive ingests ops (so a newly-linked
+ * device auto-populates once its user-group membership syncs).
  *
- * We intentionally don't use reachableDocs() because it returns ALL docs
- * visible in the keyhive graph (including docs on the same relay that
- * haven't been explicitly shared with this user).
+ * - ADD any accessible doc not yet in the list (and pre-load it for name/type).
+ * - PRUNE an encrypted entry the user-group can no longer access — but only when
+ *   it's confirmed *revoked* (still reachable in the keyhive graph). A doc that's
+ *   simply not reachable yet (offline / not synced) is kept, so we never wipe the
+ *   list on a transient empty state.
+ *
+ * We filter by user-group access (not device): a doc's creating device holds a
+ * permanent root delegation keyhive can't revoke, so a device-based check could
+ * never "delete" a self-created doc.
  */
-
-async function checkForNewKeyhiveDocs() {
-  if (!khOps || !khBridge || !khIntegration) return;
+let reconcileInFlight = false;
+let reconcilePending = false;
+async function reconcileHomeDocs() {
+  // Coalesce overlapping calls (the share-config callback can fire on every sync tick).
+  if (reconcileInFlight) { reconcilePending = true; return; }
+  reconcileInFlight = true;
   try {
+    do {
+      reconcilePending = false;
+      await reconcileHomeDocsOnce();
+    } while (reconcilePending);
+  } finally {
+    reconcileInFlight = false;
+  }
+}
+
+async function reconcileHomeDocsOnce() {
+  if (!khOps || !amDocIdFromBytes) return;
+  try {
+    const { accessibleKhIds, reachableKhIds } = await khOps.enumerateUserDocs();
     const { idbGet, idbSet } = await import('./idb-storage');
     type StoredDocEntry = { id: string; type?: string; name?: string; encrypted?: boolean; sharingGroupId?: string };
     const list = (await idbGet<StoredDocEntry[]>('automerge-doc-ids')) ?? [];
-    const dismissed = new Set((await idbGet<string[]>('dismissed-doc-ids')) ?? []);
     const knownIds = new Set(list.map(e => e.id));
+    const accessibleAmIds = new Set(accessibleKhIds.map(k => amDocIdFromBytes!(base64ToBytes(k))));
+    const reachableSet = new Set(reachableKhIds);
     let changed = false;
-    const addDoc = (amDocId: string, khDocIdObj: any): boolean => {
-      if (!isDiscoverable(amDocId, knownIds, dismissed)) return false;
-      const khDocIdB64 = bytesToBase64(khDocIdObj.toBytes());
-      console.log(`[worker] checkForNewKeyhiveDocs: discovered new doc ${amDocId} (kh=${khDocIdB64})`);
-      // No explicit registration needed: the official bridge derives the keyhive
-      // DocumentId from the automerge doc id (same bytes) on demand.
-      list.unshift({ id: amDocId, encrypted: true });
-      knownIds.add(amDocId);
-      changed = true;
-      return true;
-    };
-
     const newDocHandles: string[] = [];
 
-    // Check pending encrypted messages for docs not yet in docMap.
-    // After ingestion, keyhive may now know about these docs even if
-    // reachableDocs() doesn't list them yet.
-    const na = khIntegration.networkAdapter as any;
-    const pending: Array<{ automergeDocId: string }> = na.pendingDecrypt ?? [];
-    const checkedIds = new Set<string>();
-    for (const entry of pending) {
-      const amDocId = entry.automergeDocId;
-      if (knownIds.has(amDocId) || checkedIds.has(amDocId)) continue;
-      checkedIds.add(amDocId);
-      try {
-        const automergeUrl = `automerge:${amDocId}`;
-        const khDocId = khBridge!.docIdFromAutomergeUrl(automergeUrl as any);
-        const doc = await khOps.kh.getDocument(khDocId);
-        if (doc) {
-          console.log(`[worker] checkForNewKeyhiveDocs: found pending doc ${amDocId} via getDocument`);
-          if (addDoc(amDocId, khDocId)) newDocHandles.push(amDocId);
-        }
-      } catch {
-        // Not a keyhive-formatted docId — skip
+    // ADD accessible docs missing from the list.
+    for (const amDocId of accessibleAmIds) {
+      if (knownIds.has(amDocId)) continue;
+      console.log(`[worker] reconcileHomeDocs: adding accessible doc ${amDocId}`);
+      list.unshift({ id: amDocId, encrypted: true });
+      knownIds.add(amDocId);
+      newDocHandles.push(amDocId);
+      changed = true;
+    }
+
+    // PRUNE encrypted entries the user-group can no longer access, but only when
+    // confirmed revoked (still reachable in the graph). Keep unsynced/offline docs.
+    for (let i = list.length - 1; i >= 0; i--) {
+      const e = list[i];
+      if (!e.encrypted || accessibleAmIds.has(e.id)) continue;
+      const khDocId = resolveKhDocId(e.id);
+      if (reachableSet.has(khDocId)) {
+        console.log(`[worker] reconcileHomeDocs: removing revoked doc ${e.id}`);
+        list.splice(i, 1);
+        knownIds.delete(e.id);
+        changed = true;
       }
     }
 
     if (changed) {
       await idbSet('automerge-doc-ids', list);
       (self as any).postMessage({ type: 'doc-list-updated', list } satisfies WorkerToMain);
-      // Pre-load newly discovered docs so they show type/name on the homepage
+      // Pre-load newly added docs so they show type/name on the homepage
       // instead of appearing as "?" until manually opened.
       for (const docId of newDocHandles) {
         try {
           const handle = await getOrLoadHandle(docId);
           getOrCreateEntry(docId, handle);
         } catch (err) {
-          console.warn(`[worker] checkForNewKeyhiveDocs: failed to pre-load ${docId}:`, errMsg(err));
+          console.warn(`[worker] reconcileHomeDocs: failed to pre-load ${docId}:`, errMsg(err));
         }
       }
     }
   } catch (err) {
-    console.warn('[worker] checkForNewKeyhiveDocs failed:', errMsg(err));
+    console.warn('[worker] reconcileHomeDocs failed:', errMsg(err));
   }
 }
 
@@ -678,9 +697,10 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
 
         khIntegration.linkRepo(secureRepo, {
           onBeforeShareConfigChanged: () => {
-            // After keyhive ingests remote ops, check for newly discovered documents
-            // (e.g. Bob was added as a member by Alice — the doc should appear in Bob's list)
-            void checkForNewKeyhiveDocs();
+            // After keyhive ingests remote ops, reconcile the home list to the
+            // user-group's accessible docs (e.g. a doc shared with us, or a newly
+            // linked device gaining access to the user's whole library).
+            void reconcileHomeDocs();
             // Retry any device-group adds that were waiting on contact cards to sync.
             void drainPendingGroupAdds();
             // Notify main thread so useAccess/Home can re-check access levels
@@ -869,7 +889,7 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
       appBaseUrl = msg.appBaseUrl;
 
       // Doc list and contact names already pushed before kh-ready above.
-      // Re-read for invite pruning and keyhive GC below.
+      // Re-read for invite pruning.
       const { idbGet } = await import('./idb-storage');
       type StoredDocEntry = { id: string; type?: string; name?: string; encrypted?: boolean; sharingGroupId?: string };
       const docList = (await idbGet<StoredDocEntry[]>('automerge-doc-ids')) ?? [];
@@ -879,25 +899,11 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
       const knownDocIds = new Set(docList.map(d => d.id));
       await pruneInvitesNotIn(knownDocIds);
 
-      // GC: self-revoke from keyhive docs no longer in our list
-      if (khOps) {
-        try {
-          const reachable = await khOps.kh.reachableDocs();
-          const myKhDocIds = new Set(docList.filter(d => d.encrypted).map(d => resolveKhDocId(d.id)));
-          for (const summary of reachable) {
-            const khDocId = bytesToBase64(summary.doc.id.toBytes());
-            if (myKhDocIds.has(khDocId)) continue;
-            try {
-              await khOps.leaveDoc(khDocId);
-              console.log(`[worker] keyhive GC: left doc ${khDocId}`);
-            } catch (err: any) {
-              console.warn(`[worker] keyhive GC: failed to leave doc ${khDocId}:`, errMsg(err));
-            }
-          }
-        } catch (err: any) {
-          console.warn('[worker] keyhive GC failed:', errMsg(err));
-        }
-      }
+      // Reconcile the home list to the docs the user-group can access. (Replaces the
+      // old GC that self-revoked from reachable docs missing from the local list — the
+      // opposite of this model. Deletion now removes access explicitly via removeMyAccess,
+      // and the share-config callback reconciles again as more ops sync in.)
+      void reconcileHomeDocs();
 
       console.log('[worker] init complete');
       (self as any).postMessage({ type: 'ready', peerId: secureRepo!.peerId } satisfies WorkerToMain);
@@ -918,8 +924,8 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
       const { docIdBytes } = await khOps.createKeyhiveDoc();
       setNextDocId(docIdBytes);
       const handle = await secureRepo.create2(msg.initialJson);
-      // Add to IDB BEFORE enableSharing so checkForNewKeyhiveDocs (triggered
-      // by keyhive sync during enableSharing) sees it as already known.
+      // Add to IDB BEFORE enableSharing so reconcileHomeDocs (triggered by
+      // keyhive sync during enableSharing) sees it as already known.
       {
         const { idbGet: idbGetList, idbSet: idbSetList } = await import('./idb-storage');
         type S = { id: string;[k: string]: any };
@@ -1147,9 +1153,6 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
   if (msg.type === 'add-doc-to-list') {
     try {
       const { idbGet, idbSet } = await import('./idb-storage');
-      // Don't re-add a doc the user explicitly deleted
-      const dismissed = new Set((await idbGet<string[]>('dismissed-doc-ids')) ?? []);
-      if (dismissed.has(msg.docId)) return;
       type StoredDocEntry = { id: string;[key: string]: any };
       const list = (await idbGet<StoredDocEntry[]>('automerge-doc-ids')) ?? [];
       const metadata = msg.metadata ?? {};
@@ -1167,7 +1170,7 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
     }
   }
 
-  if (msg.type === 'remove-doc-from-list') {
+  if (msg.type === 'remove-me-from-doc') {
     try {
       const { idbGet, idbSet } = await import('./idb-storage');
       type StoredDocEntry = { id: string;[key: string]: any };
@@ -1190,26 +1193,22 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
         const { removeInviteRecordsForDoc } = await import('./invite-storage');
         await removeInviteRecordsForDoc(msg.docId);
       }
-      // Mark as dismissed BEFORE leaveDoc, so checkForNewKeyhiveDocs
-      // won't re-add it if triggered during leaveDoc's syncKeyhive()
-      const dismissed = (await idbGet<string[]>('dismissed-doc-ids')) ?? [];
-      if (!dismissed.includes(msg.docId)) {
-        dismissed.push(msg.docId);
-        await idbSet('dismissed-doc-ids', dismissed);
-      }
-      // Self-revoke from keyhive ACL
+      // Remove the current user (their user-group) from the doc's keyhive ACL.
+      // No dismissed-list bookkeeping: losing group access is what makes the doc
+      // drop off the home list (here and on the user's other devices) at the next
+      // reconcile — there's nothing to hide.
       const removedKhDocId = removedEntry?.encrypted ? resolveKhDocId(msg.docId) : null;
       if (removedKhDocId && khOps) {
         try {
-          await khOps.leaveDoc(removedKhDocId);
+          await khOps.removeMyAccess(removedKhDocId);
         } catch (err: any) {
-          console.warn('[worker] leaveDoc failed on delete:', errMsg(err));
+          console.warn('[worker] removeMyAccess failed on delete:', errMsg(err));
         }
         khOps.khDocuments.delete(removedKhDocId);
       }
       (self as any).postMessage({ type: 'doc-list-updated', list: filtered } satisfies WorkerToMain);
     } catch (err: any) {
-      console.warn('[worker] remove-doc-from-list failed:', errMsg(err));
+      console.warn('[worker] remove-me-from-doc failed:', errMsg(err));
     }
   }
 

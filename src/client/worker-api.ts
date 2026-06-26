@@ -42,7 +42,7 @@ function logSend(msg: { type: string } & Record<string, any>): void {
     || msg.type === 'open-doc'
     || msg.type === 'kh-get-my-access'
     || msg.type === 'add-doc-to-list'
-    || msg.type === 'remove-doc-from-list'
+    || msg.type === 'remove-me-from-doc'
     || msg.type === 'set-contact-name'
     || msg.type === 'remove-contact-name';
   if (!quiet) console.log('[main] → send', msg.type, msg);

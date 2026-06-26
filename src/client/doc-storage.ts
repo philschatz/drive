@@ -14,7 +14,7 @@ const DOC_STORAGE_KEY = 'automerge-doc-ids';
 
 // --- Dispatch hook (injected from automerge.ts to avoid circular imports) ---
 
-type DocListDispatch = (type: 'add-doc-to-list' | 'remove-doc-from-list', docId: string, metadata?: Partial<DocEntry>) => void;
+type DocListDispatch = (type: 'add-doc-to-list' | 'remove-me-from-doc', docId: string, metadata?: Partial<DocEntry>) => void;
 let dispatch: DocListDispatch | null = null;
 
 export function setDocListDispatch(fn: DocListDispatch): void {
@@ -94,7 +94,7 @@ export function removeDocId(id: string) {
   pendingAdds.delete(id);
   const list = getDocList().filter(e => e.id !== id);
   saveDocList(list);
-  dispatch?.('remove-doc-from-list', id);
+  dispatch?.('remove-me-from-doc', id);
 }
 
 export function getDocEntry(id: string): DocEntry | undefined {

@@ -402,6 +402,42 @@ export class KeyhiveOps {
     return access ? access.toString() : null;
   }
 
+  /**
+   * This user's access to a doc via their personal user-group (resolves group
+   * membership), or null. This is the home page's ownership lens: we check the
+   * user-group, not the device, so revoking the group can actually "delete" a
+   * self-created doc — the creating device's root delegation is permanent.
+   */
+  async getUserGroupAccess(khDocId: string): Promise<string | null> {
+    const groupId = await this.fx.getUserGroupId();
+    if (!groupId) return null;
+    const docId = new this.bridge.DocumentId(base64ToBytes(khDocId));
+    const id = new this.bridge.Identifier(base64ToBytes(groupId));
+    const access = await this.kh.accessForDoc(id, docId);
+    return access ? access.toString() : null;
+  }
+
+  /**
+   * One pass over reachableDocs() for the home-page reconcile.
+   * - `accessibleKhIds`: docs the user-group has at least read access to — the
+   *   home set (excludes relay-visible docs the user can't actually access).
+   * - `reachableKhIds`: every doc reachable in the keyhive graph (a superset).
+   * The caller uses the difference to tell a *revoked* doc (reachable but no
+   * group access → prune) from a *not-yet-synced* one (not reachable → keep).
+   */
+  async enumerateUserDocs(): Promise<{ accessibleKhIds: string[]; reachableKhIds: string[] }> {
+    const groupId = await this.fx.getUserGroupId();
+    const reachable = await this.kh.reachableDocs();
+    const reachableKhIds: string[] = [];
+    const accessibleKhIds: string[] = [];
+    for (const summary of reachable) {
+      const khDocId = bytesToBase64(summary.doc.id.toBytes());
+      reachableKhIds.push(khDocId);
+      if (groupId && (await this.getUserGroupAccess(khDocId))) accessibleKhIds.push(khDocId);
+    }
+    return { accessibleKhIds, reachableKhIds };
+  }
+
   async addMember(agentIdB64: string, docId: string, role: string): Promise<true> {
     const doc = this.khDocuments.get(docId);
     if (!doc) throw new Error('Document not found');
@@ -488,6 +524,9 @@ export class KeyhiveOps {
     return { khDocId, groupId: '' };
   }
 
+  // WARNING — invite links may be broken: the claimant is added as an individual
+  // device (see {@link claimInviteWithKeyhive}), so a link-claimed doc won't show on
+  // the home page, which now lists by user-group access. To be refactored.
   async generateInvite(
     docId: string,
     role: string,
@@ -518,7 +557,17 @@ export class KeyhiveOps {
     return { inviteKeyBytes: Array.from(seed) as number[], groupId: '', inviteSignerAgentId, inviterAgentIdBytes };
   }
 
-  /** Claim an invite using an already-initialized invite keyhive (from relay sync). */
+  /**
+   * Claim an invite using an already-initialized invite keyhive (from relay sync).
+   *
+   * WARNING — invite links may be broken: this adds the claimant's *individual
+   * device* (`ourAgentInInviteKh`), not their user-group. The home page now lists
+   * docs by *user-group* access (see {@link getUserGroupAccess} /
+   * {@link enumerateUserDocs}), so a link-claimed doc won't appear on the home page
+   * and won't be group-deletable. Fix when the invite flow is refactored to grant
+   * the claimant's user-group (as direct-contact sharing already does via
+   * {@link resolveShareAgent}).
+   */
   async claimInviteWithKeyhive(
     inviteKh: any,
     automergeDocId?: string,
@@ -661,15 +710,26 @@ export class KeyhiveOps {
     return [...seen.values()];
   }
 
-  /** Self-revoke from a document's ACL. Fetches the doc fresh from keyhive. */
-  async leaveDoc(docId: string): Promise<void> {
-    const khDocIdObj = new this.bridge.DocumentId(base64ToBytes(docId));
+  /**
+   * Remove the current user from a document's ACL — the home page "delete" action.
+   * Revokes the personal **user-group** (not the device): the group is never the
+   * permanent root-creating device, so this actually drops the doc from every
+   * device's home view. A read/edit membership a contact granted us may not be
+   * self-revokable (no authority over that delegation) — that failure is tolerated.
+   */
+  async removeMyAccess(khDocId: string): Promise<void> {
+    const khDocIdObj = new this.bridge.DocumentId(base64ToBytes(khDocId));
     const doc = await this.kh.getDocument(khDocIdObj);
     if (!doc) return;
-    const me = await this.kh.individual;
-    const agentId = bytesToBase64(me.id.toBytes());
-    const agent = await this.findAgentByIdBytes(doc, agentId);
-    await this.kh.revokeMember(agent, true, doc.toMembered());
+    const groupId = await this.fx.getUserGroupId();
+    if (groupId) {
+      try {
+        const groupAgent = await this.findAgentByIdBytes(doc, groupId);
+        await this.kh.revokeMember(groupAgent, true, doc.toMembered());
+      } catch {
+        // The user-group isn't a member, or we lack authority to revoke it.
+      }
+    }
     await this.fx.persist();
     this.fx.syncKeyhive();
   }

@@ -200,7 +200,7 @@ describe('dispatch message shape', () => {
     removeDocId('doc-1');
 
     expect(messages).toHaveLength(2);
-    expect(messages[1].msgType).toBe('remove-doc-from-list');
+    expect(messages[1].msgType).toBe('remove-me-from-doc');
     expect(messages[1].docId).toBe('doc-1');
   });
 
