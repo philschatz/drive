@@ -1930,5 +1930,48 @@ describe('KeyhiveOps', () => {
       const back: Uint8Array = repo.parseAutomergeUrl(`automerge:${amDocId}`).binaryDocumentId;
       expect(Array.from(back)).toEqual(Array.from(docBytes));
     });
+
+    // Guards the GROUP-based cross-device enumeration path: device A assigns the
+    // shared user-group as admin of a new doc (assignGroupAsAdmin), and device B —
+    // a member of that same user-group — must enumerate it via getUserGroupAccess /
+    // enumerateUserDocs. The existing cross-device tests share individual→individual,
+    // so this transitive (B ∈ group → group admins doc) path was never exercised.
+    // NOTE: this passes once B's keyhive HAS A's ops; in production the gap is that
+    // those ops never reach an offline B (stateless relay, no store-and-forward peer).
+    it('doc created on device A after linking is enumerable on device B via the user-group', async () => {
+      const { ops: opsA, kh: khA } = await createOps();
+      const { ops: opsB, kh: khB } = await createOps();
+
+      const syncAtoB = async () => {
+        await khB.ingestArchive(new Archive((await khA.toArchive()).toBytes()));
+        const indAonB = await khB.receiveContactCard(await khA.contactCard());
+        const evts: Map<Uint8Array, Uint8Array> = await khA.eventsForAgent(indAonB.toAgent());
+        const arr: Uint8Array[] = [];
+        evts.forEach((v: Uint8Array) => arr.push(v));
+        await khB.ingestEventsBytes(arr);
+      };
+
+      // --- Link B into A's user-group (same user, two devices) ---
+      const aGroupId = await opsA.ensureUserGroup({ create: true });
+      const aAgentId = (await opsA.getIdentity()).agentId;
+      const bAgentId = (await opsA.receiveContactCard(await opsB.getContactCard())).agentId;
+      await opsA.linkDevice(bAgentId, null); // A (admin) adds B to its group
+
+      await syncAtoB(); // B learns A's group ops
+      await opsB.receiveContactCard(await opsA.getContactCard());
+      await opsB.linkDevice(aAgentId, aGroupId); // B adopts A's group id
+      expect(await opsB.getUserGroupId()).toBe(aGroupId);
+
+      // --- A creates a NEW doc AFTER linking (shared with the user-group) ---
+      const { khDocId } = await opsA.enableSharing('am-doc-after-link');
+
+      // --- Sync A's new ops to B (as periodic keyhive sync would) ---
+      await syncAtoB();
+
+      // --- B must now see the doc through the shared user-group ---
+      expect(await opsB.getUserGroupAccess(khDocId)).toBe('Admin');
+      const { accessibleKhIds } = await opsB.enumerateUserDocs();
+      expect(accessibleKhIds).toContain(khDocId);
+    });
   });
 });

@@ -21,6 +21,8 @@
     "coverage": "npm run test:coverage && npm run test:cy && npm run coverage:merge",
     "cy:open": "./run-cypress.sh open",
     "cy:run": "./run-cypress.sh run",
+    "test:pw": "playwright test",
+    "test:pw:open": "playwright test --ui",
     "stop": "pkill -f 'ts-node.*serve' || true",
     "syncthing": "node syncthing-automerge/merge.js ./.data"
   },
@@ -90,6 +92,7 @@
   "devDependencies": {
     "@cypress/code-coverage": "^4.0.1",
     "@lhci/cli": "^0.15.1",
+    "@playwright/test": "^1.61.1",
     "@preact/preset-vite": "^2.10.5",
     "@testing-library/preact": "^3.2.4",
     "@types/cors": "^2.8.19",
