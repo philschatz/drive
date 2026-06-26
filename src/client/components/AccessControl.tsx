@@ -25,6 +25,7 @@ import type { InviteRecord } from '../invite-storage';
 import { getContactName, mergeCachedContacts } from '../contact-names';
 import { QRCodeDisplay } from '@/components/ui/qr-code';
 import { EditableName } from './EditableName';
+import { AccessIcon } from './AccessIcon';
 
 /** Copy or share a URL, with fallbacks for mobile browsers (e.g. Firefox Android). */
 async function shareOrCopy(url: string): Promise<boolean> {
@@ -74,16 +75,6 @@ interface InviteStatus {
   record: InviteRecord;
   accepted: boolean;
   acceptedBy?: MemberInfo;
-}
-
-function accessIcon(access: string | null | undefined): string {
-  if (!access) return 'lock';
-  switch (access) {
-    case 'admin': return 'admin_panel_settings';
-    case 'edit': return 'edit';
-    case 'read': return 'visibility';
-    default: return 'lock';
-  }
 }
 
 export function AccessControl({ docId, docType, access: accessProp }: AccessControlProps) {
@@ -242,7 +233,7 @@ export function AccessControl({ docId, docType, access: accessProp }: AccessCont
         title={accessProp ? `${accessProp} · Share & permissions` : 'Share & permissions'}
         onClick={() => setOpen(true)}
       >
-        <span className="material-symbols-outlined" style={{ fontSize: 18 }}>{accessIcon(accessProp)}</span>
+        <AccessIcon access={accessProp ?? null} style={{ fontSize: 18 }} title="" />
       </button>
       <Sheet open={open} onOpenChange={setOpen}>
         <SheetContent>

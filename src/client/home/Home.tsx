@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Alert } from '@/components/ui/alert';
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator } from '@/components/ui/dropdown-menu';
 import { Progress } from '@/components/ui/progress';
+import { AccessIcon } from '@/components/AccessIcon';
 import dayjs from 'dayjs';
 import relativeTimePlugin from 'dayjs/plugin/relativeTime';
 
@@ -404,10 +405,10 @@ export function Home({ path }: { path?: string }) {
           docId,
           (d, sid, sheet) => { (d as any).sheets[sid] = sheet; },
           sheetId, {
-            '@type': 'Sheet', name: sheetName, index: si + 1,
-            ...(hidden ? { hidden: true } : {}),
-            columns, rows: rowsMap, cells: {},
-          },
+          '@type': 'Sheet', name: sheetName, index: si + 1,
+          ...(hidden ? { hidden: true } : {}),
+          columns, rows: rowsMap, cells: {},
+        },
         );
         sentRowCounts.set(sheetId, rowIds.length);
         sentColCounts.set(sheetId, colIds.length);
@@ -775,7 +776,12 @@ export function Home({ path }: { path?: string }) {
 
   const sortedEntries = useMemo(() => {
     const indexById = new Map(entries.map((e, i) => [e.documentId, i]));
+    const noAccess = (e: DocEntry) => e.encrypted === true && e.access === null;
     return [...entries].sort((a, b) => {
+      // No-access (revoked) docs always sink to the bottom
+      const aNo = noAccess(a), bNo = noAccess(b);
+      if (aNo !== bNo) return aNo ? 1 : -1;
+
       // Both have lastUpdated: sort newest first, tiebreak by id for stability
       if (a.lastUpdated && b.lastUpdated) {
         const cmp = b.lastUpdated.localeCompare(a.lastUpdated);
@@ -887,9 +893,6 @@ export function Home({ path }: { path?: string }) {
               key={entry.documentId}
               className="flex items-center gap-2 py-1 px-1 flex-nowrap border-b border-border"
             >
-              <span className="material-symbols-outlined" style={{ width: '1rem', textAlign: 'center', color: '#999', fontSize: '0.9rem' }} title="Encrypted">
-                lock
-              </span>
               <span className="material-symbols-outlined" style={{ width: '1.2rem', textAlign: 'center', color: '#666' }}>{icon}</span>
               <a href={viewPath} className="text-sm flex-1 hover:underline flex items-center gap-1" style={noEntryAccess ? { textDecoration: 'line-through', opacity: 0.6 } : undefined}>
                 {entry.name || 'Untitled'}
@@ -906,7 +909,6 @@ export function Home({ path }: { path?: string }) {
                 <Progress className="w-16" value={0} title="Loading..." />
               ) : entry.encrypted && entry.access === null ? (
                 <span className="text-xs text-muted-foreground flex items-center gap-1" title="You no longer have access to updates">
-                  <span className="material-symbols-outlined" style={{ fontSize: 14 }}>lock</span>
                   No access
                 </span>
               ) : (
@@ -919,6 +921,18 @@ export function Home({ path }: { path?: string }) {
                   </a>
                 </>
               )}
+              <span className="inline-flex items-center justify-center h-8 w-8 text-muted-foreground">
+                <AccessIcon access={entry.access ?? null} style={{ fontSize: 18 }} />
+              </span>
+              {!noEntryAccess && (
+                <button
+                  className="inline-flex items-center justify-center h-8 w-8 rounded-md text-destructive hover:bg-destructive/10 cursor-pointer"
+                  title="Delete"
+                  onClick={() => handleDelete(entry)}
+                >
+                  <span className="material-symbols-outlined">delete</span>
+                </button>
+              )}
               <a
                 href={`#/source/${entry.documentId}`}
                 className="inline-flex items-center justify-center h-8 w-8 rounded-md text-muted-foreground hover:bg-accent hover:text-accent-foreground"
@@ -926,13 +940,6 @@ export function Home({ path }: { path?: string }) {
               >
                 <span className="material-symbols-outlined">code</span>
               </a>
-              <button
-                className="inline-flex items-center justify-center h-8 w-8 rounded-md text-destructive hover:bg-destructive/10 cursor-pointer"
-                title="Delete"
-                onClick={() => handleDelete(entry)}
-              >
-                <span className="material-symbols-outlined">delete</span>
-              </button>
             </div>
           );
         })}
