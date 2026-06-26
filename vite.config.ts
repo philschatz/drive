@@ -155,11 +155,15 @@ function versionJsonPlugin(): Plugin {
 }
 
 export default defineConfig(async () => {
-  const istanbulPlugins = process.env.CYPRESS_COVERAGE
+  const istanbulPlugins = process.env.E2E_COVERAGE
     ? [(await import('vite-plugin-istanbul')).default({
         include: 'src/**/*',
         exclude: ['node_modules'],
         extension: ['.ts', '.tsx'],
+        // The E2E suites run against a production build (`vite build` + `npm
+        // start`), not the dev server, so instrumentation must be forced —
+        // otherwise window.__coverage__ is never emitted.
+        forceBuildInstrument: true,
       })]
     : [];
 

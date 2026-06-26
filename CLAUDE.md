@@ -13,8 +13,9 @@ npm run dev          # Backend dev server with auto-reload (port 3000)
 npm run build        # Vite production build (frontend → dist/)
 npm run test:unit    # Jest unit tests
 npm run test:watch   # Jest watch mode
-npm test             # Jest + Cypress (full suite)
-npm run cy:open      # Cypress GUI (uses run-cypress.sh for NixOS compat)
+npm test             # Jest + Playwright (full suite)
+npm run test:pw      # Playwright E2E (editor UI + two-peer sync specs)
+npm run test:pw:open # Playwright UI mode
 ```
 
 **Type checking** (two separate tsconfigs):
@@ -38,7 +39,7 @@ npx jest tests/parser.test.ts
 - `src/client/` — Preact SPA with feature directories: `calendar/`, `tasks/`, `datagrid/`, `source/`, `home/`
 - `src/shared/` — Code shared between client features: automerge repo setup, presence system, schema validation, deep-assign utility
 - `tests/` — Jest tests (backend + shared logic)
-- `cypress/` — E2E tests
+- `src/client/tests-pw/` — Playwright E2E tests (editor UI specs + two-peer sync harness)
 
 ### Two TypeScript Projects
 

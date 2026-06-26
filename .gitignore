@@ -1,6 +1,5 @@
 # Data files
 .data/
-.data-cypress/
 .data-test/
 .data-jest/
 
@@ -35,9 +34,9 @@ npm-debug.log*
 .env
 .env.local
 
-# Cypress
-cypress/videos/
-cypress/screenshots/
+# Playwright
+test-results/
+playwright-report/
 
 # Temporary files
 *.tmp

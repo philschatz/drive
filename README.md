@@ -32,8 +32,9 @@ npm run dev          # Backend dev server with auto-reload
 npm run build        # Vite production build (frontend -> dist/)
 npm run test:unit    # Jest unit tests
 npm run test:watch   # Jest watch mode
-npm test             # Jest + Cypress (full suite)
-npm run cy:open      # Cypress GUI
+npm test             # Jest + Playwright (full suite)
+npm run test:pw      # Playwright E2E
+npm run test:pw:open # Playwright UI mode
 ```
 
 **Type checking** (two separate tsconfigs):
@@ -56,8 +57,8 @@ src/
   backend/     Express server, CalDAV handler, REST routes
   client/      Preact SPA: calendar/, tasks/, datagrid/, source/, home/
   shared/      Shared between client features: automerge, presence, schemas, history
-tests/         Jest tests
-cypress/       E2E tests
+tests/                 Jest tests
+src/client/tests-pw/   Playwright E2E (editor UI + two-peer sync)
 ```
 
 ### Document Types
