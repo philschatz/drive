@@ -118,19 +118,3 @@ export async function radixSelect(page: Page, triggerId: string, label: string):
   await expect(page.locator('[role="listbox"]')).toBeVisible();
   await page.locator('[role="option"]', { hasText: label }).click();
 }
-
-/**
- * Collect istanbul coverage (window.__coverage__, present only in instrumented
- * E2E_COVERAGE builds) and write it under coverage/playwright/ so the existing
- * `coverage:merge` (`nyc merge coverage ...`) picks it up alongside jest output.
- * No-op when the page is not instrumented.
- */
-export async function collectCoverage(page: Page, label: string): Promise<void> {
-  const coverage = await page.evaluate(() => (window as any).__coverage__ ?? null);
-  if (!coverage) return;
-  const fs = await import('node:fs');
-  const path = await import('node:path');
-  const dir = path.resolve(process.cwd(), 'coverage', 'playwright');
-  fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, `pw-${label}.json`), JSON.stringify(coverage));
-}

@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { openApp, createDocViaUI, collectCoverage, type App } from './support';
+import { openApp, createDocViaUI, type App } from './support';
 
 /**
  * DataGrid editor UI test (ported from cypress/e2e/datagrid.cy.ts). CodeMirror
@@ -22,7 +22,6 @@ test.describe('DataGrid', () => {
   });
 
   test.afterAll(async () => {
-    await collectCoverage(app.page, 'datagrid');
     app.assertNoFatalErrors();
     await app.close();
   });

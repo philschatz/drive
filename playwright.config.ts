@@ -28,10 +28,6 @@ export default defineConfig({
   workers: 1,
   timeout: 120_000,
   expect: { timeout: 30_000 },
-  // The fast `test:pw` run is strict (0 retries). The E2E_COVERAGE run serves an
-  // istanbul-instrumented build that is several times slower, which can race the
-  // WASM-heavy editor UI — allow retries there only.
-  retries: process.env.E2E_COVERAGE ? 2 : 0,
   reporter: [['list']],
   use: {
     baseURL,
@@ -60,12 +56,7 @@ export default defineConfig({
   webServer: {
     command: `npm run build && PORT=${PORT} npm start`,
     url: baseURL,
-    // Reuse a developer's pre-built server while iterating — but never for a
-    // coverage run, which needs a fresh E2E_COVERAGE-instrumented build.
-    reuseExistingServer: !process.env.CI && !process.env.E2E_COVERAGE,
-    // Forward the coverage flag so `npm run build` instruments via
-    // vite-plugin-istanbul (window.__coverage__).
-    env: process.env.E2E_COVERAGE ? { E2E_COVERAGE: '1' } : undefined,
+    reuseExistingServer: !process.env.CI,
     timeout: 300_000,
   },
 });

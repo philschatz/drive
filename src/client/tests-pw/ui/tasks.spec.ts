@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { openApp, createDocViaUI, collectCoverage, type App } from './support';
+import { openApp, createDocViaUI, type App } from './support';
 
 /**
  * Task-list editor UI test (ported from cypress/e2e/tasks.cy.ts). One shared
@@ -18,7 +18,6 @@ test.describe('Tasks', () => {
   });
 
   test.afterAll(async () => {
-    await collectCoverage(app.page, 'tasks');
     app.assertNoFatalErrors();
     await app.close();
   });

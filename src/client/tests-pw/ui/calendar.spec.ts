@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { openApp, createDocViaUI, radixSelect, collectCoverage, type App } from './support';
+import { openApp, createDocViaUI, radixSelect, type App } from './support';
 
 /**
  * Calendar editor UI test (ported from cypress/e2e/calendar.cy.ts). Consolidated
@@ -73,7 +73,6 @@ test.describe('Calendar', () => {
   });
 
   test.afterAll(async () => {
-    await collectCoverage(app.page, 'calendar');
     app.assertNoFatalErrors();
     await app.close();
   });
