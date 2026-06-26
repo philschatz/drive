@@ -9,10 +9,11 @@
  * 3. Let the user assign a human-readable name
  */
 
-import { useState, useCallback } from 'preact/hooks';
+import { useState, useCallback, useEffect } from 'preact/hooks';
 import { Button } from '@/components/ui/button';
-import { receiveContactCard } from '../shared/keyhive-api';
+import { receiveContactCard, getLinkPayload } from '../shared/keyhive-api';
 import { setContactName } from '../contact-names';
+import { QRCodeDisplay } from '@/components/ui/qr-code';
 import { deflate, inflate } from 'pako';
 
 interface AddFriendPageProps {
@@ -73,6 +74,16 @@ export function AddFriendPage({ cardData }: AddFriendPageProps) {
   const [name, setName] = useState('');
   const [saved, setSaved] = useState(false);
   const [processing, setProcessing] = useState(false);
+  // The current user's own friend link, shown on the success screen so the friend
+  // they just added can add them back (makes the contact relationship bidirectional).
+  const [myFriendUrl, setMyFriendUrl] = useState('');
+
+  useEffect(() => {
+    if (!saved || myFriendUrl) return;
+    getLinkPayload()
+      .then(({ card, userGroupId }) => setMyFriendUrl(buildAddFriendUrl(card, undefined, userGroupId)))
+      .catch((err: any) => setError(err?.message ?? 'Could not build your contact link'));
+  }, [saved, myFriendUrl]);
 
   const doReceive = useCallback(async () => {
     if (!cardData) {
@@ -153,6 +164,22 @@ export function AddFriendPage({ cardData }: AddFriendPageProps) {
           <p className="text-xs text-muted-foreground mb-4">
             You can now share documents with them from any document's sharing panel.
           </p>
+          {myFriendUrl && (
+            <div className="mb-4 border-t border-border pt-4">
+              <p className="text-xs text-muted-foreground mb-2">
+                Let them add you back — show them this QR code or link:
+              </p>
+              <div className="flex justify-center mb-2">
+                <QRCodeDisplay url={myFriendUrl} />
+              </div>
+              <input
+                className="w-full text-xs p-2 rounded border border-border font-mono bg-muted"
+                value={myFriendUrl}
+                readOnly
+                onClick={(e: any) => e.currentTarget.select()}
+              />
+            </div>
+          )}
           <Button variant="outline" onClick={() => { window.location.hash = '/'; }}>
             Home
           </Button>

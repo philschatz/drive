@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'preact/hooks';
 import { Button } from '@/components/ui/button';
 import { Alert } from '@/components/ui/alert';
 import { EditableName } from '@/components/EditableName';
-import { getDocMembers, type MemberInfo } from '../shared/keyhive-api';
+import { getDocMembers, getKnownContacts } from '../shared/keyhive-api';
 import { keyhiveReady } from '../shared/automerge';
 import { getContactName, getAllContactNames, removeContactName } from '../contact-names';
 import { getDocList } from '../doc-storage';
@@ -45,14 +45,29 @@ export function Contacts({ path }: { path?: string }) {
       // Ensure worker has pushed contact names before we read the cache
       await keyhiveReady;
       const docs = getDocList().filter(d => d.encrypted);
-      const results = await Promise.allSettled(
-        docs.map(d => getDocMembers(d.id))
-      );
+      // getKnownContacts is the source of truth for *who* is a contact — it surfaces
+      // received friends even before any doc is shared (mirrors the Share panel). The
+      // per-doc member lists then enrich each contact with device counts and the docs
+      // they're on. allSettled so a partial failure still renders what we have.
+      const [knownResult, ...memberResults] = await Promise.allSettled([
+        getKnownContacts(''),
+        ...docs.map(d => getDocMembers(d.id)),
+      ]);
 
       const map = new Map<string, ContactEntry>();
 
-      for (let i = 0; i < results.length; i++) {
-        const result = results[i];
+      // Seed from keyhive's known contacts (all groups; self already excluded).
+      if (knownResult.status === 'fulfilled') {
+        for (const m of knownResult.value) {
+          if (m.isMe || m.type !== 'group') continue;
+          if (!map.has(m.agentId)) {
+            map.set(m.agentId, { agentId: m.agentId, isGroup: true, docs: [], deviceIds: m.deviceIds });
+          }
+        }
+      }
+
+      for (let i = 0; i < memberResults.length; i++) {
+        const result = memberResults[i];
         if (result.status !== 'fulfilled') continue;
         const doc = docs[i];
         const { members } = result.value;
@@ -61,7 +76,7 @@ export function Contacts({ path }: { path?: string }) {
           if (m.isMe) continue;
           // Sharing is group-only: a contact is always a user-group. Skip non-group
           // members (e.g. unrevoked invite temp identities) — they aren't contacts.
-          if (m.type !== 'group') throw new Error('BUG');
+          if (m.type !== 'group') continue;
 
           let entry = map.get(m.agentId);
           if (!entry) {
