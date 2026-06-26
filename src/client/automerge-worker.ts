@@ -32,7 +32,7 @@ export type MainToWorker =
   | { type: 'unsubscribe-presence'; docId: string }
   | { type: 'set-presence'; docId: string; state: any }
   // Doc list mutations (IDB-backed)
-  | { type: 'add-doc-to-list'; docId: string; [key: string]: any }
+  | { type: 'add-doc-to-list'; docId: string;[key: string]: any }
   | { type: 'remove-doc-from-list'; docId: string }
   // Contact name mutations (IDB-backed). `id` correlates the result so the main
   // thread can await persistence and surface failures instead of losing them.
@@ -245,6 +245,18 @@ function getOrCreateEntry(docId: string, handle: any): DocEntry {
 
 // --- Query caching ---
 
+/**
+ * Whether a summary subscription for a not-yet-open doc opens (loads + syncs via
+ * repo.find) that doc in the background. The persisted qc: cache is always served first
+ * for instant paint either way.
+ *  - true (default): after serving the cache, open the doc so it syncs and the summary
+ *    refreshes live — without this an un-found doc never syncs, so a remote edit to a
+ *    listed-but-unopened doc leaves the homepage stale until it is opened.
+ *  - false: only serve the cached summary; do not open the doc (lighter, but summaries
+ *    stay stale until the doc is opened).
+ */
+const OPEN_DOCS_IN_BACKGROUND = true;
+
 const jqCache = new LRU<string, (input: any) => any>(64);
 
 async function runQuery(filter: string, doc: any): Promise<any> {
@@ -286,7 +298,7 @@ async function runCachedQuery(
 async function handleSubscribeQuery(docId: string, subId: number, filter: string, post: (m: any) => void) {
   subIdToDocId.set(subId, docId);
 
-  // Serve from cache if available
+  // Serve from cache if available, for instant paint.
   const cacheKey = `qc:${docId}:${hashStr(filter)}`;
   const memoryCached = queryResultCache.get(cacheKey);
   if (memoryCached) {
@@ -310,6 +322,16 @@ async function handleSubscribeQuery(docId: string, subId: number, filter: string
     let pending = pendingSubs.get(docId);
     if (!pending) { pending = new Map(); pendingSubs.set(docId, pending); }
     pending.set(subId, { filter, post });
+    if (OPEN_DOCS_IN_BACKGROUND) {
+      // Open (find + sync) the doc in the background so remote edits reach this
+      // subscription and refresh the cached summary served above. Without this an
+      // un-found doc never syncs, so a remote edit to a listed-but-unopened doc leaves
+      // the homepage stale. getOrCreateEntry attaches change/doc listeners, drains
+      // pending subs, and pushes fresh results.
+      getOrLoadHandle(docId)
+        .then(handle => getOrCreateEntry(docId, handle))
+        .catch(err => console.warn(`[worker] subscribe-query open failed ${docId}:`, errMsg(err)));
+    }
   }
 }
 
@@ -671,7 +693,7 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
           syncKeyhive: () => khIntegration!.networkAdapter.syncKeyhive(),
           // The official bridge derives the keyhive DocumentId from the automerge
           // doc id directly, so there is no explicit doc registration step.
-          registerDoc: () => {},
+          registerDoc: () => { },
           // After a local keyhive membership change, re-evaluate shareConfig so
           // newly-authorized peers get the doc announced (the official adapter
           // has no explicit forceResync; shareConfigChanged is the equivalent).
@@ -717,7 +739,7 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
           // Contact card
           const card = await kh.contactCard();
           let existingCard: any = null;
-          try { existingCard = await kh.getExistingContactCard(); } catch {}
+          try { existingCard = await kh.getExistingContactCard(); } catch { }
 
           // Public agent event counts (used by sync protocol)
           let publicEventInfo: any = null;
@@ -733,7 +755,7 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
                 consistent: hashes.length === events.size,
               };
             }
-          } catch {}
+          } catch { }
 
           // Per-doc details
           const docs: any[] = [];
@@ -752,7 +774,7 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
                   isGroup: m.who.isGroup(),
                 });
               }
-            } catch {}
+            } catch { }
 
             // My access for this doc
             let myAccess: string | null = null;
@@ -761,7 +783,7 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
               const myId = new Id(kh.id.bytes);
               const a = await kh.accessForDoc(myId, doc.doc_id);
               myAccess = a ? a.toString() : null;
-            } catch {}
+            } catch { }
 
             docs.push({
               docId: bytesToBase64(doc.id.toBytes()),
@@ -788,7 +810,7 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
             storedArchiveCount = archiveChunks.length;
             const eventChunks = await (storage as any).storage.loadRange(['keyhive', 'events']);
             storedEventCount = eventChunks.length;
-          } catch {}
+          } catch { }
 
           console.log('[worker] === KEYHIVE ARCHIVE DUMP ===');
           console.log('[worker] identity:', {
@@ -820,7 +842,7 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
         // BEFORE kh-ready so code awaiting keyhiveReady can read them immediately.
         {
           const { idbGet: idbGetDocs } = await import('./idb-storage');
-          type StoredDocEntry = { id: string; encrypted?: boolean; [key: string]: any };
+          type StoredDocEntry = { id: string; encrypted?: boolean;[key: string]: any };
           const earlyList = (await idbGetDocs<StoredDocEntry[]>('automerge-doc-ids')) ?? [];
           for (const entry of earlyList) {
             if (entry.encrypted) {
@@ -900,7 +922,7 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
       // by keyhive sync during enableSharing) sees it as already known.
       {
         const { idbGet: idbGetList, idbSet: idbSetList } = await import('./idb-storage');
-        type S = { id: string; [k: string]: any };
+        type S = { id: string;[k: string]: any };
         const earlyList = (await idbGetList<S[]>('automerge-doc-ids')) ?? [];
         earlyList.unshift({ id: handle.documentId, encrypted: true });
         await idbSetList('automerge-doc-ids', earlyList);
@@ -1128,7 +1150,7 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
       // Don't re-add a doc the user explicitly deleted
       const dismissed = new Set((await idbGet<string[]>('dismissed-doc-ids')) ?? []);
       if (dismissed.has(msg.docId)) return;
-      type StoredDocEntry = { id: string; [key: string]: any };
+      type StoredDocEntry = { id: string;[key: string]: any };
       const list = (await idbGet<StoredDocEntry[]>('automerge-doc-ids')) ?? [];
       const metadata = msg.metadata ?? {};
       const idx = list.findIndex(e => e.id === msg.docId);
@@ -1148,7 +1170,7 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
   if (msg.type === 'remove-doc-from-list') {
     try {
       const { idbGet, idbSet } = await import('./idb-storage');
-      type StoredDocEntry = { id: string; [key: string]: any };
+      type StoredDocEntry = { id: string;[key: string]: any };
       const list = (await idbGet<StoredDocEntry[]>('automerge-doc-ids')) ?? [];
       const removedEntry = list.find(e => e.id === msg.docId);
       const filtered = list.filter(e => e.id !== msg.docId);
@@ -1449,7 +1471,7 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
         const mainArchive = await khIntegration.keyhive.toArchive();
         const tempStore = khBridge.CiphertextStore.newInMemory();
         try {
-          inviteKh = await mainArchive.tryToKeyhive(tempStore, inviteSigner, () => {});
+          inviteKh = await mainArchive.tryToKeyhive(tempStore, inviteSigner, () => { });
           reachable = await inviteKh.reachableDocs();
           console.log(`[kh-claim-invite] poll: totalOps=${stats.totalOps} peers=${peerCount} reachable=${reachable.length} elapsed=${Date.now() - start}ms`);
           if (reachable.length > 0) break;
