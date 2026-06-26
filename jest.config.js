@@ -12,7 +12,8 @@ module.exports = {
       globalSetup: '<rootDir>/tests/setup.js',
       setupFiles: ['<rootDir>/tests/setup-subduction.js'],
       roots: ['<rootDir>/src', '<rootDir>/tests'],
-      testMatch: ['**/__tests__/**/*.ts', '**/?(*.)+(spec|test).ts'],
+      // Only *.test.ts — *.spec.ts is reserved for Playwright (src/client/tests-pw).
+      testMatch: ['**/__tests__/**/*.ts', '**/?(*.)+(test).ts'],
       testPathIgnorePatterns: ['\\.test\\.tsx$', '/clipboard\\.test\\.ts$'],
       transform: {
         '^.+\\.ts$': ['ts-jest', { diagnostics: false }],
@@ -39,7 +40,7 @@ module.exports = {
       preset: 'ts-jest',
       testEnvironment: 'jsdom',
       roots: ['<rootDir>/src/client'],
-      testMatch: ['**/?(*.)+(spec|test).tsx', '**/clipboard.test.ts'],
+      testMatch: ['**/?(*.)+(test).tsx', '**/clipboard.test.ts'],
       transform: {
         '^.+\\.tsx?$': ['ts-jest', {
           diagnostics: false,
@@ -76,6 +77,7 @@ module.exports = {
     'src/**/*.ts',
     'src/**/*.tsx',
     '!src/**/*.d.ts',
+    '!src/client/tests-pw/**',
   ],
   coverageDirectory: 'coverage/jest',
   coverageReporters: ['json', 'text-summary'],

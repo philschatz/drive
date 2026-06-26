@@ -1,5 +1,5 @@
 import type { Browser, BrowserContext, Page } from '@playwright/test';
-import type { DriveBridge } from '../../src/client/test-bridge';
+import type { DriveBridge } from '../../test-bridge';
 
 /**
  * The callable members of `window.__drive` (the worker API). Filters `DriveBridge`

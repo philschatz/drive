@@ -4,9 +4,10 @@ import { defineConfig, devices } from '@playwright/test';
  * Playwright config for two-peer async communication tests.
  *
  * These tests open two fully-isolated browser contexts (separate IndexedDB +
- * localStorage = separate peers) against the real app served by `npm run dev`,
- * which also attaches the in-memory WebSocket relay. Tests drive the worker API
- * directly via `window.__drive.*` (exposed dev-only by src/client/test-bridge.ts).
+ * localStorage = separate peers) against the built app served by the production
+ * server (`npm start`), which also attaches the in-memory WebSocket relay. Tests
+ * drive the worker API directly via `window.__drive.*` (exposed by
+ * src/client/test-bridge.ts, which is included in production builds).
  *
  * On NixOS the browsers Playwright downloads won't run, so we point at the
  * system Chromium. Override with CHROMIUM_BIN if it lives elsewhere.
@@ -14,8 +15,13 @@ import { defineConfig, devices } from '@playwright/test';
 const chromiumPath =
   process.env.CHROMIUM_BIN || '/run/current-system/sw/bin/chromium';
 
+// Run against the built app served by the production server (like Cypress),
+// on a non-3000 port so it never collides with a running `npm run dev`.
+const PORT = Number(process.env.PW_PORT) || 4445;
+const baseURL = `http://localhost:${PORT}`;
+
 export default defineConfig({
-  testDir: './tests-pw',
+  testDir: './src/client/tests-pw',
   // Each spec orchestrates two heavy WASM peers; keep them serial and give
   // generous time for keyhive init + eventual cross-peer sync.
   fullyParallel: false,
@@ -24,7 +30,7 @@ export default defineConfig({
   expect: { timeout: 30_000 },
   reporter: [['list']],
   use: {
-    baseURL: 'http://localhost:3000',
+    baseURL,
     trace: 'retain-on-failure',
     launchOptions: {
       executablePath: chromiumPath,
@@ -43,10 +49,14 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'] },
     },
   ],
+  // Build the frontend, then serve the built app (dist/) via the production
+  // server — which also attaches the in-memory WebSocket relay the peers sync
+  // through. Mirrors `test:cy`. `reuseExistingServer` lets a developer pre-run
+  // `PORT=4445 npm start` (after a build) to skip the rebuild while iterating.
   webServer: {
-    command: 'npm run dev',
-    url: 'http://localhost:3000',
+    command: `npm run build && PORT=${PORT} npm start`,
+    url: baseURL,
     reuseExistingServer: !process.env.CI,
-    timeout: 120_000,
+    timeout: 300_000,
   },
 });

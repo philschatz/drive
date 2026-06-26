@@ -11,7 +11,7 @@
     "start:caldav": "ts-node -r tsconfig-paths/register src/backend/caldav-server.ts",
     "dev:caldav": "nodemon --watch src/backend --ext ts --exec ts-node -r tsconfig-paths/register src/backend/caldav-server.ts",
     "serve:caldav": "NODE_ENV=production CALDAV_PORT=4001 ts-node -r tsconfig-paths/register src/backend/caldav-server.ts",
-    "test": "jest && npm run test:cy",
+    "test": "jest && npm run test:cy && npm run test:pw",
     "test:cy": "npm run build && PORT=4444 start-server-and-test start http://localhost:4444/health cy:run",
     "test:cy:open": "npm run build && PORT=4444 start-server-and-test start http://localhost:4444/health cy:open",
     "test:unit": "jest",
