@@ -1,24 +1,39 @@
 /**
  * Add Friend page — handles QR-code-based contact sharing.
  *
- * URL format: /#/add-friend/{base64url-encoded-contact-card}
+ * URL forms:
+ *   /#/add-friend/r.<rendezvousId>.<key>   ← preferred: tiny QR; the real (large)
+ *       contact bundle is fetched over an encrypted relay rendezvous (the only
+ *       form that works for established accounts whose bundle exceeds QR capacity).
+ *   /#/add-friend/<base64url-deflated-card> ← legacy: bundle embedded in the URL.
  *
- * Flow:
- * 1. Decode the contact card from the URL
- * 2. Call receiveContactCard to add them as a known contact
- * 3. Let the user assign a human-readable name
+ * Flow: pull the contact card (via rendezvous or the URL), receiveContactCard to
+ * add them as a known contact, then let the user assign a human-readable name.
  */
 
 import { useState, useCallback, useEffect } from 'preact/hooks';
 import { Button } from '@/components/ui/button';
-import { receiveContactCard, getLinkPayload } from '../shared/keyhive-api';
+import { receiveContactCard, rendezvousReceive } from '../shared/keyhive-api';
 import { setContactName } from '../contact-names';
-import { QRCodeDisplay } from '@/components/ui/qr-code';
+import { ReciprocalShare } from './ReciprocalShare';
 import { deflate, inflate } from 'pako';
 
 interface AddFriendPageProps {
   cardData?: string;
   path?: string;
+}
+
+/** Parse the rendezvous URL form `r.<id>.<key>` (base64url parts; '.' separates). */
+function parseRendezvous(cardData: string): { rendezvousId: string; key: string } | null {
+  if (!cardData.startsWith('r.')) return null;
+  const parts = cardData.split('.');
+  if (parts.length !== 3 || !parts[1] || !parts[2]) return null;
+  return { rendezvousId: parts[1], key: parts[2] };
+}
+
+export function buildAddFriendRendezvousUrl(rendezvousId: string, key: string): string {
+  const base = window.location.origin + window.location.pathname;
+  return `${base}#/add-friend/r.${rendezvousId}.${key}`;
 }
 
 function b64urlToBytes(b64url: string): Uint8Array {
@@ -74,16 +89,6 @@ export function AddFriendPage({ cardData }: AddFriendPageProps) {
   const [name, setName] = useState('');
   const [saved, setSaved] = useState(false);
   const [processing, setProcessing] = useState(false);
-  // The current user's own friend link, shown on the success screen so the friend
-  // they just added can add them back (makes the contact relationship bidirectional).
-  const [myFriendUrl, setMyFriendUrl] = useState('');
-
-  useEffect(() => {
-    if (!saved || myFriendUrl) return;
-    getLinkPayload()
-      .then(({ card, userGroupId }) => setMyFriendUrl(buildAddFriendUrl(card, undefined, userGroupId)))
-      .catch((err: any) => setError(err?.message ?? 'Could not build your contact link'));
-  }, [saved, myFriendUrl]);
 
   const doReceive = useCallback(async () => {
     if (!cardData) {
@@ -94,22 +99,39 @@ export function AddFriendPage({ cardData }: AddFriendPageProps) {
     setError(null);
 
     try {
-      setStatus('Decoding contact card...');
-      const { cardJson, displayName, userGroupId } = decodeFriendData(cardData);
-      if (!userGroupId) {
-        throw new Error('This contact is not a group \u2014 ask them to open Settings and show a fresh friend QR/link.');
+      const rdv = parseRendezvous(cardData);
+      let cardResult: { isOwnCard: boolean; userGroupId: string | null };
+      let displayName: string | undefined;
+
+      if (rdv) {
+        // Preferred path: fetch the bundle over the encrypted relay rendezvous.
+        setStatus('Connecting to your friend\u2026 (keep this open until it completes)');
+        const result = await rendezvousReceive(rdv.rendezvousId, rdv.key);
+        cardResult = result;
+        displayName = result.displayName;
+      } else {
+        // Legacy path: the bundle is embedded in the URL.
+        setStatus('Decoding contact card...');
+        const decoded = decodeFriendData(cardData);
+        if (!decoded.userGroupId) {
+          throw new Error('This contact is not a group \u2014 ask them to open Settings and show a fresh friend QR/link.');
+        }
+        setStatus('Adding contact...');
+        const result = await receiveContactCard(decoded.cardJson, { userGroupId: decoded.userGroupId });
+        cardResult = { isOwnCard: result.isOwnCard, userGroupId: result.userGroupId ?? decoded.userGroupId };
+        displayName = decoded.displayName;
       }
 
-      setStatus('Adding contact...');
-      const result = await receiveContactCard(cardJson, { userGroupId });
-      if (result.isOwnCard) {
+      if (cardResult.isOwnCard) {
         setError("This is your own contact card. Share this link with a friend \u2014 don't open it yourself.");
         return;
       }
+      if (!cardResult.userGroupId) {
+        throw new Error('This contact is not a group \u2014 ask them to open Settings and show a fresh friend QR/link.');
+      }
       // Identify the contact by its user-group id, never the individual device id.
-      setContactGroupId(result.userGroupId ?? userGroupId);
+      setContactGroupId(cardResult.userGroupId);
       if (displayName) setName(displayName);
-
       setStatus('Contact added. Give them a name so you can recognize them later.');
     } catch (err: any) {
       setError(err.message || 'Failed to add contact');
@@ -131,10 +153,8 @@ export function AddFriendPage({ cardData }: AddFriendPageProps) {
     setSaved(true);
   };
 
-  // Auto-start on first render
-  if (!status && !error && !contactGroupId && !processing) {
-    doReceive();
-  }
+  // Auto-start once when the page mounts with card data.
+  useEffect(() => { doReceive(); }, [doReceive]);
 
   return (
     <div className="max-w-md mx-auto p-8 text-center">
@@ -164,22 +184,12 @@ export function AddFriendPage({ cardData }: AddFriendPageProps) {
           <p className="text-xs text-muted-foreground mb-4">
             You can now share documents with them from any document's sharing panel.
           </p>
-          {myFriendUrl && (
-            <div className="mb-4 border-t border-border pt-4">
-              <p className="text-xs text-muted-foreground mb-2">
-                Let them add you back — show them this QR code or link:
-              </p>
-              <div className="flex justify-center mb-2">
-                <QRCodeDisplay url={myFriendUrl} />
-              </div>
-              <input
-                className="w-full text-xs p-2 rounded border border-border font-mono bg-muted"
-                value={myFriendUrl}
-                readOnly
-                onClick={(e: any) => e.currentTarget.select()}
-              />
-            </div>
-          )}
+          <div className="mb-4 border-t border-border pt-4">
+            <p className="text-xs text-muted-foreground mb-2">
+              Let them add you back — show them this QR code or link:
+            </p>
+            <ReciprocalShare />
+          </div>
           <Button variant="outline" onClick={() => { window.location.hash = '/'; }}>
             Home
           </Button>

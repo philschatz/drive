@@ -2,6 +2,7 @@ import { WebSocket } from 'ws';
 import { Encoder, decode } from 'cbor-x';
 import { logMessage, shortId } from './relay-log';
 import { RELAY_PEER_ID } from '../shared/relay-identity';
+import { RDV_SUB, RDV_UNSUB, RDV_MSG, RDV_PEER } from '../shared/rendezvous-protocol';
 
 // Use the same encoder settings as @automerge/automerge-repo's cbor helper
 const encoder = new Encoder({ tagUint8Array: false, useRecords: false });
@@ -24,6 +25,12 @@ const encoder = new Encoder({ tagUint8Array: false, useRecords: false });
  */
 export class WebSocketRelay {
   private sockets = new Map<string, WebSocket>();
+  /**
+   * Encrypted rendezvous topics: rendezvousId → sockets currently listening.
+   * Used to hand a large encrypted payload between two peers who only share a
+   * short id+key (e.g. via a QR code). The relay never inspects `data`.
+   */
+  private rendezvous = new Map<string, Set<WebSocket>>();
 
   handleConnection(ws: WebSocket): void {
     let myPeerId: string | null = null;
@@ -91,6 +98,8 @@ export class WebSocketRelay {
           existingWs.send(encoder.encode(introToExisting));
           logMessage('→', existingId, introToExisting);
         }
+      } else if (message.type === RDV_SUB || message.type === RDV_UNSUB || message.type === RDV_MSG) {
+        this.handleRendezvous(ws, message);
       } else if (myPeerId) {
         logMessage('←', myPeerId, message);
         const targetId = message.targetId as string | undefined;
@@ -119,6 +128,10 @@ export class WebSocketRelay {
     });
 
     ws.on('close', () => {
+      // Drop this socket from any rendezvous topics it was listening on.
+      for (const [rid, set] of this.rendezvous) {
+        if (set.delete(ws) && set.size === 0) this.rendezvous.delete(rid);
+      }
       if (myPeerId) {
         this.sockets.delete(myPeerId);
         console.log(`[relay] peer left: ${shortId(myPeerId)} (${this.sockets.size} remaining)`);
@@ -138,6 +151,42 @@ export class WebSocketRelay {
     ws.on('error', (err) => {
       console.error(`[relay] WebSocket error${myPeerId ? ` (${shortId(myPeerId)})` : ''}:`, err);
     });
+  }
+
+  /**
+   * Route encrypted-rendezvous frames by `rendezvousId` (not peer id). The relay
+   * keeps a per-topic socket set so two peers who only share a short id+key can
+   * find each other and exchange one opaque encrypted blob.
+   */
+  private handleRendezvous(ws: WebSocket, message: any): void {
+    const rid = message.rendezvousId as string | undefined;
+    if (!rid) return;
+
+    if (message.type === RDV_SUB) {
+      let set = this.rendezvous.get(rid);
+      if (!set) { set = new Set(); this.rendezvous.set(rid, set); }
+      // Announce presence symmetrically: tell each existing listener a peer
+      // arrived, and tell the newcomer about each existing listener.
+      const peerMsg = encoder.encode({ type: RDV_PEER, rendezvousId: rid });
+      for (const other of set) {
+        if (other === ws || other.readyState !== WebSocket.OPEN) continue;
+        other.send(peerMsg);
+        if (ws.readyState === WebSocket.OPEN) ws.send(peerMsg);
+      }
+      set.add(ws);
+      console.log(`[relay] rendezvous ${shortId(rid)}: ${set.size} listening`);
+    } else if (message.type === RDV_UNSUB) {
+      const set = this.rendezvous.get(rid);
+      if (set && set.delete(ws) && set.size === 0) this.rendezvous.delete(rid);
+    } else if (message.type === RDV_MSG) {
+      const set = this.rendezvous.get(rid);
+      if (!set) return;
+      const fwd = encoder.encode({ type: RDV_MSG, rendezvousId: rid, data: message.data });
+      for (const other of set) {
+        if (other === ws || other.readyState !== WebSocket.OPEN) continue;
+        other.send(fwd);
+      }
+    }
   }
 }
 

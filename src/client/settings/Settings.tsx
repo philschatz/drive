@@ -16,13 +16,16 @@ import {
 import { idbGet, idbSet } from '../idb-storage';
 import { getContactName, setContactName } from '../contact-names';
 import { QRCodeDisplay } from '@/components/ui/qr-code';
+import { ReciprocalShare } from './ReciprocalShare';
 import { buildLinkDeviceUrl } from './LinkDevicePage';
-import { buildAddFriendUrl } from './AddFriendPage';
 export function Settings({ path }: { path?: string }) {
   const [identity, setIdentity] = useState<IdentityInfo | null>(null);
   const [devices, setDevices] = useState<DeviceInfo[]>([]);
   const [contactCard, setContactCard] = useState<string | null>(null);
-  const [friendQrUrl, setFriendQrUrl] = useState('');
+  // Friend share via encrypted rendezvous: capture the name at click time and
+  // bump the nonce so re-clicking regenerates a fresh rendezvous.
+  const [friendShareName, setFriendShareName] = useState<string | null>(null);
+  const [friendShareNonce, setFriendShareNonce] = useState(0);
   const [displayName, setDisplayName] = useState('');
   const [linkDeviceUrl, setLinkDeviceUrl] = useState('');
   const [inviteUrl, setInviteUrl] = useState('');
@@ -63,17 +66,13 @@ export function Settings({ path }: { path?: string }) {
     if (identity?.agentId) setContactName(identity.agentId, value).catch(err =>
       console.error('[Settings] Failed to save display name:', err)
     );
-    setFriendQrUrl('');
+    // Hide a stale share if the name changed; the user re-clicks to regenerate.
+    setFriendShareName(null);
   };
 
-  const handleShowFriendQr = async () => {
-    try {
-      const { card, userGroupId } = await getLinkPayload();
-      const trimmed = displayName.trim();
-      setFriendQrUrl(buildAddFriendUrl(card, trimmed || undefined, userGroupId));
-    } catch (err: any) {
-      setError(err.message);
-    }
+  const handleShowFriendQr = () => {
+    setFriendShareName(displayName.trim());
+    setFriendShareNonce(n => n + 1);
   };
 
   const handleRemoveDevice = async (agentId: string) => {
@@ -299,17 +298,9 @@ export function Settings({ path }: { path?: string }) {
         <Button size="sm" variant="outline" onClick={handleShowFriendQr}>
           Show QR code
         </Button>
-        {friendQrUrl && (
-          <div className="mt-2 space-y-2">
-            <div className="flex justify-center">
-              <QRCodeDisplay url={friendQrUrl} />
-            </div>
-            <input
-              className="flex-1 text-xs p-2 rounded border border-border font-mono bg-muted w-full"
-              value={friendQrUrl}
-              readOnly
-              onClick={(e: any) => e.currentTarget.select()}
-            />
+        {friendShareName !== null && (
+          <div className="mt-2">
+            <ReciprocalShare key={`${friendShareNonce}:${friendShareName}`} displayName={friendShareName} />
           </div>
         )}
       </section>

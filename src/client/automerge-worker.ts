@@ -4,7 +4,11 @@ import { validateDocument } from '../shared/schemas';
 import { RELAY_PEER_ID } from '../shared/relay-identity';
 import { KeyhiveOps, bytesToBase64, base64ToBytes, errMsg } from './keyhive-ops';
 import { LRU } from './lru-cache';
-import { decode as cborDecode } from 'cbor-x';
+import { decode as cborDecode, Encoder } from 'cbor-x';
+import {
+  RDV_SUB, RDV_UNSUB, RDV_MSG, RDV_PEER, isRendezvousType,
+} from '../shared/rendezvous-protocol';
+import { generateRendezvous, encryptString, decryptString } from './rendezvous-crypto';
 // hashStr and QueryCacheEntry are also exported from idb-storage for main-thread use.
 // Defined inline here to avoid adding a static import that may affect worker module loading.
 function hashStr(s: string): string {
@@ -53,6 +57,10 @@ export type MainToWorker =
   | { type: 'kh-link-device'; id: number; deviceAgentId: string; peerGroupId?: string | null }
   | { type: 'kh-get-link-payload'; id: number }
   | { type: 'kh-get-known-contacts'; id: number; excludeDocId?: string }
+  // Encrypted relay rendezvous (large-payload contact exchange via QR id+key)
+  | { type: 'kh-rdv-create-share'; id: number; displayName?: string }
+  | { type: 'kh-rdv-receive'; id: number; rendezvousId: string; key: string }
+  | { type: 'kh-rdv-cancel'; rendezvousId: string }
   | { type: 'kh-claim-invite'; id: number; inviteSeed: number[]; docId: string }
   | { type: 'kh-dismiss-invite'; id: number; inviteId: string; docId: string }
   | { type: 'open-doc'; id: number; docId: string }
@@ -83,6 +91,8 @@ export type WorkerToMain =
   | { type: 'contact-names-updated'; names: Record<string, string> }
   // Keyhive state changed (membership/access may have changed)
   | { type: 'kh-state-changed' }
+  // Rendezvous sharer-side progress (the receiver path uses a normal `result`)
+  | { type: 'kh-rdv-event'; rendezvousId: string; status: 'sent' | 'error'; message?: string }
   // Relay message log
   | { type: 'relay-log'; entry: { id: number; ts: number; dir: 'sent' | 'recv'; message: any } };
 
@@ -132,6 +142,69 @@ let khIntegration: InstanceType<typeof khBridge.AutomergeRepoKeyhive> | null = n
 let khOps: KeyhiveOps | null = null;
 let setNextDocId: ((bytes: Uint8Array) => void) | null = null;
 let appBaseUrl = '';
+
+// ── Encrypted relay rendezvous ───────────────────────────────────────────────
+// Hands a large encrypted payload (e.g. a 25 KB keyhive contact bundle) between
+// two peers who only share a short id+key from a QR code. See rendezvous-protocol.ts.
+const rdvEncoder = new Encoder({ tagUint8Array: false, useRecords: false });
+/** The underlying relay WebSocket (set during init). Rendezvous frames bypass the
+ *  automerge-repo adapter and ride the raw socket. */
+let rdvSocket: WebSocket | undefined;
+/** rendezvousId → plaintext we'll encrypt and send once a peer appears (sharer side). */
+const rdvPendingShares = new Map<string, { key: string; plaintext: string }>();
+/** rendezvousId → resolver waiting for the first inbound encrypted blob (receiver side). */
+const rdvWaiters = new Map<string, (framed: Uint8Array) => void>();
+const RDV_RECEIVE_TIMEOUT_MS = 120_000;
+
+function rdvSend(frame: { type: string; rendezvousId: string; data?: Uint8Array }): void {
+  if (rdvSocket && rdvSocket.readyState === WebSocket.OPEN) {
+    rdvSocket.send(rdvEncoder.encode(frame) as unknown as ArrayBuffer);
+  }
+}
+
+/** Handle an inbound rendezvous frame intercepted off the relay socket. */
+function handleRendezvousFrame(msg: any): void {
+  const rid: string | undefined = msg.rendezvousId;
+  if (!rid) return;
+  if (msg.type === RDV_PEER) {
+    // A peer joined this topic. If we have a payload staged for it, send it now.
+    const pending = rdvPendingShares.get(rid);
+    if (pending) {
+      encryptString(pending.key, pending.plaintext)
+        .then(framed => {
+          rdvSend({ type: RDV_MSG, rendezvousId: rid, data: framed });
+          (self as any).postMessage({ type: 'kh-rdv-event', rendezvousId: rid, status: 'sent' } satisfies WorkerToMain);
+        })
+        .catch(err => {
+          (self as any).postMessage({ type: 'kh-rdv-event', rendezvousId: rid, status: 'error', message: errMsg(err) } satisfies WorkerToMain);
+        });
+    }
+  } else if (msg.type === RDV_MSG) {
+    const waiter = rdvWaiters.get(rid);
+    if (waiter) {
+      const data: Uint8Array = msg.data instanceof Uint8Array ? msg.data : new Uint8Array(msg.data);
+      waiter(data);
+    }
+  }
+}
+
+// ── Known-contact registry ───────────────────────────────────────────────────
+// A received contact is "known" the moment we ingest their card — independent of
+// whether we've named them or share a doc. getKnownContacts otherwise only sees
+// contacts via docs or saved names, so a freshly added friend would be invisible.
+// We persist their user-group id here so they surface immediately (by short id
+// until renamed). Cleared when the user deletes the contact.
+async function addKnownContactGroup(groupId: string): Promise<void> {
+  const { idbGet, idbSet } = await import('./idb-storage');
+  const list = (await idbGet<string[]>('known-contact-groups')) ?? [];
+  if (!list.includes(groupId)) { list.push(groupId); await idbSet('known-contact-groups', list); }
+}
+async function removeKnownContactGroup(groupId: string): Promise<void> {
+  const { idbGet, idbSet } = await import('./idb-storage');
+  const list = (await idbGet<string[]>('known-contact-groups')) ?? [];
+  const next = list.filter(g => g !== groupId);
+  if (next.length !== list.length) await idbSet('known-contact-groups', next);
+}
 
 /** Derive the keyhive doc-ID (base64) from an automerge doc-ID.
  *  Works because the automerge binary doc-ID bytes ARE the keyhive doc_id bytes. */
@@ -634,10 +707,21 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
         (secureWs as any).receiveMessage = (bytes: Uint8Array) => {
           try {
             const decoded = cborDecode(new Uint8Array(bytes));
+            // Rendezvous frames ride the same socket but aren't automerge-repo
+            // protocol — handle them and DON'T forward to the repo adapter.
+            if (isRendezvousType(decoded?.type)) {
+              handleRendezvousFrame(decoded);
+              return;
+            }
             postRelayLog('recv', decoded);
           } catch { /* ignore decode errors for logging */ }
           return origReceive(bytes);
         };
+        // Expose the raw socket so rendezvous frames can bypass the repo adapter.
+        // The adapter recreates its socket on reconnect, so read it lazily too.
+        rdvSocket = (secureWs as any).socket;
+        const origOnOpenForRdv = secureWs.onOpen;
+        secureWs.onOpen = () => { rdvSocket = (secureWs as any).socket; origOnOpenForRdv(); };
         // --- End relay message logging ---
 
         khIntegration = await khBridge.initializeAutomergeRepoKeyhive({
@@ -1236,6 +1320,9 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
       const names = (await idbGet<Record<string, string>>('contact-names')) ?? {};
       delete names[msg.agentId];
       await idbSet('contact-names', names);
+      // "Delete contact" must also drop them from the known registry, else they'd
+      // reappear (by short id) on the next getKnownContacts.
+      await removeKnownContactGroup(msg.agentId);
       (self as any).postMessage({ type: 'contact-names-updated', names } satisfies WorkerToMain);
       (self as any).postMessage({ type: 'result', id: msg.id } satisfies WorkerToMain);
     } catch (err: any) {
@@ -1279,10 +1366,12 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
       // We identify a friend by their user-group id (their share target), never by
       // a bare individual device id. The group id is what the client persists as
       // the contact (its name), so surface it back alongside the individual.
+      const friendGroupId = msg.isDevice ? null : msg.userGroupId;
+      if (!result.isOwnCard && friendGroupId) await addKnownContactGroup(friendGroupId);
       (self as any).postMessage({
         type: 'result',
         id: msg.id,
-        result: { ...result, userGroupId: msg.isDevice ? null : msg.userGroupId },
+        result: { ...result, userGroupId: friendGroupId },
       } satisfies WorkerToMain);
     } catch (err: any) {
       (self as any).postMessage({ type: 'result', id: msg.id, error: errMsg(err) } satisfies WorkerToMain);
@@ -1318,14 +1407,81 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
       if (!khOps) throw new Error('Keyhive not available');
       const { idbGet } = await import('./idb-storage');
       const contactNames = (await idbGet<Record<string, string>>('contact-names')) ?? {};
-      // Contacts are keyed by user-group id (sharing is group-only).
-      const contactGroupIds = Object.keys(contactNames);
+      const knownGroups = (await idbGet<string[]>('known-contact-groups')) ?? [];
+      // Contacts are keyed by user-group id (sharing is group-only): union the
+      // named contacts with received-but-unnamed ones from the known registry.
+      const contactGroupIds = [...new Set([...Object.keys(contactNames), ...knownGroups])];
       const excludeKhDocId = msg.excludeDocId ? resolveKhDocId(msg.excludeDocId) : undefined;
       const result = await khOps.getKnownContacts(excludeKhDocId, contactGroupIds);
       (self as any).postMessage({ type: 'result', id: msg.id, result } satisfies WorkerToMain);
     } catch (err: any) {
       (self as any).postMessage({ type: 'result', id: msg.id, error: errMsg(err) } satisfies WorkerToMain);
     }
+  }
+
+  // Sharer: stage our (large) contact bundle for a rendezvous and return the
+  // tiny {id,key} for the QR. The bundle is encrypted + sent once a peer appears.
+  if (msg.type === 'kh-rdv-create-share') {
+    try {
+      if (!khOps) throw new Error('Keyhive not available');
+      const userGroupId = await khOps.ensureUserGroup({ create: true });
+      const card = await khOps.getContactCard();
+      const plaintext = JSON.stringify({ card, displayName: msg.displayName, userGroupId: userGroupId ?? undefined });
+      const { rendezvousId, key } = generateRendezvous();
+      rdvPendingShares.set(rendezvousId, { key, plaintext });
+      rdvSend({ type: RDV_SUB, rendezvousId });
+      (self as any).postMessage({ type: 'result', id: msg.id, result: { rendezvousId, key } } satisfies WorkerToMain);
+    } catch (err: any) {
+      (self as any).postMessage({ type: 'result', id: msg.id, error: errMsg(err) } satisfies WorkerToMain);
+    }
+  }
+
+  // Receiver: subscribe to the rendezvous, wait for the encrypted bundle, decrypt
+  // it, and ingest the contact card. Resolves like kh-receive-contact-card.
+  if (msg.type === 'kh-rdv-receive') {
+    const { rendezvousId, key } = msg;
+    try {
+      if (!khOps) throw new Error('Keyhive not available');
+      const framed = await new Promise<Uint8Array>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          rdvWaiters.delete(rendezvousId);
+          reject(new Error('Timed out waiting for your friend. Make sure they have the QR/link open, then try again.'));
+        }, RDV_RECEIVE_TIMEOUT_MS);
+        rdvWaiters.set(rendezvousId, (data) => { clearTimeout(timer); rdvWaiters.delete(rendezvousId); resolve(data); });
+        rdvSend({ type: RDV_SUB, rendezvousId });
+      });
+
+      const plaintext = await decryptString(key, framed);
+      let cardJson = plaintext;
+      let displayName: string | undefined;
+      let userGroupId: string | undefined;
+      try {
+        const parsed = JSON.parse(plaintext);
+        if (parsed && typeof parsed === 'object' && typeof parsed.card === 'string') {
+          cardJson = parsed.card; displayName = parsed.displayName; userGroupId = parsed.userGroupId;
+        }
+      } catch { /* raw card string */ }
+
+      const result = await khOps.receiveContactCard(cardJson);
+      rdvSend({ type: RDV_UNSUB, rendezvousId });
+      const resolvedGroupId = userGroupId ?? result.groupId ?? null;
+      if (!result.isOwnCard && resolvedGroupId) await addKnownContactGroup(resolvedGroupId);
+      (self as any).postMessage({
+        type: 'result', id: msg.id,
+        result: { ...result, userGroupId: resolvedGroupId, displayName },
+      } satisfies WorkerToMain);
+    } catch (err: any) {
+      rdvWaiters.delete(rendezvousId);
+      rdvSend({ type: RDV_UNSUB, rendezvousId });
+      (self as any).postMessage({ type: 'result', id: msg.id, error: errMsg(err) } satisfies WorkerToMain);
+    }
+  }
+
+  // Either side abandons a rendezvous (e.g. the sharer navigates away).
+  if (msg.type === 'kh-rdv-cancel') {
+    rdvPendingShares.delete(msg.rendezvousId);
+    rdvWaiters.delete(msg.rendezvousId);
+    rdvSend({ type: RDV_UNSUB, rendezvousId: msg.rendezvousId });
   }
 
   if (msg.type === 'kh-list-devices') {

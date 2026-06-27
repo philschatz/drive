@@ -160,6 +160,18 @@ export function onKeyhiveStateChanged(fn: () => void): () => void {
   return () => { stateChangeListeners.delete(fn); };
 }
 
+// ── Rendezvous sharer-side events ───────────────────────────────────────────
+
+export interface RendezvousEvent { rendezvousId: string; status: 'sent' | 'error'; message?: string }
+type RendezvousEventListener = (e: RendezvousEvent) => void;
+const rdvEventListeners = new Set<RendezvousEventListener>();
+
+/** Subscribe to rendezvous sharer-side progress (payload sent to the peer / error). */
+export function onRendezvousEvent(fn: RendezvousEventListener): () => void {
+  rdvEventListeners.add(fn);
+  return () => { rdvEventListeners.delete(fn); };
+}
+
 // ── Worker message router ───────────────────────────────────────────────────
 
 worker.onmessage = (e: MessageEvent<WorkerToMain>) => {
@@ -213,6 +225,9 @@ worker.onmessage = (e: MessageEvent<WorkerToMain>) => {
     // --- Keyhive notifications ---
     case 'kh-state-changed':
       for (const fn of stateChangeListeners) fn();
+      break;
+    case 'kh-rdv-event':
+      for (const fn of rdvEventListeners) fn(msg);
       break;
 
     // --- Request/response results (doc + keyhive share the same pending map) ---
@@ -593,6 +608,29 @@ export function linkDevice(deviceAgentId: string, peerGroupId?: string | null): 
 /** Get this device's contact card plus user-group id, for building a link/share QR. */
 export function getLinkPayload(): Promise<LinkPayload> {
   return khRequest('kh-get-link-payload');
+}
+
+/**
+ * Stage our contact bundle for an encrypted relay rendezvous and get back the
+ * tiny {rendezvousId, key} to put in a QR/link. The (large) bundle is sent —
+ * encrypted under `key` — automatically once the receiver opens the link; listen
+ * via onRendezvousEvent for the 'sent' confirmation.
+ */
+export function rendezvousCreateShare(displayName?: string): Promise<{ rendezvousId: string; key: string }> {
+  return khRequest('kh-rdv-create-share', { displayName });
+}
+
+/** Receive a contact via rendezvous: subscribe, await the encrypted bundle, ingest it. */
+export function rendezvousReceive(
+  rendezvousId: string,
+  key: string,
+): Promise<{ agentId: string; isOwnCard: boolean; userGroupId: string | null; displayName?: string }> {
+  return khRequest('kh-rdv-receive', { rendezvousId, key });
+}
+
+/** Abandon a rendezvous (e.g. the sharer navigates away). Fire-and-forget. */
+export function rendezvousCancel(rendezvousId: string): void {
+  fire('kh-rdv-cancel', { rendezvousId });
 }
 
 /** Get all members, roles, and invite records for a document. */
