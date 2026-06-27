@@ -272,7 +272,6 @@ export function Tasks({ docId, rest, readOnly }: { docId?: string; rest?: string
         onToggleValidation={() => setShowValidation(v => !v)}
         validationActive={showValidation}
         validationCount={validationErrors.length}
-        docType="TaskList"
         sourcePath={focusPath}
       />
       <HistorySlider history={history} />

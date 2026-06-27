@@ -67,7 +67,7 @@ describe('addDocId', () => {
     expect(getDocList()).toEqual([{ id: 'doc-1', type: 'Calendar', name: 'Work' }]);
   });
 
-  it('stores type from invite claim', () => {
+  it('stores type when adding with metadata', () => {
     addDocId('inv-1', { type: 'Calendar' as any });
     const entry = getDocList().find(e => e.id === 'inv-1');
     expect(entry?.type).toBe('Calendar');

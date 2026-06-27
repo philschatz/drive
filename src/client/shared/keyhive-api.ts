@@ -21,8 +21,5 @@ export {
   addMember,
   revokeMember,
   changeRole,
-  generateInvite,
-  dismissInvite,
-  claimInvite,
 } from '../worker-api';
 export type { DeviceInfo, IdentityInfo, MemberInfo, LinkPayload } from '../worker-api';

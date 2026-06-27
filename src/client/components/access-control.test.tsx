@@ -13,9 +13,7 @@ jest.mock('../shared/keyhive-api', () => ({
   onKeyhiveStateChanged: jest.fn(() => jest.fn()),
   changeRole: jest.fn(),
   revokeMember: jest.fn(),
-  generateInvite: jest.fn(),
   addMember: jest.fn(),
-  dismissInvite: jest.fn(),
 }));
 
 jest.mock('../contact-names', () => ({
@@ -23,8 +21,6 @@ jest.mock('../contact-names', () => ({
   // Pass-through: these tests don't exercise the cache merge.
   mergeCachedContacts: (fromKeyhive: any[]) => fromKeyhive,
 }));
-
-jest.mock('../invite-storage', () => ({}));
 
 jest.mock('@/components/ui/sheet', () => ({
   Sheet: ({ children, open }: any) => open ? <div data-testid="sheet">{children}</div> : null,
@@ -46,17 +42,6 @@ jest.mock('@/components/ui/select', () => ({
   SelectValue: () => null,
 }));
 
-jest.mock('@/components/ui/tooltip', () => ({
-  Tooltip: ({ children }: any) => <div>{children}</div>,
-  TooltipTrigger: ({ children }: any) => <div>{children}</div>,
-  TooltipContent: ({ children }: any) => <div>{children}</div>,
-  TooltipProvider: ({ children }: any) => <div>{children}</div>,
-}));
-
-jest.mock('@/components/ui/qr-code', () => ({
-  QRCodeDisplay: () => null,
-}));
-
 jest.mock('./EditableName', () => ({
   EditableName: ({ value }: any) => <span>{value}</span>,
 }));
@@ -64,7 +49,7 @@ jest.mock('./EditableName', () => ({
 import { AccessControl } from './AccessControl';
 
 beforeEach(() => {
-  mockGetDocMembers = jest.fn(() => Promise.resolve({ members: [], invites: [] }));
+  mockGetDocMembers = jest.fn(() => Promise.resolve({ members: [] }));
   mockGetMyAccess = jest.fn(() => Promise.resolve(null));
   mockGetKnownContacts = jest.fn(() => Promise.resolve([]));
   mockGetIdentity = jest.fn(() => Promise.resolve({ deviceId: 'dev-1', agentId: 'me', userGroupId: 'my-group' }));
@@ -77,7 +62,7 @@ describe('AccessControl', () => {
     mockGetMyAccess.mockReturnValue(new Promise(() => {}));
     mockGetKnownContacts.mockReturnValue(new Promise(() => {}));
 
-    render(<AccessControl docId="doc-1" docType="Calendar" access="admin" />);
+    render(<AccessControl docId="doc-1" access="admin" />);
     // Open the sheet
     screen.getByTitle('admin · Share & permissions').click();
 
@@ -87,10 +72,10 @@ describe('AccessControl', () => {
 
   it('shows "no access" message after refresh returns null access and empty members', async () => {
     mockGetMyAccess.mockResolvedValue(null);
-    mockGetDocMembers.mockResolvedValue({ members: [], invites: [] });
+    mockGetDocMembers.mockResolvedValue({ members: [] });
     mockGetKnownContacts.mockResolvedValue([]);
 
-    render(<AccessControl docId="doc-1" docType="Calendar" access={null} />);
+    render(<AccessControl docId="doc-1" access={null} />);
     screen.getByTitle('Share & permissions').click();
 
     await waitFor(() => {
@@ -103,7 +88,7 @@ describe('AccessControl', () => {
     mockGetMyAccess.mockReturnValue(new Promise(() => {}));
     mockGetKnownContacts.mockReturnValue(new Promise(() => {}));
 
-    render(<AccessControl docId="doc-1" docType="Calendar" access={null} />);
+    render(<AccessControl docId="doc-1" access={null} />);
     screen.getByTitle('Share & permissions').click();
 
     // Wait a tick — message should still not appear
@@ -117,11 +102,10 @@ describe('AccessControl', () => {
     mockGetMyAccess.mockResolvedValue('Admin');
     mockGetDocMembers.mockResolvedValue({
       members: [{ agentId: 'a1', displayId: 'a1', role: 'admin', type: 'individual', isMe: true }],
-      invites: [],
     });
     mockGetKnownContacts.mockResolvedValue([]);
 
-    render(<AccessControl docId="doc-1" docType="Calendar" access="admin" />);
+    render(<AccessControl docId="doc-1" access="admin" />);
     screen.getByTitle('admin · Share & permissions').click();
 
     await waitFor(() => {

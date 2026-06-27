@@ -84,16 +84,30 @@ describe('keyhive refresh crash (Bob refresh → Alice encrypts → WASM panic)'
     const { ops: opsB, kh: khB, signer: signerB } = await createOps();
 
     const { khDocId: amDocId } = await opsA.enableSharing('doc-1');
-    const invite = await opsA.generateInvite(amDocId, 'edit');
 
-    // Bob claims via archive
-    const seed = new Uint8Array(invite.inviteKeyBytes);
-    const inviteSigner = Signer.memorySignerFromBytes(seed);
+    // Alice grants a temporary signer individual access, then Bob claims by
+    // reconstructing that signer's keyhive from Alice's archive — raw keyhive
+    // primitives standing in for a cross-peer access grant.
+    const docA = opsA.khDocuments.get(amDocId)!;
+    const seed = crypto.getRandomValues(new Uint8Array(32));
+    const tempSigner = Signer.memorySignerFromBytes(seed);
+    const tempKhInit = await Keyhive.init(tempSigner, CiphertextStore.newInMemory(), () => {});
+    const tempIndividual = await opsA.kh.receiveContactCard(await tempKhInit.contactCard());
+    await opsA.kh.ingestArchive(await tempKhInit.toArchive());
+    await opsA.kh.addMember(tempIndividual.toAgent(), docA.toMembered(), Access.tryFromString('edit')!, []);
+
     const archive1 = await opsA.kh.toArchive();
     const inviteKh = await archive1.tryToKeyhive(
-      CiphertextStore.newInMemory(), inviteSigner, () => {},
+      CiphertextStore.newInMemory(), tempSigner, () => {},
     );
-    await opsB.claimInviteWithKeyhive(inviteKh, 'doc-1');
+    const bobIndividual = await inviteKh.receiveContactCard(await opsB.kh.contactCard());
+    const bobAgent = bobIndividual.toAgent();
+    const bobReachable = await inviteKh.reachableDocs();
+    await inviteKh.addMember(bobAgent, bobReachable[0].doc.toMembered(), bobReachable[0].access, []);
+    const bobEvents: Map<Uint8Array, Uint8Array> = await inviteKh.eventsForAgent(bobAgent);
+    const bobArr: Uint8Array[] = []; bobEvents.forEach((v) => bobArr.push(v));
+    await opsB.kh.ingestArchive(await inviteKh.toArchive());
+    await opsB.kh.ingestEventsBytes(bobArr);
 
     // Exchange events so Alice knows about Bob and vice versa
     await syncAB(khA, khB);

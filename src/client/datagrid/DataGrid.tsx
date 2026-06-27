@@ -1355,7 +1355,6 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
         onToggleValidation={() => setShowValidation(v => !v)}
         validationActive={showValidation}
         validationCount={validationErrors.length}
-        docType="DataGrid"
         sourcePath={focusPath}
       />
       <HistorySlider history={history} />

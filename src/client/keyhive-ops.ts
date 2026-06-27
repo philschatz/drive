@@ -92,7 +92,6 @@ export class KeyhiveOps {
   kh: Keyhive; // Keyhive instance
   bridge: KeyhiveBridge;
   khDocuments = new Map<string, any>();
-  inviteAccessOverrides = new Map<string, string>();
   /** Cached personal user-group handle, keyed by its base64 id. */
   private userGroup: any = null;
   private userGroupIdCache: string | null = null;
@@ -460,8 +459,6 @@ export class KeyhiveOps {
   }
 
   async getMyAccess(khDocId: string): Promise<string | null> {
-    const override = this.inviteAccessOverrides.get(khDocId);
-    if (override) return override;
     const docId = new this.bridge.DocumentId(base64ToBytes(khDocId));
     const id = new this.bridge.Identifier(this.kh.id.bytes);
     const access = await this.kh.accessForDoc(id, docId);
@@ -595,110 +592,6 @@ export class KeyhiveOps {
     return { khDocId, groupId: '' };
   }
 
-  // WARNING — invite links may be broken: the claimant is added as an individual
-  // device (see {@link claimInviteWithKeyhive}), so a link-claimed doc won't show on
-  // the home page, which now lists by user-group access. To be refactored.
-  async generateInvite(
-    docId: string,
-    role: string,
-  ): Promise<{ inviteKeyBytes: number[]; groupId: string; inviteSignerAgentId: string; inviterAgentIdBytes: number[] }> {
-    const doc = this.khDocuments.get(docId);
-    if (!doc) throw new Error('Document not found. Re-enable sharing.');
-    // Sharing a document ensures the user-group exists and administers the doc.
-    await this.assignGroupAsAdmin(doc);
-    const seed = crypto.getRandomValues(new Uint8Array(32));
-    const inviteSigner = this.bridge.Signer.memorySignerFromBytes(seed);
-    const store = this.bridge.CiphertextStore.newInMemory();
-    const tempKh = await this.bridge.Keyhive.init(inviteSigner, store, () => {});
-    const inviteCard = await tempKh.contactCard();
-    const inviteIndividual = await this.kh.receiveContactCard(inviteCard);
-    // Ingest the temp keyhive's archive so its events (prekeys, identity ops)
-    // are part of our keyhive and get synced to other peers.
-    const tempArchive = await tempKh.toArchive();
-    await this.kh.ingestArchive(tempArchive);
-    const inviteSignerAgentId = bytesToBase64(inviteIndividual.id.toBytes());
-    const inviteAgent = inviteIndividual.toAgent();
-    const access = this.bridge.Access.tryFromString(role);
-    if (!access) throw new Error(`Invalid role: ${role}`);
-    await this.kh.addMember(inviteAgent, doc.toMembered(), access, []);
-    await this.fx.persist();
-    this.fx.syncKeyhive();
-    const me = await this.kh.individual;
-    const inviterAgentIdBytes = Array.from(me.id.toBytes()) as number[];
-    return { inviteKeyBytes: Array.from(seed) as number[], groupId: '', inviteSignerAgentId, inviterAgentIdBytes };
-  }
-
-  /**
-   * Claim an invite using an already-initialized invite keyhive (from relay sync).
-   *
-   * WARNING — invite links may be broken: this adds the claimant's *individual
-   * device* (`ourAgentInInviteKh`), not their user-group. The home page now lists
-   * docs by *user-group* access (see {@link getUserGroupAccess} /
-   * {@link enumerateUserDocs}), so a link-claimed doc won't appear on the home page
-   * and won't be group-deletable. Fix when the invite flow is refactored to grant
-   * the claimant's user-group (as direct-contact sharing already does via
-   * {@link resolveShareAgent}).
-   */
-  async claimInviteWithKeyhive(
-    inviteKh: any,
-    automergeDocId?: string,
-  ): Promise<{ khDocId: string }> {
-    const ourCard = await this.kh.contactCard();
-    const ourIndividualInInviteKh = await inviteKh.receiveContactCard(ourCard);
-    const ourAgentInInviteKh = ourIndividualInInviteKh.toAgent();
-    const reachable = await inviteKh.reachableDocs();
-    if (reachable.length === 0) throw new Error('Invite has no document access');
-    const docSummaryItem = reachable[0];
-    const inviteDoc = docSummaryItem.doc;
-    const inviteAccess = docSummaryItem.access;
-    const inviteAccessStr = inviteAccess.toString();
-    await inviteKh.addMember(ourAgentInInviteKh, inviteDoc.toMembered(), inviteAccess, []);
-
-    // Ingest CGKA events from inviteKh. When our keyhive processes the
-    // CGKA Add op for us, receive_cgka_op detects active_id == added_id and
-    // calls merge_cgka_invite_op, which properly sets CGKA owner_id and
-    // includes our secret prekey in owner_sks.
-    const eventsForUs: Map<Uint8Array, Uint8Array> = await inviteKh.eventsForAgent(ourAgentInInviteKh);
-    const eventsArr: Uint8Array[] = [];
-    eventsForUs.forEach((v: Uint8Array) => eventsArr.push(v));
-
-    // Ingest the invite archive into our existing keyhive.
-    const inviteArchiveOut = await inviteKh.toArchive();
-    await this.kh.ingestArchive(inviteArchiveOut);
-    await this.kh.ingestEventsBytes(eventsArr);
-
-    // Persist claim events individually so ingestKeyhiveFromStorage can
-    // re-process them later once predecessors arrive from peer sync.
-    // Without this, CGKA membership ops that go to "pending" (missing
-    // predecessors) are lost — they only exist in WASM memory, never reach
-    // the events store, and can never be served to the inviter.
-    for (const eventBytes of eventsArr) {
-      await this.fx.saveEventBytes(eventBytes);
-    }
-
-    const khDocId = bytesToBase64(inviteDoc.id.toBytes());
-    this.inviteAccessOverrides.set(khDocId, inviteAccessStr);
-    const docFromOurKh = await this.kh.getDocument(inviteDoc.doc_id);
-    if (docFromOurKh) {
-      this.khDocuments.set(khDocId, docFromOurKh);
-    }
-
-    // Revoke the temporary invite identity now that we have the full
-    // delegation chain in our main keyhive. This rotates the key.
-    // Note: the claimer can't revoke the temp invite member (insufficient authority).
-    // The inviter auto-revokes it when detecting the claim via revokeClaimedInviteMembers().
-    if (automergeDocId) {
-      this.fx.registerDoc(automergeDocId, inviteDoc.doc_id);
-    }
-    await this.fx.persist();
-    this.fx.syncKeyhive();
-    this.fx.forceResyncAllPeers();
-    if (automergeDocId) {
-      this.fx.findDoc(automergeDocId);
-    }
-    return { khDocId };
-  }
-
   registerDocMapping(automergeDocId: string, khDocId: string): void {
     const docId = new this.bridge.DocumentId(base64ToBytes(khDocId));
     this.fx.registerDoc(automergeDocId, docId);
@@ -731,8 +624,7 @@ export class KeyhiveOps {
     }
 
     // Group members already sharing a document. Sharing is group-only, so only
-    // group members are surfaced as contacts; individuals (e.g. unrevoked invite
-    // temp identities) are skipped.
+    // group members are surfaced as contacts; bare individuals are skipped.
     const reachable = await this.kh.reachableDocs();
     for (const summary of reachable) {
       let members: any[];

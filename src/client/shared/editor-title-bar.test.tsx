@@ -15,11 +15,10 @@ jest.mock('./presence', () => ({
 jest.mock('./keyhive-api', () => ({
   initKeyhiveApi: jest.fn(),
   handleKeyhiveResponse: jest.fn(),
-  getDocMembers: jest.fn(() => Promise.resolve({ members: [], invites: [] })),
+  getDocMembers: jest.fn(() => Promise.resolve({ members: [] })),
   getMyAccess: jest.fn(() => Promise.resolve(null)),
   changeRole: jest.fn(),
   revokeMember: jest.fn(),
-  generateInvite: jest.fn(),
 }));
 
 jest.mock('../components/AccessControl', () => ({

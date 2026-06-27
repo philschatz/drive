@@ -9,7 +9,6 @@ import { Settings } from './settings/Settings';
 import { Contacts } from './contacts/Contacts';
 import { LinkDevicePage } from './settings/LinkDevicePage';
 import { AddFriendPage } from './settings/AddFriendPage';
-import { InvitePage } from './invite/InvitePage';
 import { hashHistory } from './hash-history';
 import { UpdateBanner } from './components/UpdateBanner';
 import { Toaster } from './components/ui/toast';
@@ -24,8 +23,6 @@ export function App() {
       <Contacts path="/contacts" />
       <LinkDevicePage path="/link-device/:cardData" />
       <AddFriendPage path="/add-friend/:cardData" />
-      <InvitePage path="/invite/:docId/:docType/:inviteKey" />
-      <InvitePage path="/invite/:docId/:inviteKey" />
       <AllCalendars path="/calendars/" />
       <Calendar path="/calendars/:docId/:rest*" />
       <Calendar path="/calendars/:docId" />

@@ -25,7 +25,6 @@ export function EditorTitleBar<P extends PeerLike>({
   onToggleValidation,
   validationActive = false,
   validationCount = 0,
-  docType,
   children,
 }: {
   icon: string;
@@ -45,8 +44,6 @@ export function EditorTitleBar<P extends PeerLike>({
   onToggleValidation?: () => void;
   validationActive?: boolean;
   validationCount?: number;
-  /** Document type (Calendar/TaskList/DataGrid) — embedded in invite URL for correct redirect. */
-  docType?: string;
   children?: ComponentChildren;
 }) {
   const connected = useWsStatus(docId!);
@@ -109,7 +106,6 @@ export function EditorTitleBar<P extends PeerLike>({
         {docId && (
           <AccessControl
             docId={docId}
-            docType={docType}
             access={access}
           />
         )}

@@ -8,7 +8,6 @@ import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import type { WorkerToMain } from './automerge-worker';
 import type { ValidationError } from './automerge-worker';
 import type { PresenceState, PeerState } from '@automerge/automerge-repo';
-import type { InviteRecord } from './invite-storage';
 import { deepAssign } from '../shared/deep-assign';
 import type { RendezvousStatus } from '../shared/rendezvous-protocol';
 export type { RendezvousStatus } from '../shared/rendezvous-protocol';
@@ -67,7 +66,6 @@ localStorage.removeItem('showUnencrypted');
 
 const initMsg = {
   type: 'init' as const,
-  appBaseUrl: window.location.origin + window.location.pathname,
 };
 console.log('[main] → send', initMsg.type, initMsg);
 worker.postMessage(initMsg);
@@ -650,8 +648,8 @@ export function rendezvousCancel(rendezvousId: string): void {
   fire('kh-rdv-cancel', { rendezvousId });
 }
 
-/** Get all members, roles, and invite records for a document. */
-export function getDocMembers(docId: string): Promise<{ members: MemberInfo[]; invites: InviteRecord[] }> {
+/** Get all members and roles for a document. */
+export function getDocMembers(docId: string): Promise<{ members: MemberInfo[] }> {
   return khRequest('kh-get-doc-members', { docId });
 }
 
@@ -683,21 +681,6 @@ export function revokeMember(agentId: string, docId: string): Promise<void> {
 /** Change a member's role (revoke + re-add, triggers key rotation). */
 export function changeRole(agentId: string, docId: string, newRole: string): Promise<void> {
   return khRequest('kh-change-role', { agentId, docId, newRole });
-}
-
-/** Generate an invite link for a document. The worker builds the URL and stores the invite record. */
-export function generateInvite(docId: string, role: string, docType: string): Promise<{ inviteKeyBytes: number[]; groupId: string; inviteSignerAgentId: string; inviteUrl: string }> {
-  return khRequest('kh-generate-invite', { docId, role, docType });
-}
-
-/** Dismiss (delete) an invite record by ID. Returns the remaining invites for the doc. */
-export function dismissInvite(inviteId: string, docId: string): Promise<{ invites: InviteRecord[] }> {
-  return khRequest('kh-dismiss-invite', { inviteId, docId });
-}
-
-/** Claim an invite by syncing keys from the relay using the invite seed. */
-export function claimInvite(inviteSeed: number[], docId: string): Promise<void> {
-  return khRequest('kh-claim-invite', { inviteSeed, docId });
 }
 
 // ── HyperFormula worker port ─────────────────────────────────────────────────

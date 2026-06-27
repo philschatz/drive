@@ -20,7 +20,7 @@ function hashStr(s: string): string {
 interface QueryCacheEntry { result: any; json: string; lastModified?: number; heads: string[] }
 
 export type MainToWorker =
-  | { type: 'init'; appBaseUrl: string }
+  | { type: 'init' }
   | { type: 'query'; id: number; docId: string; filter: string }
   // New worker-owned doc API
   | { type: 'create-doc'; id: number; initialJson: any }
@@ -51,7 +51,6 @@ export type MainToWorker =
   | { type: 'kh-add-member'; id: number; agentId: string; docId: string; role: string }
   | { type: 'kh-revoke-member'; id: number; agentId: string; docId: string }
   | { type: 'kh-change-role'; id: number; agentId: string; docId: string; newRole: string }
-  | { type: 'kh-generate-invite'; id: number; docId: string; role: string; docType: string }
   | { type: 'kh-list-devices'; id: number }
   | { type: 'kh-remove-device'; id: number; agentId: string }
   | { type: 'kh-ensure-user-group'; id: number; create?: boolean; adoptGroupId?: string; waitForSync?: boolean }
@@ -64,8 +63,6 @@ export type MainToWorker =
   | { type: 'kh-rdv-link-create'; id: number }
   | { type: 'kh-rdv-link-join'; id: number; rendezvousId: string; key: string }
   | { type: 'kh-rdv-cancel'; rendezvousId: string }
-  | { type: 'kh-claim-invite'; id: number; inviteSeed: number[]; docId: string }
-  | { type: 'kh-dismiss-invite'; id: number; inviteId: string; docId: string }
   | { type: 'open-doc'; id: number; docId: string }
   | { type: 'subscribe-validation'; docId: string }
   | { type: 'unsubscribe-validation'; docId: string }
@@ -145,7 +142,6 @@ let secureRepo: InstanceType<typeof Repo> | null = null;
 let khIntegration: InstanceType<typeof khBridge.AutomergeRepoKeyhive> | null = null;
 let khOps: KeyhiveOps | null = null;
 let setNextDocId: ((bytes: Uint8Array) => void) | null = null;
-let appBaseUrl = '';
 
 // ── Encrypted relay rendezvous ───────────────────────────────────────────────
 // Hands a large encrypted payload (e.g. a 25 KB keyhive contact bundle) between
@@ -1022,20 +1018,6 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
         (self as any).postMessage({ type: 'kh-error', message: errMsg(khErr) } satisfies WorkerToMain);
       }
 
-      // --- Store appBaseUrl ---
-      appBaseUrl = msg.appBaseUrl;
-
-      // Doc list and contact names already pushed before kh-ready above.
-      // Re-read for invite pruning.
-      const { idbGet } = await import('./idb-storage');
-      type StoredDocEntry = { id: string; type?: string; name?: string; sharingGroupId?: string };
-      const docList = (await idbGet<StoredDocEntry[]>('automerge-doc-ids')) ?? [];
-
-      // Prune invite records for docs no longer in the list
-      const { pruneInvitesNotIn } = await import('./invite-storage');
-      const knownDocIds = new Set(docList.map(d => d.id));
-      await pruneInvitesNotIn(knownDocIds);
-
       // Reconcile the home list to the docs the user-group can access. (Replaces the
       // old GC that self-revoked from reachable docs missing from the local list — the
       // opposite of this model. Deletion now removes access explicitly via removeMyAccess,
@@ -1325,11 +1307,6 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
       queryResultCache.deletePrefix(`qc:${msg.docId}:`);
       const { idbDelPrefix } = await import('./idb-storage');
       await idbDelPrefix(`qc:${msg.docId}:`);
-      // Remove invite records for the deleted doc
-      {
-        const { removeInviteRecordsForDoc } = await import('./invite-storage');
-        await removeInviteRecordsForDoc(msg.docId);
-      }
       // Remove the current user (their user-group) from the doc's keyhive ACL.
       // No dismissed-list bookkeeping: losing group access is what makes the doc
       // drop off the home list (here and on the user's other devices) at the next
@@ -1427,9 +1404,7 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
       if (!khOps) throw new Error('Keyhive not available');
       const khDocId = resolveKhDocId(msg.docId);
       const members = await khOps.getDocMembers(khDocId);
-      const { getInviteRecords } = await import('./invite-storage');
-      const invites = await getInviteRecords(msg.docId);
-      (self as any).postMessage({ type: 'result', id: msg.id, result: { members, invites } } satisfies WorkerToMain);
+      (self as any).postMessage({ type: 'result', id: msg.id, result: { members } } satisfies WorkerToMain);
     } catch (err: any) {
       (self as any).postMessage({ type: 'result', id: msg.id, error: errMsg(err) } satisfies WorkerToMain);
     }
@@ -1738,35 +1713,6 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
     }
   }
 
-  if (msg.type === 'kh-generate-invite') {
-    try {
-      if (!khOps) throw new Error('Keyhive not available');
-      const khDocId = resolveKhDocId(msg.docId);
-      const result = await khOps.generateInvite(khDocId, msg.role);
-
-      // Build invite URL and store record in IDB
-      const members = await khOps.getDocMembers(khDocId);
-      const { encodeInvitePayload } = await import('./invite/invite-codec');
-      const seed = new Uint8Array(result.inviteKeyBytes);
-      const inviterAgentId = new Uint8Array(result.inviterAgentIdBytes);
-      const inviteUrl = `${appBaseUrl}#/invite/${msg.docId}/${msg.docType}/${encodeInvitePayload(seed, inviterAgentId)}`;
-      const { addInviteRecord } = await import('./invite-storage');
-      await addInviteRecord({
-        id: Date.now().toString(),
-        docId: msg.docId,
-        inviteUrl,
-        role: msg.role,
-        createdAt: Date.now(),
-        inviteSignerAgentId: result.inviteSignerAgentId,
-        baselineAgentIds: members.map((m: any) => m.agentId),
-      });
-
-      (self as any).postMessage({ type: 'result', id: msg.id, result: { ...result, inviteUrl } } satisfies WorkerToMain);
-    } catch (err: any) {
-      (self as any).postMessage({ type: 'result', id: msg.id, error: errMsg(err) } satisfies WorkerToMain);
-    }
-  }
-
   if (msg.type === 'kh-add-member') {
     try {
       if (!khOps) throw new Error('Keyhive not available');
@@ -1795,67 +1741,6 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
       const khDocId = resolveKhDocId(msg.docId);
       const result = await khOps.changeRole(msg.agentId, khDocId, msg.newRole);
       (self as any).postMessage({ type: 'result', id: msg.id, result } satisfies WorkerToMain);
-    } catch (err: any) {
-      (self as any).postMessage({ type: 'result', id: msg.id, error: errMsg(err) } satisfies WorkerToMain);
-    }
-  }
-
-  if (msg.type === 'kh-claim-invite') {
-    try {
-      if (!khOps || !khBridge || !khIntegration) throw new Error('Keyhive not available');
-
-      // Seed-only invite: reconstruct invite keyhive using the main keyhive's
-      // archive (which has Alice's events from relay sync) and the invite seed.
-      const seed = new Uint8Array(msg.inviteSeed);
-      const inviteSigner = khBridge.Signer.memorySignerFromBytes(seed);
-
-      // Force an immediate keyhive sync to get latest events from peers
-      khIntegration.networkAdapter.syncKeyhive(undefined, true);
-
-      const MAX_WAIT_MS = 60000;
-      const POLL_INTERVAL_MS = 3000;
-      const start = Date.now();
-      let inviteKh: any = null;
-      let reachable: any[] = [];
-
-      while (Date.now() - start < MAX_WAIT_MS) {
-        const stats = await khIntegration.keyhive.stats();
-        const peerCount = (khIntegration.networkAdapter as any).peers?.size ?? '?';
-        const mainArchive = await khIntegration.keyhive.toArchive();
-        const tempStore = khBridge.CiphertextStore.newInMemory();
-        try {
-          inviteKh = await mainArchive.tryToKeyhive(tempStore, inviteSigner, () => { });
-          reachable = await inviteKh.reachableDocs();
-          console.log(`[kh-claim-invite] poll: totalOps=${stats.totalOps} peers=${peerCount} reachable=${reachable.length} elapsed=${Date.now() - start}ms`);
-          if (reachable.length > 0) break;
-        } catch (e) {
-          console.log(`[kh-claim-invite] poll: totalOps=${stats.totalOps} peers=${peerCount} tryToKeyhive error elapsed=${Date.now() - start}ms`);
-        }
-        // Force sync with contact card to ensure peer discovery
-        khIntegration.networkAdapter.syncKeyhive(undefined, true);
-        await new Promise(r => setTimeout(r, POLL_INTERVAL_MS));
-      }
-
-      if (!inviteKh || reachable.length === 0) {
-        const stats = await khIntegration.keyhive.stats();
-        throw new Error(`Invite signer membership not found after ${Math.round((Date.now() - start) / 1000)}s (totalOps=${stats.totalOps}). The invite may not have synced yet — try again.`);
-      }
-
-      const result = await khOps.claimInviteWithKeyhive(inviteKh, msg.docId);
-      // khDocId is derived on-demand via resolveKhDocId.
-      (self as any).postMessage({ type: 'result', id: msg.id, result } satisfies WorkerToMain);
-    } catch (err: any) {
-      console.error('[kh-claim-invite] failed:', err);
-      (self as any).postMessage({ type: 'result', id: msg.id, error: errMsg(err) } satisfies WorkerToMain);
-    }
-  }
-
-  if (msg.type === 'kh-dismiss-invite') {
-    try {
-      const { removeInviteRecord, getInviteRecords } = await import('./invite-storage');
-      await removeInviteRecord(msg.inviteId);
-      const invites = await getInviteRecords(msg.docId);
-      (self as any).postMessage({ type: 'result', id: msg.id, result: { invites } } satisfies WorkerToMain);
     } catch (err: any) {
       (self as any).postMessage({ type: 'result', id: msg.id, error: errMsg(err) } satisfies WorkerToMain);
     }

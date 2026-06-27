@@ -1,9 +1,8 @@
 import { Router, Request, Response } from 'express';
-import { decodeInvitePayload, parseInviteUrl } from '../invite-codec';
 import type { CaldavKeyhive } from '../caldav-keyhive';
 
 /**
- * Admin routes for managing the CalDAV server's keyhive identity and invites.
+ * Admin routes for inspecting the CalDAV server's keyhive identity and documents.
  *
  * @param getCaldavKeyhive - getter that returns the CaldavKeyhive instance (null if not yet initialized)
  */
@@ -29,44 +28,6 @@ export function createAdminRoutes(getCaldavKeyhive: () => CaldavKeyhive | null):
       return;
     }
     res.json(kh.khOps.getIdentity());
-  });
-
-  router.post('/admin/caldav-claim-invite', async (req: Request, res: Response) => {
-    const kh = getCaldavKeyhive();
-    if (!kh) {
-      res.status(503).json({ error: 'Keyhive not initialized' });
-      return;
-    }
-
-    try {
-      let { invitePayload, docId } = req.body as { invitePayload?: string; docId?: string };
-
-      // Support passing a full invite URL — extract docId and payload from it
-      if (invitePayload && invitePayload.includes('#/invite/')) {
-        const parsed = parseInviteUrl(invitePayload);
-        docId = docId || parsed.docId;
-        invitePayload = parsed.payload;
-      }
-
-      if (!invitePayload || !docId) {
-        res.status(400).json({ error: 'Missing invitePayload or docId' });
-        return;
-      }
-
-      const { seed } = decodeInvitePayload(invitePayload);
-      // Seed-only claim: build invite keyhive from main archive + invite seed
-      const inviteSigner = kh.khOps.bridge.Signer.memorySignerFromBytes(seed);
-      const mainArchive = await kh.khOps.kh.toArchive();
-      const tempStore = kh.khOps.bridge.CiphertextStore.newInMemory();
-      const inviteKh = await mainArchive.tryToKeyhive(tempStore, inviteSigner, () => {});
-      const result = await kh.khOps.claimInviteWithKeyhive(inviteKh, docId);
-
-      console.log(`[admin] Invite claimed for doc ${docId}, khDocId: ${result.khDocId}`);
-      res.json({ success: true, khDocId: result.khDocId, docId });
-    } catch (err: any) {
-      console.error('[admin] Failed to claim invite:', err);
-      res.status(500).json({ error: err.message || 'Failed to claim invite' });
-    }
   });
 
   return router;
@@ -113,54 +74,8 @@ function adminPageHtml(identity: string, docs: string[]): string {
   <h2>Server Identity</h2>
   <div class="identity">${escHtml(identity)}</div>
 
-  <h2>Claim Invite</h2>
-  <form id="claim-form">
-    <label for="invite">Invite URL or payload</label>
-    <textarea id="invite" name="invitePayload" placeholder="Paste invite URL or base64url payload..." required></textarea>
-    <label for="docId">Document ID (optional if URL contains it)</label>
-    <input id="docId" name="docId" placeholder="automerge document ID">
-    <button type="submit">Claim Invite</button>
-  </form>
-  <div id="result" class="result" style="display:none"></div>
-
   <h2>Accessible Documents</h2>
   <ul>${docList}</ul>
-
-  <script>
-    const form = document.getElementById('claim-form');
-    const result = document.getElementById('result');
-    form.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      result.style.display = 'none';
-      const btn = form.querySelector('button');
-      btn.disabled = true;
-      btn.textContent = 'Claiming...';
-      try {
-        const body = Object.fromEntries(new FormData(form));
-        const resp = await fetch('/admin/caldav-claim-invite', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-        });
-        const data = await resp.json();
-        if (resp.ok) {
-          result.className = 'result ok';
-          result.textContent = 'Invite claimed! khDocId: ' + data.khDocId;
-          setTimeout(() => location.reload(), 1500);
-        } else {
-          result.className = 'result err';
-          result.textContent = data.error || 'Unknown error';
-        }
-      } catch (err) {
-        result.className = 'result err';
-        result.textContent = err.message;
-      } finally {
-        result.style.display = 'block';
-        btn.disabled = false;
-        btn.textContent = 'Claim Invite';
-      }
-    });
-  </script>
 </body>
 </html>`;
 }

@@ -216,7 +216,6 @@ function CalendarInner({ docId, readOnly, initialEventId }: { docId: string; rea
         onToggleValidation={() => setShowValidation(v => !v)}
         validationActive={showValidation}
         validationCount={validationErrors.length}
-        docType="Calendar"
         sourcePath={focusPath}
       >
         <input

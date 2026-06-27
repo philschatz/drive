@@ -32,7 +32,7 @@ export function Settings({ path }: { path?: string }) {
   const [friendShareName, setFriendShareName] = useState<string | null>(null);
   const [friendShareNonce, setFriendShareNonce] = useState(0);
   const [displayName, setDisplayName] = useState('');
-  const [inviteUrl, setInviteUrl] = useState('');
+  const [linkUrl, setLinkUrl] = useState('');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
@@ -96,12 +96,11 @@ export function Settings({ path }: { path?: string }) {
 
   const handleExport = async () => {
     try {
-      const [docList, contactNames, invites] = await Promise.all([
+      const [docList, contactNames] = await Promise.all([
         idbGet<unknown[]>('automerge-doc-ids').then(v => v ?? []),
         idbGet<Record<string, string>>('contact-names').then(v => v ?? {}),
-        idbGet<unknown[]>('automerge-invites').then(v => v ?? []),
       ]);
-      const payload = { version: 1, exportedAt: new Date().toISOString(), docList, contactNames, invites };
+      const payload = { version: 1, exportedAt: new Date().toISOString(), docList, contactNames };
       const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -129,11 +128,10 @@ export function Settings({ path }: { path?: string }) {
         if (!Array.isArray(payload.docList)) throw new Error('Invalid backup: docList must be an array.');
         if (typeof payload.contactNames !== 'object' || Array.isArray(payload.contactNames))
           throw new Error('Invalid backup: contactNames must be an object.');
-        if (!Array.isArray(payload.invites)) throw new Error('Invalid backup: invites must be an array.');
+        // Legacy backups may carry an `invites` field — it's no longer used, so ignore it.
         await Promise.all([
           idbSet('automerge-doc-ids', payload.docList),
           idbSet('contact-names', payload.contactNames),
-          idbSet('automerge-invites', payload.invites),
         ]);
         localStorage.setItem('automerge-doc-ids', JSON.stringify(payload.docList));
         window.location.reload();
@@ -145,7 +143,7 @@ export function Settings({ path }: { path?: string }) {
   };
 
   const handleNavigateUrl = () => {
-    const url = inviteUrl.trim();
+    const url = linkUrl.trim();
     if (!url) return;
     const hashIdx = url.indexOf('#');
     if (hashIdx === -1) {
@@ -320,16 +318,16 @@ export function Settings({ path }: { path?: string }) {
       <section className="mb-6">
         <h2 className="text-lg font-semibold mb-2">Developer: Open Link</h2>
         <p className="text-xs text-muted-foreground mb-2">
-          Paste a link to navigate to it (e.g. invite or document links).
+          Paste a link to navigate to it (e.g. document or add-friend links).
         </p>
         <div className="flex items-center gap-2">
           <input
             className="flex-1 text-sm p-2 rounded border border-border font-mono"
-            value={inviteUrl}
-            onInput={(e: any) => setInviteUrl(e.currentTarget.value)}
+            value={linkUrl}
+            onInput={(e: any) => setLinkUrl(e.currentTarget.value)}
             placeholder="Paste URL here..."
           />
-          <Button size="sm" onClick={handleNavigateUrl} disabled={!inviteUrl.trim()}>
+          <Button size="sm" onClick={handleNavigateUrl} disabled={!linkUrl.trim()}>
             Go
           </Button>
         </div>
@@ -339,7 +337,7 @@ export function Settings({ path }: { path?: string }) {
       <section className="mb-6">
         <h2 className="text-lg font-semibold mb-2">Data Backup</h2>
         <p className="text-xs text-muted-foreground mb-2">
-          Export or import your document list, contacts, and invite data.
+          Export or import your document list and contacts.
           This does not include document contents (those sync via Automerge).
         </p>
         <div className="flex items-center gap-2">

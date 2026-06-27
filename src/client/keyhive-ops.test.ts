@@ -66,19 +66,69 @@ async function createOps() {
   return { ops, kh, fx };
 }
 
-/** Simulate the seed-only claim flow: get archive from inviter → tryToKeyhive → claimInviteWithKeyhive */
+/**
+ * Test-only harness: grant a second peer access to a shared doc using raw keyhive
+ * primitives — a temporary signer is added as an individual member of the doc.
+ * This mirrors how the app's cross-peer encryption works (individual membership)
+ * without depending on any product-level "invite" API. Returns the seed bytes the
+ * claimant uses to reconstruct that membership in {@link claimViaArchive}.
+ */
+async function grantPeerAccessViaTempSigner(
+  ops: KeyhiveOps,
+  khDocId: string,
+  role: string,
+) {
+  const doc = ops.khDocuments.get(khDocId);
+  if (!doc) throw new Error('Document not found');
+  const seed = crypto.getRandomValues(new Uint8Array(32));
+  const tempSigner = Signer.memorySignerFromBytes(seed);
+  const tempKh = await Keyhive.init(tempSigner, CiphertextStore.newInMemory(), () => {});
+  const tempIndividual = await ops.kh.receiveContactCard(await tempKh.contactCard());
+  // Ingest the temp keyhive's events (prekeys, identity ops) into ops' keyhive.
+  await ops.kh.ingestArchive(await tempKh.toArchive());
+  const access = Access.tryFromString(role);
+  if (!access) throw new Error(`Invalid role: ${role}`);
+  await ops.kh.addMember(tempIndividual.toAgent(), doc.toMembered(), access, []);
+  return {
+    inviteKeyBytes: Array.from(seed) as number[],
+    inviteSignerAgentId: bytesToBase64(tempIndividual.id.toBytes()),
+  };
+}
+
+/**
+ * Test-only counterpart to {@link grantPeerAccessViaTempSigner}: reconstruct the
+ * temp signer's keyhive from the granter's archive, add the claimant as an
+ * individual member, and ingest the resulting events into the claimant's keyhive —
+ * giving the claimant cross-peer access for encryption tests.
+ */
 async function claimViaArchive(
-  opsInviter: KeyhiveOps,
+  opsGranter: KeyhiveOps,
   opsClaimant: KeyhiveOps,
   inviteKeyBytes: number[],
-  automergeDocId?: string,
+  _automergeDocId?: string,
 ) {
   const seed = new Uint8Array(inviteKeyBytes);
-  const inviteSigner = Signer.memorySignerFromBytes(seed);
-  const archive = await opsInviter.kh.toArchive();
-  const tempStore = CiphertextStore.newInMemory();
-  const inviteKh = await archive.tryToKeyhive(tempStore, inviteSigner, () => {});
-  return opsClaimant.claimInviteWithKeyhive(inviteKh, automergeDocId);
+  const tempSigner = Signer.memorySignerFromBytes(seed);
+  const archive = await opsGranter.kh.toArchive();
+  const tempKh = await archive.tryToKeyhive(CiphertextStore.newInMemory(), tempSigner, () => {});
+
+  const ourIndividual = await tempKh.receiveContactCard(await opsClaimant.kh.contactCard());
+  const ourAgent = ourIndividual.toAgent();
+  const reachable = await tempKh.reachableDocs();
+  if (reachable.length === 0) throw new Error('Grant has no document access');
+  const grantedDoc = reachable[0].doc;
+  await tempKh.addMember(ourAgent, grantedDoc.toMembered(), reachable[0].access, []);
+
+  const eventsForUs: Map<Uint8Array, Uint8Array> = await tempKh.eventsForAgent(ourAgent);
+  const eventsArr: Uint8Array[] = [];
+  eventsForUs.forEach((v: Uint8Array) => eventsArr.push(v));
+  await opsClaimant.kh.ingestArchive(await tempKh.toArchive());
+  await opsClaimant.kh.ingestEventsBytes(eventsArr);
+
+  const khDocId = bytesToBase64(grantedDoc.id.toBytes());
+  const docFromOurKh = await opsClaimant.kh.getDocument(grantedDoc.doc_id);
+  if (docFromOurKh) opsClaimant.khDocuments.set(khDocId, docFromOurKh);
+  return { khDocId };
 }
 
 describe('KeyhiveOps', () => {
@@ -210,85 +260,13 @@ describe('KeyhiveOps', () => {
     });
   });
 
-  describe('generateInvite', () => {
-    it('generates an invite with seed bytes', async () => {
-      const { ops } = await createOps();
-      const { khDocId } = await ops.enableSharing('doc-1');
-
-      const result = await ops.generateInvite(khDocId, 'edit');
-      expect(result.inviteKeyBytes).toHaveLength(32);
-      expect(result.inviteSignerAgentId).toBeDefined();
-    });
-
-    it('throws for unknown document', async () => {
-      const { ops } = await createOps();
-      await expect(ops.generateInvite('nonexistent', 'edit')).rejects.toThrow('Document not found');
-    });
-
-    it('throws for invalid role', async () => {
-      const { ops } = await createOps();
-      const { khDocId } = await ops.enableSharing('doc-1');
-      await expect(ops.generateInvite(khDocId, 'superadmin')).rejects.toThrow('Invalid role');
-    });
-  });
-
-  describe('claimInviteWithKeyhive', () => {
-    it('full round-trip: enableSharing → generateInvite → claimInviteWithKeyhive', async () => {
-      const { ops: opsA } = await createOps();
-      const { ops: opsB, fx: fxB } = await createOps();
-
-      // A enables sharing and generates invite
-      const { khDocId } = await opsA.enableSharing('doc-1');
-      const invite = await opsA.generateInvite(khDocId, 'edit');
-
-      // B claims via archive (simulates seed-only flow)
-      const result = await claimViaArchive(opsA, opsB, invite.inviteKeyBytes, 'doc-1');
-      expect(result.khDocId).toBeDefined();
-      expect(opsB.khDocuments.has(result.khDocId)).toBe(true);
-      expect(fxB.calls.registerDoc.length).toBe(1);
-      expect(fxB.calls.forceResyncAllPeers.length).toBe(1);
-      expect(fxB.calls.findDoc.length).toBe(1);
-      expect(fxB.calls.findDoc[0][0]).toBe('doc-1');
-    });
-
-    it('saves claim events to storage so pending CGKA ops can be re-processed', async () => {
-      const { ops: opsA } = await createOps();
-      const { ops: opsB, fx: fxB } = await createOps();
-
-      const { khDocId } = await opsA.enableSharing('doc-1');
-      const invite = await opsA.generateInvite(khDocId, 'edit');
-      await claimViaArchive(opsA, opsB, invite.inviteKeyBytes, 'doc-1');
-
-      // claimInviteWithKeyhive must persist each event individually so
-      // ingestKeyhiveFromStorage can re-process them once predecessors
-      // arrive from peer sync. Without this, CGKA membership ops stuck
-      // in "pending" never reach the inviter.
-      expect(fxB.calls.saveEventBytes.length).toBeGreaterThan(0);
-      for (const [eventBytes] of fxB.calls.saveEventBytes) {
-        expect(eventBytes).toBeInstanceOf(Uint8Array);
-        expect(eventBytes.length).toBeGreaterThan(0);
-      }
-    });
-
-    it('sets inviteAccessOverrides to the correct access level', async () => {
-      const { ops: opsA } = await createOps();
-      const { ops: opsB } = await createOps();
-
-      const { khDocId } = await opsA.enableSharing('doc-1');
-      const invite = await opsA.generateInvite(khDocId, 'edit');
-      const result = await claimViaArchive(opsA, opsB, invite.inviteKeyBytes);
-
-      // getMyAccess should return the override, not Admin
-      const access = await opsB.getMyAccess(result.khDocId);
-      expect(access).toBe('Edit');
-    });
-
+  describe('cross-peer access (shared-doc test harness)', () => {
     it('claimant can encrypt after claiming (CGKA ownership works)', async () => {
       const { ops: opsA } = await createOps();
       const { ops: opsB } = await createOps();
 
       const { khDocId } = await opsA.enableSharing('doc-1');
-      const invite = await opsA.generateInvite(khDocId, 'edit');
+      const invite = await grantPeerAccessViaTempSigner(opsA, khDocId, 'edit');
       await claimViaArchive(opsA, opsB, invite.inviteKeyBytes);
 
       // B can self-encrypt
@@ -311,7 +289,7 @@ describe('KeyhiveOps', () => {
       const { ops: opsB, kh: khB } = await createOps();
 
       const { khDocId } = await opsA.enableSharing('doc-1');
-      const invite = await opsA.generateInvite(khDocId, 'edit');
+      const invite = await grantPeerAccessViaTempSigner(opsA, khDocId, 'edit');
       await claimViaArchive(opsA, opsB, invite.inviteKeyBytes, 'doc-1');
 
       // Step 1: Sync B→A so A knows about B
@@ -348,7 +326,7 @@ describe('KeyhiveOps', () => {
       const { ops: opsB, kh: khB } = await createOps();
 
       const { khDocId } = await opsA.enableSharing('doc-1');
-      const invite = await opsA.generateInvite(khDocId, 'edit');
+      const invite = await grantPeerAccessViaTempSigner(opsA, khDocId, 'edit');
       await claimViaArchive(opsA, opsB, invite.inviteKeyBytes, 'doc-1');
 
       // Sync B→A
@@ -394,7 +372,7 @@ describe('KeyhiveOps', () => {
       const { ops: opsB, kh: khB } = await createOps();
 
       const { khDocId } = await opsA.enableSharing('doc-1');
-      const invite = await opsA.generateInvite(khDocId, 'edit');
+      const invite = await grantPeerAccessViaTempSigner(opsA, khDocId, 'edit');
       await claimViaArchive(opsA, opsB, invite.inviteKeyBytes, 'doc-1');
 
       // A encrypts BEFORE any sync with B
@@ -420,7 +398,7 @@ describe('KeyhiveOps', () => {
       const { ops: opsB, kh: khB } = await createOps();
 
       const { khDocId } = await opsA.enableSharing('doc-1');
-      const invite = await opsA.generateInvite(khDocId, 'edit');
+      const invite = await grantPeerAccessViaTempSigner(opsA, khDocId, 'edit');
       await claimViaArchive(opsA, opsB, invite.inviteKeyBytes, 'doc-1');
 
       // A encrypts before sync
@@ -466,7 +444,7 @@ describe('KeyhiveOps', () => {
       const { ops: opsB, kh: khB } = await createOps();
 
       const { khDocId } = await opsA.enableSharing('doc-1');
-      const invite = await opsA.generateInvite(khDocId, 'edit');
+      const invite = await grantPeerAccessViaTempSigner(opsA, khDocId, 'edit');
       await claimViaArchive(opsA, opsB, invite.inviteKeyBytes, 'doc-1');
 
       const ENC_ENCRYPTED = 0x01;
@@ -546,7 +524,7 @@ describe('KeyhiveOps', () => {
       const { ops: opsB, kh: khB } = await createOps();
 
       const { khDocId } = await opsA.enableSharing('doc-1');
-      const invite = await opsA.generateInvite(khDocId, 'edit');
+      const invite = await grantPeerAccessViaTempSigner(opsA, khDocId, 'edit');
       await claimViaArchive(opsA, opsB, invite.inviteKeyBytes, 'doc-1');
 
       // Keyhive sync: B→A then A→B
@@ -594,7 +572,7 @@ describe('KeyhiveOps', () => {
       const { ops: opsB, kh: khB } = await createOps();
 
       const { khDocId } = await opsA.enableSharing('doc-1');
-      const invite = await opsA.generateInvite(khDocId, 'edit');
+      const invite = await grantPeerAccessViaTempSigner(opsA, khDocId, 'edit');
       await claimViaArchive(opsA, opsB, invite.inviteKeyBytes, 'doc-1');
 
       // B encrypts
@@ -618,51 +596,12 @@ describe('KeyhiveOps', () => {
       expect(new Uint8Array(decrypted)).toEqual(plaintext);
     });
 
-    it('inviter can revoke temp invite member after claim', async () => {
-      const { ops: opsA, kh: khA } = await createOps();
-      const { ops: opsB, kh: khB } = await createOps();
-
-      const { khDocId } = await opsA.enableSharing('doc-1');
-      const invite = await opsA.generateInvite(khDocId, 'edit');
-
-      // Before claim: temp invite member should be in the member list
-      const membersBefore = await opsA.getDocMembers(khDocId);
-      const tempMemberBefore = membersBefore.find(m => m.agentId === invite.inviteSignerAgentId);
-      expect(tempMemberBefore).toBeDefined();
-
-      // B claims via archive
-      const result = await claimViaArchive(opsA, opsB, invite.inviteKeyBytes, 'doc-1');
-
-      // Temp member is still present on B's side (claimer can't revoke)
-      const membersOnB = await opsB.getDocMembers(result.khDocId);
-      expect(membersOnB.find(m => m.agentId === invite.inviteSignerAgentId)).toBeDefined();
-
-      // Alice (inviter/owner) revokes the temp invite member
-      await opsA.revokeMember(invite.inviteSignerAgentId, khDocId);
-
-      // After revocation: temp member is gone from Alice's member list
-      const membersAfterA = await opsA.getDocMembers(khDocId);
-      expect(membersAfterA.find(m => m.agentId === invite.inviteSignerAgentId)).toBeUndefined();
-
-      // B should still be a member (on A's side)
-      // Sync B's archive to A so A knows about B
-      const bArchive = await khB.toArchive();
-      await khA.ingestArchive(bArchive);
-      const bCard = await khB.contactCard();
-      await khA.receiveContactCard(bCard);
-      const membersAfterSync = await opsA.getDocMembers(khDocId);
-      // Exclude Alice's own user-group (now an admin co-owner) — we want B.
-      const bOnA = membersAfterSync.find(m => !m.isMe && m.type !== 'group' && m.agentId !== invite.inviteSignerAgentId);
-      expect(bOnA).toBeDefined();
-      expect(bOnA!.role).toBe('edit');
-    });
-
     it('cross-peer encryption works after temp member revocation', async () => {
       const { ops: opsA, kh: khA } = await createOps();
       const { ops: opsB, kh: khB } = await createOps();
 
       const { khDocId } = await opsA.enableSharing('doc-1');
-      const invite = await opsA.generateInvite(khDocId, 'edit');
+      const invite = await grantPeerAccessViaTempSigner(opsA, khDocId, 'edit');
       await claimViaArchive(opsA, opsB, invite.inviteKeyBytes, 'doc-1');
 
       // Sync: A ingests B's archive so A knows about B
@@ -705,7 +644,7 @@ describe('KeyhiveOps', () => {
 
       // Alice enables sharing and generates admin invite for Bob
       const { khDocId } = await opsA.enableSharing('doc-1');
-      const invite = await opsA.generateInvite(khDocId, 'admin');
+      const invite = await grantPeerAccessViaTempSigner(opsA, khDocId, 'admin');
 
       // Bob claims the invite
       await claimViaArchive(opsA, opsB, invite.inviteKeyBytes, 'doc-1');
@@ -745,7 +684,7 @@ describe('KeyhiveOps', () => {
 
       // Alice enables sharing and generates admin invite for Bob
       const { khDocId } = await opsA.enableSharing('doc-1');
-      const invite = await opsA.generateInvite(khDocId, 'admin');
+      const invite = await grantPeerAccessViaTempSigner(opsA, khDocId, 'admin');
 
       // Bob claims the invite
       await claimViaArchive(opsA, opsB, invite.inviteKeyBytes, 'doc-1');
@@ -802,7 +741,7 @@ describe('KeyhiveOps', () => {
 
       // Alice enables sharing and generates admin invite for Bob
       const { khDocId } = await opsA.enableSharing('doc-1');
-      const invite = await opsA.generateInvite(khDocId, 'admin');
+      const invite = await grantPeerAccessViaTempSigner(opsA, khDocId, 'admin');
 
       // Bob claims the invite (no keyhive sync yet — just archive claim)
       await claimViaArchive(opsA, opsB, invite.inviteKeyBytes, 'doc-1');
@@ -845,7 +784,7 @@ describe('KeyhiveOps', () => {
       // After reload with invite ingested
       const ops = new KeyhiveOps(kh, bridge, noopSideEffects());
       await ops.enableSharing('test-doc');
-      await ops.generateInvite(
+      await grantPeerAccessViaTempSigner(ops, 
         Array.from(ops.khDocuments.keys())[0],
         'admin',
       );
@@ -873,7 +812,7 @@ describe('KeyhiveOps', () => {
 
       // Alice enables sharing and generates admin invite
       const { khDocId } = await opsA.enableSharing('doc-1');
-      const invite = await opsA.generateInvite(khDocId, 'admin');
+      const invite = await grantPeerAccessViaTempSigner(opsA, khDocId, 'admin');
 
       // Bob claims the invite
       await claimViaArchive(opsA, opsB, invite.inviteKeyBytes, 'doc-1');
@@ -928,7 +867,7 @@ describe('KeyhiveOps', () => {
       const { ops: opsB, kh: khB } = await createOps();
 
       const { khDocId } = await opsA.enableSharing('doc-1');
-      const invite = await opsA.generateInvite(khDocId, 'admin');
+      const invite = await grantPeerAccessViaTempSigner(opsA, khDocId, 'admin');
       await claimViaArchive(opsA, opsB, invite.inviteKeyBytes, 'doc-1');
 
       // NO contact card exchange — Bob checks access immediately
@@ -952,7 +891,7 @@ describe('KeyhiveOps', () => {
       const { ops: opsB, kh: khB } = await createOps();
 
       const { khDocId } = await opsA.enableSharing('doc-1');
-      const invite = await opsA.generateInvite(khDocId, 'admin');
+      const invite = await grantPeerAccessViaTempSigner(opsA, khDocId, 'admin');
       const claimResult = await claimViaArchive(opsA, opsB, invite.inviteKeyBytes, 'doc-1');
 
       // Get the DocumentId from khDocuments (same as what registerDoc uses)
@@ -987,7 +926,7 @@ describe('KeyhiveOps', () => {
       const { ops: opsB, kh: khB } = await createOps();
 
       const { khDocId } = await opsA.enableSharing('doc-1');
-      const invite = await opsA.generateInvite(khDocId, 'admin');
+      const invite = await grantPeerAccessViaTempSigner(opsA, khDocId, 'admin');
       await claimViaArchive(opsA, opsB, invite.inviteKeyBytes, 'doc-1');
 
       const bReachable = await khB.reachableDocs();
@@ -1016,7 +955,7 @@ describe('KeyhiveOps', () => {
       const { ops: opsB, kh: khB } = await createOps();
 
       const { khDocId } = await opsA.enableSharing('doc-1');
-      const invite = await opsA.generateInvite(khDocId, 'admin');
+      const invite = await grantPeerAccessViaTempSigner(opsA, khDocId, 'admin');
       await claimViaArchive(opsA, opsB, invite.inviteKeyBytes, 'doc-1');
 
       // Keyhive sync
@@ -1079,14 +1018,6 @@ describe('KeyhiveOps', () => {
       const access = await ops.getMyAccess(khDocId);
       expect(access).toBe('Admin');
     });
-
-    it('returns override when set', async () => {
-      const { ops } = await createOps();
-      const { khDocId } = await ops.enableSharing('doc-1');
-      ops.inviteAccessOverrides.set(khDocId, 'Read');
-      const access = await ops.getMyAccess(khDocId);
-      expect(access).toBe('Read');
-    });
   });
 
   describe('registerSharingGroup', () => {
@@ -1103,15 +1034,15 @@ describe('KeyhiveOps', () => {
     });
   });
 
-  describe('multiple invites to same document', () => {
+  describe('multiple peers sharing a document', () => {
     it('both claimants see the document', async () => {
       const { ops: opsA } = await createOps();
       const { ops: opsB } = await createOps();
       const { ops: opsC } = await createOps();
 
       const { khDocId } = await opsA.enableSharing('doc-1');
-      const inviteB = await opsA.generateInvite(khDocId, 'edit');
-      const inviteC = await opsA.generateInvite(khDocId, 'edit');
+      const inviteB = await grantPeerAccessViaTempSigner(opsA, khDocId, 'edit');
+      const inviteC = await grantPeerAccessViaTempSigner(opsA, khDocId, 'edit');
 
       await claimViaArchive(opsA, opsB, inviteB.inviteKeyBytes);
       await claimViaArchive(opsA, opsC, inviteC.inviteKeyBytes);

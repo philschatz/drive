@@ -1,6 +1,6 @@
 /**
  * Access control panel for a document.
- * Shows members, roles, invite link generation, and role management.
+ * Shows members, roles, and role management, and lets admins share with a contact.
  * Rendered as a Sheet (slide-over panel) triggered from the editor title bar.
  */
 
@@ -8,7 +8,6 @@ import { useState, useEffect, useCallback } from 'preact/hooks';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from '@/components/ui/tooltip';
 import {
   getDocMembers,
   getMyAccess,
@@ -17,67 +16,21 @@ import {
   getKnownContacts,
   getIdentity,
   addMember,
-  dismissInvite,
   onKeyhiveStateChanged,
   type MemberInfo,
 } from '../shared/keyhive-api';
-import type { InviteRecord } from '../invite-storage';
 import { getContactName, mergeCachedContacts } from '../contact-names';
-import { QRCodeDisplay } from '@/components/ui/qr-code';
 import { EditableName } from './EditableName';
 import { AccessIcon } from './AccessIcon';
-
-/** Copy or share a URL, with fallbacks for mobile browsers (e.g. Firefox Android). */
-async function shareOrCopy(url: string): Promise<boolean> {
-  // On mobile, prefer the native share sheet
-  if (navigator.share) {
-    try {
-      await navigator.share({ url });
-      return true;
-    } catch {
-      // User cancelled or share failed — fall through to clipboard
-    }
-  }
-  // Try the clipboard API
-  try {
-    await navigator.clipboard.writeText(url);
-    return true;
-  } catch {
-    // Clipboard API unavailable or denied — fall through
-  }
-  // Fallback: temporary textarea + execCommand
-  try {
-    const ta = document.createElement('textarea');
-    ta.value = url;
-    ta.style.position = 'fixed';
-    ta.style.opacity = '0';
-    document.body.appendChild(ta);
-    ta.select();
-    const ok = document.execCommand('copy');
-    document.body.removeChild(ta);
-    return ok;
-  } catch {
-    return false;
-  }
-}
-
 
 interface AccessControlProps {
   /** Automerge document ID. */
   docId: string;
-  /** Document type (Calendar/TaskList/DataGrid) — embedded in invite URL so invitee can redirect correctly. */
-  docType?: string;
   /** Current access level — shown as icon on the trigger button. */
   access?: string | null;
 }
 
-interface InviteStatus {
-  record: InviteRecord;
-  accepted: boolean;
-  acceptedBy?: MemberInfo;
-}
-
-export function AccessControl({ docId, docType, access: accessProp }: AccessControlProps) {
+export function AccessControl({ docId, access: accessProp }: AccessControlProps) {
   const [open, setOpen] = useState(false);
   const [members, setMembers] = useState<MemberInfo[]>([]);
   const [myAccess, setMyAccess] = useState<string | null>(accessProp ?? null);
@@ -85,41 +38,10 @@ export function AccessControl({ docId, docType, access: accessProp }: AccessCont
   const [contacts, setContacts] = useState<MemberInfo[]>([]);
   const [selectedContact, setSelectedContact] = useState<string>('');
   const [inviteRole, setInviteRole] = useState<string>('read');
-  const [inviteStatuses, setInviteStatuses] = useState<InviteStatus[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
 
   const isAdmin = myAccess?.toLowerCase() === 'admin';
-
-  const checkInvites = useCallback(async (currentMembers?: MemberInfo[], currentInvites?: InviteRecord[]) => {
-    const resolved = currentMembers && currentInvites
-      ? { members: currentMembers, invites: currentInvites }
-      : await getDocMembers(docId);
-    const records = currentInvites ?? resolved.invites;
-    if (records.length === 0) { setInviteStatuses([]); return; }
-    const current = currentMembers ?? resolved.members;
-    const statuses = records.map(r => {
-      const baseline = new Set(r.baselineAgentIds);
-      const newMembers = current.filter(
-        m => !baseline.has(m.agentId) && m.agentId !== r.inviteSignerAgentId
-      );
-      return { record: r, accepted: newMembers.length > 0, acceptedBy: newMembers[0] };
-    });
-    setInviteStatuses(statuses);
-
-    // Auto-revoke temp invite members once the invite has been claimed.
-    // Only the inviter (admin) has the authority to revoke.
-    for (const s of statuses) {
-      if (!s.accepted) continue;
-      const tempStillPresent = current.some(m => m.agentId === s.record.inviteSignerAgentId);
-      if (tempStillPresent) {
-        revokeMember(s.record.inviteSignerAgentId, docId).catch(err =>
-          console.warn('[AccessControl] Failed to auto-revoke temp invite member:', err)
-        );
-      }
-    }
-  }, [docId]);
 
   const refresh = useCallback(async () => {
     // Use allSettled so a failure in one call (e.g. getKnownContacts iterating
@@ -133,9 +55,7 @@ export function AccessControl({ docId, docType, access: accessProp }: AccessCont
 
     const members = membersResult.status === 'fulfilled' ? membersResult.value.members : [];
     if (membersResult.status === 'fulfilled') {
-      const { members: m, invites } = membersResult.value;
-      setMembers(m);
-      await checkInvites(m, invites);
+      setMembers(membersResult.value.members);
     }
 
     if (accessResult.status === 'fulfilled') {
@@ -164,7 +84,7 @@ export function AccessControl({ docId, docType, access: accessProp }: AccessCont
       .find((r): r is PromiseRejectedResult => r.status === 'rejected');
     if (firstError) setError(firstError.reason?.message ?? 'Unknown error');
     setLoaded(true);
-  }, [docId, checkInvites]);
+  }, [docId]);
 
   useEffect(() => {
     if (open) refresh();
@@ -219,11 +139,6 @@ export function AccessControl({ docId, docType, access: accessProp }: AccessCont
     } finally {
       setLoading(false);
     }
-  };
-
-  const handleDismissInvite = async (id: string) => {
-    const { invites } = await dismissInvite(id, docId);
-    await checkInvites(undefined, invites);
   };
 
   return (
@@ -347,68 +262,6 @@ export function AccessControl({ docId, docType, access: accessProp }: AccessCont
                   <Button size="sm" onClick={handleAdd} disabled={loading || !selectedContact}>
                     Add
                   </Button>
-                </div>
-              )}
-
-              {/* Per-invite status list */}
-              {inviteStatuses.length > 0 && (
-                <div className="flex flex-col gap-1.5">
-                  {inviteStatuses.map(({ record, accepted, acceptedBy }) => (
-                    <div key={record.id} className="text-xs rounded border border-border p-2">
-                      <div className="flex items-center justify-between gap-2 mb-1">
-                        <span className="text-muted-foreground capitalize">{record.role} invite</span>
-                        <span className="text-muted-foreground">{new Date(record.createdAt).toLocaleDateString()}</span>
-                        <button
-                          className="text-muted-foreground hover:text-foreground leading-none"
-                          onClick={() => handleDismissInvite(record.id)}
-                        >
-                          &times;
-                        </button>
-                      </div>
-                      {accepted ? (
-                        <div className="flex items-center gap-1 text-green-700 dark:text-green-400">
-                          <span className="material-symbols-outlined" style={{ fontSize: 14 }}>check_circle</span>
-                          Accepted — key rotated
-                          {acceptedBy && (
-                            <span className="text-muted-foreground ml-1">({getContactName(acceptedBy.agentId) || `${acceptedBy.agentId.slice(0, 8)}…`})</span>
-                          )}
-                        </div>
-                      ) : (
-                        <>
-                          <div className="flex items-center gap-1 text-muted-foreground mb-1">
-                            <span className="material-symbols-outlined" style={{ fontSize: 14 }}>schedule</span>
-                            Pending
-                          </div>
-                          <div className="flex items-center gap-1">
-                            <input
-                              className="flex-1 text-xs bg-muted p-1 rounded font-mono truncate"
-                              value={record.inviteUrl}
-                              readOnly
-                              onClick={(e: any) => e.currentTarget.select()}
-                            />
-                            <TooltipProvider>
-                              <Tooltip open={copiedUrl === record.inviteUrl}>
-                                <TooltipTrigger asChild>
-                                  <Button size="sm" variant="outline"
-                                    onClick={async () => {
-                                      const copied = await shareOrCopy(record.inviteUrl);
-                                      if (copied) {
-                                        setCopiedUrl(record.inviteUrl);
-                                        setTimeout(() => setCopiedUrl(null), 1500);
-                                      }
-                                    }}>
-                                    Copy
-                                  </Button>
-                                </TooltipTrigger>
-                                <TooltipContent>Copied!</TooltipContent>
-                              </Tooltip>
-                            </TooltipProvider>
-                          </div>
-                          <QRCodeDisplay url={record.inviteUrl} size={160} className="mt-2 flex justify-center" />
-                        </>
-                      )}
-                    </div>
-                  ))}
                 </div>
               )}
             </div>
