@@ -1,6 +1,8 @@
+import { isCacheDisabled } from './idb-storage';
+
 type DocType = 'Calendar' | 'TaskList' | 'DataGrid' | 'unknown';
 
-interface DocEntry {
+export interface DocEntry {
   id: string;
   type?: DocType;
   name?: string;
@@ -62,6 +64,8 @@ export function applyDocListFromWorker(list: DocEntry[]): void {
 // --- Core storage (reads/writes localStorage as sync cache) ---
 
 export function getDocList(): DocEntry[] {
+  // localStorage is a cache only; when disabled, callers fetch from the worker (fetchDocList).
+  if (isCacheDisabled()) return [];
   try {
     const raw = JSON.parse(localStorage.getItem(DOC_STORAGE_KEY) || '[]');
     if (!Array.isArray(raw)) return [];
@@ -70,6 +74,7 @@ export function getDocList(): DocEntry[] {
 }
 
 function saveDocList(list: DocEntry[]) {
+  if (isCacheDisabled()) return; // skip the persistent cache when disabled
   localStorage.setItem(DOC_STORAGE_KEY, JSON.stringify(list));
 }
 

@@ -11,8 +11,8 @@ import type { PresenceState, PeerState } from '@automerge/automerge-repo';
 import { deepAssign } from '../shared/deep-assign';
 import type { RendezvousStatus } from '../shared/rendezvous-protocol';
 export type { RendezvousStatus } from '../shared/rendezvous-protocol';
-import { idbGet, hashStr, type QueryCacheEntry } from './idb-storage';
-import { setDocListDispatch, applyDocListFromWorker } from './doc-storage';
+import { idbGet, idbDelPrefix, hashStr, settingGet, settingSetSync, isCacheDisabled, type QueryCacheEntry } from './idb-storage';
+import { setDocListDispatch, applyDocListFromWorker, type DocEntry } from './doc-storage';
 import { setContactNamesDispatch, applyContactNamesFromWorker } from './contact-names';
 
 // Re-export for convenience
@@ -69,6 +69,10 @@ const initMsg = {
 };
 console.log('[main] → send', initMsg.type, initMsg);
 worker.postMessage(initMsg);
+
+// Best-effort: heal the synchronous localStorage mirror of the cache-disabled setting from
+// its IDB source of truth, in case localStorage was cleared but IDB still holds the flag.
+settingGet('cache-disabled').then(v => settingSetSync('cache-disabled', v)).catch(() => {});
 
 // ── Ready promises ──────────────────────────────────────────────────────────
 
@@ -374,6 +378,40 @@ export function useRelayLog(): [RelayLogEntry[], () => void] {
 export const HOME_SUMMARY_QUERY =
   '{ type: .["@type"], name: (.name // ""), eventCount: (if .events then (.events | length) else 0 end), taskCount: (if .tasks then [.tasks[] | select(.progress != "completed" and .progress != "cancelled")] | length else 0 end), cellCount: (if .sheets then [.sheets[].cells // {} | length] | add else 0 end) }';
 
+// ── Cache controls ───────────────────────────────────────────────────────────
+
+/**
+ * Enable/disable all performance caches. Persists the flag (IDB source of truth + the
+ * synchronous localStorage mirror), tells the worker (which clears its caches when
+ * disabling), then reloads so the worker re-reads the flag and the main thread starts
+ * fresh. Turning it on also clears the main-thread localStorage caches.
+ */
+export async function setCacheDisabled(disabled: boolean): Promise<void> {
+  settingSetSync('cache-disabled', disabled); // sync mirror, read on next load
+  await request('set-cache-disabled', { disabled }); // worker persists IDB + clears if disabling
+  if (disabled) {
+    localStorage.removeItem('keyhive-access-cache');
+    localStorage.removeItem('automerge-doc-ids'); // doc-list paint mirror
+  }
+  window.location.reload();
+}
+
+/** Wipe all performance caches (worker query/validation caches + main-thread localStorage caches) and reload. */
+export async function clearAllCaches(): Promise<void> {
+  await request('clear-caches'); // worker clears its LRUs + idbDelPrefix('qc:')
+  await idbDelPrefix('qc:'); // belt-and-suspenders in case the worker is unavailable
+  localStorage.removeItem('keyhive-access-cache');
+  localStorage.removeItem('automerge-doc-ids');
+  window.location.reload();
+}
+
+/** Explicitly pull the doc list from the worker (the source of truth) and apply it. */
+export async function fetchDocList(): Promise<DocEntry[]> {
+  const list = await request<DocEntry[]>('get-doc-list');
+  applyDocListFromWorker(list); // notify listeners + sync the enabled-mode cache, one path
+  return list;
+}
+
 // ── Document mutations ──────────────────────────────────────────────────────
 
 export function createDoc(initialJson: any): Promise<{ docId: string }> {
@@ -449,13 +487,15 @@ export function subscribeQuery(
   fire('subscribe-query', { subId, docId, filter });
 
   // Fast path: read from IDB on main thread while worker may be blocked
-  // parsing a large document's WASM binary.
-  const cacheKey = `qc:${docId}:${hashStr(filter)}`;
-  idbGet<QueryCacheEntry>(cacheKey).then(cached => {
-    if (cached && !workerResponded && subscriptionCallbacks.has(subId)) {
-      onResult(cached.result, cached.heads, cached.lastModified);
-    }
-  });
+  // parsing a large document's WASM binary. Skipped when caching is disabled.
+  if (!isCacheDisabled()) {
+    const cacheKey = `qc:${docId}:${hashStr(filter)}`;
+    idbGet<QueryCacheEntry>(cacheKey).then(cached => {
+      if (cached && !workerResponded && subscriptionCallbacks.has(subId)) {
+        onResult(cached.result, cached.heads, cached.lastModified);
+      }
+    });
+  }
 
   return () => {
     subscriptionCallbacks.delete(subId);

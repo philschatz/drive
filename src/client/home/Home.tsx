@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'preact/hooks';
 import { useConnectionStatus, usePeerList } from '../shared/automerge';
-import { createDoc, updateDoc, subscribeQuery, HOME_SUMMARY_QUERY } from '../worker-api';
+import { createDoc, updateDoc, subscribeQuery, fetchDocList, HOME_SUMMARY_QUERY } from '../worker-api';
 import { getMyAccess, onKeyhiveStateChanged } from '../shared/keyhive-api';
 import { getCachedAccess } from '../shared/useAccess';
 import { peerColor, peerDisplayName } from '../shared/presence';
@@ -67,10 +67,18 @@ export function Home({ path }: { path?: string }) {
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [importStatus, setImportStatus] = useState<{ label: string; progress: number } | null>(null);
+  const [listLoading, setListLoading] = useState(true);
   const connected = useConnectionStatus();
   const repoPeers = usePeerList();
 
   useEffect(() => { document.title = 'Automerge Documents'; }, []);
+
+  // Pull the doc list from the worker (the source of truth). Results flow in via the
+  // onDocListUpdated subscription below; this also drives the loading state and is the
+  // only source when the localStorage cache is disabled.
+  useEffect(() => {
+    fetchDocList().catch((err) => console.warn('[Home] fetchDocList failed:', err)).finally(() => setListLoading(false));
+  }, []);
 
   // Subscribe to worker-pushed doc list updates (IDB → localStorage cache)
   useEffect(() => {
@@ -937,7 +945,9 @@ export function Home({ path }: { path?: string }) {
           );
         })}
         {entries.length === 0 && (
-          <p className="text-sm text-muted-foreground py-4">No documents yet.</p>
+          <p className="text-sm text-muted-foreground py-4">
+            {listLoading ? 'Loading documents…' : 'No documents yet.'}
+          </p>
         )}
       </div>
 

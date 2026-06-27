@@ -2,8 +2,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'preact/hooks'
 import '@schedule-x/theme-default/dist/index.css';
 import './calendar.css';
 import type { PeerState } from '../shared/automerge';
-import { openDoc, subscribeQuery, updateDoc, queryDoc, deepAssign } from '../worker-api';
-import { getDocList } from '../doc-storage';
+import { openDoc, subscribeQuery, updateDoc, queryDoc, deepAssign, fetchDocList } from '../worker-api';
 import { initPresence, type PresenceState } from '../shared/presence';
 import { EditorTitleBar } from '../shared/EditorTitleBar';
 import type { CalendarEvent } from './schema';
@@ -25,10 +24,6 @@ interface LoadedCalendar {
   description: string;
   timeZone: string;
   events: Record<string, CalendarEvent>;
-}
-
-function getSavedIds(): string[] {
-  return getDocList().map(e => e.id);
 }
 
 const defaultTZ = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -143,7 +138,7 @@ export function AllCalendars({ path }: { path?: string }) {
     const unsubscribes: (() => void)[] = [];
 
     (async () => {
-      const allIds = getSavedIds();
+      const allIds = (await fetchDocList()).map(e => e.id);
 
       const initRange = getInitialDateRange();
       currentRangeRef.current = initRange;

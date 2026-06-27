@@ -95,6 +95,55 @@ export function _resetConnectionForTest(): void {
   dbPromise = null;
 }
 
+// ── Settings registry ───────────────────────────────────────────────────────
+//
+// All app settings are enumerated here with their types and defaults. IndexedDB is
+// the source of truth (readable from both threads); localStorage holds only a
+// synchronous read-mirror for main-thread call sites that need the value during render
+// (web workers have no localStorage, so the worker hydrates its own copy from IDB).
+
+const SETTINGS_PREFIX = 'settings:';
+
+/** The single source of all app settings: their types and default values. */
+interface SettingsSchema {
+  'cache-disabled': boolean;
+  // future settings get one line here + a default below
+}
+
+const SETTINGS_DEFAULTS: SettingsSchema = {
+  'cache-disabled': false,
+};
+
+type SettingName = keyof SettingsSchema;
+
+/** Read a setting from IndexedDB (source of truth), falling back to its default. */
+export async function settingGet<K extends SettingName>(name: K): Promise<SettingsSchema[K]> {
+  const v = await idbGet<SettingsSchema[K]>(SETTINGS_PREFIX + name);
+  return v ?? SETTINGS_DEFAULTS[name]; // ?? only fills null/undefined, so a stored `false` is kept
+}
+
+/** Persist a setting to IndexedDB (source of truth). */
+export async function settingSet<K extends SettingName>(name: K, value: SettingsSchema[K]): Promise<void> {
+  await idbSet(SETTINGS_PREFIX + name, value);
+}
+
+/** Read the synchronous localStorage mirror of a setting (main thread only). */
+export function settingGetSync<K extends SettingName>(name: K): SettingsSchema[K] {
+  if (typeof localStorage === 'undefined') return SETTINGS_DEFAULTS[name];
+  const raw = localStorage.getItem(SETTINGS_PREFIX + name);
+  if (raw === null) return SETTINGS_DEFAULTS[name];
+  try { return JSON.parse(raw) as SettingsSchema[K]; } catch { return SETTINGS_DEFAULTS[name]; }
+}
+
+/** Write the synchronous localStorage mirror of a setting (main thread only). */
+export function settingSetSync<K extends SettingName>(name: K, value: SettingsSchema[K]): void {
+  if (typeof localStorage === 'undefined') return;
+  localStorage.setItem(SETTINGS_PREFIX + name, JSON.stringify(value));
+}
+
+/** Convenience reader for the hot synchronous call sites (doc-storage, useAccess). */
+export function isCacheDisabled(): boolean { return settingGetSync('cache-disabled'); }
+
 // ── Shared utilities (used by both worker and main thread) ──────────────────
 
 /** djb2 string hash → base-36. Used for query cache keys. */

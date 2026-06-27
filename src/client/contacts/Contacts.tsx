@@ -4,8 +4,8 @@ import { Alert } from '@/components/ui/alert';
 import { EditableName } from '@/components/EditableName';
 import { getDocMembers, getKnownContacts } from '../shared/keyhive-api';
 import { keyhiveReady } from '../shared/automerge';
+import { fetchDocList } from '../worker-api';
 import { getContactName, getAllContactNames, removeContactName } from '../contact-names';
-import { getDocList } from '../doc-storage';
 import { type DocType, viewPathForType, iconForType } from '../shared/doc-type-helpers';
 
 interface ContactDocInfo {
@@ -44,7 +44,7 @@ export function Contacts({ path }: { path?: string }) {
     try {
       // Ensure worker has pushed contact names before we read the cache
       await keyhiveReady;
-      const docs = getDocList();
+      const docs = await fetchDocList();
       // getKnownContacts is the source of truth for *who* is a contact — it surfaces
       // received friends even before any doc is shared (mirrors the Share panel). The
       // per-doc member lists then enrich each contact with device counts and the docs

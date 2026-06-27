@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'preact/hooks';
 import { getMyAccess, onKeyhiveStateChanged } from './keyhive-api';
+import { isCacheDisabled } from '../idb-storage';
 
 export type AccessLevel = 'admin' | 'edit' | 'read' | 'relay' | null;
 
@@ -11,6 +12,7 @@ function readAccessCache(): Record<string, string> {
 }
 
 function writeAccessCache(docId: string, access: AccessLevel): void {
+  if (isCacheDisabled()) return; // don't repopulate the cache when disabled
   const cache = readAccessCache();
   if (access === null) delete cache[docId];
   else cache[docId] = access;
@@ -18,6 +20,7 @@ function writeAccessCache(docId: string, access: AccessLevel): void {
 }
 
 export function getCachedAccess(docId: string): AccessLevel {
+  if (isCacheDisabled()) return null; // bypass the cache (covers useAccess + Home seeds)
   const cache = readAccessCache();
   return (cache[docId] as AccessLevel) ?? null;
 }

@@ -5,6 +5,8 @@
 import { useState, useEffect, useCallback } from 'preact/hooks';
 import { Button } from '@/components/ui/button';
 import { Alert } from '@/components/ui/alert';
+import { Switch } from '@/components/ui/switch';
+import { Label } from '@/components/ui/label';
 import {
   getIdentity,
   listDevices,
@@ -16,7 +18,8 @@ import {
   type IdentityInfo,
   type DeviceInfo,
 } from '../shared/keyhive-api';
-import { idbGet, idbSet } from '../idb-storage';
+import { setCacheDisabled, clearAllCaches } from '../worker-api';
+import { idbGet, idbSet, isCacheDisabled } from '../idb-storage';
 import { getContactName, setContactName } from '../contact-names';
 import { RendezvousShare } from './RendezvousShare';
 import { buildLinkDeviceRendezvousUrl } from './LinkDevicePage';
@@ -36,6 +39,7 @@ export function Settings({ path }: { path?: string }) {
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
+  const [cacheDisabled] = useState(isCacheDisabled());
 
   const refresh = useCallback(async () => {
     try {
@@ -93,6 +97,22 @@ export function Settings({ path }: { path?: string }) {
     }
   };
 
+
+  const handleToggleCacheDisabled = async (v: boolean) => {
+    try {
+      await setCacheDisabled(v); // persists, tells worker, then reloads the page
+    } catch (err: any) {
+      setError('Failed to update cache setting: ' + err.message);
+    }
+  };
+
+  const handleClearCaches = async () => {
+    try {
+      await clearAllCaches(); // clears caches, then reloads the page
+    } catch (err: any) {
+      setError('Failed to clear caches: ' + err.message);
+    }
+  };
 
   const handleExport = async () => {
     try {
@@ -344,6 +364,24 @@ export function Settings({ path }: { path?: string }) {
           <Button size="sm" variant="outline" onClick={handleExport}>Export</Button>
           <Button size="sm" variant="outline" onClick={handleImport}>Import</Button>
         </div>
+      </section>
+
+      {/* Cache */}
+      <section className="mb-6">
+        <h2 className="text-lg font-semibold mb-2">Cache</h2>
+        <p className="text-xs text-muted-foreground mb-2">
+          The app caches query results and derived data for faster loading. Disabling bypasses
+          all caches (always reading live data); the page reloads when you change this.
+        </p>
+        <div className="flex items-center gap-2 mb-3">
+          <Switch
+            id="disable-cache"
+            checked={cacheDisabled}
+            onCheckedChange={handleToggleCacheDisabled}
+          />
+          <Label htmlFor="disable-cache" className="cursor-pointer">Disable cache</Label>
+        </div>
+        <Button size="sm" variant="destructive" onClick={handleClearCaches}>Clear Caches</Button>
       </section>
     </div>
   );

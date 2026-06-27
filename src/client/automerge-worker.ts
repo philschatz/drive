@@ -21,6 +21,9 @@ interface QueryCacheEntry { result: any; json: string; lastModified?: number; he
 
 export type MainToWorker =
   | { type: 'init' }
+  | { type: 'set-cache-disabled'; id: number; disabled: boolean }
+  | { type: 'clear-caches'; id: number }
+  | { type: 'get-doc-list'; id: number }
   | { type: 'query'; id: number; docId: string; filter: string }
   // New worker-owned doc API
   | { type: 'create-doc'; id: number; initialJson: any }
@@ -391,13 +394,21 @@ const OPEN_DOCS_IN_BACKGROUND = true;
 
 const jqCache = new LRU<string, (input: any) => any>(64);
 
+/**
+ * When true, all performance caches are bypassed: the compiled-filter `jqCache`, the
+ * query result cache (`queryResultCache` + IDB `qc:*`), and the validation cache. Hydrated
+ * from the persisted `settings:cache-disabled` setting at init; updated on `set-cache-disabled`.
+ */
+let cacheDisabled = false;
+
 async function runQuery(filter: string, doc: any): Promise<any> {
-  let fn = jqCache.get(filter);
+  // When cacheDisabled, recompile the filter fresh each call instead of reusing jqCache.
+  let fn = cacheDisabled ? undefined : jqCache.get(filter);
   if (!fn) {
     const { compile } = await import('../shared/jq');
     const compiled = compile(filter);
     fn = (input: any) => { const r = compiled(input); return r.length > 0 ? r[0] : null; };
-    jqCache.set(filter, fn);
+    if (!cacheDisabled) jqCache.set(filter, fn);
   }
   return fn(doc);
 }
@@ -410,8 +421,14 @@ const queryResultCache = new LRU<string, QueryCacheEntry>(256);
 async function runCachedQuery(
   docId: string, filter: string, doc: any, heads: string[], lastModified?: number,
 ): Promise<{ result: any; heads: string[]; lastModified?: number; changed: boolean }> {
-  const cacheKey = `qc:${docId}:${hashStr(filter)}`;
   const result = await runQuery(filter, doc);
+
+  if (cacheDisabled) {
+    // Bypass the query result cache (in-memory + IDB) — always recompute, always emit.
+    return { result, heads, lastModified, changed: true };
+  }
+
+  const cacheKey = `qc:${docId}:${hashStr(filter)}`;
   const json = JSON.stringify(result);
 
   const cached = queryResultCache.get(cacheKey);
@@ -430,17 +447,20 @@ async function runCachedQuery(
 async function handleSubscribeQuery(docId: string, subId: number, filter: string, post: (m: any) => void) {
   subIdToDocId.set(subId, docId);
 
-  // Serve from cache if available, for instant paint.
-  const cacheKey = `qc:${docId}:${hashStr(filter)}`;
-  const memoryCached = queryResultCache.get(cacheKey);
-  if (memoryCached) {
-    post({ type: 'query-result', subId, result: memoryCached.result, heads: memoryCached.heads, lastModified: memoryCached.lastModified });
-  } else {
-    const { idbGet } = await import('./idb-storage');
-    const idbCached = await idbGet<QueryCacheEntry>(cacheKey);
-    if (idbCached) {
-      queryResultCache.set(cacheKey, idbCached);
-      post({ type: 'query-result', subId, result: idbCached.result, heads: idbCached.heads, lastModified: idbCached.lastModified });
+  // Serve from cache if available, for instant paint. Skipped when caching is disabled —
+  // results then come only from the live query below.
+  if (!cacheDisabled) {
+    const cacheKey = `qc:${docId}:${hashStr(filter)}`;
+    const memoryCached = queryResultCache.get(cacheKey);
+    if (memoryCached) {
+      post({ type: 'query-result', subId, result: memoryCached.result, heads: memoryCached.heads, lastModified: memoryCached.lastModified });
+    } else {
+      const { idbGet } = await import('./idb-storage');
+      const idbCached = await idbGet<QueryCacheEntry>(cacheKey);
+      if (idbCached) {
+        queryResultCache.set(cacheKey, idbCached);
+        post({ type: 'query-result', subId, result: idbCached.result, heads: idbCached.heads, lastModified: idbCached.lastModified });
+      }
     }
   }
 
@@ -543,15 +563,19 @@ async function pushToSubscriptions(docId: string) {
 function pushValidation(docId: string, doc: any) {
   const allErrors = validateDocument(doc);
   const errors = allErrors.slice(0, 100);
-  const json = JSON.stringify(errors);
-  const cacheKey = `qc:${docId}:validation`;
 
-  const cached = queryResultCache.get(cacheKey);
-  if (cached && cached.json === json) return; // unchanged
+  // When cacheDisabled, skip the validation cache — always emit below.
+  if (!cacheDisabled) {
+    const json = JSON.stringify(errors);
+    const cacheKey = `qc:${docId}:validation`;
 
-  const entry: QueryCacheEntry = { result: errors, json, heads: [] };
-  queryResultCache.set(cacheKey, entry);
-  import('./idb-storage').then(({ idbSet }) => idbSet(cacheKey, entry));
+    const cached = queryResultCache.get(cacheKey);
+    if (cached && cached.json === json) return; // unchanged
+
+    const entry: QueryCacheEntry = { result: errors, json, heads: [] };
+    queryResultCache.set(cacheKey, entry);
+    import('./idb-storage').then(({ idbSet }) => idbSet(cacheKey, entry));
+  }
 
   (self as any).postMessage({ type: 'update-validation', docId, errors } satisfies WorkerToMain);
 }
@@ -657,6 +681,14 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
   if (msg.type === 'init') {
     try {
       console.log('[worker] init message received');
+
+      // Hydrate the cache-disabled flag from its persisted setting (IDB source of truth).
+      try {
+        const { settingGet } = await import('./idb-storage');
+        cacheDisabled = (await settingGet('cache-disabled')) === true;
+      } catch (err) {
+        console.warn('[worker] failed to read cache-disabled setting:', errMsg(err));
+      }
 
       // --- Create secure repo ---
       try {
@@ -1030,6 +1062,52 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
       console.error('[worker] init failed:', err);
       (self as any).postMessage({ type: 'error', message: errMsg(err) } satisfies WorkerToMain);
     }
+  }
+
+  // --- Cache controls ---
+
+  if (msg.type === 'set-cache-disabled') {
+    try {
+      cacheDisabled = msg.disabled;
+      const { settingSet, idbDelPrefix } = await import('./idb-storage');
+      await settingSet('cache-disabled', msg.disabled);
+      if (msg.disabled) {
+        // Clear performance caches when disabling. (The caller reloads afterward, so the
+        // in-memory LRUs are also wiped on restart; the IDB clear is the part that persists.)
+        queryResultCache.clear();
+        jqCache.clear();
+        await idbDelPrefix('qc:');
+      }
+      (self as any).postMessage({ type: 'result', id: msg.id, result: null } satisfies WorkerToMain);
+    } catch (err) {
+      (self as any).postMessage({ type: 'result', id: msg.id, error: errMsg(err) } satisfies WorkerToMain);
+    }
+    return;
+  }
+
+  if (msg.type === 'clear-caches') {
+    try {
+      queryResultCache.clear();
+      jqCache.clear();
+      const { idbDelPrefix } = await import('./idb-storage');
+      await idbDelPrefix('qc:');
+      (self as any).postMessage({ type: 'result', id: msg.id, result: null } satisfies WorkerToMain);
+    } catch (err) {
+      (self as any).postMessage({ type: 'result', id: msg.id, error: errMsg(err) } satisfies WorkerToMain);
+    }
+    return;
+  }
+
+  if (msg.type === 'get-doc-list') {
+    try {
+      const { idbGet } = await import('./idb-storage');
+      type StoredDocEntry = { id: string; type?: string; name?: string; sharingGroupId?: string };
+      const list = (await idbGet<StoredDocEntry[]>('automerge-doc-ids')) ?? [];
+      (self as any).postMessage({ type: 'result', id: msg.id, result: list } satisfies WorkerToMain);
+    } catch (err) {
+      (self as any).postMessage({ type: 'result', id: msg.id, error: errMsg(err) } satisfies WorkerToMain);
+    }
+    return;
   }
 
   // --- New worker-owned doc API ---
