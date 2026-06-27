@@ -623,7 +623,7 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
         const secureStorage = new IndexedDBStorageAdapter('automerge-secure');
         const secureWs = new BrowserWebSocketClientAdapter(
           self.location?.protocol === 'https:'
-            ? 'wss://auto-relay-436046666a53.herokuapp.com'
+            ? 'wss://drive-relay-ebe030e3546f.herokuapp.com'
             : `ws://${self.location?.hostname || 'localhost'}:${self.location?.port || 3000}`
         );
 
