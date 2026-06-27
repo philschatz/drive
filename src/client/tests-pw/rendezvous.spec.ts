@@ -61,6 +61,14 @@ test('rendezvous makes both peers contacts from a single exchange', async ({ bro
       (list) => list.some((c: any) => c.agentId === bobGroup),
       { label: 'alice knows bob', timeout: 30_000 },
     );
+
+    // The worker (not the UI) named Bob on Alice's side from the name he replied
+    // with — Alice has no UI to name him, so the worker manages it.
+    await waitFor(
+      () => alice!.call('getAllContactNames'),
+      (names) => names[bobGroup!] === 'Bob',
+      { label: 'alice auto-named bob', timeout: 30_000 },
+    );
   } finally {
     await Promise.all([alice?.close(), bob?.close()].filter(Boolean) as Promise<void>[]);
   }

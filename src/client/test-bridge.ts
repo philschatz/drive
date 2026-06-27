@@ -18,6 +18,7 @@ import {
   getDocList,
   onDocListUpdated,
 } from './doc-storage';
+import { getAllContactNames } from './contact-names';
 
 const bridge = {
   ...workerApi,
@@ -25,6 +26,9 @@ const bridge = {
   removeDocId,
   getDocList,
   onDocListUpdated,
+  // contact-name cache (worker-owned, mirrored to the main thread) so tests can
+  // assert names the worker assigns (e.g. auto-naming during the rendezvous).
+  getAllContactNames,
   // readiness promises so tests can await a fully-initialized peer
   workerReady,
   keyhiveReady,

@@ -226,6 +226,42 @@ async function removeKnownContactGroup(groupId: string): Promise<void> {
   if (next.length !== list.length) await idbSet('known-contact-groups', next);
 }
 
+// ── Contact-name store ───────────────────────────────────────────────────────
+// The worker is the single owner/writer of the persisted contact-name map (IDB
+// key 'contact-names'); the main thread keeps only a read cache, refreshed from
+// the 'contact-names-updated' broadcasts these helpers emit. Centralising the
+// writes here lets worker-internal flows (e.g. the rendezvous contact exchange)
+// name a contact directly, without a round-trip through the UI.
+async function getContactNames(): Promise<Record<string, string>> {
+  const { idbGet } = await import('./idb-storage');
+  return (await idbGet<Record<string, string>>('contact-names')) ?? {};
+}
+function broadcastContactNames(names: Record<string, string>): void {
+  (self as any).postMessage({ type: 'contact-names-updated', names } satisfies WorkerToMain);
+}
+/** Persist (or overwrite) a contact's name and broadcast the new map. Blank/absent = no-op. */
+async function putContactName(agentId: string, name: string | undefined): Promise<void> {
+  const trimmed = name?.trim();
+  if (!trimmed) return;
+  const names = await getContactNames();
+  if (names[agentId] === trimmed) return;
+  names[agentId] = trimmed;
+  const { idbSet } = await import('./idb-storage');
+  await idbSet('contact-names', names);
+  broadcastContactNames(names);
+}
+/** Forget a contact's name and drop them from the known registry, then broadcast. */
+async function deleteContactName(agentId: string): Promise<void> {
+  const names = await getContactNames();
+  delete names[agentId];
+  const { idbSet } = await import('./idb-storage');
+  await idbSet('contact-names', names);
+  // "Delete contact" must also drop them from the known registry, else they'd
+  // reappear (by short id) on the next getKnownContacts.
+  await removeKnownContactGroup(agentId);
+  broadcastContactNames(names);
+}
+
 /** Derive the keyhive doc-ID (base64) from an automerge doc-ID.
  *  Works because the automerge binary doc-ID bytes ARE the keyhive doc_id bytes. */
 function resolveKhDocId(automergeDocId: string): string {
@@ -980,8 +1016,7 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
             }
           }
           (self as any).postMessage({ type: 'doc-list-updated', list: earlyList } satisfies WorkerToMain);
-          const earlyNames = (await idbGetDocs<Record<string, string>>('contact-names')) ?? {};
-          (self as any).postMessage({ type: 'contact-names-updated', names: earlyNames } satisfies WorkerToMain);
+          broadcastContactNames(await getContactNames());
         }
         (self as any).postMessage({ type: 'kh-ready' } satisfies WorkerToMain);
       } catch (khErr: any) {
@@ -1320,11 +1355,7 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
 
   if (msg.type === 'set-contact-name') {
     try {
-      const { idbGet, idbSet } = await import('./idb-storage');
-      const names = (await idbGet<Record<string, string>>('contact-names')) ?? {};
-      names[msg.agentId] = msg.name;
-      await idbSet('contact-names', names);
-      (self as any).postMessage({ type: 'contact-names-updated', names } satisfies WorkerToMain);
+      await putContactName(msg.agentId, msg.name);
       (self as any).postMessage({ type: 'result', id: msg.id } satisfies WorkerToMain);
     } catch (err: any) {
       // Surface the failure instead of swallowing it — a lost write must not look
@@ -1336,14 +1367,7 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
 
   if (msg.type === 'remove-contact-name') {
     try {
-      const { idbGet, idbSet } = await import('./idb-storage');
-      const names = (await idbGet<Record<string, string>>('contact-names')) ?? {};
-      delete names[msg.agentId];
-      await idbSet('contact-names', names);
-      // "Delete contact" must also drop them from the known registry, else they'd
-      // reappear (by short id) on the next getKnownContacts.
-      await removeKnownContactGroup(msg.agentId);
-      (self as any).postMessage({ type: 'contact-names-updated', names } satisfies WorkerToMain);
+      await deleteContactName(msg.agentId);
       (self as any).postMessage({ type: 'result', id: msg.id } satisfies WorkerToMain);
     } catch (err: any) {
       console.error('[worker] remove-contact-name failed:', errMsg(err));
@@ -1428,7 +1452,7 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
     try {
       if (!khOps) throw new Error('Keyhive not available');
       const { idbGet } = await import('./idb-storage');
-      const contactNames = (await idbGet<Record<string, string>>('contact-names')) ?? {};
+      const contactNames = await getContactNames();
       const knownGroups = (await idbGet<string[]>('known-contact-groups')) ?? [];
       // Contacts are keyed by user-group id (sharing is group-only): union the
       // named contacts with received-but-unnamed ones from the known registry.
@@ -1467,10 +1491,15 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
           (async () => {
             try {
               rdvEvent(rendezvousId, 'receiving');
-              const { card: peerCard, userGroupId: peerGroupId } = JSON.parse(pt);
+              const { card: peerCard, displayName: peerName, userGroupId: peerGroupId } = JSON.parse(pt);
               const result = await khOps!.receiveContactCard(peerCard);
               const resolvedGroupId = peerGroupId ?? result.groupId ?? null;
-              if (!result.isOwnCard && resolvedGroupId) await addKnownContactGroup(resolvedGroupId);
+              if (!result.isOwnCard && resolvedGroupId) {
+                await addKnownContactGroup(resolvedGroupId);
+                // We have no UI to name the friend on this (sharer) side, so adopt
+                // the name they sent — the worker owns contact names, so it can.
+                await putContactName(resolvedGroupId, peerName);
+              }
               rdvSessions.delete(rendezvousId);
               rdvSend({ type: RDV_UNSUB, rendezvousId });
               rdvEvent(rendezvousId, 'received');
