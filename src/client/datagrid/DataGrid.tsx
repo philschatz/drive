@@ -29,7 +29,7 @@ import { createHfBridge, type HfBridge, type MCResults, type CondFormatResults }
 import { sendHfPort } from '../worker-api';
 import { DistributionPanel } from './DistributionPanel';
 import { formatDistValue } from './helpers';
-import { addDocId, getDocEntry } from '@/doc-storage';
+import { addDocId } from '@/doc-storage';
 import './datagrid.css';
 
 // Lightweight metadata query — returns doc name and each sheet's name/index/hidden plus row/col ordering (no cell data)
@@ -107,10 +107,9 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
   const validationErrors = useDocumentValidation(docId);
   const { undo, redo, canUndo, canRedo, onHeadsUpdate } = useUndoRedo(docId!);
   const history = useDocumentHistory(docId!);
-  const dgEncrypted = !!getDocEntry(docId!)?.encrypted;
-  const { access: dgAccess, canEdit: accessCanEdit, loaded: accessLoaded } = useAccess(dgEncrypted ? docId : undefined);
+  const { access: dgAccess, canEdit: accessCanEdit, loaded: accessLoaded } = useAccess(docId);
   const canEdit = !readOnly && history.editable && accessCanEdit;
-  const noAccess = dgEncrypted && accessLoaded && dgAccess === null;
+  const noAccess = accessLoaded && dgAccess === null;
   const canEditRef = useRef(canEdit);
   canEditRef.current = canEdit;
   const hfBridgeRef = useRef<HfBridge | null>(null);

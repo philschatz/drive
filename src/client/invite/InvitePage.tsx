@@ -82,7 +82,6 @@ export function InvitePage({ docId, docType, inviteKey }: InvitePageProps) {
       const resolvedType = docType ?? entry?.type;
       addDocId(docId, {
         ...entry,
-        encrypted: true,
         ...(resolvedType ? { type: resolvedType as any } : {}),
       });
 

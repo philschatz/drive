@@ -67,11 +67,10 @@ describe('addDocId', () => {
     expect(getDocList()).toEqual([{ id: 'doc-1', type: 'Calendar', name: 'Work' }]);
   });
 
-  it('stores type and encrypted from invite claim', () => {
-    addDocId('inv-1', { encrypted: true, type: 'Calendar' as any });
+  it('stores type from invite claim', () => {
+    addDocId('inv-1', { type: 'Calendar' as any });
     const entry = getDocList().find(e => e.id === 'inv-1');
     expect(entry?.type).toBe('Calendar');
-    expect(entry?.encrypted).toBe(true);
   });
 });
 
@@ -166,12 +165,12 @@ describe('dispatch message shape', () => {
       messages.push({ msgType, docId, metadata });
     });
 
-    addDocId('doc-1', { type: 'Calendar', name: 'Work', encrypted: true });
+    addDocId('doc-1', { type: 'Calendar', name: 'Work' });
 
     expect(messages).toHaveLength(1);
     expect(messages[0].msgType).toBe('add-doc-to-list');
     expect(messages[0].docId).toBe('doc-1');
-    expect(messages[0].metadata).toEqual({ type: 'Calendar', name: 'Work', encrypted: true });
+    expect(messages[0].metadata).toEqual({ type: 'Calendar', name: 'Work' });
   });
 
   it('metadata.type does not collide with message type when building worker message', () => {
@@ -204,40 +203,16 @@ describe('dispatch message shape', () => {
     expect(messages[1].docId).toBe('doc-1');
   });
 
-  it('encrypted flag is preserved in metadata for worker init', () => {
-    // After refresh, the worker reads IDB entries and uses encrypted flag for
-    // repo routing. This test verifies the field survives the dispatch.
-    const posted: any[] = [];
-    setDocListDispatch((msgType, docId, metadata) => {
-      posted.push({ type: msgType, docId, metadata });
-    });
-
-    addDocId('secure-doc', { type: 'Calendar', name: 'Work', encrypted: true });
-
-    expect(posted).toHaveLength(1);
-    const msg = posted[0];
-    expect(msg.metadata.encrypted).toBe(true);
-    const idbEntry = { id: msg.docId, ...msg.metadata };
-    expect(idbEntry).toEqual({
-      id: 'secure-doc',
-      type: 'Calendar',
-      name: 'Work',
-      encrypted: true,
-    });
-  });
-
   it('simulated IDB round-trip preserves all metadata needed for reload', () => {
     // When the worker stores metadata to IDB and reloads on refresh, all fields
-    // must survive. This is critical because:
-    // - encrypted → always true for keyhive documents
-    // - type/name → shown on homepage before doc subscription resolves
+    // (type/name, shown on homepage before doc subscription resolves) must survive.
     const posted: any[] = [];
     setDocListDispatch((msgType, docId, metadata) => {
       posted.push({ type: msgType, docId, metadata });
     });
 
-    addDocId('doc-1', { type: 'TaskList', name: 'Tasks', encrypted: false });
-    addDocId('doc-2', { type: 'Calendar', name: 'Work', encrypted: true });
+    addDocId('doc-1', { type: 'TaskList', name: 'Tasks' });
+    addDocId('doc-2', { type: 'Calendar', name: 'Work' });
 
     // Simulate what the worker does: store to IDB, then reload on refresh
     const idbList = posted.map(msg => ({ id: msg.docId, ...msg.metadata }));
@@ -247,7 +222,7 @@ describe('dispatch message shape', () => {
     const reloaded = getDocList();
 
     expect(reloaded).toHaveLength(2);
-    expect(reloaded[0]).toEqual({ id: 'doc-1', type: 'TaskList', name: 'Tasks', encrypted: false });
-    expect(reloaded[1]).toEqual({ id: 'doc-2', type: 'Calendar', name: 'Work', encrypted: true });
+    expect(reloaded[0]).toEqual({ id: 'doc-1', type: 'TaskList', name: 'Tasks' });
+    expect(reloaded[1]).toEqual({ id: 'doc-2', type: 'Calendar', name: 'Work' });
   });
 });

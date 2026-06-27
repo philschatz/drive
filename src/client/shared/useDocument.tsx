@@ -31,7 +31,7 @@ export function useDocument(docId: string | undefined) {
         if (!cancelled) {
           setProgress(100); setMessage('Ready'); setStatus('ready');
           // Ensure the doc appears in the home page doc list (e.g. when visiting a shared URL)
-          addDocId(docId, { encrypted: true });
+          addDocId(docId);
         }
       })
       .catch((err) => { if (!cancelled) { setStatus('error'); setError(err.message); } });

@@ -44,7 +44,7 @@ export function Contacts({ path }: { path?: string }) {
     try {
       // Ensure worker has pushed contact names before we read the cache
       await keyhiveReady;
-      const docs = getDocList().filter(d => d.encrypted);
+      const docs = getDocList();
       // getKnownContacts is the source of truth for *who* is a contact — it surfaces
       // received friends even before any doc is shared (mirrors the Share panel). The
       // per-doc member lists then enrich each contact with device counts and the docs

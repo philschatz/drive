@@ -7,7 +7,6 @@ import { EditorTitleBar } from '../shared/EditorTitleBar';
 import { useDocumentHistory } from '../shared/useDocumentHistory';
 import { useAccess } from '../shared/useAccess';
 import { HistorySlider } from '../shared/HistorySlider';
-import { getDocEntry } from '../doc-storage';
 import type { TaskDocument, Task } from './schema';
 import { TaskEditor } from './TaskEditor';
 import { useDocumentValidation } from '../shared/useDocumentValidation';
@@ -69,10 +68,9 @@ export function Tasks({ docId, rest, readOnly }: { docId?: string; rest?: string
 
   const history = useDocumentHistory(docId!);
   const validationErrors = useDocumentValidation(docId);
-  const encrypted = !!getDocEntry(docId!)?.encrypted;
-  const { access, canEdit: accessCanEdit, loaded: accessLoaded } = useAccess(encrypted ? docId : undefined);
+  const { access, canEdit: accessCanEdit, loaded: accessLoaded } = useAccess(docId);
   const canEdit = !readOnly && history.editable && accessCanEdit;
-  const noAccess = encrypted && accessLoaded && access === null;
+  const noAccess = accessLoaded && access === null;
   const canEditRef = useRef(canEdit);
   canEditRef.current = canEdit;
   const broadcastRef = useRef<((key: keyof PresenceState, value: any) => void) | null>(null);

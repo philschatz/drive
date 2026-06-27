@@ -3,7 +3,6 @@ import { useWsStatus, getWorkerPeerId } from './automerge';
 import { peerColor, peerDisplayName } from './presence';
 import { AccessControl } from '../components/AccessControl';
 import { useAccess } from './useAccess';
-import { getDocEntry } from '../doc-storage';
 
 interface PeerLike {
   peerId: string;
@@ -51,8 +50,7 @@ export function EditorTitleBar<P extends PeerLike>({
   children?: ComponentChildren;
 }) {
   const connected = useWsStatus(docId!);
-  const encrypted = docId ? !!getDocEntry(docId)?.encrypted : false;
-  const { access } = useAccess(encrypted ? docId : undefined);
+  const { access } = useAccess(docId);
 
   return (
     <div className="flex items-center gap-1.5 px-1 min-h-10 w-full">
@@ -108,7 +106,7 @@ export function EditorTitleBar<P extends PeerLike>({
         </span>
 
         {/* Sharing / access button */}
-        {encrypted && docId && (
+        {docId && (
           <AccessControl
             docId={docId}
             docType={docType}

@@ -29,7 +29,6 @@ interface DocEntry {
   lastUpdated: string | null;
   loading: boolean;
   peers: string[];
-  encrypted?: boolean;
   /** null = no access / revoked, undefined = not yet checked */
   access?: string | null;
 }
@@ -48,8 +47,7 @@ function initialEntries(): DocEntry[] {
     lastUpdated: null,
     loading: true,
     peers: [],
-    encrypted: e.encrypted,
-    access: e.encrypted ? getCachedAccess(e.id) : undefined,
+    access: getCachedAccess(e.id),
   }));
 }
 
@@ -89,7 +87,6 @@ export function Home({ path }: { path?: string }) {
               lastUpdated: null,
               loading: true,
               peers: [],
-              encrypted: e.encrypted,
             },
         );
       });
@@ -112,21 +109,18 @@ export function Home({ path }: { path?: string }) {
       })
     );
 
-    // Fetch keyhive access for encrypted docs
+    // Fetch keyhive access for every doc (all docs are encrypted/keyhive-backed).
     const fetchAccessForDocs = () => {
       for (const docId of docIds) {
-        const entry = getDocList().find(e => e.id === docId);
-        if (entry?.encrypted) {
-          getMyAccess(docId).then(access => {
-            setEntries(prev => prev.map(e =>
-              e.documentId === docId ? { ...e, access: access?.toLowerCase() ?? null } : e
-            ));
-          }).catch(() => {
-            setEntries(prev => prev.map(e =>
-              e.documentId === docId ? { ...e, access: null } : e
-            ));
-          });
-        }
+        getMyAccess(docId).then(access => {
+          setEntries(prev => prev.map(e =>
+            e.documentId === docId ? { ...e, access: access?.toLowerCase() ?? null } : e
+          ));
+        }).catch(() => {
+          setEntries(prev => prev.map(e =>
+            e.documentId === docId ? { ...e, access: null } : e
+          ));
+        });
       }
     };
     fetchAccessForDocs();
@@ -153,7 +147,6 @@ export function Home({ path }: { path?: string }) {
           lastUpdated: null,
           loading: true,
           peers: [],
-          encrypted: e.encrypted,
         }));
       return newEntries.length > 0 ? [...prev, ...newEntries] : prev;
     });
@@ -164,7 +157,7 @@ export function Home({ path }: { path?: string }) {
     if (name === null) return;
     const resolvedName = name || 'Untitled';
     const { docId } = await createDoc({ '@type': 'Calendar', name: resolvedName, events: {} });
-    addDocId(docId, { type: 'Calendar', name: resolvedName, encrypted: true });
+    addDocId(docId, { type: 'Calendar', name: resolvedName });
     window.location.hash = viewPathForType('Calendar', docId);
   };
 
@@ -173,7 +166,7 @@ export function Home({ path }: { path?: string }) {
     if (name === null) return;
     const resolvedName = name || 'Untitled';
     const { docId } = await createDoc({ '@type': 'TaskList', name: resolvedName, tasks: {} });
-    addDocId(docId, { type: 'TaskList', name: resolvedName, encrypted: true });
+    addDocId(docId, { type: 'TaskList', name: resolvedName });
     window.location.hash = viewPathForType('TaskList', docId);
   };
 
@@ -199,7 +192,7 @@ export function Home({ path }: { path?: string }) {
         },
       },
     });
-    addDocId(docId, { type: 'DataGrid', name: resolvedName, encrypted: true });
+    addDocId(docId, { type: 'DataGrid', name: resolvedName });
     window.location.hash = viewPathForType('DataGrid', docId);
   };
 
@@ -234,7 +227,7 @@ export function Home({ path }: { path?: string }) {
       // Create the document before parsing
       setImportStatus({ label: 'Creating document...', progress: 0 });
       const { docId } = await createDoc({ '@type': 'DataGrid', name, sheets: {} });
-      addDocId(docId, { type: 'DataGrid', name, encrypted: true });
+      addDocId(docId, { type: 'DataGrid', name });
 
       setImportStatus({ label: 'Reading file...', progress: 2 });
       await new Promise(r => setTimeout(r, 0));
@@ -719,7 +712,7 @@ export function Home({ path }: { path?: string }) {
       const { docId } = await createDoc(data);
       const type = (data['@type'] === 'Calendar' || data['@type'] === 'TaskList' || data['@type'] === 'DataGrid')
         ? data['@type'] as DocType : 'unknown';
-      addDocId(docId, { type, name, encrypted: true });
+      addDocId(docId, { type, name });
       window.location.hash = viewPathForType(type, docId);
     } catch (err: any) {
       setError('Import failed: ' + err.message);
@@ -745,7 +738,7 @@ export function Home({ path }: { path?: string }) {
       const events: Record<string, any> = {};
       for (const { uid, event } of parsed) events[uid] = event;
       const { docId } = await createDoc({ '@type': 'Calendar', name: calName, events });
-      addDocId(docId, { type: 'Calendar', name: calName, encrypted: true });
+      addDocId(docId, { type: 'Calendar', name: calName });
       setImportStatus(null);
       window.location.hash = viewPathForType('Calendar', docId);
     } catch (err: any) {
@@ -776,7 +769,7 @@ export function Home({ path }: { path?: string }) {
 
   const sortedEntries = useMemo(() => {
     const indexById = new Map(entries.map((e, i) => [e.documentId, i]));
-    const noAccess = (e: DocEntry) => e.encrypted === true && e.access === null;
+    const noAccess = (e: DocEntry) => e.access === null;
     return [...entries].sort((a, b) => {
       // No-access (revoked) docs always sink to the bottom
       const aNo = noAccess(a), bNo = noAccess(b);
@@ -885,7 +878,7 @@ export function Home({ path }: { path?: string }) {
 
       <div className="flex flex-col">
         {sortedEntries.map(entry => {
-          const noEntryAccess = entry.encrypted && entry.access === null;
+          const noEntryAccess = entry.access === null;
           const viewPath = viewPathForType(entry.type, entry.documentId);
           const icon = iconForType(entry.type);
           return (
@@ -907,7 +900,7 @@ export function Home({ path }: { path?: string }) {
               </a>
               {entry.loading ? (
                 <Progress className="w-16" value={0} title="Loading..." />
-              ) : entry.encrypted && entry.access === null ? (
+              ) : entry.access === null ? (
                 <span className="text-xs text-muted-foreground flex items-center gap-1" title="You no longer have access to updates">
                   No access
                 </span>

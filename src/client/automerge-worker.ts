@@ -90,7 +90,7 @@ export type WorkerToMain =
   // Validation
   | { type: 'update-validation'; docId: string; errors: ValidationError[] }
   // Doc list / contact names push
-  | { type: 'doc-list-updated'; list: Array<{ id: string; type?: string; name?: string; encrypted?: boolean; sharingGroupId?: string }> }
+  | { type: 'doc-list-updated'; list: Array<{ id: string; type?: string; name?: string; sharingGroupId?: string }> }
   | { type: 'contact-names-updated'; names: Record<string, string> }
   // Keyhive state changed (membership/access may have changed)
   | { type: 'kh-state-changed' }
@@ -597,7 +597,7 @@ async function reconcileHomeDocsOnce() {
   try {
     const { accessibleKhIds, reachableKhIds } = await khOps.enumerateUserDocs();
     const { idbGet, idbSet } = await import('./idb-storage');
-    type StoredDocEntry = { id: string; type?: string; name?: string; encrypted?: boolean; sharingGroupId?: string };
+    type StoredDocEntry = { id: string; type?: string; name?: string; sharingGroupId?: string };
     const list = (await idbGet<StoredDocEntry[]>('automerge-doc-ids')) ?? [];
     const knownIds = new Set(list.map(e => e.id));
     const accessibleAmIds = new Set(accessibleKhIds.map(k => amDocIdFromBytes!(base64ToBytes(k))));
@@ -609,17 +609,17 @@ async function reconcileHomeDocsOnce() {
     for (const amDocId of accessibleAmIds) {
       if (knownIds.has(amDocId)) continue;
       console.log(`[worker] reconcileHomeDocs: adding accessible doc ${amDocId}`);
-      list.unshift({ id: amDocId, encrypted: true });
+      list.unshift({ id: amDocId });
       knownIds.add(amDocId);
       newDocHandles.push(amDocId);
       changed = true;
     }
 
-    // PRUNE encrypted entries the user-group can no longer access, but only when
-    // confirmed revoked (still reachable in the graph). Keep unsynced/offline docs.
+    // PRUNE entries the user-group can no longer access, but only when confirmed
+    // revoked (still reachable in the graph). Keep unsynced/offline docs.
     for (let i = list.length - 1; i >= 0; i--) {
       const e = list[i];
-      if (!e.encrypted || accessibleAmIds.has(e.id)) continue;
+      if (accessibleAmIds.has(e.id)) continue;
       const khDocId = resolveKhDocId(e.id);
       if (reachableSet.has(khDocId)) {
         console.log(`[worker] reconcileHomeDocs: removing revoked doc ${e.id}`);
@@ -998,21 +998,19 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
           console.warn('[worker] keyhive dump failed:', dumpErr);
         }
 
-        // Pre-register encrypted docs with keyhive and push doc list + contact names
-        // BEFORE kh-ready so code awaiting keyhiveReady can read them immediately.
+        // Pre-register docs with keyhive and push doc list + contact names BEFORE
+        // kh-ready so code awaiting keyhiveReady can read them immediately.
         {
           const { idbGet: idbGetDocs } = await import('./idb-storage');
-          type StoredDocEntry = { id: string; encrypted?: boolean;[key: string]: any };
+          type StoredDocEntry = { id: string;[key: string]: any };
           const earlyList = (await idbGetDocs<StoredDocEntry[]>('automerge-doc-ids')) ?? [];
           for (const entry of earlyList) {
-            if (entry.encrypted) {
-              const khDocId = resolveKhDocId(entry.id);
-              try {
-                khOps!.registerDocMapping(entry.id, khDocId);
-                await khOps!.registerSharingGroup(khDocId);
-              } catch (err) {
-                console.warn(`[worker] Failed to pre-register doc ${entry.id}:`, errMsg(err));
-              }
+            const khDocId = resolveKhDocId(entry.id);
+            try {
+              khOps!.registerDocMapping(entry.id, khDocId);
+              await khOps!.registerSharingGroup(khDocId);
+            } catch (err) {
+              console.warn(`[worker] Failed to pre-register doc ${entry.id}:`, errMsg(err));
             }
           }
           (self as any).postMessage({ type: 'doc-list-updated', list: earlyList } satisfies WorkerToMain);
@@ -1030,7 +1028,7 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
       // Doc list and contact names already pushed before kh-ready above.
       // Re-read for invite pruning.
       const { idbGet } = await import('./idb-storage');
-      type StoredDocEntry = { id: string; type?: string; name?: string; encrypted?: boolean; sharingGroupId?: string };
+      type StoredDocEntry = { id: string; type?: string; name?: string; sharingGroupId?: string };
       const docList = (await idbGet<StoredDocEntry[]>('automerge-doc-ids')) ?? [];
 
       // Prune invite records for docs no longer in the list
@@ -1069,7 +1067,7 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
         const { idbGet: idbGetList, idbSet: idbSetList } = await import('./idb-storage');
         type S = { id: string;[k: string]: any };
         const earlyList = (await idbGetList<S[]>('automerge-doc-ids')) ?? [];
-        earlyList.unshift({ id: handle.documentId, encrypted: true });
+        earlyList.unshift({ id: handle.documentId });
         await idbSetList('automerge-doc-ids', earlyList);
         (self as any).postMessage({ type: 'doc-list-updated', list: earlyList } satisfies WorkerToMain);
       }
@@ -1336,7 +1334,7 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
       // No dismissed-list bookkeeping: losing group access is what makes the doc
       // drop off the home list (here and on the user's other devices) at the next
       // reconcile — there's nothing to hide.
-      const removedKhDocId = removedEntry?.encrypted ? resolveKhDocId(msg.docId) : null;
+      const removedKhDocId = removedEntry ? resolveKhDocId(msg.docId) : null;
       if (removedKhDocId && khOps) {
         try {
           await khOps.removeMyAccess(removedKhDocId);
