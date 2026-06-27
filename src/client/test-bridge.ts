@@ -14,6 +14,7 @@
 import * as workerApi from './worker-api';
 import { workerReady, keyhiveReady } from './worker-api';
 import {
+  addDocId,
   removeDocId,
   getDocList,
   onDocListUpdated,
@@ -23,6 +24,7 @@ import { getAllContactNames } from './contact-names';
 const bridge = {
   ...workerApi,
   // doc-list helpers (these live in doc-storage, not worker-api)
+  addDocId,
   removeDocId,
   getDocList,
   onDocListUpdated,

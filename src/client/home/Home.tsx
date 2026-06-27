@@ -38,7 +38,7 @@ function relativeTime(ts: string | null): string {
   return dayjs(ts).fromNow();
 }
 
-function initialEntries(): DocEntry[] {
+function entriesFromCache(): DocEntry[] {
   return getDocList().map(e => ({
     type: (e.type || 'unknown') as DocType,
     documentId: e.id,
@@ -63,7 +63,7 @@ function applyQueryResult(prev: DocEntry[], docId: string, result: any, lastModi
 }
 
 export function Home({ path }: { path?: string }) {
-  const [entries, setEntries] = useState<DocEntry[]>(initialEntries);
+  const [entries, setEntries] = useState<DocEntry[]>([]);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [importStatus, setImportStatus] = useState<{ label: string; progress: number } | null>(null);
@@ -73,10 +73,11 @@ export function Home({ path }: { path?: string }) {
 
   useEffect(() => { document.title = 'Automerge Documents'; }, []);
 
-  // Pull the doc list from the worker (the source of truth). Results flow in via the
-  // onDocListUpdated subscription below; this also drives the loading state and is the
-  // only source when the localStorage cache is disabled.
+  // Seed instantly from the cache (returns [] when caching is disabled), then pull the
+  // authoritative list from the worker. Both flow into `entries` via setEntries / the
+  // onDocListUpdated subscription below, which also keeps the cache fresh on worker pushes.
   useEffect(() => {
+    setEntries(entriesFromCache());
     fetchDocList().catch((err) => console.warn('[Home] fetchDocList failed:', err)).finally(() => setListLoading(false));
   }, []);
 

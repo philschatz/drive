@@ -11,7 +11,8 @@ import type { PresenceState, PeerState } from '@automerge/automerge-repo';
 import { deepAssign } from '../shared/deep-assign';
 import type { RendezvousStatus } from '../shared/rendezvous-protocol';
 export type { RendezvousStatus } from '../shared/rendezvous-protocol';
-import { idbGet, idbDelPrefix, hashStr, settingGet, settingSetSync, isCacheDisabled, type QueryCacheEntry } from './idb-storage';
+import { idbDelPrefix, settingGet, settingSetSync } from './idb-storage';
+import { queryFastPath } from './client-cache';
 import { setDocListDispatch, applyDocListFromWorker, type DocEntry } from './doc-storage';
 import { setContactNamesDispatch, applyContactNamesFromWorker } from './contact-names';
 
@@ -486,16 +487,13 @@ export function subscribeQuery(
   });
   fire('subscribe-query', { subId, docId, filter });
 
-  // Fast path: read from IDB on main thread while worker may be blocked
-  // parsing a large document's WASM binary. Skipped when caching is disabled.
-  if (!isCacheDisabled()) {
-    const cacheKey = `qc:${docId}:${hashStr(filter)}`;
-    idbGet<QueryCacheEntry>(cacheKey).then(cached => {
-      if (cached && !workerResponded && subscriptionCallbacks.has(subId)) {
-        onResult(cached.result, cached.heads, cached.lastModified);
-      }
-    });
-  }
+  // Fast path: read from IDB on main thread while worker may be blocked parsing a
+  // large document's WASM binary. Resolves to null when caching is disabled.
+  queryFastPath.read(docId, filter).then(cached => {
+    if (cached && !workerResponded && subscriptionCallbacks.has(subId)) {
+      onResult(cached.result, cached.heads, cached.lastModified);
+    }
+  });
 
   return () => {
     subscriptionCallbacks.delete(subId);

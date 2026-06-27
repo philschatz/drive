@@ -1,28 +1,15 @@
 import { useState, useEffect, useCallback } from 'preact/hooks';
 import { getMyAccess, onKeyhiveStateChanged } from './keyhive-api';
-import { isCacheDisabled } from '../idb-storage';
+import { accessCache } from '../client-cache';
 
 export type AccessLevel = 'admin' | 'edit' | 'read' | 'relay' | null;
 
-const ACCESS_CACHE_KEY = 'keyhive-access-cache';
-
-function readAccessCache(): Record<string, string> {
-  try { return JSON.parse(localStorage.getItem(ACCESS_CACHE_KEY) || '{}'); }
-  catch { return {}; }
-}
-
 function writeAccessCache(docId: string, access: AccessLevel): void {
-  if (isCacheDisabled()) return; // don't repopulate the cache when disabled
-  const cache = readAccessCache();
-  if (access === null) delete cache[docId];
-  else cache[docId] = access;
-  localStorage.setItem(ACCESS_CACHE_KEY, JSON.stringify(cache));
+  accessCache.write(docId, access); // no-op when caching is disabled
 }
 
 export function getCachedAccess(docId: string): AccessLevel {
-  if (isCacheDisabled()) return null; // bypass the cache (covers useAccess + Home seeds)
-  const cache = readAccessCache();
-  return (cache[docId] as AccessLevel) ?? null;
+  return accessCache.read(docId); // null when caching is disabled
 }
 
 /**

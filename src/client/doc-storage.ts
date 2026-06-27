@@ -1,4 +1,4 @@
-import { isCacheDisabled } from './idb-storage';
+import { docListCache } from './client-cache';
 
 type DocType = 'Calendar' | 'TaskList' | 'DataGrid' | 'unknown';
 
@@ -9,8 +9,6 @@ export interface DocEntry {
   /** Keyhive sharing group ID (base64-encoded). Needed to restore after reload. */
   sharingGroupId?: string;
 }
-
-const DOC_STORAGE_KEY = 'automerge-doc-ids';
 
 // --- Dispatch hook (injected from automerge.ts to avoid circular imports) ---
 
@@ -64,18 +62,13 @@ export function applyDocListFromWorker(list: DocEntry[]): void {
 // --- Core storage (reads/writes localStorage as sync cache) ---
 
 export function getDocList(): DocEntry[] {
-  // localStorage is a cache only; when disabled, callers fetch from the worker (fetchDocList).
-  if (isCacheDisabled()) return [];
-  try {
-    const raw = JSON.parse(localStorage.getItem(DOC_STORAGE_KEY) || '[]');
-    if (!Array.isArray(raw)) return [];
-    return raw;
-  } catch { return []; }
+  // localStorage is a cache only; when disabled, docListCache.read() returns [] and
+  // callers fetch from the worker (fetchDocList) instead.
+  return docListCache.read();
 }
 
 function saveDocList(list: DocEntry[]) {
-  if (isCacheDisabled()) return; // skip the persistent cache when disabled
-  localStorage.setItem(DOC_STORAGE_KEY, JSON.stringify(list));
+  docListCache.write(list); // no-op when caching is disabled
 }
 
 export function addDocId(id: string, cache?: Omit<DocEntry, 'id'>) {
