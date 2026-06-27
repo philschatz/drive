@@ -11,6 +11,8 @@ import {
   removeDevice,
   rendezvousCreateShare,
   rendezvousCreateDeviceLink,
+  onKeyhiveStateChanged,
+  onRendezvousEvent,
   type IdentityInfo,
   type DeviceInfo,
 } from '../shared/keyhive-api';
@@ -52,6 +54,15 @@ export function Settings({ path }: { path?: string }) {
   }, []);
 
   useEffect(() => { refresh(); }, [refresh]);
+
+  // Keep the device list current when a link completes. On the sharer device the
+  // 'linked' rendezvous event fires the moment the new device finishes; on either
+  // device a keyhive state change (membership synced via the relay) also refreshes.
+  useEffect(() => {
+    const offRdv = onRendezvousEvent((e) => { if (e.status === 'linked') refresh(); });
+    const offState = onKeyhiveStateChanged(() => refresh());
+    return () => { offRdv(); offState(); };
+  }, [refresh]);
 
   const handleShowContactCard = () => {
     setShowDeviceLink(true);
@@ -264,9 +275,9 @@ export function Settings({ path }: { path?: string }) {
                   key={deviceLinkNonce}
                   create={rendezvousCreateDeviceLink}
                   buildUrl={buildLinkDeviceRendezvousUrl}
-                  doneStatuses={['linked']}
-                  waitingLabel="Keep this open until your new device opens the link."
-                  doneLabel="✓ Device linked."
+                  waitingLabel="Waiting for your new device to open the link…"
+                  transferLabel="Exchanging keys with your new device…"
+                  doneLabel="Device linked."
                 />
               </div>
             )}
@@ -297,9 +308,9 @@ export function Settings({ path }: { path?: string }) {
               key={`${friendShareNonce}:${friendShareName}`}
               create={() => rendezvousCreateShare(friendShareName || undefined)}
               buildUrl={buildAddFriendRendezvousUrl}
-              doneStatuses={['sent']}
-              waitingLabel="Keep this open until your friend opens the link."
-              doneLabel="✓ Sent — they have your contact info."
+              waitingLabel="Waiting for your friend to open the link…"
+              transferLabel="Sending your contact info…"
+              doneLabel="Sent — they have your contact info."
             />
           </div>
         )}

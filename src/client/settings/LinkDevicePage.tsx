@@ -14,7 +14,9 @@
 import { useState, useCallback, useEffect } from 'preact/hooks';
 import { Button } from '@/components/ui/button';
 import { QRCodeDisplay } from '@/components/ui/qr-code';
-import { receiveContactCard, linkDevice, getLinkPayload, rendezvousJoinDeviceLink } from '../shared/keyhive-api';
+import { receiveContactCard, linkDevice, getLinkPayload, rendezvousJoinDeviceLink, onRendezvousEvent } from '../shared/keyhive-api';
+import type { RendezvousStatus } from '../worker-api';
+import { RendezvousProgress } from './RendezvousProgress';
 import { deflate, inflate } from 'pako';
 
 /** Parse the rendezvous URL form `r.<id>.<key>` (base64url parts; '.' separates). */
@@ -85,6 +87,20 @@ export function LinkDevicePage({ cardData }: LinkDevicePageProps) {
   const [done, setDone] = useState(false);
   const [processing, setProcessing] = useState(false);
   const [myCardUrl, setMyCardUrl] = useState('');
+  const [phase, setPhase] = useState<RendezvousStatus | null>(null);
+
+  // Rendezvous join path (preferred): the tiny QR carries only {id, key}.
+  const rdv = cardData ? parseRendezvous(cardData) : null;
+
+  // Mirror the sharer's step-by-step progress (and channel id) on this device.
+  useEffect(() => {
+    if (!rdv) return;
+    const off = onRendezvousEvent((e) => {
+      if (e.rendezvousId === rdv.rendezvousId && e.status !== 'error') setPhase(e.status);
+    });
+    return off;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rdv?.rendezvousId]);
 
   const doLink = useCallback(async () => {
     if (!cardData) {
@@ -95,7 +111,6 @@ export function LinkDevicePage({ cardData }: LinkDevicePageProps) {
     setError(null);
 
     try {
-      const rdv = parseRendezvous(cardData);
       if (rdv) {
         // Preferred path: bidirectional handshake over the encrypted relay
         // rendezvous (the original device's card is too large for a QR).
@@ -139,6 +154,8 @@ export function LinkDevicePage({ cardData }: LinkDevicePageProps) {
     } finally {
       setProcessing(false);
     }
+    // `rdv` is derived from cardData; depending on it would rebuild this each render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cardData]);
 
   // Auto-start once when the page mounts with card data.
@@ -154,6 +171,11 @@ export function LinkDevicePage({ cardData }: LinkDevicePageProps) {
       {error ? (
         <div className="text-destructive mb-4">
           <p className="mb-2">{error}</p>
+          {rdv && (
+            <p className="text-[10px] text-muted-foreground mb-2">
+              Channel: <code className="font-mono">{rdv.rendezvousId.slice(0, 8)}…</code>
+            </p>
+          )}
           <div className="flex gap-2 justify-center">
             <Button variant="default" onClick={doLink} disabled={processing}>
               Retry
@@ -165,7 +187,19 @@ export function LinkDevicePage({ cardData }: LinkDevicePageProps) {
         </div>
       ) : (
         <div>
-          <p className="text-sm text-muted-foreground mb-4">{status}</p>
+          {rdv && !done ? (
+            <div className="mb-4">
+              <RendezvousProgress
+                phase={phase}
+                rendezvousId={rdv.rendezvousId}
+                waitingLabel="Connecting to your other device — keep both open…"
+                transferLabel="Exchanging keys…"
+                doneLabel="Linked."
+              />
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground mb-4">{status}</p>
+          )}
           {done && (
             <>
               {myCardUrl ? (

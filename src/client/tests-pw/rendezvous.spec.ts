@@ -18,11 +18,15 @@ test('rendezvous transfers a contact without embedding it in a URL', async ({ br
     expect(rendezvousId.length).toBeLessThan(64);
     expect(key.length).toBeLessThan(64);
 
-    // Alice should be told when the payload has been sent.
+    // Alice should be told when the payload has been sent. The worker now emits a
+    // richer progress stream (waiting → peer-joined → sending → sent), so wait for
+    // the terminal status rather than the first event.
     const sentPromise = alice.page.evaluate(
       (rid) => new Promise<string>((resolve) => {
         const off = (window as any).__drive.onRendezvousEvent((e: any) => {
-          if (e.rendezvousId === rid) { off(); resolve(e.status); }
+          if (e.rendezvousId === rid && (e.status === 'sent' || e.status === 'error')) {
+            off(); resolve(e.status);
+          }
         });
       }),
       rendezvousId,

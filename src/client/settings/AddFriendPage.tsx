@@ -13,9 +13,11 @@
 
 import { useState, useCallback, useEffect } from 'preact/hooks';
 import { Button } from '@/components/ui/button';
-import { receiveContactCard, rendezvousReceive, rendezvousCreateShare } from '../shared/keyhive-api';
+import { receiveContactCard, rendezvousReceive, rendezvousCreateShare, onRendezvousEvent } from '../shared/keyhive-api';
+import type { RendezvousStatus } from '../worker-api';
 import { setContactName } from '../contact-names';
 import { RendezvousShare } from './RendezvousShare';
+import { RendezvousProgress } from './RendezvousProgress';
 import { deflate, inflate } from 'pako';
 
 interface AddFriendPageProps {
@@ -89,6 +91,21 @@ export function AddFriendPage({ cardData }: AddFriendPageProps) {
   const [name, setName] = useState('');
   const [saved, setSaved] = useState(false);
   const [processing, setProcessing] = useState(false);
+  const [phase, setPhase] = useState<RendezvousStatus | null>(null);
+
+  // Rendezvous receive path (preferred): the tiny QR carries only {id, key}.
+  const rdv = cardData ? parseRendezvous(cardData) : null;
+
+  // Subscribe to progress for this channel so the receiver shows the same
+  // step-by-step indicator (and channel id) the sharer does.
+  useEffect(() => {
+    if (!rdv) return;
+    const off = onRendezvousEvent((e) => {
+      if (e.rendezvousId === rdv.rendezvousId && e.status !== 'error') setPhase(e.status);
+    });
+    return off;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rdv?.rendezvousId]);
 
   const doReceive = useCallback(async () => {
     if (!cardData) {
@@ -99,7 +116,6 @@ export function AddFriendPage({ cardData }: AddFriendPageProps) {
     setError(null);
 
     try {
-      const rdv = parseRendezvous(cardData);
       let cardResult: { isOwnCard: boolean; userGroupId: string | null };
       let displayName: string | undefined;
 
@@ -138,6 +154,8 @@ export function AddFriendPage({ cardData }: AddFriendPageProps) {
     } finally {
       setProcessing(false);
     }
+    // `rdv` is derived from cardData; depending on it would rebuild this each render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cardData]);
 
   const handleSave = async () => {
@@ -166,6 +184,11 @@ export function AddFriendPage({ cardData }: AddFriendPageProps) {
       {error ? (
         <div className="text-destructive mb-4">
           <p className="mb-2">{error}</p>
+          {rdv && (
+            <p className="text-[10px] text-muted-foreground mb-2">
+              Channel: <code className="font-mono">{rdv.rendezvousId.slice(0, 8)}…</code>
+            </p>
+          )}
           <div className="flex gap-2 justify-center">
             <Button variant="default" onClick={doReceive} disabled={processing}>
               Retry
@@ -191,9 +214,9 @@ export function AddFriendPage({ cardData }: AddFriendPageProps) {
             <RendezvousShare
               create={() => rendezvousCreateShare()}
               buildUrl={buildAddFriendRendezvousUrl}
-              doneStatuses={['sent']}
-              waitingLabel="Keep this open until your friend opens the link."
-              doneLabel="✓ Sent — they have your contact info."
+              waitingLabel="Waiting for your friend to open the link…"
+              transferLabel="Sending your contact info…"
+              doneLabel="Sent — they have your contact info."
             />
           </div>
           <Button variant="outline" onClick={() => { window.location.hash = '/'; }}>
@@ -223,6 +246,14 @@ export function AddFriendPage({ cardData }: AddFriendPageProps) {
             </Button>
           </div>
         </div>
+      ) : rdv ? (
+        <RendezvousProgress
+          phase={phase}
+          rendezvousId={rdv.rendezvousId}
+          waitingLabel="Connecting to your friend — keep this open…"
+          transferLabel="Receiving their contact info…"
+          doneLabel="Contact received."
+        />
       ) : (
         <p className="text-sm text-muted-foreground">{status || 'Processing...'}</p>
       )}

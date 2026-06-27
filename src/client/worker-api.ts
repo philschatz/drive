@@ -10,6 +10,8 @@ import type { ValidationError } from './automerge-worker';
 import type { PresenceState, PeerState } from '@automerge/automerge-repo';
 import type { InviteRecord } from './invite-storage';
 import { deepAssign } from '../shared/deep-assign';
+import type { RendezvousStatus } from '../shared/rendezvous-protocol';
+export type { RendezvousStatus } from '../shared/rendezvous-protocol';
 import { idbGet, hashStr, type QueryCacheEntry } from './idb-storage';
 import { setDocListDispatch, applyDocListFromWorker } from './doc-storage';
 import { setContactNamesDispatch, applyContactNamesFromWorker } from './contact-names';
@@ -162,7 +164,7 @@ export function onKeyhiveStateChanged(fn: () => void): () => void {
 
 // ── Rendezvous sharer-side events ───────────────────────────────────────────
 
-export interface RendezvousEvent { rendezvousId: string; status: 'sent' | 'linked' | 'error'; message?: string }
+export interface RendezvousEvent { rendezvousId: string; status: RendezvousStatus; message?: string }
 type RendezvousEventListener = (e: RendezvousEvent) => void;
 const rdvEventListeners = new Set<RendezvousEventListener>();
 

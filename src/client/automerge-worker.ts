@@ -7,6 +7,7 @@ import { LRU } from './lru-cache';
 import { decode as cborDecode, Encoder } from 'cbor-x';
 import {
   RDV_SUB, RDV_UNSUB, RDV_MSG, RDV_PEER, isRendezvousType,
+  type RendezvousStatus,
 } from '../shared/rendezvous-protocol';
 import { generateRendezvous, encryptString, decryptString } from './rendezvous-crypto';
 // hashStr and QueryCacheEntry are also exported from idb-storage for main-thread use.
@@ -93,8 +94,9 @@ export type WorkerToMain =
   | { type: 'contact-names-updated'; names: Record<string, string> }
   // Keyhive state changed (membership/access may have changed)
   | { type: 'kh-state-changed' }
-  // Rendezvous sharer-side progress (the receiver path uses a normal `result`)
-  | { type: 'kh-rdv-event'; rendezvousId: string; status: 'sent' | 'linked' | 'error'; message?: string }
+  // Rendezvous progress (emitted for both the sharer and the receiver so each
+  // side can render a step-by-step indicator; the receiver also gets a `result`)
+  | { type: 'kh-rdv-event'; rendezvousId: string; status: RendezvousStatus; message?: string }
   // Relay message log
   | { type: 'relay-log'; entry: { id: number; ts: number; dir: 'sent' | 'recv'; message: any } };
 
@@ -171,6 +173,13 @@ function rdvSend(frame: { type: string; rendezvousId: string; data?: Uint8Array 
   if (rdvSocket && rdvSocket.readyState === WebSocket.OPEN) {
     rdvSocket.send(rdvEncoder.encode(frame) as unknown as ArrayBuffer);
   }
+}
+
+/** Post a rendezvous progress event to the UI (drives the step indicator). */
+function rdvEvent(rendezvousId: string, status: RendezvousStatus, message?: string): void {
+  (self as any).postMessage(
+    { type: 'kh-rdv-event', rendezvousId, status, ...(message !== undefined ? { message } : {}) } satisfies WorkerToMain,
+  );
 }
 
 /** Encrypt and send a payload to the other peer on a rendezvous topic. */
@@ -1438,12 +1447,15 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
       rdvSessions.set(rendezvousId, {
         key,
         onPeer: () => {
+          rdvEvent(rendezvousId, 'peer-joined');
+          rdvEvent(rendezvousId, 'sending');
           rdvSendPayload(rendezvousId, key, plaintext)
-            .then(() => (self as any).postMessage({ type: 'kh-rdv-event', rendezvousId, status: 'sent' } satisfies WorkerToMain))
-            .catch(err => (self as any).postMessage({ type: 'kh-rdv-event', rendezvousId, status: 'error', message: errMsg(err) } satisfies WorkerToMain));
+            .then(() => rdvEvent(rendezvousId, 'sent'))
+            .catch(err => rdvEvent(rendezvousId, 'error', errMsg(err)));
         },
       });
       rdvSend({ type: RDV_SUB, rendezvousId });
+      rdvEvent(rendezvousId, 'waiting');
       (self as any).postMessage({ type: 'result', id: msg.id, result: { rendezvousId, key } } satisfies WorkerToMain);
     } catch (err: any) {
       (self as any).postMessage({ type: 'result', id: msg.id, error: errMsg(err) } satisfies WorkerToMain);
@@ -1463,9 +1475,16 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
         }, RDV_RECEIVE_TIMEOUT_MS);
         rdvSessions.set(rendezvousId, {
           key,
-          onData: (pt) => { clearTimeout(timer); rdvSessions.delete(rendezvousId); resolve(pt); },
+          onPeer: () => rdvEvent(rendezvousId, 'peer-joined'),
+          onData: (pt) => {
+            clearTimeout(timer);
+            rdvSessions.delete(rendezvousId);
+            rdvEvent(rendezvousId, 'receiving');
+            resolve(pt);
+          },
         });
         rdvSend({ type: RDV_SUB, rendezvousId });
+        rdvEvent(rendezvousId, 'waiting');
       });
 
       let cardJson = plaintext;
@@ -1482,6 +1501,7 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
       rdvSend({ type: RDV_UNSUB, rendezvousId });
       const resolvedGroupId = userGroupId ?? result.groupId ?? null;
       if (!result.isOwnCard && resolvedGroupId) await addKnownContactGroup(resolvedGroupId);
+      rdvEvent(rendezvousId, 'received');
       (self as any).postMessage({
         type: 'result', id: msg.id,
         result: { ...result, userGroupId: resolvedGroupId, displayName },
@@ -1489,6 +1509,7 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
     } catch (err: any) {
       rdvSessions.delete(rendezvousId);
       rdvSend({ type: RDV_UNSUB, rendezvousId });
+      rdvEvent(rendezvousId, 'error', errMsg(err));
       (self as any).postMessage({ type: 'result', id: msg.id, error: errMsg(err) } satisfies WorkerToMain);
     }
   }
@@ -1507,25 +1528,29 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
       rdvSessions.set(rendezvousId, {
         key,
         onPeer: () => {
+          rdvEvent(rendezvousId, 'peer-joined');
+          rdvEvent(rendezvousId, 'sending');
           rdvSendPayload(rendezvousId, key, myPayload).catch(err =>
-            (self as any).postMessage({ type: 'kh-rdv-event', rendezvousId, status: 'error', message: errMsg(err) } satisfies WorkerToMain));
+            rdvEvent(rendezvousId, 'error', errMsg(err)));
         },
         onData: (pt) => {
           (async () => {
             try {
+              rdvEvent(rendezvousId, 'receiving');
               const { card: peerCard, userGroupId: peerGroupId } = JSON.parse(pt);
               const result = await khOps!.receiveContactCard(peerCard);
               await khOps!.linkDevice(result.agentId, peerGroupId ?? null);
               rdvSessions.delete(rendezvousId);
               rdvSend({ type: RDV_UNSUB, rendezvousId });
-              (self as any).postMessage({ type: 'kh-rdv-event', rendezvousId, status: 'linked' } satisfies WorkerToMain);
+              rdvEvent(rendezvousId, 'linked');
             } catch (err: any) {
-              (self as any).postMessage({ type: 'kh-rdv-event', rendezvousId, status: 'error', message: errMsg(err) } satisfies WorkerToMain);
+              rdvEvent(rendezvousId, 'error', errMsg(err));
             }
           })();
         },
       });
       rdvSend({ type: RDV_SUB, rendezvousId });
+      rdvEvent(rendezvousId, 'waiting');
       (self as any).postMessage({ type: 'result', id: msg.id, result: { rendezvousId, key } } satisfies WorkerToMain);
     } catch (err: any) {
       (self as any).postMessage({ type: 'result', id: msg.id, error: errMsg(err) } satisfies WorkerToMain);
@@ -1546,9 +1571,11 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
         }, RDV_RECEIVE_TIMEOUT_MS);
         rdvSessions.set(rendezvousId, {
           key,
+          onPeer: () => rdvEvent(rendezvousId, 'peer-joined'),
           onData: (pt) => {
             (async () => {
               try {
+                rdvEvent(rendezvousId, 'receiving');
                 const { card: peerCard, userGroupId: peerGroupId } = JSON.parse(pt);
                 const result = await khOps!.receiveContactCard(peerCard);
                 if (result.isOwnCard) throw new Error("This is your own device's link. Open it on a different device.");
@@ -1557,21 +1584,25 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
                 // Leg 2: send our now-adopted card back so the original adds us.
                 const myUserGroupId = await khOps!.ensureUserGroup({ create: true });
                 const myCard = await khOps!.getContactCard();
+                rdvEvent(rendezvousId, 'sending');
                 await rdvSendPayload(rendezvousId, key, JSON.stringify({ card: myCard, userGroupId: myUserGroupId }));
                 clearTimeout(timer);
                 rdvSessions.delete(rendezvousId);
                 rdvSend({ type: RDV_UNSUB, rendezvousId });
+                rdvEvent(rendezvousId, 'linked');
                 resolve();
               } catch (err) {
                 clearTimeout(timer);
                 rdvSessions.delete(rendezvousId);
                 rdvSend({ type: RDV_UNSUB, rendezvousId });
+                rdvEvent(rendezvousId, 'error', errMsg(err));
                 reject(err);
               }
             })();
           },
         });
         rdvSend({ type: RDV_SUB, rendezvousId });
+        rdvEvent(rendezvousId, 'waiting');
       });
       (self as any).postMessage({ type: 'result', id: msg.id, result: { ok: true } } satisfies WorkerToMain);
     } catch (err: any) {

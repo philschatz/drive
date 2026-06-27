@@ -30,3 +30,26 @@ export interface RdvDataMsg { type: typeof RDV_MSG; rendezvousId: string; data: 
 export interface RdvPeerMsg { type: typeof RDV_PEER; rendezvousId: string }
 
 export type RendezvousFrame = RdvSubMsg | RdvUnsubMsg | RdvDataMsg | RdvPeerMsg;
+
+/**
+ * Worker → UI progress for one rendezvous (carried by the `kh-rdv-event` message,
+ * NOT a relay wire frame). Lets both the sharer and the receiver render where they
+ * are in the exchange:
+ *   waiting      — subscribed to the channel, waiting for the other peer
+ *   peer-joined  — the other peer is now present on the channel
+ *   sending      — encrypting + sending our payload (sharer / device-link)
+ *   sent         — payload delivered (friend-share sharer is done)
+ *   receiving    — got the encrypted payload, decrypting + ingesting (receiver)
+ *   received     — receiver finished ingesting the contact
+ *   linked       — device-link handshake complete
+ *   error        — something failed (a human message accompanies it)
+ */
+export type RendezvousStatus =
+  | 'waiting'
+  | 'peer-joined'
+  | 'sending'
+  | 'sent'
+  | 'receiving'
+  | 'received'
+  | 'linked'
+  | 'error';

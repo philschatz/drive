@@ -81,11 +81,15 @@ test('linking a new device via rendezvous converges both onto one user-group', a
     expect(rendezvousId.length).toBeLessThan(64);
     expect(key.length).toBeLessThan(64);
 
-    // A is notified once the handshake completes.
+    // A is notified once the handshake completes. The worker now emits a richer
+    // progress stream (waiting → peer-joined → sending → … → linked), so wait for
+    // the terminal status rather than the first event.
     const linkedPromise = deviceA.page.evaluate(
       (rid) => new Promise<string>((resolve) => {
         const off = (window as any).__drive.onRendezvousEvent((e: any) => {
-          if (e.rendezvousId === rid) { off(); resolve(e.status); }
+          if (e.rendezvousId === rid && (e.status === 'linked' || e.status === 'error')) {
+            off(); resolve(e.status);
+          }
         });
       }),
       rendezvousId,

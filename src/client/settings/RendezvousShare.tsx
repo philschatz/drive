@@ -13,23 +13,28 @@
 
 import { useState, useEffect } from 'preact/hooks';
 import { rendezvousCancel, onRendezvousEvent } from '../shared/keyhive-api';
+import type { RendezvousStatus } from '../worker-api';
 import { QRCodeDisplay } from '@/components/ui/qr-code';
+import { RendezvousProgress } from './RendezvousProgress';
 
 interface RendezvousShareProps {
   /** Stage the share in the worker and return the rendezvous id+key. */
   create: () => Promise<{ rendezvousId: string; key: string }>;
   /** Build the QR/link URL from the id+key. */
   buildUrl: (rendezvousId: string, key: string) => string;
-  /** Event status(es) that mean the handshake completed (e.g. 'sent', 'linked'). */
-  doneStatuses: string[];
   waitingLabel: string;
+  /** Step label while the payload is being exchanged. */
+  transferLabel?: string;
   doneLabel: string;
 }
 
-export function RendezvousShare({ create, buildUrl, doneStatuses, waitingLabel, doneLabel }: RendezvousShareProps) {
+export function RendezvousShare({
+  create, buildUrl, waitingLabel, transferLabel = 'Exchanging encrypted data…', doneLabel,
+}: RendezvousShareProps) {
   const [url, setUrl] = useState('');
+  const [rendezvousId, setRendezvousId] = useState('');
   const [error, setError] = useState('');
-  const [done, setDone] = useState(false);
+  const [phase, setPhase] = useState<RendezvousStatus | null>(null);
 
   useEffect(() => {
     let rid = '';
@@ -37,12 +42,13 @@ export function RendezvousShare({ create, buildUrl, doneStatuses, waitingLabel, 
     const offEvent = onRendezvousEvent((e) => {
       if (e.rendezvousId !== rid) return;
       if (e.status === 'error') setError(e.message ?? 'Something went wrong.');
-      else if (doneStatuses.includes(e.status)) setDone(true);
+      else setPhase(e.status);
     });
     create()
       .then(({ rendezvousId, key }) => {
         if (cancelled) { rendezvousCancel(rendezvousId); return; }
         rid = rendezvousId;
+        setRendezvousId(rendezvousId);
         setUrl(buildUrl(rendezvousId, key));
       })
       .catch((err: any) => setError(err?.message ?? 'Could not create a share link.'));
@@ -55,7 +61,8 @@ export function RendezvousShare({ create, buildUrl, doneStatuses, waitingLabel, 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  if (error) {
+  // Couldn't even stage the share — nothing to show but the failure.
+  if (error && !url) {
     return <p className="text-xs text-destructive">{error}</p>;
   }
   if (!url) {
@@ -73,7 +80,14 @@ export function RendezvousShare({ create, buildUrl, doneStatuses, waitingLabel, 
         readOnly
         onClick={(e: any) => e.currentTarget.select()}
       />
-      <p className="text-xs text-muted-foreground">{done ? doneLabel : waitingLabel}</p>
+      <RendezvousProgress
+        phase={phase}
+        rendezvousId={rendezvousId}
+        waitingLabel={waitingLabel}
+        transferLabel={transferLabel}
+        doneLabel={doneLabel}
+        errorMessage={error || null}
+      />
     </div>
   );
 }
