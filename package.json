@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "start": "ts-node -r tsconfig-paths/register src/backend/serve.ts",
-    "start:relay": "ts-node -r tsconfig-paths/register src/backend/relay-server.ts",
+    "start:relay": "ts-node --transpile-only -r tsconfig-paths/register src/backend/relay-server.ts",
     "dev": "vite dev --port 3000",
     "build": "vite build",
     "serve:prod": "NODE_ENV=production PORT=4000 ts-node -r tsconfig-paths/register src/backend/serve.ts",
