@@ -29,7 +29,11 @@ interface RendezvousProgressProps {
 
 type StepState = 'pending' | 'active' | 'done';
 
-/** Index of the *current* step (0-based) for a given phase. 4 = fully complete. */
+/**
+ * Index of the *current* step (0-based) for a given phase. A terminal phase
+ * returns 5 (past the last index) so every step — including the final "done"
+ * row — renders complete rather than leaving it spinning.
+ */
 function currentStep(phase: RendezvousStatus | null, connected: boolean): number {
   switch (phase) {
     case 'waiting': return 1;
@@ -38,7 +42,7 @@ function currentStep(phase: RendezvousStatus | null, connected: boolean): number
     case 'receiving': return 3;
     case 'sent':
     case 'received':
-    case 'linked': return 4;
+    case 'linked': return 5;
     default: return connected ? 1 : 0; // no event yet
   }
 }

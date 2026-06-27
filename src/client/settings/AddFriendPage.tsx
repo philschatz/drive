@@ -13,10 +13,9 @@
 
 import { useState, useCallback, useEffect } from 'preact/hooks';
 import { Button } from '@/components/ui/button';
-import { receiveContactCard, rendezvousReceive, rendezvousCreateShare, onRendezvousEvent } from '../shared/keyhive-api';
+import { receiveContactCard, rendezvousReceive, getIdentity, onRendezvousEvent } from '../shared/keyhive-api';
 import type { RendezvousStatus } from '../worker-api';
-import { setContactName } from '../contact-names';
-import { RendezvousShare } from './RendezvousShare';
+import { setContactName, getContactName } from '../contact-names';
 import { RendezvousProgress } from './RendezvousProgress';
 import { deflate, inflate } from 'pako';
 
@@ -116,13 +115,16 @@ export function AddFriendPage({ cardData }: AddFriendPageProps) {
     setError(null);
 
     try {
-      let cardResult: { isOwnCard: boolean; userGroupId: string | null };
+      let cardResult: { isOwnCard: boolean; userGroupId: string | null; alreadyKnown: boolean };
       let displayName: string | undefined;
 
       if (rdv) {
         // Preferred path: fetch the bundle over the encrypted relay rendezvous.
+        // Pass our own name so the friend (who we add back automatically) can
+        // label us without a second exchange.
         setStatus('Connecting to your friend\u2026 (keep this open until it completes)');
-        const result = await rendezvousReceive(rdv.rendezvousId, rdv.key);
+        const myName = getContactName((await getIdentity()).agentId) || undefined;
+        const result = await rendezvousReceive(rdv.rendezvousId, rdv.key, myName);
         cardResult = result;
         displayName = result.displayName;
       } else {
@@ -134,7 +136,7 @@ export function AddFriendPage({ cardData }: AddFriendPageProps) {
         }
         setStatus('Adding contact...');
         const result = await receiveContactCard(decoded.cardJson, { userGroupId: decoded.userGroupId });
-        cardResult = { isOwnCard: result.isOwnCard, userGroupId: result.userGroupId ?? decoded.userGroupId };
+        cardResult = { isOwnCard: result.isOwnCard, userGroupId: result.userGroupId ?? decoded.userGroupId, alreadyKnown: result.alreadyKnown };
         displayName = decoded.displayName;
       }
 
@@ -148,7 +150,7 @@ export function AddFriendPage({ cardData }: AddFriendPageProps) {
       // Identify the contact by its user-group id, never the individual device id.
       setContactGroupId(cardResult.userGroupId);
       if (displayName) setName(displayName);
-      setStatus('Contact added. Give them a name so you can recognize them later.');
+      setStatus('You added each other. Give them a name so you can recognize them later.');
     } catch (err: any) {
       setError(err.message || 'Failed to add contact');
     } finally {
@@ -202,23 +204,12 @@ export function AddFriendPage({ cardData }: AddFriendPageProps) {
         <div>
           <p className="text-sm text-green-600 font-medium mb-4">
             <span className="material-symbols-outlined align-middle mr-1" style={{ fontSize: 16 }}>check_circle</span>
-            {name.trim() ? `${name.trim()} has been added as a contact.` : 'Contact added.'}
+            {name.trim() ? `You and ${name.trim()} are now contacts.` : "You're now contacts."}
           </p>
           <p className="text-xs text-muted-foreground mb-4">
-            You can now share documents with them from any document's sharing panel.
+            You added each other in one step — you can both share documents from any
+            document's sharing panel.
           </p>
-          <div className="mb-4 border-t border-border pt-4">
-            <p className="text-xs text-muted-foreground mb-2">
-              Let them add you back — show them this QR code or link:
-            </p>
-            <RendezvousShare
-              create={() => rendezvousCreateShare()}
-              buildUrl={buildAddFriendRendezvousUrl}
-              waitingLabel="Waiting for your friend to open the link…"
-              transferLabel="Sending your contact info…"
-              doneLabel="Sent — they have your contact info."
-            />
-          </div>
           <Button variant="outline" onClick={() => { window.location.hash = '/'; }}>
             Home
           </Button>
@@ -251,8 +242,8 @@ export function AddFriendPage({ cardData }: AddFriendPageProps) {
           phase={phase}
           rendezvousId={rdv.rendezvousId}
           waitingLabel="Connecting to your friend — keep this open…"
-          transferLabel="Receiving their contact info…"
-          doneLabel="Contact received."
+          transferLabel="Exchanging contact info…"
+          doneLabel="You're now contacts."
         />
       ) : (
         <p className="text-sm text-muted-foreground">{status || 'Processing...'}</p>

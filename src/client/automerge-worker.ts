@@ -60,7 +60,7 @@ export type MainToWorker =
   | { type: 'kh-get-known-contacts'; id: number; excludeDocId?: string }
   // Encrypted relay rendezvous (large-payload contact exchange via QR id+key)
   | { type: 'kh-rdv-create-share'; id: number; displayName?: string }
-  | { type: 'kh-rdv-receive'; id: number; rendezvousId: string; key: string }
+  | { type: 'kh-rdv-receive'; id: number; rendezvousId: string; key: string; displayName?: string }
   | { type: 'kh-rdv-link-create'; id: number }
   | { type: 'kh-rdv-link-join'; id: number; rendezvousId: string; key: string }
   | { type: 'kh-rdv-cancel'; rendezvousId: string }
@@ -210,10 +210,14 @@ function handleRendezvousFrame(msg: any): void {
 // contacts via docs or saved names, so a freshly added friend would be invisible.
 // We persist their user-group id here so they surface immediately (by short id
 // until renamed). Cleared when the user deletes the contact.
-async function addKnownContactGroup(groupId: string): Promise<void> {
+/** Persist a contact's user-group; returns true if we already knew them. */
+async function addKnownContactGroup(groupId: string): Promise<boolean> {
   const { idbGet, idbSet } = await import('./idb-storage');
   const list = (await idbGet<string[]>('known-contact-groups')) ?? [];
-  if (!list.includes(groupId)) { list.push(groupId); await idbSet('known-contact-groups', list); }
+  if (list.includes(groupId)) return true;
+  list.push(groupId);
+  await idbSet('known-contact-groups', list);
+  return false;
 }
 async function removeKnownContactGroup(groupId: string): Promise<void> {
   const { idbGet, idbSet } = await import('./idb-storage');
@@ -1383,11 +1387,13 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
       // a bare individual device id. The group id is what the client persists as
       // the contact (its name), so surface it back alongside the individual.
       const friendGroupId = msg.isDevice ? null : msg.userGroupId;
-      if (!result.isOwnCard && friendGroupId) await addKnownContactGroup(friendGroupId);
+      const alreadyKnown = !result.isOwnCard && !!friendGroupId
+        ? await addKnownContactGroup(friendGroupId)
+        : false;
       (self as any).postMessage({
         type: 'result',
         id: msg.id,
-        result: { ...result, userGroupId: friendGroupId },
+        result: { ...result, userGroupId: friendGroupId, alreadyKnown },
       } satisfies WorkerToMain);
     } catch (err: any) {
       (self as any).postMessage({ type: 'result', id: msg.id, error: errMsg(err) } satisfies WorkerToMain);
@@ -1436,7 +1442,9 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
   }
 
   // Sharer: stage our (large) contact bundle for a rendezvous and return the
-  // tiny {id,key} for the QR. The bundle is encrypted + sent once a peer appears.
+  // tiny {id,key} for the QR. Bidirectional, like device-link: we send our bundle
+  // when the friend joins, then ingest the bundle they send back so the friendship
+  // is mutual from a single exchange (the friend never has to reciprocate by hand).
   if (msg.type === 'kh-rdv-create-share') {
     try {
       if (!khOps) throw new Error('Keyhive not available');
@@ -1446,12 +1454,30 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
       const { rendezvousId, key } = generateRendezvous();
       rdvSessions.set(rendezvousId, {
         key,
+        // Leg 1: send our bundle as soon as the friend joins the channel.
         onPeer: () => {
           rdvEvent(rendezvousId, 'peer-joined');
           rdvEvent(rendezvousId, 'sending');
           rdvSendPayload(rendezvousId, key, plaintext)
-            .then(() => rdvEvent(rendezvousId, 'sent'))
             .catch(err => rdvEvent(rendezvousId, 'error', errMsg(err)));
+        },
+        // Leg 2: ingest the friend's bundle so they become our contact too, then
+        // close the channel. Completion ('received') only fires after this.
+        onData: (pt) => {
+          (async () => {
+            try {
+              rdvEvent(rendezvousId, 'receiving');
+              const { card: peerCard, userGroupId: peerGroupId } = JSON.parse(pt);
+              const result = await khOps!.receiveContactCard(peerCard);
+              const resolvedGroupId = peerGroupId ?? result.groupId ?? null;
+              if (!result.isOwnCard && resolvedGroupId) await addKnownContactGroup(resolvedGroupId);
+              rdvSessions.delete(rendezvousId);
+              rdvSend({ type: RDV_UNSUB, rendezvousId });
+              rdvEvent(rendezvousId, 'received');
+            } catch (err: any) {
+              rdvEvent(rendezvousId, 'error', errMsg(err));
+            }
+          })();
         },
       });
       rdvSend({ type: RDV_SUB, rendezvousId });
@@ -1463,7 +1489,9 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
   }
 
   // Receiver: subscribe to the rendezvous, wait for the encrypted bundle, decrypt
-  // it, and ingest the contact card. Resolves like kh-receive-contact-card.
+  // it, and ingest the contact card — then send our own bundle back over the same
+  // channel so the friendship is mutual (the sharer's onData ingests it). Resolves
+  // like kh-receive-contact-card.
   if (msg.type === 'kh-rdv-receive') {
     const { rendezvousId, key } = msg;
     try {
@@ -1498,13 +1526,24 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
       } catch { /* raw card string */ }
 
       const result = await khOps.receiveContactCard(cardJson);
-      rdvSend({ type: RDV_UNSUB, rendezvousId });
       const resolvedGroupId = userGroupId ?? result.groupId ?? null;
-      if (!result.isOwnCard && resolvedGroupId) await addKnownContactGroup(resolvedGroupId);
+      const alreadyKnown = !result.isOwnCard && !!resolvedGroupId
+        ? await addKnownContactGroup(resolvedGroupId)
+        : false;
+      // Reciprocate: send our bundle back so the sharer adds us too. Must happen
+      // while still subscribed (the relay only routes to current subscribers), so
+      // send before RDV_UNSUB. Skip when it's our own card — no one to reply to.
+      if (!result.isOwnCard) {
+        const myUserGroupId = await khOps.ensureUserGroup({ create: true });
+        const myCard = await khOps.getContactCard();
+        rdvEvent(rendezvousId, 'sending');
+        await rdvSendPayload(rendezvousId, key, JSON.stringify({ card: myCard, displayName: msg.displayName, userGroupId: myUserGroupId ?? undefined }));
+      }
+      rdvSend({ type: RDV_UNSUB, rendezvousId });
       rdvEvent(rendezvousId, 'received');
       (self as any).postMessage({
         type: 'result', id: msg.id,
-        result: { ...result, userGroupId: resolvedGroupId, displayName },
+        result: { ...result, userGroupId: resolvedGroupId, displayName, alreadyKnown },
       } satisfies WorkerToMain);
     } catch (err: any) {
       rdvSessions.delete(rendezvousId);

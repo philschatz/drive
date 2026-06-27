@@ -588,7 +588,7 @@ export function getContactCard(): Promise<string> {
 export function receiveContactCard(
   cardJson: string,
   opts?: { isDevice?: boolean; userGroupId?: string | null },
-): Promise<{ agentId: string; isOwnCard: boolean; userGroupId: string | null }> {
+): Promise<{ agentId: string; isOwnCard: boolean; userGroupId: string | null; alreadyKnown: boolean }> {
   return khRequest('kh-receive-contact-card', { cardJson, isDevice: opts?.isDevice, userGroupId: opts?.userGroupId });
 }
 
@@ -626,8 +626,9 @@ export function rendezvousCreateShare(displayName?: string): Promise<{ rendezvou
 export function rendezvousReceive(
   rendezvousId: string,
   key: string,
-): Promise<{ agentId: string; isOwnCard: boolean; userGroupId: string | null; displayName?: string }> {
-  return khRequest('kh-rdv-receive', { rendezvousId, key });
+  displayName?: string,
+): Promise<{ agentId: string; isOwnCard: boolean; userGroupId: string | null; displayName?: string; alreadyKnown: boolean }> {
+  return khRequest('kh-rdv-receive', { rendezvousId, key, displayName });
 }
 
 /**

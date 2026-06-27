@@ -309,8 +309,8 @@ export function Settings({ path }: { path?: string }) {
               create={() => rendezvousCreateShare(friendShareName || undefined)}
               buildUrl={buildAddFriendRendezvousUrl}
               waitingLabel="Waiting for your friend to open the link…"
-              transferLabel="Sending your contact info…"
-              doneLabel="Sent — they have your contact info."
+              transferLabel="Exchanging contact info…"
+              doneLabel="Connected — you're now contacts."
             />
           </div>
         )}
