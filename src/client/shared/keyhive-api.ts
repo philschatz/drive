@@ -9,6 +9,8 @@ export {
   getMyAccess,
   rendezvousCreateShare,
   rendezvousReceive,
+  rendezvousCreateDeviceLink,
+  rendezvousJoinDeviceLink,
   rendezvousCancel,
   onRendezvousEvent,
   listDevices,

@@ -5,6 +5,7 @@
   "main": "index.js",
   "scripts": {
     "start": "ts-node -r tsconfig-paths/register src/backend/serve.ts",
+    "start:relay": "ts-node -r tsconfig-paths/register src/backend/relay-server.ts",
     "dev": "vite dev --port 3000",
     "build": "vite build",
     "serve:prod": "NODE_ENV=production PORT=4000 ts-node -r tsconfig-paths/register src/backend/serve.ts",
@@ -62,6 +63,7 @@
     "@schedule-x/theme-default": "^4.1.0",
     "@tailwindcss/vite": "^4.2.0",
     "buffer": "^6.0.3",
+    "cbor-x": "^1.6.4",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cors": "^2.8.6",

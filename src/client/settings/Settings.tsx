@@ -7,27 +7,29 @@ import { Button } from '@/components/ui/button';
 import { Alert } from '@/components/ui/alert';
 import {
   getIdentity,
-  getLinkPayload,
   listDevices,
   removeDevice,
+  rendezvousCreateShare,
+  rendezvousCreateDeviceLink,
   type IdentityInfo,
   type DeviceInfo,
 } from '../shared/keyhive-api';
 import { idbGet, idbSet } from '../idb-storage';
 import { getContactName, setContactName } from '../contact-names';
-import { QRCodeDisplay } from '@/components/ui/qr-code';
-import { ReciprocalShare } from './ReciprocalShare';
-import { buildLinkDeviceUrl } from './LinkDevicePage';
+import { RendezvousShare } from './RendezvousShare';
+import { buildLinkDeviceRendezvousUrl } from './LinkDevicePage';
+import { buildAddFriendRendezvousUrl } from './AddFriendPage';
 export function Settings({ path }: { path?: string }) {
   const [identity, setIdentity] = useState<IdentityInfo | null>(null);
   const [devices, setDevices] = useState<DeviceInfo[]>([]);
-  const [contactCard, setContactCard] = useState<string | null>(null);
+  // Device-link share via encrypted rendezvous (nonce bump = regenerate).
+  const [deviceLinkNonce, setDeviceLinkNonce] = useState(0);
+  const [showDeviceLink, setShowDeviceLink] = useState(false);
   // Friend share via encrypted rendezvous: capture the name at click time and
   // bump the nonce so re-clicking regenerates a fresh rendezvous.
   const [friendShareName, setFriendShareName] = useState<string | null>(null);
   const [friendShareNonce, setFriendShareNonce] = useState(0);
   const [displayName, setDisplayName] = useState('');
-  const [linkDeviceUrl, setLinkDeviceUrl] = useState('');
   const [inviteUrl, setInviteUrl] = useState('');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
@@ -51,14 +53,9 @@ export function Settings({ path }: { path?: string }) {
 
   useEffect(() => { refresh(); }, [refresh]);
 
-  const handleShowContactCard = async () => {
-    try {
-      const { card, userGroupId } = await getLinkPayload();
-      setContactCard(card);
-      setLinkDeviceUrl(buildLinkDeviceUrl(card, userGroupId));
-    } catch (err: any) {
-      setError(err.message);
-    }
+  const handleShowContactCard = () => {
+    setShowDeviceLink(true);
+    setDeviceLinkNonce(n => n + 1);
   };
 
   const handleDisplayNameChange = (value: string) => {
@@ -249,7 +246,8 @@ export function Settings({ path }: { path?: string }) {
         <div className="mt-4">
           <h3 className="text-sm font-semibold mb-2">Invite Another Device</h3>
           <p className="text-xs text-muted-foreground mb-2">
-            Invite another device to act as you. Linking is a handshake — both devices open a link to complete it.
+            Invite another device to act as you. Open the link on your new device while
+            this page stays open — they connect over the relay to finish linking.
           </p>
 
           {/* Show your contact card for the new device to scan */}
@@ -260,21 +258,16 @@ export function Settings({ path }: { path?: string }) {
             <Button size="sm" variant="outline" onClick={handleShowContactCard}>
               Show QR Code
             </Button>
-            {contactCard && (
-              <div className="mt-2 space-y-2">
-                {linkDeviceUrl && (
-                  <div className="space-y-2">
-                    <div className="flex justify-center">
-                      <QRCodeDisplay url={linkDeviceUrl} />
-                    </div>
-                    <input
-                      className="flex-1 text-xs p-2 rounded border border-border font-mono bg-muted w-full"
-                      value={linkDeviceUrl}
-                      readOnly
-                      onClick={(e: any) => e.currentTarget.select()}
-                    />
-                  </div>
-                )}
+            {showDeviceLink && (
+              <div className="mt-2">
+                <RendezvousShare
+                  key={deviceLinkNonce}
+                  create={rendezvousCreateDeviceLink}
+                  buildUrl={buildLinkDeviceRendezvousUrl}
+                  doneStatuses={['linked']}
+                  waitingLabel="Keep this open until your new device opens the link."
+                  doneLabel="✓ Device linked."
+                />
               </div>
             )}
           </div>
@@ -300,7 +293,14 @@ export function Settings({ path }: { path?: string }) {
         </Button>
         {friendShareName !== null && (
           <div className="mt-2">
-            <ReciprocalShare key={`${friendShareNonce}:${friendShareName}`} displayName={friendShareName} />
+            <RendezvousShare
+              key={`${friendShareNonce}:${friendShareName}`}
+              create={() => rendezvousCreateShare(friendShareName || undefined)}
+              buildUrl={buildAddFriendRendezvousUrl}
+              doneStatuses={['sent']}
+              waitingLabel="Keep this open until your friend opens the link."
+              doneLabel="✓ Sent — they have your contact info."
+            />
           </div>
         )}
       </section>

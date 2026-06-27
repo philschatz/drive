@@ -11,11 +11,24 @@
  *    QR code for the original device to open and finish the handshake.
  */
 
-import { useState, useCallback } from 'preact/hooks';
+import { useState, useCallback, useEffect } from 'preact/hooks';
 import { Button } from '@/components/ui/button';
 import { QRCodeDisplay } from '@/components/ui/qr-code';
-import { receiveContactCard, linkDevice, getLinkPayload } from '../shared/keyhive-api';
+import { receiveContactCard, linkDevice, getLinkPayload, rendezvousJoinDeviceLink } from '../shared/keyhive-api';
 import { deflate, inflate } from 'pako';
+
+/** Parse the rendezvous URL form `r.<id>.<key>` (base64url parts; '.' separates). */
+function parseRendezvous(cardData: string): { rendezvousId: string; key: string } | null {
+  if (!cardData.startsWith('r.')) return null;
+  const parts = cardData.split('.');
+  if (parts.length !== 3 || !parts[1] || !parts[2]) return null;
+  return { rendezvousId: parts[1], key: parts[2] };
+}
+
+export function buildLinkDeviceRendezvousUrl(rendezvousId: string, key: string): string {
+  const base = window.location.origin + window.location.pathname;
+  return `${base}#/link-device/r.${rendezvousId}.${key}`;
+}
 
 interface LinkDevicePageProps {
   cardData?: string;
@@ -82,6 +95,17 @@ export function LinkDevicePage({ cardData }: LinkDevicePageProps) {
     setError(null);
 
     try {
+      const rdv = parseRendezvous(cardData);
+      if (rdv) {
+        // Preferred path: bidirectional handshake over the encrypted relay
+        // rendezvous (the original device's card is too large for a QR).
+        setStatus('Linking with your other device… (keep both open)');
+        await rendezvousJoinDeviceLink(rdv.rendezvousId, rdv.key);
+        setStatus('');
+        setDone(true);
+        return;
+      }
+
       setStatus('Decoding contact card...');
       const { cardJson, userGroupId: peerGroupId } = decodeLinkData(cardData);
 
@@ -117,10 +141,8 @@ export function LinkDevicePage({ cardData }: LinkDevicePageProps) {
     }
   }, [cardData]);
 
-  // Auto-start on first render
-  if (!status && !error && !done && !processing) {
-    doLink();
-  }
+  // Auto-start once when the page mounts with card data.
+  useEffect(() => { doLink(); }, [doLink]);
 
   return (
     <div className="max-w-md mx-auto p-8 text-center">

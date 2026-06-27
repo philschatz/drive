@@ -60,6 +60,8 @@ export type MainToWorker =
   // Encrypted relay rendezvous (large-payload contact exchange via QR id+key)
   | { type: 'kh-rdv-create-share'; id: number; displayName?: string }
   | { type: 'kh-rdv-receive'; id: number; rendezvousId: string; key: string }
+  | { type: 'kh-rdv-link-create'; id: number }
+  | { type: 'kh-rdv-link-join'; id: number; rendezvousId: string; key: string }
   | { type: 'kh-rdv-cancel'; rendezvousId: string }
   | { type: 'kh-claim-invite'; id: number; inviteSeed: number[]; docId: string }
   | { type: 'kh-dismiss-invite'; id: number; inviteId: string; docId: string }
@@ -92,7 +94,7 @@ export type WorkerToMain =
   // Keyhive state changed (membership/access may have changed)
   | { type: 'kh-state-changed' }
   // Rendezvous sharer-side progress (the receiver path uses a normal `result`)
-  | { type: 'kh-rdv-event'; rendezvousId: string; status: 'sent' | 'error'; message?: string }
+  | { type: 'kh-rdv-event'; rendezvousId: string; status: 'sent' | 'linked' | 'error'; message?: string }
   // Relay message log
   | { type: 'relay-log'; entry: { id: number; ts: number; dir: 'sent' | 'recv'; message: any } };
 
@@ -150,10 +152,19 @@ const rdvEncoder = new Encoder({ tagUint8Array: false, useRecords: false });
 /** The underlying relay WebSocket (set during init). Rendezvous frames bypass the
  *  automerge-repo adapter and ride the raw socket. */
 let rdvSocket: WebSocket | undefined;
-/** rendezvousId → plaintext we'll encrypt and send once a peer appears (sharer side). */
-const rdvPendingShares = new Map<string, { key: string; plaintext: string }>();
-/** rendezvousId → resolver waiting for the first inbound encrypted blob (receiver side). */
-const rdvWaiters = new Map<string, (framed: Uint8Array) => void>();
+
+/**
+ * One live rendezvous. `onPeer` fires when another peer joins the topic (e.g. send
+ * our card); `onData` fires with the decrypted payload of an inbound message. A
+ * one-way share sets only `onPeer`; a receiver sets only `onData`; a device link
+ * (bidirectional handshake) sets both.
+ */
+interface RdvSession {
+  key: string;
+  onPeer?: () => void;
+  onData?: (plaintext: string) => void;
+}
+const rdvSessions = new Map<string, RdvSession>();
 const RDV_RECEIVE_TIMEOUT_MS = 120_000;
 
 function rdvSend(frame: { type: string; rendezvousId: string; data?: Uint8Array }): void {
@@ -162,29 +173,25 @@ function rdvSend(frame: { type: string; rendezvousId: string; data?: Uint8Array 
   }
 }
 
+/** Encrypt and send a payload to the other peer on a rendezvous topic. */
+async function rdvSendPayload(rendezvousId: string, key: string, plaintext: string): Promise<void> {
+  const framed = await encryptString(key, plaintext);
+  rdvSend({ type: RDV_MSG, rendezvousId, data: framed });
+}
+
 /** Handle an inbound rendezvous frame intercepted off the relay socket. */
 function handleRendezvousFrame(msg: any): void {
   const rid: string | undefined = msg.rendezvousId;
   if (!rid) return;
+  const session = rdvSessions.get(rid);
+  if (!session) return;
   if (msg.type === RDV_PEER) {
-    // A peer joined this topic. If we have a payload staged for it, send it now.
-    const pending = rdvPendingShares.get(rid);
-    if (pending) {
-      encryptString(pending.key, pending.plaintext)
-        .then(framed => {
-          rdvSend({ type: RDV_MSG, rendezvousId: rid, data: framed });
-          (self as any).postMessage({ type: 'kh-rdv-event', rendezvousId: rid, status: 'sent' } satisfies WorkerToMain);
-        })
-        .catch(err => {
-          (self as any).postMessage({ type: 'kh-rdv-event', rendezvousId: rid, status: 'error', message: errMsg(err) } satisfies WorkerToMain);
-        });
-    }
-  } else if (msg.type === RDV_MSG) {
-    const waiter = rdvWaiters.get(rid);
-    if (waiter) {
-      const data: Uint8Array = msg.data instanceof Uint8Array ? msg.data : new Uint8Array(msg.data);
-      waiter(data);
-    }
+    session.onPeer?.();
+  } else if (msg.type === RDV_MSG && session.onData) {
+    const data: Uint8Array = msg.data instanceof Uint8Array ? msg.data : new Uint8Array(msg.data);
+    decryptString(session.key, data)
+      .then(pt => session.onData!(pt))
+      .catch(err => console.error('[rdv] failed to decrypt inbound payload:', errMsg(err)));
   }
 }
 
@@ -1428,7 +1435,14 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
       const card = await khOps.getContactCard();
       const plaintext = JSON.stringify({ card, displayName: msg.displayName, userGroupId: userGroupId ?? undefined });
       const { rendezvousId, key } = generateRendezvous();
-      rdvPendingShares.set(rendezvousId, { key, plaintext });
+      rdvSessions.set(rendezvousId, {
+        key,
+        onPeer: () => {
+          rdvSendPayload(rendezvousId, key, plaintext)
+            .then(() => (self as any).postMessage({ type: 'kh-rdv-event', rendezvousId, status: 'sent' } satisfies WorkerToMain))
+            .catch(err => (self as any).postMessage({ type: 'kh-rdv-event', rendezvousId, status: 'error', message: errMsg(err) } satisfies WorkerToMain));
+        },
+      });
       rdvSend({ type: RDV_SUB, rendezvousId });
       (self as any).postMessage({ type: 'result', id: msg.id, result: { rendezvousId, key } } satisfies WorkerToMain);
     } catch (err: any) {
@@ -1442,16 +1456,18 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
     const { rendezvousId, key } = msg;
     try {
       if (!khOps) throw new Error('Keyhive not available');
-      const framed = await new Promise<Uint8Array>((resolve, reject) => {
+      const plaintext = await new Promise<string>((resolve, reject) => {
         const timer = setTimeout(() => {
-          rdvWaiters.delete(rendezvousId);
+          rdvSessions.delete(rendezvousId);
           reject(new Error('Timed out waiting for your friend. Make sure they have the QR/link open, then try again.'));
         }, RDV_RECEIVE_TIMEOUT_MS);
-        rdvWaiters.set(rendezvousId, (data) => { clearTimeout(timer); rdvWaiters.delete(rendezvousId); resolve(data); });
+        rdvSessions.set(rendezvousId, {
+          key,
+          onData: (pt) => { clearTimeout(timer); rdvSessions.delete(rendezvousId); resolve(pt); },
+        });
         rdvSend({ type: RDV_SUB, rendezvousId });
       });
 
-      const plaintext = await decryptString(key, framed);
       let cardJson = plaintext;
       let displayName: string | undefined;
       let userGroupId: string | undefined;
@@ -1471,16 +1487,101 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
         result: { ...result, userGroupId: resolvedGroupId, displayName },
       } satisfies WorkerToMain);
     } catch (err: any) {
-      rdvWaiters.delete(rendezvousId);
+      rdvSessions.delete(rendezvousId);
       rdvSend({ type: RDV_UNSUB, rendezvousId });
+      (self as any).postMessage({ type: 'result', id: msg.id, error: errMsg(err) } satisfies WorkerToMain);
+    }
+  }
+
+  // Device-link sharer (the original/admin device). Bidirectional handshake over
+  // one rendezvous: we send our card when the new device joins, then ingest the
+  // new device's card and add it to our user-group. Returns {id,key} immediately;
+  // posts a 'linked' event when the handshake completes.
+  if (msg.type === 'kh-rdv-link-create') {
+    try {
+      if (!khOps) throw new Error('Keyhive not available');
+      const myUserGroupId = await khOps.ensureUserGroup({ create: true });
+      const myCard = await khOps.getContactCard();
+      const myPayload = JSON.stringify({ card: myCard, userGroupId: myUserGroupId });
+      const { rendezvousId, key } = generateRendezvous();
+      rdvSessions.set(rendezvousId, {
+        key,
+        onPeer: () => {
+          rdvSendPayload(rendezvousId, key, myPayload).catch(err =>
+            (self as any).postMessage({ type: 'kh-rdv-event', rendezvousId, status: 'error', message: errMsg(err) } satisfies WorkerToMain));
+        },
+        onData: (pt) => {
+          (async () => {
+            try {
+              const { card: peerCard, userGroupId: peerGroupId } = JSON.parse(pt);
+              const result = await khOps!.receiveContactCard(peerCard);
+              await khOps!.linkDevice(result.agentId, peerGroupId ?? null);
+              rdvSessions.delete(rendezvousId);
+              rdvSend({ type: RDV_UNSUB, rendezvousId });
+              (self as any).postMessage({ type: 'kh-rdv-event', rendezvousId, status: 'linked' } satisfies WorkerToMain);
+            } catch (err: any) {
+              (self as any).postMessage({ type: 'kh-rdv-event', rendezvousId, status: 'error', message: errMsg(err) } satisfies WorkerToMain);
+            }
+          })();
+        },
+      });
+      rdvSend({ type: RDV_SUB, rendezvousId });
+      (self as any).postMessage({ type: 'result', id: msg.id, result: { rendezvousId, key } } satisfies WorkerToMain);
+    } catch (err: any) {
+      (self as any).postMessage({ type: 'result', id: msg.id, error: errMsg(err) } satisfies WorkerToMain);
+    }
+  }
+
+  // Device-link joiner (the new device, from the QR/link). Wait for the original
+  // device's card, adopt its user-group, then send our (post-adopt) card back so
+  // the original can add us. Resolves once we've done our half of the handshake.
+  if (msg.type === 'kh-rdv-link-join') {
+    const { rendezvousId, key } = msg;
+    try {
+      if (!khOps) throw new Error('Keyhive not available');
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          rdvSessions.delete(rendezvousId);
+          reject(new Error('Timed out waiting for your other device. Make sure its QR/link is open, then try again.'));
+        }, RDV_RECEIVE_TIMEOUT_MS);
+        rdvSessions.set(rendezvousId, {
+          key,
+          onData: (pt) => {
+            (async () => {
+              try {
+                const { card: peerCard, userGroupId: peerGroupId } = JSON.parse(pt);
+                const result = await khOps!.receiveContactCard(peerCard);
+                if (result.isOwnCard) throw new Error("This is your own device's link. Open it on a different device.");
+                // Leg 1: adopt the original device's user-group.
+                await khOps!.linkDevice(result.agentId, peerGroupId ?? null);
+                // Leg 2: send our now-adopted card back so the original adds us.
+                const myUserGroupId = await khOps!.ensureUserGroup({ create: true });
+                const myCard = await khOps!.getContactCard();
+                await rdvSendPayload(rendezvousId, key, JSON.stringify({ card: myCard, userGroupId: myUserGroupId }));
+                clearTimeout(timer);
+                rdvSessions.delete(rendezvousId);
+                rdvSend({ type: RDV_UNSUB, rendezvousId });
+                resolve();
+              } catch (err) {
+                clearTimeout(timer);
+                rdvSessions.delete(rendezvousId);
+                rdvSend({ type: RDV_UNSUB, rendezvousId });
+                reject(err);
+              }
+            })();
+          },
+        });
+        rdvSend({ type: RDV_SUB, rendezvousId });
+      });
+      (self as any).postMessage({ type: 'result', id: msg.id, result: { ok: true } } satisfies WorkerToMain);
+    } catch (err: any) {
       (self as any).postMessage({ type: 'result', id: msg.id, error: errMsg(err) } satisfies WorkerToMain);
     }
   }
 
   // Either side abandons a rendezvous (e.g. the sharer navigates away).
   if (msg.type === 'kh-rdv-cancel') {
-    rdvPendingShares.delete(msg.rendezvousId);
-    rdvWaiters.delete(msg.rendezvousId);
+    rdvSessions.delete(msg.rendezvousId);
     rdvSend({ type: RDV_UNSUB, rendezvousId: msg.rendezvousId });
   }
 

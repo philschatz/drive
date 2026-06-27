@@ -162,7 +162,7 @@ export function onKeyhiveStateChanged(fn: () => void): () => void {
 
 // ── Rendezvous sharer-side events ───────────────────────────────────────────
 
-export interface RendezvousEvent { rendezvousId: string; status: 'sent' | 'error'; message?: string }
+export interface RendezvousEvent { rendezvousId: string; status: 'sent' | 'linked' | 'error'; message?: string }
 type RendezvousEventListener = (e: RendezvousEvent) => void;
 const rdvEventListeners = new Set<RendezvousEventListener>();
 
@@ -626,6 +626,20 @@ export function rendezvousReceive(
   key: string,
 ): Promise<{ agentId: string; isOwnCard: boolean; userGroupId: string | null; displayName?: string }> {
   return khRequest('kh-rdv-receive', { rendezvousId, key });
+}
+
+/**
+ * Device-link sharer (original/admin device): stage a bidirectional rendezvous and
+ * get the tiny {id,key} for the QR. The new device's `rendezvousJoinDeviceLink`
+ * completes the handshake; listen via onRendezvousEvent for status 'linked'.
+ */
+export function rendezvousCreateDeviceLink(): Promise<{ rendezvousId: string; key: string }> {
+  return khRequest('kh-rdv-link-create');
+}
+
+/** Device-link joiner (new device): adopt the original device's group over the rendezvous. */
+export function rendezvousJoinDeviceLink(rendezvousId: string, key: string): Promise<{ ok: boolean }> {
+  return khRequest('kh-rdv-link-join', { rendezvousId, key });
 }
 
 /** Abandon a rendezvous (e.g. the sharer navigates away). Fire-and-forget. */

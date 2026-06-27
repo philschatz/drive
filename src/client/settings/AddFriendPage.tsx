@@ -13,9 +13,9 @@
 
 import { useState, useCallback, useEffect } from 'preact/hooks';
 import { Button } from '@/components/ui/button';
-import { receiveContactCard, rendezvousReceive } from '../shared/keyhive-api';
+import { receiveContactCard, rendezvousReceive, rendezvousCreateShare } from '../shared/keyhive-api';
 import { setContactName } from '../contact-names';
-import { ReciprocalShare } from './ReciprocalShare';
+import { RendezvousShare } from './RendezvousShare';
 import { deflate, inflate } from 'pako';
 
 interface AddFriendPageProps {
@@ -188,7 +188,13 @@ export function AddFriendPage({ cardData }: AddFriendPageProps) {
             <p className="text-xs text-muted-foreground mb-2">
               Let them add you back — show them this QR code or link:
             </p>
-            <ReciprocalShare />
+            <RendezvousShare
+              create={() => rendezvousCreateShare()}
+              buildUrl={buildAddFriendRendezvousUrl}
+              doneStatuses={['sent']}
+              waitingLabel="Keep this open until your friend opens the link."
+              doneLabel="✓ Sent — they have your contact info."
+            />
           </div>
           <Button variant="outline" onClick={() => { window.location.hash = '/'; }}>
             Home

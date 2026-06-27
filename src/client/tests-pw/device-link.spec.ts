@@ -63,3 +63,56 @@ test('linking a new device converges both devices onto one user-group', async ({
     await deviceB?.close();
   }
 });
+
+/**
+ * Same convergence, but via the encrypted relay rendezvous (a single tiny QR, no
+ * card embedded in the URL) — what the "Invite Another Device" UI now uses.
+ */
+test('linking a new device via rendezvous converges both onto one user-group', async ({ browser }) => {
+  let deviceA: Peer | undefined;
+  let deviceB: Peer | undefined;
+  try {
+    [deviceA, deviceB] = await Promise.all([newPeer(browser, 'deviceA'), newPeer(browser, 'deviceB')]);
+
+    // Device A (original) creates the rendezvous and gets a tiny id+key for the QR.
+    const a = await deviceA.call('getLinkPayload');
+    expect(a.userGroupId).toBeTruthy();
+    const { rendezvousId, key } = await deviceA.call('rendezvousCreateDeviceLink');
+    expect(rendezvousId.length).toBeLessThan(64);
+    expect(key.length).toBeLessThan(64);
+
+    // A is notified once the handshake completes.
+    const linkedPromise = deviceA.page.evaluate(
+      (rid) => new Promise<string>((resolve) => {
+        const off = (window as any).__drive.onRendezvousEvent((e: any) => {
+          if (e.rendezvousId === rid) { off(); resolve(e.status); }
+        });
+      }),
+      rendezvousId,
+    );
+
+    // Device B (new) joins via the same id+key (what opening the link does).
+    await deviceB.call('rendezvousJoinDeviceLink', rendezvousId, key);
+    expect(await linkedPromise).toBe('linked');
+
+    // Both devices converge onto A's user-group and see each other.
+    await waitFor(
+      () => deviceB!.call('getIdentity'),
+      (id) => id.userGroupId === a.userGroupId,
+      { label: 'deviceB adopts shared group' },
+    );
+    await waitFor(
+      () => deviceA!.call('listDevices'),
+      (devices) => devices.length >= 2,
+      { label: 'deviceA sees both devices' },
+    );
+    await waitFor(
+      () => deviceB!.call('listDevices'),
+      (devices) => devices.length >= 2,
+      { label: 'deviceB sees both devices' },
+    );
+  } finally {
+    await deviceA?.close();
+    await deviceB?.close();
+  }
+});
