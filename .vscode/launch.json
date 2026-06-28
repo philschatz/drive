@@ -31,6 +31,26 @@
       ],
       "console": "integratedTerminal",
       "skipFiles": ["<node_internals>/**"]
+    },
+    {
+      "name": "Playwright Tests",
+      "type": "node",
+      "request": "launch",
+      "runtimeArgs": ["${workspaceFolder}/node_modules/.bin/playwright", "test"],
+      "console": "integratedTerminal",
+      "skipFiles": ["<node_internals>/**"]
+    },
+    {
+      "name": "Playwright: Current File",
+      "type": "node",
+      "request": "launch",
+      "runtimeArgs": [
+        "${workspaceFolder}/node_modules/.bin/playwright",
+        "test",
+        "${relativeFile}"
+      ],
+      "console": "integratedTerminal",
+      "skipFiles": ["<node_internals>/**"]
     }
   ]
 }
