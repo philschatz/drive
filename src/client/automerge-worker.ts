@@ -303,6 +303,51 @@ function resolveKhDocId(automergeDocId: string): string {
   return bytesToBase64(khDocIdObj.toBytes());
 }
 
+/** Run a keyhive WASM operation on the bridge's shared serialization queue.
+ *  ALL keyhive access (blob encryption, signing, sync) goes through this single
+ *  PromiseQueue; calling keyhive concurrently/reentrantly traps the WASM
+ *  ("unreachable executed"), so our presence encrypt/decrypt must use it too.
+ *  Never nest these calls (the queue runs fns serially and would deadlock). */
+function runOnKeyhiveQueue<T>(fn: () => Promise<T>): Promise<T> {
+  // keyhiveQueue is private in the bridge's types but is the only shared lock; reach it directly.
+  const queue = (khIntegration as any)?.networkAdapter?.keyhiveQueue;
+  return queue ? queue.run(fn) : fn();
+}
+
+/** Resolve the keyhive Document object for an automerge doc-ID, or null if not available yet. */
+async function getKhDoc(automergeDocId: string): Promise<any | null> {
+  if (!khOps || !khBridge) return null;
+  try {
+    const khDocId = khBridge.docIdFromAutomergeUrl(`automerge:${automergeDocId}` as any);
+    return await runOnKeyhiveQueue(() => khOps!.kh.getDocument(khDocId));
+  } catch (err) {
+    console.warn('[worker] getKhDoc failed:', errMsg(err));
+    return null;
+  }
+}
+
+/** Encrypt a presence channel value with the document's keyhive (per-document) key, so
+ *  only current members can read it. Mirrors the proven network-adapter path in
+ *  keyhive-ops.test.ts ("A encrypts → serialize → deserialize → B decrypts"). */
+async function encryptPresenceValue(doc: any, value: unknown): Promise<Uint8Array> {
+  const bytes = new TextEncoder().encode(JSON.stringify(value ?? null));
+  const seed = crypto.getRandomValues(new Uint8Array(32));
+  return runOnKeyhiveQueue(async () => {
+    const ref = new khBridge!.ChangeId(seed);
+    const result = await khOps!.kh.tryEncrypt(doc, ref, [], bytes);
+    return result.encrypted_content().toBytes();
+  });
+}
+
+/** Decrypt a presence channel value. Throws if the current key isn't available yet
+ *  (e.g. a freshly-joined peer before keyhive sync completes) — callers skip on throw. */
+async function decryptPresenceValue(doc: any, enc: Uint8Array): Promise<unknown> {
+  return runOnKeyhiveQueue(async () => {
+    const decrypted = await khOps!.kh.tryDecrypt(doc, khBridge!.Encrypted.fromBytes(enc));
+    return JSON.parse(new TextDecoder().decode(decrypted));
+  });
+}
+
 /** Return the (only) repo. */
 function getRepo(): InstanceType<typeof Repo> {
   if (!secureRepo) throw new Error('Secure repo not initialized');
@@ -1322,16 +1367,44 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
       const handle = await getOrLoadHandle(msg.docId);
       const entry = getOrCreateEntry(msg.docId, handle);
       if (!entry.presence) {
-        const presence = new PresenceClass({ handle });
-        presence.start({ initialState: { viewing: true, focusedField: null }, heartbeatMs: 5000, peerTtlMs: 15000 });
-        const sendPresence = () => {
-          const peers = { ...presence.getPeerStates().value };
-          (self as any).postMessage({ type: 'update-presence', docId: msg.docId, peers } satisfies WorkerToMain);
-        };
-        presence.on('update', sendPresence);
-        presence.on('goodbye', sendPresence);
-        presence.on('snapshot', sendPresence);
-        entry.presence = presence;
+        // Presence values are encrypted with the document's keyhive key, so the
+        // ephemeral channel (which travels in plaintext) never leaks what a peer is
+        // viewing/editing. Needs the keyhive doc; if it isn't ready yet, skip and
+        // let the next subscribe (on editor mount) start presence.
+        const doc = await getKhDoc(msg.docId);
+        if (!doc) {
+          console.warn('[worker] presence-subscribe: keyhive doc not ready; skipping');
+        } else {
+          const presence = new PresenceClass({ handle });
+          presence.start({
+            initialState: {
+              viewing: await encryptPresenceValue(doc, true),
+              focusedField: await encryptPresenceValue(doc, null),
+            },
+            heartbeatMs: 5000,
+            peerTtlMs: 15000,
+          });
+          const sendPresence = async () => {
+            const raw = presence.getPeerStates().value;
+            const peers: Record<string, any> = {};
+            for (const [peerId, st] of Object.entries<any>(raw)) {
+              const value: Record<string, unknown> = {};
+              for (const [ch, enc] of Object.entries<any>(st?.value ?? {})) {
+                try {
+                  value[ch] = await decryptPresenceValue(doc, enc as Uint8Array);
+                } catch {
+                  // Peer not yet key-synced; skip this channel (resolves on next update/snapshot).
+                }
+              }
+              peers[peerId] = { ...st, value };
+            }
+            (self as any).postMessage({ type: 'update-presence', docId: msg.docId, peers } satisfies WorkerToMain);
+          };
+          presence.on('update', sendPresence);
+          presence.on('goodbye', sendPresence);
+          presence.on('snapshot', sendPresence);
+          entry.presence = presence;
+        }
       }
     } catch (err: any) {
       console.warn('[worker] presence-subscribe failed:', errMsg(err));
@@ -1349,8 +1422,15 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
   if (msg.type === 'set-presence') {
     const entry = docRegistry.get(msg.docId);
     if (entry?.presence) {
-      for (const [key, value] of Object.entries(msg.state)) {
-        entry.presence.broadcast(key, value);
+      const doc = await getKhDoc(msg.docId);
+      if (doc) {
+        for (const [key, value] of Object.entries(msg.state)) {
+          try {
+            entry.presence.broadcast(key, await encryptPresenceValue(doc, value));
+          } catch (err: any) {
+            console.warn('[worker] presence encrypt failed:', errMsg(err));
+          }
+        }
       }
     }
   }

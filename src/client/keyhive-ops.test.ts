@@ -367,6 +367,56 @@ describe('KeyhiveOps', () => {
       expect(new Uint8Array(decrypted)).toEqual(plaintext);
     });
 
+    it('presence value round-trips cross-peer (encrypted ephemeral payload)', async () => {
+      // Mirrors the worker presence helpers (encryptPresenceValue / decryptPresenceValue
+      // in automerge-worker.ts): a JSON presence value is encrypted with the doc key,
+      // sent as bytes, then decrypted back to the identical value by another member.
+      const encryptPresenceValue = async (kh: Keyhive, doc: any, value: unknown): Promise<Uint8Array> => {
+        const bytes = new TextEncoder().encode(JSON.stringify(value ?? null));
+        const ref = new ChangeId(crypto.getRandomValues(new Uint8Array(32)));
+        const result = await kh.tryEncrypt(doc, ref, [], bytes);
+        return result.encrypted_content().toBytes();
+      };
+      const decryptPresenceValue = async (kh: Keyhive, doc: any, enc: Uint8Array): Promise<unknown> => {
+        const out = await kh.tryDecrypt(doc, (Encrypted as any).fromBytes(enc));
+        return JSON.parse(new TextDecoder().decode(out));
+      };
+
+      const { ops: opsA, kh: khA } = await createOps();
+      const { ops: opsB, kh: khB } = await createOps();
+
+      const { khDocId } = await opsA.enableSharing('doc-1');
+      const invite = await grantPeerAccessViaTempSigner(opsA, khDocId, 'edit');
+      await claimViaArchive(opsA, opsB, invite.inviteKeyBytes, 'doc-1');
+
+      // Sync B→A so A knows about B before encrypting.
+      const cardA = await khA.contactCard();
+      const indA_inB = await khB.receiveContactCard(cardA);
+      const bEventsForA: Map<Uint8Array, Uint8Array> = await khB.eventsForAgent(indA_inB.toAgent());
+      const bArr: Uint8Array[] = [];
+      bEventsForA.forEach((v: Uint8Array) => bArr.push(v));
+      await khA.ingestEventsBytes(bArr);
+
+      // A encrypts a presence value (a focused-field path, as broadcast by editors).
+      const docA = await khA.getDocument(opsA.khDocuments.values().next().value!.doc_id);
+      const presenceValue = { focusedField: ['events', 'uid-123', 'title'] };
+      const enc = await encryptPresenceValue(khA, docA!, presenceValue);
+
+      // Sync A→B so B has the key.
+      const cardB = await khB.contactCard();
+      const indB_inA = await khA.receiveContactCard(cardB);
+      const aEventsForB: Map<Uint8Array, Uint8Array> = await khA.eventsForAgent(indB_inA.toAgent());
+      const aArr: Uint8Array[] = [];
+      aEventsForB.forEach((v: Uint8Array) => aArr.push(v));
+      await khB.ingestEventsBytes(aArr);
+
+      // B decrypts and recovers the identical value.
+      const bReachable = await khB.reachableDocs();
+      const docB = await khB.getDocument(bReachable[0].doc.doc_id);
+      const recovered = await decryptPresenceValue(khB, docB!, enc);
+      expect(recovered).toEqual(presenceValue);
+    });
+
     it('A encrypts before knowing about B → B cannot decrypt (production timing)', async () => {
       const { ops: opsA, kh: khA } = await createOps();
       const { ops: opsB, kh: khB } = await createOps();
