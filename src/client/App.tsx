@@ -8,7 +8,9 @@ import { DataGrid } from './datagrid/DataGrid';
 import { Settings } from './settings/Settings';
 import { Contacts } from './contacts/Contacts';
 import { LinkDevicePage } from './settings/LinkDevicePage';
+import { LinkDeviceSharePage } from './settings/LinkDeviceSharePage';
 import { AddFriendPage } from './settings/AddFriendPage';
+import { ShareWithFriendPage } from './settings/ShareWithFriendPage';
 import { hashHistory } from './hash-history';
 import { UpdateBanner } from './components/UpdateBanner';
 import { WorkerErrorBanner } from './components/WorkerErrorBanner';
@@ -23,6 +25,8 @@ export function App() {
       <Home path="/" />
       <Settings path="/settings" />
       <Contacts path="/contacts" />
+      <ShareWithFriendPage path="/add-friend" />
+      <LinkDeviceSharePage path="/link-device" />
       <LinkDevicePage path="/link-device/:cardData" />
       <AddFriendPage path="/add-friend/:cardData" />
       <AllCalendars path="/calendars/" />

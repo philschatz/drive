@@ -3,7 +3,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'preact/hooks';
-import { Button } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
 import { Alert } from '@/components/ui/alert';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
@@ -11,8 +11,7 @@ import {
   getIdentity,
   listDevices,
   removeDevice,
-  rendezvousCreateShare,
-  rendezvousCreateDeviceLink,
+  ensureUserGroup,
   onKeyhiveStateChanged,
   onRendezvousEvent,
   type IdentityInfo,
@@ -21,20 +20,14 @@ import {
 import { setCacheDisabled, clearAllCaches, deleteAllData } from '../worker-api';
 import { idbGet, idbSet, isCacheDisabled } from '../idb-storage';
 import { getContactName, setContactName } from '../contact-names';
-import { RendezvousShare } from './RendezvousShare';
-import { buildLinkDeviceRendezvousUrl } from './LinkDevicePage';
-import { buildAddFriendRendezvousUrl } from './AddFriendPage';
 export function Settings({ path }: { path?: string }) {
   const [identity, setIdentity] = useState<IdentityInfo | null>(null);
   const [devices, setDevices] = useState<DeviceInfo[]>([]);
-  // Device-link share via encrypted rendezvous (nonce bump = regenerate).
-  const [deviceLinkNonce, setDeviceLinkNonce] = useState(0);
-  const [showDeviceLink, setShowDeviceLink] = useState(false);
-  // Friend share via encrypted rendezvous: capture the name at click time and
-  // bump the nonce so re-clicking regenerates a fresh rendezvous.
-  const [friendShareName, setFriendShareName] = useState<string | null>(null);
-  const [friendShareNonce, setFriendShareNonce] = useState(0);
   const [displayName, setDisplayName] = useState('');
+  // The last persisted name, to skip no-op saves (e.g. a blur with no change, which
+  // would otherwise create a user group from an accidental focus).
+  const [savedName, setSavedName] = useState('');
+  const [savingName, setSavingName] = useState(false);
   const [linkUrl, setLinkUrl] = useState('');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
@@ -48,7 +41,10 @@ export function Settings({ path }: { path?: string }) {
         listDevices(),
       ]);
       setIdentity(id);
-      setDisplayName(getContactName(id.agentId) || '');
+      // Your name is stored as a User Group contact (keyed by user-group id), not by device.
+      const name = (id.userGroupId && getContactName(id.userGroupId)) || '';
+      setDisplayName(name);
+      setSavedName(name);
       setDevices(devs);
     } catch (err: any) {
       setError(err.message);
@@ -68,23 +64,23 @@ export function Settings({ path }: { path?: string }) {
     return () => { offRdv(); offState(); };
   }, [refresh]);
 
-  const handleShowContactCard = () => {
-    setShowDeviceLink(true);
-    setDeviceLinkNonce(n => n + 1);
-  };
-
-  const handleDisplayNameChange = (value: string) => {
-    setDisplayName(value);
-    if (identity?.agentId) setContactName(identity.agentId, value).catch(err =>
-      console.error('[Settings] Failed to save display name:', err)
-    );
-    // Hide a stale share if the name changed; the user re-clicks to regenerate.
-    setFriendShareName(null);
-  };
-
-  const handleShowFriendQr = () => {
-    setFriendShareName(displayName.trim());
-    setFriendShareNonce(n => n + 1);
+  // Save your name as a User Group contact, creating the user group if it doesn't
+  // exist yet (so the name has a stable, share-able identity to attach to).
+  const handleSaveName = async () => {
+    // No-op if unchanged — avoids creating a user group from an accidental blur.
+    if (displayName.trim() === savedName) return;
+    setSavingName(true);
+    try {
+      const { userGroupId } = await ensureUserGroup({ create: true });
+      if (!userGroupId) throw new Error('Could not create your user group.');
+      await setContactName(userGroupId, displayName.trim());
+      setMessage('Name saved.');
+      await refresh();
+    } catch (err: any) {
+      setError('Failed to save name: ' + err.message);
+    } finally {
+      setSavingName(false);
+    }
   };
 
   const handleRemoveDevice = async (agentId: string) => {
@@ -255,6 +251,34 @@ export function Settings({ path }: { path?: string }) {
         )}
       </section>
 
+      {/* Your name */}
+      <section className="mb-6">
+        <h2 className="text-lg font-semibold mb-2">Your Name</h2>
+        <p className="text-xs text-muted-foreground mb-2">
+          Set the name friends see when you share with them. Saving creates your user group
+          if you don't have one yet.
+        </p>
+        <div className="flex items-center gap-2">
+          <input
+            className="flex-1 text-sm p-2 rounded border border-border"
+            value={displayName}
+            onInput={(e: any) => setDisplayName(e.currentTarget.value)}
+            onBlur={handleSaveName}
+            onKeyDown={(e: any) => { if (e.key === 'Enter') handleSaveName(); }}
+            placeholder="Your name (optional)"
+          />
+          <Button size="sm" onClick={handleSaveName} disabled={savingName}>
+            {savingName ? 'Saving…' : 'Save'}
+          </Button>
+        </div>
+        <div className="mt-3 flex items-center gap-2">
+          <a href="#/add-friend" className={buttonVariants({ variant: 'outline', size: 'sm' })}>
+            <span className="material-symbols-outlined mr-1" style={{ fontSize: 16 }}>person_add</span>
+            Add Friend
+          </a>
+        </div>
+      </section>
+
       {/* Devices */}
       <section className="mb-6">
         <h2 className="text-lg font-semibold mb-2">Devices</h2>
@@ -289,67 +313,13 @@ export function Settings({ path }: { path?: string }) {
           </div>
         )}
 
-        {/* Invite another device */}
+        {/* Link another device — full flow on its own page */}
         <div className="mt-4">
-          <h3 className="text-sm font-semibold mb-2">Invite Another Device</h3>
-          <p className="text-xs text-muted-foreground mb-2">
-            Invite another device to act as you. Open the link on your new device while
-            this page stays open — they connect over the relay to finish linking.
-          </p>
-
-          {/* Show your contact card for the new device to scan */}
-          <div className="mb-3">
-            <p className="text-xs text-muted-foreground mb-1">
-              On your new device, scan this QR code or open this link:
-            </p>
-            <Button size="sm" variant="outline" onClick={handleShowContactCard}>
-              Show QR Code
-            </Button>
-            {showDeviceLink && (
-              <div className="mt-2">
-                <RendezvousShare
-                  key={deviceLinkNonce}
-                  create={rendezvousCreateDeviceLink}
-                  buildUrl={buildLinkDeviceRendezvousUrl}
-                  waitingLabel="Waiting for your new device to open the link…"
-                  transferLabel="Exchanging keys with your new device…"
-                  doneLabel="Device linked."
-                />
-              </div>
-            )}
-          </div>
+          <a href="#/link-device" className={buttonVariants({ variant: 'outline', size: 'sm' })}>
+            <span className="material-symbols-outlined mr-1" style={{ fontSize: 16 }}>devices</span>
+            Link Device
+          </a>
         </div>
-      </section>
-
-      {/* Share me with a friend */}
-      <section className="mb-6">
-        <h2 className="text-lg font-semibold mb-2">Share me with a friend</h2>
-        <p className="text-xs text-muted-foreground mb-2">
-          Show this QR code to a friend so they can add you as a contact and share documents with you.
-        </p>
-        <div className="mb-2">
-          <input
-            className="w-full text-sm p-2 rounded border border-border"
-            value={displayName}
-            onInput={(e: any) => handleDisplayNameChange(e.currentTarget.value)}
-            placeholder="Display name (optional)"
-          />
-        </div>
-        <Button size="sm" variant="outline" onClick={handleShowFriendQr}>
-          Show QR code
-        </Button>
-        {friendShareName !== null && (
-          <div className="mt-2">
-            <RendezvousShare
-              key={`${friendShareNonce}:${friendShareName}`}
-              create={() => rendezvousCreateShare(friendShareName || undefined)}
-              buildUrl={buildAddFriendRendezvousUrl}
-              waitingLabel="Waiting for your friend to open the link…"
-              transferLabel="Exchanging contact info…"
-              doneLabel="Connected — you're now contacts."
-            />
-          </div>
-        )}
       </section>
 
       {/* Navigate to URL */}

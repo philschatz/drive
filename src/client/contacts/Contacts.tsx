@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'preact/hooks';
-import { Button } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
 import { Alert } from '@/components/ui/alert';
 import { EditableName } from '@/components/EditableName';
 import { getDocMembers, getKnownContacts } from '../shared/keyhive-api';
@@ -151,6 +151,10 @@ export function Contacts({ path }: { path?: string }) {
         <Button variant="outline" size="sm" onClick={refresh} disabled={loading} title="Refresh">
           <span className="material-symbols-outlined" style={{ fontSize: 16 }}>refresh</span>
         </Button>
+        <a href="#/add-friend" className={`${buttonVariants({ variant: 'outline', size: 'sm' })} ml-auto`}>
+          <span className="material-symbols-outlined mr-1" style={{ fontSize: 16 }}>person_add</span>
+          Add Friend
+        </a>
       </div>
 
       {error && (

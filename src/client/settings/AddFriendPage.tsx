@@ -123,7 +123,9 @@ export function AddFriendPage({ cardData }: AddFriendPageProps) {
         // Pass our own name so the friend (who we add back automatically) can
         // label us without a second exchange.
         setStatus('Connecting to your friend\u2026 (keep this open until it completes)');
-        const myName = getContactName((await getIdentity()).agentId) || undefined;
+        // Our own name is stored as a User Group contact (keyed by user-group id).
+        const me = await getIdentity();
+        const myName = (me.userGroupId && getContactName(me.userGroupId)) || undefined;
         const result = await rendezvousReceive(rdv.rendezvousId, rdv.key, myName);
         cardResult = result;
         displayName = result.displayName;
