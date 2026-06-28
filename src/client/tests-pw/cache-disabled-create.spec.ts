@@ -44,7 +44,7 @@ test('cache disabled: created doc survives reload', async ({ browser }) => {
         };
         req.onerror = () => resolve('OPEN_ERR');
       });
-      return { getDocList: api.getDocList(), fetched, idbList };
+      return { getDocList: await api.getDocList(), fetched, idbList };
     });
     console.log('BEFORE RELOAD:', JSON.stringify(beforeReload));
 
@@ -70,7 +70,7 @@ test('cache disabled: created doc survives reload', async ({ browser }) => {
         };
         req.onerror = () => resolve('OPEN_ERR');
       });
-      return { getDocList: api.getDocList(), fetched, idbList };
+      return { getDocList: await api.getDocList(), fetched, idbList };
     });
     console.log('AFTER RELOAD:', JSON.stringify(afterReload));
     console.log('RECONCILE LOGS:', logs.filter(l => l.includes('reconcile')).join(' | '));

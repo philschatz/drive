@@ -12,7 +12,7 @@ import { ValidationPanel } from '../shared/ValidationPanel';
 import { hashHistory } from '../hash-history';
 import { Progress } from '@/components/ui/progress';
 import { Button } from '@/components/ui/button';
-import { addDocId } from '@/doc-storage';
+import { addDocId } from '@/worker-api';
 import { JqPanel } from './JqPanel';
 import './source-viewer.css';
 

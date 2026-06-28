@@ -12,13 +12,49 @@ import { deepAssign } from '../shared/deep-assign';
 import type { RendezvousStatus } from '../shared/rendezvous-protocol';
 export type { RendezvousStatus } from '../shared/rendezvous-protocol';
 import { idbDelPrefix, settingGet, settingSetSync } from './idb-storage';
-import { queryFastPath } from './client-cache';
-import { setDocListDispatch, applyDocListFromWorker, type DocEntry } from './doc-storage';
 import { setContactNamesDispatch, applyContactNamesFromWorker } from './contact-names';
 
 // Re-export for convenience
 export { deepAssign };
 export type { ValidationError };
+
+// ── Doc list (the worker's IDB doc-id list is the single source of truth) ─────
+
+export interface DocEntry {
+  id: string;
+  type?: 'Calendar' | 'TaskList' | 'DataGrid' | 'unknown';
+  name?: string;
+  /** Keyhive sharing group ID (base64-encoded). Needed to restore after reload. */
+  sharingGroupId?: string;
+}
+
+type DocListListener = (list: DocEntry[]) => void;
+const docListListeners = new Set<DocListListener>();
+
+/** Subscribe to doc-list changes pushed by the worker (after add/remove/reconcile). */
+export function onDocListUpdated(fn: DocListListener): () => void {
+  docListListeners.add(fn);
+  return () => { docListListeners.delete(fn); };
+}
+
+function emitDocList(list: DocEntry[]): void {
+  for (const fn of docListListeners) fn(list);
+}
+
+/** Register a newly created/opened doc with the worker (which persists it). */
+export function addDocId(docId: string, metadata?: Partial<DocEntry>): void {
+  fire('add-doc-to-list', { docId, metadata });
+}
+
+/** Remove the current user from a doc (revokes own access + drops it from the list). */
+export function removeDocId(docId: string): void {
+  fire('remove-me-from-doc', { docId });
+}
+
+/** Update a doc's cached metadata (name/type) in the worker's list. */
+export function updateDocCache(docId: string, metadata: Partial<DocEntry>): void {
+  fire('add-doc-to-list', { docId, metadata });
+}
 
 // Functions that the worker provides its own copy of. Callers pass the real ref;
 // updateDoc detects it by identity and sends a marker the worker substitutes.
@@ -50,12 +86,7 @@ function logSend(msg: { type: string } & Record<string, any>): void {
   if (!quiet) console.log('[main] → send', msg.type, msg);
 }
 
-// Wire up dispatch hooks (avoids circular imports with doc-storage / contact-names)
-setDocListDispatch((msgType, docId, metadata) => {
-  const msg = { type: msgType, docId, metadata };
-  logSend(msg);
-  worker.postMessage(msg);
-});
+// Wire up the contact-names dispatch hook (avoids a circular import with contact-names)
 setContactNamesDispatch((type, agentId, name) =>
   // Route through request() so the caller can await persistence and a failed write
   // rejects (rather than being a silent fire-and-forget that drops the data).
@@ -221,7 +252,7 @@ worker.onmessage = (e: MessageEvent<WorkerToMain>) => {
 
     // --- Doc storage / contact names ---
     case 'doc-list-updated':
-      applyDocListFromWorker(msg.list as any);
+      emitDocList(msg.list as any);
       break;
     case 'contact-names-updated':
       applyContactNamesFromWorker(msg.names);
@@ -382,34 +413,32 @@ export const HOME_SUMMARY_QUERY =
 // ── Cache controls ───────────────────────────────────────────────────────────
 
 /**
- * Enable/disable all performance caches. Persists the flag (IDB source of truth + the
- * synchronous localStorage mirror), tells the worker (which clears its caches when
- * disabling), then reloads so the worker re-reads the flag and the main thread starts
- * fresh. Turning it on also clears the main-thread localStorage caches.
+ * Enable/disable the worker's performance caches (jq/query-result/validation). Persists
+ * the flag (IDB source of truth + the synchronous localStorage mirror), tells the worker
+ * (which clears its caches when disabling), then reloads so the worker re-reads the flag.
  */
 export async function setCacheDisabled(disabled: boolean): Promise<void> {
   settingSetSync('cache-disabled', disabled); // sync mirror, read on next load
   await request('set-cache-disabled', { disabled }); // worker persists IDB + clears if disabling
-  if (disabled) {
-    localStorage.removeItem('keyhive-access-cache');
-    localStorage.removeItem('automerge-doc-ids'); // doc-list paint mirror
-  }
   window.location.reload();
 }
 
-/** Wipe all performance caches (worker query/validation caches + main-thread localStorage caches) and reload. */
+/** Wipe the worker's performance caches (query/validation LRUs + IDB qc:*) and reload. */
 export async function clearAllCaches(): Promise<void> {
   await request('clear-caches'); // worker clears its LRUs + idbDelPrefix('qc:')
   await idbDelPrefix('qc:'); // belt-and-suspenders in case the worker is unavailable
-  localStorage.removeItem('keyhive-access-cache');
-  localStorage.removeItem('automerge-doc-ids');
   window.location.reload();
 }
 
-/** Explicitly pull the doc list from the worker (the source of truth) and apply it. */
+/** Read the current doc list from the worker (the source of truth). */
+export function getDocList(): Promise<DocEntry[]> {
+  return request<DocEntry[]>('get-doc-list');
+}
+
+/** Pull the doc list from the worker and notify onDocListUpdated subscribers. */
 export async function fetchDocList(): Promise<DocEntry[]> {
-  const list = await request<DocEntry[]>('get-doc-list');
-  applyDocListFromWorker(list); // notify listeners + sync the enabled-mode cache, one path
+  const list = await getDocList();
+  emitDocList(list);
   return list;
 }
 
@@ -479,21 +508,11 @@ export function subscribeQuery(
   onResult: (result: any, heads: string[], lastModified?: number) => void,
 ): () => void {
   const subId = ++nextSubId;
-  let workerResponded = false;
 
   subscriptionCallbacks.set(subId, (result, heads, lastModified) => {
-    workerResponded = true;
     onResult(result, heads, lastModified);
   });
   fire('subscribe-query', { subId, docId, filter });
-
-  // Fast path: read from IDB on main thread while worker may be blocked parsing a
-  // large document's WASM binary. Resolves to null when caching is disabled.
-  queryFastPath.read(docId, filter).then(cached => {
-    if (cached && !workerResponded && subscriptionCallbacks.has(subId)) {
-      onResult(cached.result, cached.heads, cached.lastModified);
-    }
-  });
 
   return () => {
     subscriptionCallbacks.delete(subId);

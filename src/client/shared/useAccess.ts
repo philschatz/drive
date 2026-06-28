@@ -1,16 +1,7 @@
 import { useState, useEffect, useCallback } from 'preact/hooks';
 import { getMyAccess, onKeyhiveStateChanged } from './keyhive-api';
-import { accessCache } from '../client-cache';
 
 export type AccessLevel = 'admin' | 'edit' | 'read' | 'relay' | null;
-
-function writeAccessCache(docId: string, access: AccessLevel): void {
-  accessCache.write(docId, access); // no-op when caching is disabled
-}
-
-export function getCachedAccess(docId: string): AccessLevel {
-  return accessCache.read(docId); // null when caching is disabled
-}
 
 /**
  * Query the current device's keyhive access level for a document.
@@ -20,9 +11,8 @@ export function getCachedAccess(docId: string): AccessLevel {
  * Re-fetches automatically when keyhive state changes (e.g. member added/revoked).
  */
 export function useAccess(docId: string | undefined): { access: AccessLevel; canEdit: boolean; loaded: boolean } {
-  const cached = docId ? getCachedAccess(docId) : null;
-  const [access, setAccess] = useState<AccessLevel>(cached);
-  const [loaded, setLoaded] = useState(!!cached);
+  const [access, setAccess] = useState<AccessLevel>(null);
+  const [loaded, setLoaded] = useState(false);
 
   const fetchAccess = useCallback(() => {
     if (!docId) {
@@ -34,11 +24,9 @@ export function useAccess(docId: string | undefined): { access: AccessLevel; can
       const level = (a?.toLowerCase() ?? null) as AccessLevel;
       setAccess(level);
       setLoaded(true);
-      writeAccessCache(docId, level);
     }).catch(() => {
       setAccess(null);
       setLoaded(true);
-      writeAccessCache(docId, null);
     });
   }, [docId]);
 

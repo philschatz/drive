@@ -141,7 +141,7 @@ export function settingSetSync<K extends SettingName>(name: K, value: SettingsSc
   localStorage.setItem(SETTINGS_PREFIX + name, JSON.stringify(value));
 }
 
-/** Convenience reader for the hot synchronous call sites (doc-storage, useAccess). */
+/** Synchronous reader for the worker-cache toggle (e.g. the Settings UI). */
 export function isCacheDisabled(): boolean { return settingGetSync('cache-disabled'); }
 
 // ── Shared utilities (used by both worker and main thread) ──────────────────

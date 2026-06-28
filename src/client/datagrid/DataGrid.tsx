@@ -29,7 +29,7 @@ import { createHfBridge, type HfBridge, type MCResults, type CondFormatResults }
 import { sendHfPort } from '../worker-api';
 import { DistributionPanel } from './DistributionPanel';
 import { formatDistValue } from './helpers';
-import { addDocId } from '@/doc-storage';
+import { addDocId } from '@/worker-api';
 import './datagrid.css';
 
 // Lightweight metadata query — returns doc name and each sheet's name/index/hidden plus row/col ordering (no cell data)

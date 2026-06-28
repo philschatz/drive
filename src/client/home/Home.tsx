@@ -1,8 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'preact/hooks';
 import { useConnectionStatus, usePeerList } from '../shared/automerge';
-import { createDoc, updateDoc, subscribeQuery, fetchDocList, HOME_SUMMARY_QUERY } from '../worker-api';
+import { createDoc, updateDoc, subscribeQuery, fetchDocList, addDocId, removeDocId, updateDocCache, onDocListUpdated, HOME_SUMMARY_QUERY } from '../worker-api';
 import { getMyAccess, onKeyhiveStateChanged } from '../shared/keyhive-api';
-import { getCachedAccess } from '../shared/useAccess';
 import { peerColor, peerDisplayName } from '../shared/presence';
 import { Button } from '@/components/ui/button';
 import { Alert } from '@/components/ui/alert';
@@ -14,7 +13,6 @@ import relativeTimePlugin from 'dayjs/plugin/relativeTime';
 
 dayjs.extend(relativeTimePlugin);
 import { a1ToInternal } from '@/datagrid/helpers';
-import { getDocList, addDocId, removeDocId, updateDocCache, onDocListUpdated } from '@/doc-storage';
 import { type DocType, viewPathForType, iconForType } from '@/shared/doc-type-helpers';
 import { RelayLogPanel } from './RelayLogPanel';
 
@@ -36,19 +34,6 @@ interface DocEntry {
 function relativeTime(ts: string | null): string {
   if (!ts) return '';
   return dayjs(ts).fromNow();
-}
-
-function entriesFromCache(): DocEntry[] {
-  return getDocList().map(e => ({
-    type: (e.type || 'unknown') as DocType,
-    documentId: e.id,
-    name: e.name || e.id.slice(0, 8),
-    count: null,
-    lastUpdated: null,
-    loading: true,
-    peers: [],
-    access: getCachedAccess(e.id),
-  }));
 }
 
 function applyQueryResult(prev: DocEntry[], docId: string, result: any, lastModified?: number): DocEntry[] {
@@ -73,15 +58,13 @@ export function Home({ path }: { path?: string }) {
 
   useEffect(() => { document.title = 'Automerge Documents'; }, []);
 
-  // Seed instantly from the cache (returns [] when caching is disabled), then pull the
-  // authoritative list from the worker. Both flow into `entries` via setEntries / the
-  // onDocListUpdated subscription below, which also keeps the cache fresh on worker pushes.
+  // Pull the doc list from the worker (the source of truth). Results flow into `entries`
+  // via the onDocListUpdated subscription below.
   useEffect(() => {
-    setEntries(entriesFromCache());
     fetchDocList().catch((err) => console.warn('[Home] fetchDocList failed:', err)).finally(() => setListLoading(false));
   }, []);
 
-  // Subscribe to worker-pushed doc list updates (IDB → localStorage cache)
+  // Subscribe to worker-pushed doc list updates
   useEffect(() => {
     return onDocListUpdated((list) => {
       setEntries((prev) => {
@@ -140,26 +123,6 @@ export function Home({ path }: { path?: string }) {
     return () => { unsubs.forEach(u => u()); unsubStateChanged(); };
   }, [docIdKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
-
-  const reloadEntries = useCallback(() => {
-    const docList = getDocList();
-    if (docList.length === 0) return;
-    setEntries(prev => {
-      const existing = new Set(prev.map(e => e.documentId));
-      const newEntries: DocEntry[] = docList
-        .filter(e => !existing.has(e.id))
-        .map(e => ({
-          type: (e.type || 'unknown') as DocType,
-          documentId: e.id,
-          name: e.name || e.id.slice(0, 8),
-          count: null,
-          lastUpdated: null,
-          loading: true,
-          peers: [],
-        }));
-      return newEntries.length > 0 ? [...prev, ...newEntries] : prev;
-    });
-  }, []);
 
   const handleCreateCalendar = async () => {
     const name = prompt('Calendar name:', 'Untitled');
@@ -726,7 +689,7 @@ export function Home({ path }: { path?: string }) {
     } catch (err: any) {
       setError('Import failed: ' + err.message);
     }
-  }, [reloadEntries]);
+  }, []);
 
   const icsInputRef = useRef<HTMLInputElement>(null);
 
@@ -754,7 +717,7 @@ export function Home({ path }: { path?: string }) {
       setImportStatus(null);
       setError('Import failed: ' + err.message);
     }
-  }, [reloadEntries]);
+  }, []);
 
   const [installPrompt, setInstallPrompt] = useState<any>(null);
   const isStandalone = window.matchMedia('(display-mode: standalone)').matches

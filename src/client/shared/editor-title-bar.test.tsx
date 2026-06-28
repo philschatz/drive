@@ -30,10 +30,6 @@ jest.mock('./useAccess', () => ({
   useAccess: () => mockAccessReturn,
 }));
 
-jest.mock('../doc-storage', () => ({
-  getDocEntry: () => undefined,
-}));
-
 jest.mock('../components/ui/dropdown-menu', () => ({
   DropdownMenu: ({ children }: any) => children,
   DropdownMenuTrigger: ({ children }: any) => children,
