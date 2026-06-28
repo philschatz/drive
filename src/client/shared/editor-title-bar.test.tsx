@@ -3,6 +3,7 @@ import { render, screen, fireEvent } from '@testing-library/preact';
 // Mock automerge module before importing EditorTitleBar
 jest.mock('./automerge', () => ({
   useWsStatus: jest.fn(() => true),
+  usePeerTransports: jest.fn(() => ({})),
   getWorkerPeerId: jest.fn(() => 'self-peer-id'),
   repo: { peerId: 'self-peer-id' },
 }));
@@ -10,6 +11,7 @@ jest.mock('./automerge', () => ({
 jest.mock('./presence', () => ({
   peerColor: (id: string) => `#${id.slice(0, 6)}`,
   peerDisplayName: (id: string) => `Peer ${id.slice(0, 8)}`,
+  PeerDot: ({ peerId, label }: any) => <span title={label ?? `Peer ${peerId}`} />,
 }));
 
 jest.mock('./keyhive-api', () => ({
@@ -116,7 +118,8 @@ describe('EditorTitleBar', () => {
         peerTitle={(p) => p.name}
       />
     );
-    expect(screen.getByTitle('Alice')).toBeDefined();
+    // The dot tooltip appends the transport (relay by default in this mock).
+    expect(screen.getByTitle(/^Alice/)).toBeDefined();
   });
 
   it('shows source link when docId is provided', () => {

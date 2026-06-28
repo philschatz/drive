@@ -40,6 +40,10 @@ export default defineConfig({
         '--js-flags=--max-old-space-size=8192',
         '--no-sandbox',
         '--disable-dev-shm-usage',
+        // Expose real loopback ICE candidates instead of mDNS `.local` ones so
+        // two local contexts can establish a direct WebRTC channel reliably
+        // (the webrtc-direct spec); only affects WebRTC, unused by other specs.
+        '--disable-features=WebRtcHideLocalIpsWithMdns',
       ],
     },
   },

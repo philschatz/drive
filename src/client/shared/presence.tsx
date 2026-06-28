@@ -1,4 +1,4 @@
-import { subscribePresence, setPresence } from '../worker-api';
+import { subscribePresence, setPresence, usePeerTransports } from '../worker-api';
 import type { PeerState } from './automerge';
 import { getContactName } from '../contact-names';
 
@@ -46,17 +46,47 @@ export interface PeerFieldInfo {
   peerId: string;
 }
 
+/**
+ * A peer indicator dot. A FILLED dot means a direct WebRTC (peer-to-peer)
+ * channel is open to that peer; a HOLLOW ring means the peer is reachable only
+ * through the relay server. Hollow is the default so a relayed connection is
+ * never mistaken for a direct one. The transport is also named in the tooltip.
+ */
+export function PeerDot({ peerId, direct, label, sizeClass = 'w-2 h-2' }: {
+  peerId: string;
+  direct: boolean;
+  /** Base tooltip text; the transport ("direct"/"via relay") is appended. */
+  label?: string;
+  /** Tailwind size classes for the dot (default 8px). */
+  sizeClass?: string;
+}) {
+  const color = peerColor(peerId);
+  const base = label ?? peerDisplayName(peerId);
+  return (
+    <span
+      className={`${sizeClass} rounded-full inline-block shrink-0`}
+      style={{
+        boxSizing: 'border-box',
+        backgroundColor: direct ? color : 'transparent',
+        border: direct ? 'none' : `2px solid ${color}`,
+      }}
+      title={`${base} — ${direct ? 'direct (P2P)' : 'via relay'}`}
+    />
+  );
+}
+
 export function PresenceDot({ fieldId, peerFocusedFields }: {
   fieldId: string;
   peerFocusedFields?: Record<string, PeerFieldInfo>;
 }) {
+  const transports = usePeerTransports();
   const info = peerFocusedFields?.[fieldId];
   if (!info) return null;
   return (
-    <div
-      className="w-2 h-2 rounded-full shrink-0 inline-block"
-      style={{ backgroundColor: info.color }}
-      title={`${peerDisplayName(info.peerId)} is editing`}
+    <PeerDot
+      peerId={info.peerId}
+      direct={transports[info.peerId] === 'direct'}
+      label={`${peerDisplayName(info.peerId)} is editing`}
     />
   );
 }

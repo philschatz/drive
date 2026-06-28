@@ -9,6 +9,8 @@ import {
   RDV_SUB, RDV_UNSUB, RDV_MSG, RDV_PEER, isRendezvousType,
   type RendezvousStatus,
 } from '../shared/rendezvous-protocol';
+import { isWebRTCSignalType, type WebRTCSignalFrame } from '../shared/webrtc-signal';
+import { makeWebRTCRelayAdapter, type WebRTCRelayAdapter } from './webrtc-relay-adapter';
 import { generateRendezvous, encryptString, decryptString } from './rendezvous-crypto';
 // hashStr and QueryCacheEntry are also exported from idb-storage for main-thread use.
 // Defined inline here to avoid adding a static import that may affect worker module loading.
@@ -69,7 +71,9 @@ export type MainToWorker =
   | { type: 'open-doc'; id: number; docId: string }
   | { type: 'subscribe-validation'; docId: string }
   | { type: 'unsubscribe-validation'; docId: string }
-  | { type: 'hf-port'; port: MessagePort };
+  | { type: 'hf-port'; port: MessagePort }
+  // Main-thread WebRTC bridge port (RTCPeerConnection lives on the main thread).
+  | { type: 'webrtc-port'; port: MessagePort };
 
 export type ValidationError = { path: (string | number)[]; message: string; kind?: 'schema' | 'dependency' | 'warning' };
 
@@ -82,6 +86,8 @@ export type WorkerToMain =
   | { type: 'peer-connected'; peerCount: number; peers: string[] }
   | { type: 'peer-disconnected'; peerCount: number; peers: string[] }
   | { type: 'ws-status'; connected: boolean }
+  // A peer's sync transport flipped between a direct WebRTC channel and the relay.
+  | { type: 'p2p-status'; peerId: string; transport: 'direct' | 'relay' }
   // New worker-owned doc API responses
   | { type: 'result'; id: number; result?: any; error?: string }
   | { type: 'query-result'; subId: number; result: any; heads: string[]; lastModified?: number; error?: string }
@@ -129,6 +135,9 @@ self.onmessage = (e: MessageEvent) => { pendingMessages.push(e); };
 // Dynamic import so the queue handler above is registered BEFORE WASM top-level await runs
 let Repo: any, IndexedDBStorageAdapter: any, Automerge: any;
 let BrowserWebSocketClientAdapter: any;
+/** automerge-repo's NetworkAdapter base class, captured from the dynamic import
+ *  so WebRTCRelayAdapter can extend it without a static (WASM-triggering) import. */
+let NetworkAdapterBase: any;
 let PresenceClass: any;
 /** Convert keyhive doc-id bytes (== automerge BinaryDocumentId) → automerge doc id string. */
 let amDocIdFromBytes: ((bytes: Uint8Array) => string) | null = null;
@@ -156,6 +165,7 @@ try {
   await import('@automerge/automerge-subduction');
   const repoModule: any = await import('@automerge/automerge-repo');
   Repo = repoModule.Repo;
+  NetworkAdapterBase = repoModule.NetworkAdapter;
   PresenceClass = repoModule.Presence;
   // Keyhive doc-id bytes are the automerge BinaryDocumentId; stringify+parse is the
   // build-portable inverse of docIdFromAutomergeUrl (binaryToDocumentId isn't exported
@@ -188,6 +198,14 @@ const rdvEncoder = new Encoder({ tagUint8Array: false, useRecords: false });
 /** The underlying relay WebSocket (set during init). Rendezvous frames bypass the
  *  automerge-repo adapter and ride the raw socket. */
 let rdvSocket: WebSocket | undefined;
+
+// ── WebRTC direct-peer transport ─────────────────────────────────────────────
+// The composite network adapter that upgrades peers from relay to a direct data
+// channel. RTCPeerConnection lives on the main thread (not available in Workers),
+// so the adapter talks to it over a MessagePort. The port may arrive before or
+// after the adapter is built; hold it until both exist.
+let p2pAdapter: WebRTCRelayAdapter | null = null;
+let pendingWebrtcPort: MessagePort | null = null;
 
 /**
  * One live rendezvous. `onPeer` fires when another peer joins the topic (e.g. send
@@ -876,7 +894,13 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
               handleRendezvousFrame(decoded);
               return;
             }
-          } catch { /* not a rendezvous frame — fall through to the repo adapter */ }
+            // WebRTC signaling frames ride the same socket but drive the direct
+            // data-channel negotiation — hand them to the p2p adapter, not the repo.
+            if (isWebRTCSignalType(decoded?.type)) {
+              p2pAdapter?.handleSignal(decoded as WebRTCSignalFrame);
+              return;
+            }
+          } catch { /* not an overlay frame — fall through to the repo adapter */ }
           return origReceive(bytes);
         };
         // Expose the raw socket so rendezvous frames can bypass the repo adapter.
@@ -885,10 +909,28 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
         const origOnOpenForRdv = secureWs.onOpen;
         secureWs.onOpen = () => { rdvSocket = (secureWs as any).socket; origOnOpenForRdv(); };
 
+        // Wrap the relay adapter so peers can be upgraded to direct WebRTC data
+        // channels. Keyhive still wraps a SINGLE adapter, so its encryption and
+        // access control are unchanged — only the underlying pipe switches.
+        p2pAdapter = makeWebRTCRelayAdapter(NetworkAdapterBase, secureWs, {
+          sendSignalFrame: (frame) => {
+            if (rdvSocket && rdvSocket.readyState === WebSocket.OPEN) {
+              rdvSocket.send(rdvEncoder.encode(frame) as unknown as ArrayBuffer);
+            }
+          },
+          onTransportChange: (peerId, transport) => {
+            (self as any).postMessage({ type: 'p2p-status', peerId, transport } satisfies WorkerToMain);
+          },
+          relayPeerId: RELAY_PEER_ID,
+        });
+        if (pendingWebrtcPort) { p2pAdapter.attachPort(pendingWebrtcPort); pendingWebrtcPort = null; }
+
         khIntegration = await khBridge.initializeAutomergeRepoKeyhive({
           storage: secureStorage,
           peerIdSuffix: 'drive',
-          networkAdapter: secureWs,
+          // Cast: WebRTCRelayAdapter implements NetworkAdapterInterface but the
+          // bridge's .d.ts asks for the concrete NetworkAdapter class brand.
+          networkAdapter: p2pAdapter as any,
           onlyShareWithHardcodedServerPeerId: false,
           periodicallyRequestSync: true,
           automaticArchiveIngestion: true,
@@ -1993,6 +2035,13 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
   }
 
   // --- HyperFormula worker port ---
+
+  if (msg.type === 'webrtc-port') {
+    const port = (msg as any).port as MessagePort;
+    // The port may arrive before keyhive init builds the adapter; hold it.
+    if (p2pAdapter) p2pAdapter.attachPort(port);
+    else pendingWebrtcPort = port;
+  }
 
   if (msg.type === 'hf-port') {
     const hfPort = (msg as any).port as MessagePort;

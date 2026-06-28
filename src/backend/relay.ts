@@ -3,6 +3,7 @@ import { Encoder, decode } from 'cbor-x';
 import { logMessage, shortId } from './relay-log';
 import { RELAY_PEER_ID } from '../shared/relay-identity';
 import { RDV_SUB, RDV_UNSUB, RDV_MSG, RDV_PEER } from '../shared/rendezvous-protocol';
+import { WRTC_SIGNAL } from '../shared/webrtc-signal';
 
 // Use the same encoder settings as @automerge/automerge-repo's cbor helper
 const encoder = new Encoder({ tagUint8Array: false, useRecords: false });
@@ -100,6 +101,19 @@ export class WebSocketRelay {
         }
       } else if (message.type === RDV_SUB || message.type === RDV_UNSUB || message.type === RDV_MSG) {
         this.handleRendezvous(ws, message);
+      } else if (message.type === WRTC_SIGNAL) {
+        // WebRTC signaling (SDP offer/answer + ICE candidates). Unicast verbatim
+        // to the named peer so two peers can negotiate a direct data channel.
+        // The relay never inspects the `signal` payload.
+        const targetId = message.targetId as string | undefined;
+        if (myPeerId) logMessage('←', myPeerId, message);
+        if (targetId && this.sockets.has(targetId)) {
+          const targetWs = this.sockets.get(targetId)!;
+          if (targetWs.readyState === WebSocket.OPEN) {
+            targetWs.send(buf);
+            logMessage('→', targetId, message);
+          }
+        }
       } else if (myPeerId) {
         logMessage('←', myPeerId, message);
         const targetId = message.targetId as string | undefined;

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Collaborative document editor built on Automerge CRDTs. Currently supports Calendar, TaskList, and DataGrid document types. The frontend is a Preact PWA; the backend is an Express server with CalDAV support. Documents sync in real-time via automerge-repo WebSocket connections.
+Collaborative document editor built on Automerge CRDTs. Currently supports Calendar, TaskList, and DataGrid document types. The frontend is a Preact PWA; the backend is an Express server with CalDAV support. Documents sync in real-time via automerge-repo through a WebSocket relay, with an opportunistic upgrade to direct peer-to-peer WebRTC channels (see Sync & Networking).
 
 ## Commands
 
@@ -70,6 +70,18 @@ Documents follow JSCalendar (RFC 8984) with modifications for CRDT collaboration
 
 `src/shared/presence.tsx` provides real-time peer awareness using Automerge's native Presence API. All editors share a unified `PresenceState` type: `{ viewing: boolean, focusedField: (string | number)[] | null }`. The focused field path encodes what a peer is editing (e.g., `['events', uid, 'title']`).
 
+### Sync & Networking
+
+The Automerge repo runs inside a **dedicated Web Worker** (`src/client/automerge-worker.ts`); the main thread talks to it through `src/client/worker-api.ts` (request/response by numeric `id`, plus fire-and-forget pushes and subscription callbacks). Keyhive provides end-to-end encryption by wrapping a **single** `NetworkAdapter`, so all transport multiplexing happens *below* keyhive and is invisible to it (same peerIds, same messages, same sync state).
+
+Transport, from the bottom up:
+
+- **Relay (default).** `src/backend/relay.ts` is a stateless WebSocket relay (also embedded in `serve.ts` / dev via `relay-plugin.ts`) that does peer discovery and routes opaque encrypted bytes by `targetId`. It identifies itself with the all-zero `RELAY_PEER_ID` (`src/shared/relay-identity.ts`) and is never a keyhive member.
+- **Direct WebRTC (opportunistic upgrade).** `src/client/webrtc-relay-adapter.ts` is the single adapter handed to keyhive: it wraps the relay adapter and, per peer, routes that peer's sync over a direct `RTCDataChannel` once one is open, falling back to the relay otherwise. Because `RTCPeerConnection` is window-only, the peer connections live on the **main thread** in `src/client/webrtc-bridge.ts`, connected to the worker over a `MessagePort` (same pattern as the HyperFormula bridge). STUN-only by default (no TURN — symmetric-NAT peers stay on the relay); override ICE servers with `VITE_ICE_SERVERS`. The bridge retries a stalled negotiation a few times, then leaves that peer on the relay.
+- **Relay overlay frames.** Two protocols ride the relay socket alongside the automerge-repo protocol and are intercepted client-side before reaching the repo: WebRTC signaling (`WRTC_SIGNAL`, `src/shared/webrtc-signal.ts`) carrying SDP/ICE, and the encrypted **rendezvous** channel (`RDV_*`, `src/shared/rendezvous-protocol.ts`) used for QR contact/device exchange.
+
+Per-peer transport is surfaced to the UI via the worker's `p2p-status` message → `usePeerTransports()`; the shared `PeerDot` (`src/shared/presence.tsx`) renders a **filled** dot for a direct channel and a **hollow ring** (the default) for relay, so a relayed connection is never mistaken for P2P.
+
 ### Routing
 
 `src/client/App.tsx` defines routes via preact-router:
@@ -98,3 +110,4 @@ The backend implements CalDAV (RFC 4791) at `/dav/`. `src/backend/parser.ts` con
 - `PORT` — Server port (default 3000)
 - `AUTOMERGE_DATA_DIR` — Persistent storage directory (default `.data`)
 - `NODE_ENV=production` — Disables request logging, serves built frontend
+- `VITE_ICE_SERVERS` — (frontend, build-time) JSON array of `RTCIceServer` for WebRTC. Defaults to public Google STUN; set this to add a TURN server.

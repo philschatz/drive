@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'preact/hooks';
-import { useConnectionStatus, usePeerList } from '../shared/automerge';
+import { useConnectionStatus, usePeerList, usePeerTransports } from '../shared/automerge';
 import { createDoc, updateDoc, subscribeQuery, fetchDocList, removeDocId, onDocListUpdated, HOME_SUMMARY_QUERY } from '../worker-api';
 import { getMyAccess, onKeyhiveStateChanged } from '../shared/keyhive-api';
-import { peerColor, peerDisplayName } from '../shared/presence';
+import { peerDisplayName, PeerDot } from '../shared/presence';
 import { Button } from '@/components/ui/button';
 import { Alert } from '@/components/ui/alert';
 import { DeleteButton } from '@/components/ui/delete-button';
@@ -55,6 +55,7 @@ export function Home({ path }: { path?: string }) {
   const [listLoading, setListLoading] = useState(true);
   const connected = useConnectionStatus();
   const repoPeers = usePeerList();
+  const transports = usePeerTransports();
 
   useEffect(() => { document.title = 'Automerge Documents'; }, []);
 
@@ -764,12 +765,7 @@ export function Home({ path }: { path?: string }) {
         />
         <span className="text-xs text-muted-foreground">{connected ? 'Connected' : 'Disconnected'}</span>
         {repoPeers.map(peerId => (
-          <span
-            key={peerId}
-            className="w-2 h-2 rounded-full inline-block shrink-0"
-            style={{ backgroundColor: peerColor(peerId) }}
-            title={peerDisplayName(peerId)}
-          />
+          <PeerDot key={peerId} peerId={peerId} direct={transports[peerId] === 'direct'} />
         ))}
       </div>
 
@@ -855,11 +851,11 @@ export function Home({ path }: { path?: string }) {
               <a href={viewPath} className="text-sm flex-1 hover:underline flex items-center gap-1" style={noEntryAccess ? { textDecoration: 'line-through', opacity: 0.6 } : undefined}>
                 {entry.name || 'Untitled'}
                 {entry.peers.map(peerId => (
-                  <span
+                  <PeerDot
                     key={peerId}
-                    className="w-2 h-2 rounded-full inline-block shrink-0"
-                    style={{ backgroundColor: peerColor(peerId) }}
-                    title={`${peerDisplayName(peerId)} is viewing`}
+                    peerId={peerId}
+                    direct={transports[peerId] === 'direct'}
+                    label={`${peerDisplayName(peerId)} is viewing`}
                   />
                 ))}
               </a>

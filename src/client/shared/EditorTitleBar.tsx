@@ -1,6 +1,6 @@
 import type { ComponentChildren } from 'preact';
-import { useWsStatus, getWorkerPeerId } from './automerge';
-import { peerColor, peerDisplayName } from './presence';
+import { useWsStatus, usePeerTransports, getWorkerPeerId } from './automerge';
+import { peerDisplayName, PeerDot } from './presence';
 import { AccessControl } from '../components/AccessControl';
 import { useAccess } from './useAccess';
 
@@ -47,6 +47,7 @@ export function EditorTitleBar<P extends PeerLike>({
   children?: ComponentChildren;
 }) {
   const connected = useWsStatus(docId!);
+  const transports = usePeerTransports();
   const { access } = useAccess(docId);
 
   return (
@@ -87,10 +88,12 @@ export function EditorTitleBar<P extends PeerLike>({
         {/* Peer dots — clipped to ~4 dots on narrow screens */}
         <div className="flex items-center gap-1 max-w-[72px] sm:max-w-none overflow-hidden">
           {peers.filter(p => p.peerId !== getWorkerPeerId()).map(peer => (
-            <div
+            <PeerDot
               key={peer.peerId}
-              style={{ width: 12, height: 12, borderRadius: '50%', flexShrink: 0, backgroundColor: peerColor(peer.peerId) }}
-              title={peerTitle ? peerTitle(peer) : peerDisplayName(peer.peerId)}
+              peerId={peer.peerId}
+              direct={transports[peer.peerId] === 'direct'}
+              label={peerTitle ? peerTitle(peer) : peerDisplayName(peer.peerId)}
+              sizeClass="w-3 h-3"
             />
           ))}
         </div>

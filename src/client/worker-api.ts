@@ -13,6 +13,7 @@ import type { RendezvousStatus } from '../shared/rendezvous-protocol';
 export type { RendezvousStatus } from '../shared/rendezvous-protocol';
 import { idbDelPrefix, settingGet, settingSetSync, closeDb } from './idb-storage';
 import { setContactNamesDispatch, applyContactNamesFromWorker } from './contact-names';
+import { startWebRTCBridge } from './webrtc-bridge';
 
 // Re-export for convenience
 export { deepAssign };
@@ -100,6 +101,19 @@ let rejectKeyhiveReady!: (err: Error) => void;
 export const keyhiveReady = new Promise<void>((resolve, reject) => { resolveKeyhiveReady = resolve; rejectKeyhiveReady = reject; });
 keyhiveReady.catch(() => { }); // prevent unhandled rejection — callers handle the error
 
+// ── WebRTC bridge (main thread owns RTCPeerConnection) ───────────────────────
+// The repo's network adapter lives in the worker, but RTCPeerConnection is
+// window-only. Wire a MessagePort between the worker's WebRTCRelayAdapter and the
+// main-thread bridge that owns the peer connections + data channels.
+{
+  const channel = new MessageChannel();
+  startWebRTCBridge(channel.port2);
+  // Gate on workerReady so the adapter exists when the port arrives.
+  workerReady.then(() => {
+    worker.postMessage({ type: 'webrtc-port', port: channel.port1 }, [channel.port1]);
+  }).catch(() => { /* worker never became ready — nothing to bridge */ });
+}
+
 // ── Worker peer ID ──────────────────────────────────────────────────────────
 
 let _workerPeerId = '';
@@ -118,6 +132,35 @@ let wsConnected = false;
 
 type PeerListListener = (peers: string[]) => void;
 const peerListListeners = new Set<PeerListListener>();
+
+// Per-peer sync transport: 'direct' once a WebRTC data channel is open, else 'relay'.
+export type PeerTransport = 'direct' | 'relay';
+type P2pStatusListener = (peerId: string, transport: PeerTransport) => void;
+const p2pStatusListeners = new Set<P2pStatusListener>();
+const peerTransports = new Map<string, PeerTransport>();
+
+/** Current transport for a peer ('relay' if no direct channel is open). */
+export function getPeerTransport(peerId: string): PeerTransport {
+  return peerTransports.get(peerId) ?? 'relay';
+}
+/** All peers currently on a direct WebRTC channel. */
+export function getDirectPeers(): string[] {
+  return [...peerTransports.entries()].filter(([, t]) => t === 'direct').map(([p]) => p);
+}
+/** Subscribe to per-peer transport changes (direct ⇄ relay). */
+export function onP2pStatus(fn: P2pStatusListener): () => void {
+  p2pStatusListeners.add(fn);
+  return () => { p2pStatusListeners.delete(fn); };
+}
+
+/** Reactive snapshot of every known peer's transport ('direct' | 'relay'). */
+export function usePeerTransports(): Record<string, PeerTransport> {
+  const [snapshot, setSnapshot] = useState<Record<string, PeerTransport>>(
+    () => Object.fromEntries(peerTransports)
+  );
+  useEffect(() => onP2pStatus(() => setSnapshot(Object.fromEntries(peerTransports))), []);
+  return snapshot;
+}
 
 // ── Request/response plumbing ────────────────────────────────────────────────
 
@@ -228,6 +271,10 @@ worker.onmessage = (e: MessageEvent<WorkerToMain>) => {
     case 'ws-status':
       wsConnected = msg.connected;
       for (const fn of wsStatusListeners) fn(msg.connected);
+      break;
+    case 'p2p-status':
+      peerTransports.set(msg.peerId, msg.transport);
+      for (const fn of p2pStatusListeners) fn(msg.peerId, msg.transport);
       break;
 
     // --- Doc storage / contact names ---
