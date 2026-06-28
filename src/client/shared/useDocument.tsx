@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'preact/hooks';
 import { type ComponentChildren } from 'preact';
-import { openDoc, addDocId } from '../worker-api';
+import { openDoc } from '../worker-api';
 import { Progress } from '../components/ui/progress';
 
 export type DocStatus = 'loading' | 'ready' | 'error';
@@ -29,8 +29,8 @@ export function useDocument(docId: string | undefined) {
       .then(() => {
         if (!cancelled) {
           setProgress(100); setMessage('Ready'); setStatus('ready');
-          // Ensure the doc appears in the home page doc list (e.g. when visiting a shared URL)
-          addDocId(docId);
+          // The worker owns the doc list: an opened/shared doc enters it via
+          // reconcileHomeDocs once keyhive access syncs (no explicit registration here).
         }
       })
       .catch((err) => { if (!cancelled) { setStatus('error'); setError(err.message); } });

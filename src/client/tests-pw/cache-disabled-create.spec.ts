@@ -18,11 +18,10 @@ test('cache disabled: created doc survives reload', async ({ browser }) => {
       Promise.all([(window as any).__drive.workerReady, (window as any).__drive.keyhiveReady])
     );
 
-    // Create a doc (mirror Home: createDoc + addDocId).
+    // Create a doc (mirror Home: createDoc registers it in the worker's list).
     const docId = await peer.page.evaluate(async () => {
       const api = (window as any).__drive;
-      const { docId } = await api.createDoc({ '@type': 'Calendar', name: 'Repro Cal', events: {} });
-      api.addDocId?.(docId, { type: 'Calendar', name: 'Repro Cal' });
+      const { docId } = await api.createDoc({ '@type': 'Calendar', name: 'Repro Cal', events: {} }, { type: 'Calendar', name: 'Repro Cal' });
       return docId as string;
     });
     expect(docId).toBeTruthy();

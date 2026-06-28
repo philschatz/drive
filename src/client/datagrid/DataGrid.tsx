@@ -29,7 +29,6 @@ import { createHfBridge, type HfBridge, type MCResults, type CondFormatResults }
 import { sendHfPort } from '../worker-api';
 import { DistributionPanel } from './DistributionPanel';
 import { formatDistValue } from './helpers';
-import { addDocId } from '@/worker-api';
 import './datagrid.css';
 
 // Lightweight metadata query — returns doc name and each sheet's name/index/hidden plus row/col ordering (no cell data)
@@ -1036,7 +1035,6 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
 
       if (!docMetaRef.current) {
         // First load — determine which sheet to show and subscribe to it
-        addDocId(docId, { type: 'DataGrid', name: result.name });
         const order = sortedEntries(result.sheets);
         const firstSheetId = order.length > 0 ? order[0][0] : null;
         const validInitial = initialSheetId && result.sheets[initialSheetId] ? initialSheetId : null;

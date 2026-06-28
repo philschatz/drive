@@ -12,7 +12,6 @@ import { ValidationPanel } from '../shared/ValidationPanel';
 import { hashHistory } from '../hash-history';
 import { Progress } from '@/components/ui/progress';
 import { Button } from '@/components/ui/button';
-import { addDocId } from '@/worker-api';
 import { JqPanel } from './JqPanel';
 import './source-viewer.css';
 
@@ -234,7 +233,6 @@ export function SourceViewer({ docId, rest }: { docId?: string; rest?: string; p
       });
       if (!mounted) return;
       setLoadProgress(null);
-      addDocId(docId);
 
       // Subscribe to the full document via worker-api (routes through correct repo)
       const unsubQuery = subscribeQuery(docId, '.', (result) => {

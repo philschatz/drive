@@ -16,7 +16,7 @@ import { workerReady, keyhiveReady } from './worker-api';
 import { getAllContactNames } from './contact-names';
 
 const bridge = {
-  ...workerApi, // includes the doc-list helpers (addDocId/removeDocId/getDocList/onDocListUpdated)
+  ...workerApi, // includes the doc-list helpers (removeDocId/getDocList/onDocListUpdated)
   // contact-name cache (worker-owned, mirrored to the main thread) so tests can
   // assert names the worker assigns (e.g. auto-naming during the rendezvous).
   getAllContactNames,

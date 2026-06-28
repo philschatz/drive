@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'preact/hooks';
 import { useConnectionStatus, usePeerList } from '../shared/automerge';
-import { createDoc, updateDoc, subscribeQuery, fetchDocList, addDocId, removeDocId, updateDocCache, onDocListUpdated, HOME_SUMMARY_QUERY } from '../worker-api';
+import { createDoc, updateDoc, subscribeQuery, fetchDocList, removeDocId, onDocListUpdated, HOME_SUMMARY_QUERY } from '../worker-api';
 import { getMyAccess, onKeyhiveStateChanged } from '../shared/keyhive-api';
 import { peerColor, peerDisplayName } from '../shared/presence';
 import { Button } from '@/components/ui/button';
@@ -94,9 +94,6 @@ export function Home({ path }: { path?: string }) {
     const unsubs = docIds.map(docId =>
       subscribeQuery(docId, HOME_SUMMARY_QUERY, (result, _heads, lastModified) => {
         if (!result) return;
-        const type = (result.type === 'Calendar' || result.type === 'TaskList' || result.type === 'DataGrid')
-          ? result.type as DocType : 'unknown';
-        updateDocCache(docId, { type, name: result.name });
         setEntries(prev => applyQueryResult(prev, docId, result, lastModified));
       })
     );
@@ -128,8 +125,7 @@ export function Home({ path }: { path?: string }) {
     const name = prompt('Calendar name:', 'Untitled');
     if (name === null) return;
     const resolvedName = name || 'Untitled';
-    const { docId } = await createDoc({ '@type': 'Calendar', name: resolvedName, events: {} });
-    addDocId(docId, { type: 'Calendar', name: resolvedName });
+    const { docId } = await createDoc({ '@type': 'Calendar', name: resolvedName, events: {} }, { type: 'Calendar', name: resolvedName });
     window.location.hash = viewPathForType('Calendar', docId);
   };
 
@@ -137,8 +133,7 @@ export function Home({ path }: { path?: string }) {
     const name = prompt('Task list name:', 'Untitled');
     if (name === null) return;
     const resolvedName = name || 'Untitled';
-    const { docId } = await createDoc({ '@type': 'TaskList', name: resolvedName, tasks: {} });
-    addDocId(docId, { type: 'TaskList', name: resolvedName });
+    const { docId } = await createDoc({ '@type': 'TaskList', name: resolvedName, tasks: {} }, { type: 'TaskList', name: resolvedName });
     window.location.hash = viewPathForType('TaskList', docId);
   };
 
@@ -163,8 +158,7 @@ export function Home({ path }: { path?: string }) {
           cells: {},
         },
       },
-    });
-    addDocId(docId, { type: 'DataGrid', name: resolvedName });
+    }, { type: 'DataGrid', name: resolvedName });
     window.location.hash = viewPathForType('DataGrid', docId);
   };
 
@@ -198,8 +192,7 @@ export function Home({ path }: { path?: string }) {
 
       // Create the document before parsing
       setImportStatus({ label: 'Creating document...', progress: 0 });
-      const { docId } = await createDoc({ '@type': 'DataGrid', name, sheets: {} });
-      addDocId(docId, { type: 'DataGrid', name });
+      const { docId } = await createDoc({ '@type': 'DataGrid', name, sheets: {} }, { type: 'DataGrid', name });
 
       setImportStatus({ label: 'Reading file...', progress: 2 });
       await new Promise(r => setTimeout(r, 0));
@@ -681,10 +674,9 @@ export function Home({ path }: { path?: string }) {
       const data = JSON.parse(text);
       if (!data || typeof data !== 'object') throw new Error('Invalid JSON: expected an object');
       const name = data.name || file.name.replace(/\.json$/i, '') || 'Imported';
-      const { docId } = await createDoc(data);
       const type = (data['@type'] === 'Calendar' || data['@type'] === 'TaskList' || data['@type'] === 'DataGrid')
         ? data['@type'] as DocType : 'unknown';
-      addDocId(docId, { type, name });
+      const { docId } = await createDoc(data, { type, name });
       window.location.hash = viewPathForType(type, docId);
     } catch (err: any) {
       setError('Import failed: ' + err.message);
@@ -709,8 +701,7 @@ export function Home({ path }: { path?: string }) {
       const calName = file.name.replace(/\.ics$/i, '') || 'Imported';
       const events: Record<string, any> = {};
       for (const { uid, event } of parsed) events[uid] = event;
-      const { docId } = await createDoc({ '@type': 'Calendar', name: calName, events });
-      addDocId(docId, { type: 'Calendar', name: calName });
+      const { docId } = await createDoc({ '@type': 'Calendar', name: calName, events }, { type: 'Calendar', name: calName });
       setImportStatus(null);
       window.location.hash = viewPathForType('Calendar', docId);
     } catch (err: any) {

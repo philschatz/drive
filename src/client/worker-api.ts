@@ -41,19 +41,9 @@ function emitDocList(list: DocEntry[]): void {
   for (const fn of docListListeners) fn(list);
 }
 
-/** Register a newly created/opened doc with the worker (which persists it). */
-export function addDocId(docId: string, metadata?: Partial<DocEntry>): void {
-  fire('add-doc-to-list', { docId, metadata });
-}
-
 /** Remove the current user from a doc (revokes own access + drops it from the list). */
 export function removeDocId(docId: string): void {
   fire('remove-me-from-doc', { docId });
-}
-
-/** Update a doc's cached metadata (name/type) in the worker's list. */
-export function updateDocCache(docId: string, metadata: Partial<DocEntry>): void {
-  fire('add-doc-to-list', { docId, metadata });
 }
 
 // Functions that the worker provides its own copy of. Callers pass the real ref;
@@ -77,9 +67,6 @@ setContactNamesDispatch((type, agentId, name) =>
   // rejects (rather than being a silent fire-and-forget that drops the data).
   request<void>(type, { agentId, ...(name !== undefined ? { name } : {}) })
 );
-
-// Clean up legacy localStorage key from when insecure mode existed
-localStorage.removeItem('showUnencrypted');
 
 const initMsg = {
   type: 'init' as const,
@@ -497,8 +484,8 @@ export async function fetchDocList(): Promise<DocEntry[]> {
 
 // ── Document mutations ──────────────────────────────────────────────────────
 
-export function createDoc(initialJson: any): Promise<{ docId: string }> {
-  return request<{ docId: string }>('create-doc', { initialJson });
+export function createDoc(initialJson: any, metadata?: Partial<DocEntry>): Promise<{ docId: string }> {
+  return request<{ docId: string }>('create-doc', { initialJson, metadata });
 }
 
 /**

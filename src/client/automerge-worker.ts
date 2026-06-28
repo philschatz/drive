@@ -26,7 +26,7 @@ export type MainToWorker =
   | { type: 'get-doc-list'; id: number }
   | { type: 'query'; id: number; docId: string; filter: string }
   // New worker-owned doc API
-  | { type: 'create-doc'; id: number; initialJson: any }
+  | { type: 'create-doc'; id: number; initialJson: any; metadata?: Record<string, any> }
   | { type: 'update-doc'; id: number; docId: string; fnSource: string; args: unknown[] }
   | { type: 'subscribe-query'; subId: number; docId: string; filter: string }
   | { type: 'unsubscribe-query'; subId: number }
@@ -38,8 +38,8 @@ export type MainToWorker =
   | { type: 'subscribe-presence'; docId: string }
   | { type: 'unsubscribe-presence'; docId: string }
   | { type: 'set-presence'; docId: string; state: any }
-  // Doc list mutations (IDB-backed)
-  | { type: 'add-doc-to-list'; docId: string;[key: string]: any }
+  // Doc list mutations (IDB-backed). Adding a doc is folded into 'create-doc';
+  // every other doc enters the list via reconcileHomeDocs (keyhive-access driven).
   | { type: 'remove-me-from-doc'; docId: string }
   // Contact name mutations (IDB-backed). `id` correlates the result so the main
   // thread can await persistence and surface failures instead of losing them.
@@ -104,6 +104,16 @@ export type WorkerToMain =
 // Catch-all error surfacing: any uncaught error or unhandled promise rejection in the
 // worker is logged and forwarded to the main thread, which shows it in a banner. Registered
 // first thing so it also covers failures during WASM/keyhive init.
+// Mirror the main thread's message logging (worker-api.ts) from inside the worker
+// so each `[main] → send X` pairs with a `[worker] ← recv X` and vice-versa. Log
+// every outgoing type (no filter). Wrapping self.postMessage covers all ~70 send
+// sites at once. Installed first thing, before any send (the error surfacing below).
+const origPostMessage = self.postMessage.bind(self);
+(self as any).postMessage = (msg: any, ...rest: any[]) => {
+  try { console.log('[worker] → send', msg?.type, msg); } catch { /* never let logging break a send */ }
+  return (origPostMessage as any)(msg, ...rest);
+};
+
 function reportWorkerError(prefix: string, detail: unknown) {
   const message = (detail as any)?.message || String(detail ?? 'Unknown worker error');
   console.error(`[worker] ${prefix}:`, detail);
@@ -706,6 +716,7 @@ function postStatus() {
 
 async function handleMessage(e: MessageEvent<MainToWorker>) {
   const msg = e.data;
+  console.log('[worker] ← recv', msg.type, msg);
 
   if (msg.type === 'init') {
     try {
@@ -1172,7 +1183,7 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
         const { idbGet: idbGetList, idbSet: idbSetList } = await import('./idb-storage');
         type S = { id: string;[k: string]: any };
         const earlyList = (await idbGetList<S[]>('automerge-doc-ids')) ?? [];
-        earlyList.unshift({ id: handle.documentId });
+        earlyList.unshift({ id: handle.documentId, ...(msg.metadata ?? {}) });
         await idbSetList('automerge-doc-ids', earlyList);
         (self as any).postMessage({ type: 'doc-list-updated', list: earlyList } satisfies WorkerToMain);
       }
@@ -1391,26 +1402,6 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
   }
 
   // --- Doc list mutations (IDB-backed) ---
-
-  if (msg.type === 'add-doc-to-list') {
-    try {
-      const { idbGet, idbSet } = await import('./idb-storage');
-      type StoredDocEntry = { id: string;[key: string]: any };
-      const list = (await idbGet<StoredDocEntry[]>('automerge-doc-ids')) ?? [];
-      const metadata = msg.metadata ?? {};
-      const idx = list.findIndex(e => e.id === msg.docId);
-      if (idx >= 0) {
-        list[idx] = { ...list[idx], ...metadata, id: msg.docId };
-        list.unshift(list.splice(idx, 1)[0]);
-      } else {
-        list.unshift({ id: msg.docId, ...metadata });
-      }
-      await idbSet('automerge-doc-ids', list);
-      (self as any).postMessage({ type: 'doc-list-updated', list } satisfies WorkerToMain);
-    } catch (err: any) {
-      console.warn('[worker] add-doc-to-list failed:', errMsg(err));
-    }
-  }
 
   if (msg.type === 'remove-me-from-doc') {
     try {
