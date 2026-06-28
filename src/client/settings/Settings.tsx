@@ -84,6 +84,7 @@ export function Settings({ path }: { path?: string }) {
   };
 
   const handleRemoveDevice = async (agentId: string) => {
+    if (!confirm(`Remove device ${agentId.slice(0, 16)}…?`)) return;
     try {
       await removeDevice(agentId);
       setMessage('Device removed.');
@@ -110,17 +111,8 @@ export function Settings({ path }: { path?: string }) {
     }
   };
 
-  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const handleDeleteAllData = async () => {
-    // Two-click confirm instead of confirm() — browsers suppress repeated native dialogs,
-    // which silently swallowed this action. First click arms; second click within the
-    // armed window performs the reset.
-    if (!confirmingDelete) {
-      setConfirmingDelete(true);
-      setTimeout(() => setConfirmingDelete(false), 5000);
-      return;
-    }
-    setConfirmingDelete(false);
+    if (!confirm('Permanently erase ALL local data — every document, your identity/keys, contacts, and settings? Documents not shared with another device are lost forever. This cannot be undone.')) return;
     try {
       await deleteAllData(); // terminates the worker, deletes all IndexedDB + localStorage, reloads
     } catch (err: any) {
@@ -381,7 +373,7 @@ export function Settings({ path }: { path?: string }) {
           lost forever. Use this to recover from a corrupted local state.
         </p>
         <Button size="sm" variant="destructive" onClick={handleDeleteAllData}>
-          {confirmingDelete ? 'Click again to confirm — erases everything' : 'Delete All Data'}
+          Delete All Data
         </Button>
       </section>
     </div>

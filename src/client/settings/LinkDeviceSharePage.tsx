@@ -45,6 +45,7 @@ export function LinkDeviceSharePage({ path }: { path?: string }) {
   }, [refresh]);
 
   const handleRemoveDevice = async (agentId: string) => {
+    if (!confirm(`Remove device ${agentId.slice(0, 16)}…?`)) return;
     try {
       await removeDevice(agentId);
       setMessage('Device removed.');

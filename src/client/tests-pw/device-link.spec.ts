@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { newPeer, waitFor, type Peer } from './support/peer';
+import { setupSharedDoc } from './support/scenarios';
 
 /**
  * Add a new device: link a second, fresh device into the same identity so both
@@ -114,6 +115,125 @@ test('linking a new device via rendezvous converges both onto one user-group', a
       () => deviceB!.call('listDevices'),
       (devices) => devices.length >= 2,
       { label: 'deviceB sees both devices' },
+    );
+  } finally {
+    await deviceA?.close();
+    await deviceB?.close();
+  }
+});
+
+/**
+ * Regression: a doc SHARED WITH the original device by a friend (access via
+ * user-group membership, not authored locally) should also reach a newly linked
+ * device once it adopts the shared group.
+ */
+test('a newly linked device loads a friend-shared document', async ({ browser }) => {
+  let bob2: Peer | undefined;
+  const { alice, bob, bobGroup, docId } = await setupSharedDoc(browser, 'edit');
+  try {
+    // bob (already has edit access to alice's doc) links a second device.
+    bob2 = await newPeer(browser, 'bob2');
+    const { rendezvousId, key } = await bob.call('rendezvousCreateDeviceLink');
+    const linkedPromise = bob.page.evaluate(
+      (rid) => new Promise<string>((resolve) => {
+        const off = (window as any).__drive.onRendezvousEvent((e: any) => {
+          if (e.rendezvousId === rid && (e.status === 'linked' || e.status === 'error')) {
+            off(); resolve(e.status);
+          }
+        });
+      }),
+      rendezvousId,
+    );
+    await bob2.call('rendezvousJoinDeviceLink', rendezvousId, key);
+    expect(await linkedPromise).toBe('linked');
+
+    await waitFor(
+      () => bob2!.call('getIdentity'),
+      (id) => id.userGroupId === bobGroup,
+      { label: 'bob2 adopts bob\'s group' },
+    );
+
+    // The friend-shared doc must reach bob's second device.
+    await waitFor(
+      () => bob2!.call('getDocList'),
+      (list) => list.some((e) => e.id === docId),
+      { label: 'bob2 loads the friend-shared doc', timeout: 45_000 },
+    );
+  } finally {
+    await alice.close();
+    await bob.close();
+    await bob2?.close();
+  }
+});
+
+/**
+ * Regression: a newly linked device should load the ORIGINAL device's whole
+ * library. The original's user-group administers its docs; once the new device
+ * adopts that group, reconcileHomeDocs must surface those docs in its home list.
+ */
+test('a newly linked device loads the original device\'s documents', async ({ browser }) => {
+  let deviceA: Peer | undefined;
+  let deviceB: Peer | undefined;
+  try {
+    [deviceA, deviceB] = await Promise.all([newPeer(browser, 'deviceA'), newPeer(browser, 'deviceB')]);
+
+    // Device A (original) has an established group and a document in its library.
+    await deviceA.call('ensureUserGroup', { create: true });
+    const { docId } = await deviceA.call('createDoc', {
+      '@type': 'TaskList',
+      name: 'My list',
+      tasks: {},
+    });
+    const a = await deviceA.call('getLinkPayload');
+    expect(a.userGroupId).toBeTruthy();
+
+    // Link device B via the encrypted rendezvous (what the UI does).
+    const { rendezvousId, key } = await deviceA.call('rendezvousCreateDeviceLink');
+    const linkedPromise = deviceA.page.evaluate(
+      (rid) => new Promise<string>((resolve) => {
+        const off = (window as any).__drive.onRendezvousEvent((e: any) => {
+          if (e.rendezvousId === rid && (e.status === 'linked' || e.status === 'error')) {
+            off(); resolve(e.status);
+          }
+        });
+      }),
+      rendezvousId,
+    );
+    await deviceB.call('rendezvousJoinDeviceLink', rendezvousId, key);
+    expect(await linkedPromise).toBe('linked');
+
+    await waitFor(
+      () => deviceB!.call('getIdentity'),
+      (id) => id.userGroupId === a.userGroupId,
+      { label: 'deviceB adopts shared group' },
+    );
+
+    // The original device's document must appear in the new device's home list.
+    await waitFor(
+      () => deviceB!.call('getDocList'),
+      (list) => list.some((e) => e.id === docId),
+      { label: 'deviceB loads the original device\'s doc', timeout: 45_000 },
+    );
+
+    // …and its content must actually sync (not just be listed-but-unavailable).
+    await waitFor(
+      () => deviceB!.call('queryDoc', docId, '.name').then((r) => r.result).catch(() => null),
+      (result) => Array.isArray(result) && result.includes('My list'),
+      { label: 'deviceB reads the synced doc content', timeout: 45_000 },
+    );
+
+    // Reopen device B (close & reopen the app): docs must still load on a fresh
+    // worker init — the startup path, gated by findDanglingUserGroup, must not
+    // skip reconcile for a legitimately-adopted group.
+    await deviceB.page.goto('/');
+    await deviceB.page.waitForFunction(() => !!(window as any).__drive, undefined, { timeout: 60_000 });
+    await deviceB.page.evaluate(() =>
+      Promise.all([(window as any).__drive.workerReady, (window as any).__drive.keyhiveReady])
+    );
+    await waitFor(
+      () => deviceB!.call('getDocList'),
+      (list) => list.some((e) => e.id === docId),
+      { label: 'deviceB still has the doc after reopen', timeout: 45_000 },
     );
   } finally {
     await deviceA?.close();

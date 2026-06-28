@@ -647,6 +647,21 @@ async function reconcileHomeDocs() {
   }
 }
 
+/**
+ * Load the freshly-linked device's library. After adopting the original device's
+ * user-group, the group's doc-admin delegations arrive over the relay
+ * asynchronously — so rather than waiting for a share-config change to happen to
+ * fire, force a keyhive sync and reconcile a few times to surface every doc the
+ * group (and thus this device) now has access to.
+ */
+async function reconcileHomeDocsAfterLink() {
+  for (let i = 0; i < 6; i++) {
+    try { khIntegration?.networkAdapter?.syncKeyhive?.(); } catch { /* best effort */ }
+    await reconcileHomeDocs();
+    await new Promise((r) => setTimeout(r, 1500));
+  }
+}
+
 async function reconcileHomeDocsOnce() {
   if (!khOps || !amDocIdFromBytes) return;
   try {
@@ -1673,6 +1688,8 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
         rdvSend({ type: RDV_SUB, rendezvousId });
         rdvEvent(rendezvousId, 'waiting');
       });
+      // We just adopted the original device's user-group — pull in its whole library.
+      void reconcileHomeDocsAfterLink();
       (self as any).postMessage({ type: 'result', id: msg.id, result: { ok: true } } satisfies WorkerToMain);
     } catch (err: any) {
       (self as any).postMessage({ type: 'result', id: msg.id, error: errMsg(err) } satisfies WorkerToMain);
@@ -1723,6 +1740,8 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
     try {
       if (!khOps) throw new Error('Keyhive not available');
       const result = await khOps.linkDevice(msg.deviceAgentId, msg.peerGroupId);
+      // Adopting/converging a group can grant access to the peer's docs — surface them.
+      void reconcileHomeDocsAfterLink();
       (self as any).postMessage({ type: 'result', id: msg.id, result } satisfies WorkerToMain);
     } catch (err: any) {
       (self as any).postMessage({ type: 'result', id: msg.id, error: errMsg(err) } satisfies WorkerToMain);
