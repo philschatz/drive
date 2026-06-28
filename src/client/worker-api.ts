@@ -67,23 +67,8 @@ const worker = new Worker(
   { type: 'module' },
 );
 
-// Log only diagnostically useful outgoing messages (skip routine traffic).
 function logSend(msg: { type: string } & Record<string, any>): void {
-  const quiet = false && msg.type === 'query'
-    || msg.type === 'subscribe-query'
-    || msg.type === 'unsubscribe-query'
-    || msg.type === 'subscribe-presence'
-    || msg.type === 'unsubscribe-presence'
-    || msg.type === 'set-presence'
-    || msg.type === 'subscribe-validation'
-    || msg.type === 'unsubscribe-validation'
-    || msg.type === 'open-doc'
-    || msg.type === 'kh-get-my-access'
-    || msg.type === 'add-doc-to-list'
-    || msg.type === 'remove-me-from-doc'
-    || msg.type === 'set-contact-name'
-    || msg.type === 'remove-contact-name';
-  if (!quiet) console.log('[main] → send', msg.type, msg);
+  console.log('[main] → send', msg.type, msg);
 }
 
 // Wire up the contact-names dispatch hook (avoids a circular import with contact-names)
@@ -109,7 +94,19 @@ settingGet('cache-disabled').then(v => settingSetSync('cache-disabled', v)).catc
 // ── Ready promises ──────────────────────────────────────────────────────────
 
 let resolveRepoReady: () => void;
-export const workerReady = new Promise<void>(r => { resolveRepoReady = r; });
+let rejectRepoReady!: (err: Error) => void;
+export const workerReady = new Promise<void>((resolve, reject) => { resolveRepoReady = resolve; rejectRepoReady = reject; });
+workerReady.catch(() => { }); // prevent unhandled rejection — callers handle the error
+
+// Fatal worker-init error (e.g. a dangling user-group). Surfaced to the UI as a banner.
+let workerFatalError: string | null = null;
+const workerErrorListeners = new Set<(message: string) => void>();
+export function getWorkerError(): string | null { return workerFatalError; }
+export function onWorkerError(fn: (message: string) => void): () => void {
+  workerErrorListeners.add(fn);
+  if (workerFatalError) fn(workerFatalError); // replay for late subscribers
+  return () => { workerErrorListeners.delete(fn); };
+}
 
 let resolveKeyhiveReady!: () => void;
 let rejectKeyhiveReady!: (err: Error) => void;
@@ -178,7 +175,7 @@ function fire(type: string, payload: Record<string, any> = {}): void {
     const msg = { type, ...payload };
     logSend(msg);
     worker.postMessage(msg);
-  });
+  }).catch(() => { }); // worker never became ready — nothing to send
 }
 
 /** Keyhive requests gate on keyhiveReady (which implies workerReady). */
@@ -235,6 +232,17 @@ worker.onmessage = (e: MessageEvent<WorkerToMain>) => {
       break;
     case 'error':
       console.error('Automerge worker error:', msg.message);
+      workerFatalError = msg.message;
+      rejectRepoReady(new Error(msg.message)); // settle workerReady so request()-gated UI stops hanging
+      rejectKeyhiveReady(new Error(msg.message)); // and keyhiveReady (no-op if already resolved)
+      for (const fn of workerErrorListeners) fn(msg.message);
+      break;
+    case 'data-warning':
+      // Non-fatal: the worker is up (ready/kh-ready still posted), but local data has a
+      // problem (e.g. a dangling user-group). Surface a banner without blocking the app.
+      console.warn('Worker data warning:', msg.message);
+      workerFatalError = msg.message;
+      for (const fn of workerErrorListeners) fn(msg.message);
       break;
 
     // --- Connectivity ---
@@ -437,9 +445,12 @@ export async function clearAllCaches(): Promise<void> {
  * IndexedDB connections (otherwise deleteDatabase blocks). Irreversible.
  */
 export async function deleteAllData(): Promise<void> {
-  // Terminate the worker so 'automerge-secure' (and its own idb connections) close.
+  // Terminate the worker so 'automerge-secure' (and its own idb connections) close,
+  // then close the main thread's 'app-storage' connection. Both must be released before
+  // deleteDatabase can complete (otherwise it blocks). closeDb is fire-and-forget so a
+  // pending/blocked open can't hang the reset.
   worker.terminate();
-  closeDb(); // close the main thread's 'app-storage' connection
+  closeDb();
 
   const known = ['app-storage', 'automerge-secure'];
   let names = known;
@@ -452,11 +463,20 @@ export async function deleteAllData(): Promise<void> {
     } catch { /* fall back to the known list */ }
   }
 
+  // Wait for each deletion to actually COMPLETE (onsuccess) before reloading — resolving
+  // early on onblocked left the delete pending, which then raced the reload and could fire
+  // against the fresh DB the new worker creates (corrupting it → init hangs). The worker is
+  // terminated, so any block is transient (connection still closing) and clears into
+  // onsuccess. A timeout is a safety net so we never hang the reset forever.
   await Promise.all(names.map(name => new Promise<void>((resolve) => {
+    let settled = false;
+    const finish = () => { if (!settled) { settled = true; resolve(); } };
     const req = indexedDB.deleteDatabase(name);
-    req.onsuccess = () => resolve();
-    req.onerror = () => resolve();
-    req.onblocked = () => resolve(); // proceed; the reload finishes closing connections
+    req.onsuccess = finish;
+    req.onerror = finish;
+    // onblocked: don't resolve — wait for onsuccess once the terminated worker's
+    // connection finishes closing. The timeout is the safety net.
+    setTimeout(finish, 5000);
   })));
 
   localStorage.clear();

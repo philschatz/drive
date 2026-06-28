@@ -222,9 +222,10 @@ export class KeyhiveOps {
     if (!groupId) return;
     const group = await this.getGroupById(groupId);
     if (!group) {
-      // A persisted id that won't resolve is a dangling reference; startup integrity
-      // checking (assertUserGroupIntact) fails fast on it, so we shouldn't reach here.
-      console.error(`[kh] assignGroupAsAdmin: user-group ${groupId.slice(0, 8)} not loadable`);
+      // Dangling user-group (id persisted but group missing from keyhive). This is
+      // detected at startup (findDanglingUserGroup → data-warning banner); bail rather
+      // than leaving the doc owned only by this device.
+      console.warn(`[kh] assignGroupAsAdmin: user-group ${groupId.slice(0, 8)} not loadable`);
       return;
     }
     await this.addGroupAsAdmin(doc, group);
@@ -233,23 +234,18 @@ export class KeyhiveOps {
   }
 
   /**
-   * Fail fast if a user-group id is persisted but its group is missing from keyhive
-   * (a dangling reference — e.g. keyhive storage was migrated/reset while the IDB id
-   * survived). Left unchecked, the group can administer no docs, so reconcileHomeDocs
-   * sees zero accessible docs and prunes the whole home list. No-op when no id is set
-   * (first run) or the group resolves normally.
+   * Detect a dangling user-group: an id is persisted but its group is missing from
+   * keyhive (e.g. keyhive storage was migrated/reset while the IDB 'user-group-id'
+   * survived). Returns the dangling id, or null when no id is set (fresh install) or
+   * the group resolves normally. Callers surface this and skip reconcileHomeDocs — a
+   * dangling group can administer no docs, so reconcile would see zero accessible docs
+   * and prune the whole home list.
    */
-  async assertUserGroupIntact(): Promise<void> {
+  async findDanglingUserGroup(): Promise<string | null> {
     const id = await this.fx.getUserGroupId();
-    if (!id) return;
+    if (!id) return null; // fresh install — no group yet, nothing dangling
     const group = await this.getGroupById(id);
-    if (!group) {
-      throw new Error(
-        `User-group ${id} is persisted but missing from keyhive (dangling reference). ` +
-        `Keyhive's group ops were likely lost in a storage migration while the IDB ` +
-        `'user-group-id' survived. Clear that IDB key to recreate the group.`,
-      );
-    }
+    return group ? null : id;
   }
 
   /** Add the user-group as admin to every document this device can reach. */

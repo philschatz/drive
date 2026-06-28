@@ -39,11 +39,16 @@ function getDb(): Promise<IDBDatabase> {
   return dbPromise;
 }
 
-/** Close the cached connection so the database can be deleted (full-reset flow). */
+/**
+ * Best-effort close of the cached connection so the database can be deleted (full-reset
+ * flow). Fire-and-forget: never awaits the open promise (which may be pending/blocked on a
+ * broken page and would hang the reset). deleteDatabase's own onblocked+timeout handles the
+ * case where the connection is still closing.
+ */
 export function closeDb(): void {
   const p = dbPromise;
   dbPromise = null;
-  if (p) p.then(db => db.close()).catch(() => {});
+  if (p) p.then(db => db.close()).catch(() => { });
 }
 
 export async function idbGet<T>(key: string): Promise<T | null> {

@@ -114,13 +114,17 @@ export function Settings({ path }: { path?: string }) {
     }
   };
 
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const handleDeleteAllData = async () => {
-    const ok = confirm(
-      'Delete ALL local data?\n\nThis erases every document, your keyhive identity/keys, ' +
-      'contacts, and settings on this device, then reloads. This cannot be undone, and any ' +
-      'document not shared with another device will be lost permanently.',
-    );
-    if (!ok) return;
+    // Two-click confirm instead of confirm() — browsers suppress repeated native dialogs,
+    // which silently swallowed this action. First click arms; second click within the
+    // armed window performs the reset.
+    if (!confirmingDelete) {
+      setConfirmingDelete(true);
+      setTimeout(() => setConfirmingDelete(false), 5000);
+      return;
+    }
+    setConfirmingDelete(false);
     try {
       await deleteAllData(); // terminates the worker, deletes all IndexedDB + localStorage, reloads
     } catch (err: any) {
@@ -406,7 +410,9 @@ export function Settings({ path }: { path?: string }) {
           settings — then reload as a fresh install. Documents not shared with another device are
           lost forever. Use this to recover from a corrupted local state.
         </p>
-        <Button size="sm" variant="destructive" onClick={handleDeleteAllData}>Delete All Data</Button>
+        <Button size="sm" variant="destructive" onClick={handleDeleteAllData}>
+          {confirmingDelete ? 'Click again to confirm — erases everything' : 'Delete All Data'}
+        </Button>
       </section>
     </div>
   );

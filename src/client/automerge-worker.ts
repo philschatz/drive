@@ -78,6 +78,7 @@ export type WorkerToMain =
   | { type: 'kh-ready' }
   | { type: 'kh-error'; message: string }
   | { type: 'error'; message: string }
+  | { type: 'data-warning'; message: string }
   | { type: 'peer-connected'; peerCount: number; peers: string[] }
   | { type: 'peer-disconnected'; peerCount: number; peers: string[] }
   | { type: 'ws-status'; connected: boolean }
@@ -99,6 +100,19 @@ export type WorkerToMain =
   | { type: 'kh-rdv-event'; rendezvousId: string; status: RendezvousStatus; message?: string }
   // Relay message log
   | { type: 'relay-log'; entry: { id: number; ts: number; dir: 'sent' | 'recv'; message: any } };
+
+// Catch-all error surfacing: any uncaught error or unhandled promise rejection in the
+// worker is logged and forwarded to the main thread, which shows it in a banner. Registered
+// first thing so it also covers failures during WASM/keyhive init.
+function reportWorkerError(prefix: string, detail: unknown) {
+  const message = (detail as any)?.message || String(detail ?? 'Unknown worker error');
+  console.error(`[worker] ${prefix}:`, detail);
+  try {
+    (self as any).postMessage({ type: 'data-warning', message } satisfies WorkerToMain);
+  } catch { /* postMessage can fail if detail isn't structured-cloneable; message string is */ }
+}
+self.addEventListener('error', (e: ErrorEvent) => reportWorkerError('uncaught error', e.error ?? e.message));
+self.addEventListener('unhandledrejection', (e: PromiseRejectionEvent) => reportWorkerError('unhandled rejection', e.reason));
 
 // Queue messages that arrive while WASM is initializing
 const pendingMessages: MessageEvent[] = [];
@@ -1065,17 +1079,27 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
         (self as any).postMessage({ type: 'kh-error', message: errMsg(khErr) } satisfies WorkerToMain);
       }
 
-      // Fail fast if the persisted user-group id no longer resolves in keyhive (a dangling
-      // reference, e.g. keyhive storage was migrated/reset while the IDB id survived).
-      // Continuing would let reconcileHomeDocs see zero accessible docs and prune the whole
-      // home list. Throwing here aborts init (outer catch posts 'error') before reconcile.
-      if (khOps) await khOps.assertUserGroupIntact();
-
-      // Reconcile the home list to the docs the user-group can access. (Replaces the
-      // old GC that self-revoked from reachable docs missing from the local list — the
-      // opposite of this model. Deletion now removes access explicitly via removeMyAccess,
-      // and the share-config callback reconciles again as more ops sync in.)
-      void reconcileHomeDocs();
+      // Detect a dangling user-group (id persisted but its group missing from keyhive,
+      // e.g. keyhive storage was migrated/reset while the IDB id survived). Such a group
+      // can administer no docs, so reconcileHomeDocs would see zero accessible docs and
+      // prune the whole home list. Surface it as a warning and SKIP reconcile — the app
+      // stays usable (docs are preserved, served from the IDB list) and the user can
+      // recover via Settings → Delete All Data. We don't abort init: that would hang every
+      // request()-gated screen on an infinite spinner.
+      const danglingGroup = khOps ? await khOps.findDanglingUserGroup() : null;
+      if (danglingGroup) {
+        console.error(`[worker] user-group ${danglingGroup} is dangling (missing from keyhive) — skipping reconcile to preserve the home list`);
+        (self as any).postMessage({
+          type: 'data-warning',
+          message: `Your user-group is missing from local keyhive storage (likely from a data migration). Documents are preserved, but sharing is broken — reset via Settings → Delete All Data.`,
+        } satisfies WorkerToMain);
+      } else {
+        // Reconcile the home list to the docs the user-group can access. (Replaces the
+        // old GC that self-revoked from reachable docs missing from the local list — the
+        // opposite of this model. Deletion now removes access explicitly via removeMyAccess,
+        // and the share-config callback reconciles again as more ops sync in.)
+        void reconcileHomeDocs();
+      }
 
       console.log('[worker] init complete');
       (self as any).postMessage({ type: 'ready', peerId: secureRepo!.peerId } satisfies WorkerToMain);
