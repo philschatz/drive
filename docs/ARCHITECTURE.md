@@ -136,6 +136,7 @@ validateNode(value, schema, path, errors): void   // depth-first, accumulates Va
 - **Contact bundle** envelope (`{__kind:'contact-bundle', card, groupId?, groupEvents?}`) is exchanged over the QR rendezvous.
 - Package: official `@automerge/automerge-repo-keyhive` (subduction.37), with `@keyhive/keyhive` pinned to a **GitHub release tarball** via npm `overrides` (drive-86a218c).
 - **Revocation caveat:** revoking a peer never notifies that peer (keyhive sync design). The home page lists docs by user-group access; "delete" = remove-me-from-doc (revoke own user-group).
+- **Keyhive WASM is non-reentrant:** overlapping calls (one suspended at an `await` while another runs) trap with `unreachable executed`. The bridge serializes its own calls (blob/sign/sync) through a shared `PromiseQueue` (`keyhiveQueue`); the worker routes everything else through it too — the `keyhive` instance handed to `KeyhiveOps` is wrapped in a `serializeKeyhive()` Proxy (per-method, so polling loops like `waitForGroup` release the lock), and stray callers (`bestAccessForDoc`, persist, init dump) use `runOnKeyhiveQueue()`. Needed once presence (§6) added high-frequency encrypt/decrypt.
 
 ---
 
@@ -163,6 +164,10 @@ validateNode(value, schema, path, errors): void   // depth-first, accumulates Va
 
 **`focusedField` is a path into the Automerge document data, not a reference to a UI/DOM node.** It is the same key path used to address the value in the doc — e.g. `['events', uid, 'title']`, `['tasks', uid, 'due']`, `['sheets', sheetId, 'cells', 'rowId:colId']` — so it is stable across peers regardless of each client's markup, layout, or screen size. Rendering is a purely local concern: each editor *maps* an incoming document path to whatever local element represents that value (an input id like `ed-title`, a list row, a grid cell) to draw the colored border/dot. A reimplementation with entirely different DOM can interoperate as long as it broadcasts and interprets the **same document paths**.
 
+**Encrypted in the worker.** Presence rides Automerge **ephemeral messages** — relay-forwarded and **not** covered by document encryption — so the worker encrypts each channel *value* under the doc's keyhive key (`encryptPresenceValue`/`decryptPresenceValue` via `kh.tryEncrypt`/`tryDecrypt`; channel names like `viewing`/`focusedField` stay plaintext, values are ciphertext). The `Presence` instance lives in the worker; the main-thread `initPresence`/`subscribePresence`/`setPresence` carry only decrypted state, so the UI is unchanged. Round-trip is covered by `keyhive-ops.test.ts` and the `presence` Playwright spec. **Breaking wire-format change** vs. the earlier plaintext presence — all peers must run the encrypted build.
+
+**Best-effort.** A peer lacking the doc's key (PCS key not yet synced, or private-browsing IndexedDB that can't retrieve its `SecretKey`) can't encrypt or decrypt presence. So presence **always starts** (empty initial state, so it can still receive), encryption never throws (`encryptPresenceValueOrNull` returns `null`), and a 5s retry re-attempts and self-stops once healthy (late keys recover automatically). Keyhive-capable peers exchange presence; keyless peers show nothing rather than crashing.
+
 ### Reusable UI (`components/ui/`, shadcn + Radix via preact/compat)
 `button`, `input`, `textarea`, `label`, `checkbox`, `select`, `dropdown-menu`, `context-menu`, `sheet`, `alert`, `badge`, `toast`, `tooltip`, `progress`, `menubar`, `qr-code`. Custom: `EditableName`, `AccessIcon`, `AccessControl` (share dialog), `UpdateBanner` (PWA update). Styling = Tailwind v4 classes + Material Symbols icons; no CSS-in-JS.
 
@@ -187,7 +192,7 @@ validateNode(value, schema, path, errors): void   // depth-first, accumulates Va
 
 ### Tests
 - **Jest** two projects: `server` (node env, `.data-jest`, subduction WASM setup, shims keyhive/repo-keyhive) and `ui` (jsdom, `@testing-library/preact`, CSS mock). Specs in `tests/` (caldav, parser, snapshots) and `src/shared` (deep-assign, jq, relay-identity, schema), plus `src/client/components/ui/components.test.tsx`.
-- **Playwright** (`src/client/tests-pw/`): serial, 1 worker, builds+serves prod; **two isolated BrowserContexts** as peers, driven via `window.__drive` `peer.call(method,...)`. Specs: `ui/*` (calendar/datagrid/tasks) + two-peer (`device-link`, `friend-share`, `rendezvous`, `revoke-self`, `revoke-user`). Coverage intentionally **not** wired (instrumented build too slow/flaky).
+- **Playwright** (`src/client/tests-pw/`): serial, 1 worker, builds+serves prod; **two isolated BrowserContexts** as peers, driven via `window.__drive` `peer.call(method,...)`. Specs: `ui/*` (calendar/datagrid/tasks) + two-peer (`device-link`, `friend-share`, `rendezvous`, `revoke-self`, `revoke-user`, `presence` — asserts one peer's `focusedField` arrives **decrypted** at the other and stays stable). Coverage intentionally **not** wired (instrumented build too slow/flaky).
 
 ### Env vars
 `PORT` (3000), `NODE_ENV=production` (no logging, serve dist), `AUTOMERGE_DATA_DIR` (`.data`), `CALDAV_PORT` (4001), `VITE_BASE_PATH` (subdir deploy). Deploy: Heroku Procfile → `start:relay`; standard prod → `build && start`.
@@ -208,6 +213,8 @@ validateNode(value, schema, path, errors): void   // depth-first, accumulates Va
 - **WASM is streamed, not base64-inlined** (the inline path OOMs Chromium during tests).
 - **Revocation is silent** to the revoked peer (keyhive design).
 - **`window.__drive` ships in production** by design (Playwright harness).
+- **Keyhive WASM is non-reentrant** — all access goes through the shared `keyhiveQueue` (`serializeKeyhive` proxy + `runOnKeyhiveQueue`); overlapping calls trap `unreachable executed` (§5).
+- **Presence is encrypted and best-effort** — ephemeral payloads aren't doc-encrypted, so the worker encrypts presence values under the doc key; a keyless peer shows nothing and never throws (§6).
 
 ---
 

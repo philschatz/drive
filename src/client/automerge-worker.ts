@@ -306,20 +306,42 @@ function resolveKhDocId(automergeDocId: string): string {
 /** Run a keyhive WASM operation on the bridge's shared serialization queue.
  *  ALL keyhive access (blob encryption, signing, sync) goes through this single
  *  PromiseQueue; calling keyhive concurrently/reentrantly traps the WASM
- *  ("unreachable executed"), so our presence encrypt/decrypt must use it too.
- *  Never nest these calls (the queue runs fns serially and would deadlock). */
+ *  ("unreachable executed"). Used directly for the few keyhive entry points that
+ *  don't already go through the serialized `kh` proxy (e.g. shareConfig's
+ *  bestAccessForDoc). Never nest these calls (serial queue → deadlock). */
 function runOnKeyhiveQueue<T>(fn: () => Promise<T>): Promise<T> {
   // keyhiveQueue is private in the bridge's types but is the only shared lock; reach it directly.
   const queue = (khIntegration as any)?.networkAdapter?.keyhiveQueue;
   return queue ? queue.run(fn) : fn();
 }
 
-/** Resolve the keyhive Document object for an automerge doc-ID, or null if not available yet. */
+/** Wrap a keyhive instance so EVERY method call is serialized on the shared queue.
+ *  keyhive WASM is not reentrant: if one keyhive method is suspended at an await and
+ *  another runs, it traps ("unreachable executed"). The bridge serializes its own
+ *  calls (blob/sync/sign) on the shared queue, but KeyhiveOps and worker-level calls
+ *  did not — so high-frequency presence encrypt/decrypt collided with them. Routing
+ *  the keyhive instance through this proxy puts every method on the same queue.
+ *  Per-method (not per-operation) granularity keeps slots short, so polling loops
+ *  (e.g. KeyhiveOps.waitForGroup's setTimeout) release the lock between calls.
+ *  Synchronous getters/properties pass through untouched — they can't be interrupted
+ *  mid-call, so they're reentrancy-safe. */
+function serializeKeyhive(realKh: any): any {
+  return new Proxy(realKh, {
+    get(target, prop) {
+      const val = (target as any)[prop];
+      if (typeof val !== 'function') return val;
+      return (...args: any[]) => runOnKeyhiveQueue(() => Promise.resolve(val.apply(target, args)));
+    },
+  });
+}
+
+/** Resolve the keyhive Document object for an automerge doc-ID, or null if not available yet.
+ *  (khOps.kh is the serialized proxy, so getDocument is queued automatically.) */
 async function getKhDoc(automergeDocId: string): Promise<any | null> {
   if (!khOps || !khBridge) return null;
   try {
     const khDocId = khBridge.docIdFromAutomergeUrl(`automerge:${automergeDocId}` as any);
-    return await runOnKeyhiveQueue(() => khOps!.kh.getDocument(khDocId));
+    return await khOps.kh.getDocument(khDocId);
   } catch (err) {
     console.warn('[worker] getKhDoc failed:', errMsg(err));
     return null;
@@ -327,25 +349,62 @@ async function getKhDoc(automergeDocId: string): Promise<any | null> {
 }
 
 /** Encrypt a presence channel value with the document's keyhive (per-document) key, so
- *  only current members can read it. Mirrors the proven network-adapter path in
- *  keyhive-ops.test.ts ("A encrypts → serialize → deserialize → B decrypts"). */
+ *  only current members can read it. khOps.kh is the serialized proxy, so tryEncrypt is
+ *  queued; extracting the ciphertext bytes from the result is self-contained (no keyhive
+ *  borrow) and safe off-queue. Mirrors the proven path in keyhive-ops.test.ts. */
 async function encryptPresenceValue(doc: any, value: unknown): Promise<Uint8Array> {
   const bytes = new TextEncoder().encode(JSON.stringify(value ?? null));
-  const seed = crypto.getRandomValues(new Uint8Array(32));
-  return runOnKeyhiveQueue(async () => {
-    const ref = new khBridge!.ChangeId(seed);
-    const result = await khOps!.kh.tryEncrypt(doc, ref, [], bytes);
-    return result.encrypted_content().toBytes();
-  });
+  const ref = new khBridge!.ChangeId(crypto.getRandomValues(new Uint8Array(32)));
+  const result = await khOps!.kh.tryEncrypt(doc, ref, [], bytes);
+  return result.encrypted_content().toBytes();
 }
 
 /** Decrypt a presence channel value. Throws if the current key isn't available yet
  *  (e.g. a freshly-joined peer before keyhive sync completes) — callers skip on throw. */
 async function decryptPresenceValue(doc: any, enc: Uint8Array): Promise<unknown> {
-  return runOnKeyhiveQueue(async () => {
-    const decrypted = await khOps!.kh.tryDecrypt(doc, khBridge!.Encrypted.fromBytes(enc));
-    return JSON.parse(new TextDecoder().decode(decrypted));
-  });
+  const decrypted = await khOps!.kh.tryDecrypt(doc, khBridge!.Encrypted.fromBytes(enc));
+  return JSON.parse(new TextDecoder().decode(decrypted));
+}
+
+/** Encrypt a presence value, returning null (never throwing) when keyhive can't yet make
+ *  the key for this peer ("SecretKey not found" before the doc's PCS key has synced in).
+ *  Mirrors how the keyhive blob-interceptor skips encryption when there's no PCS key. */
+async function encryptPresenceValueOrNull(doc: any, value: unknown): Promise<Uint8Array | null> {
+  try {
+    return await encryptPresenceValue(doc, value);
+  } catch {
+    // No usable key yet (e.g. PCS key not synced) — defer; schedulePresenceRetry re-attempts.
+    return null;
+  }
+}
+
+/** Encrypt + broadcast the desired local presence state. Returns true only if every
+ *  channel encrypted successfully (false means the keyhive key isn't available yet). */
+async function flushPresenceOut(entry: DocEntry): Promise<boolean> {
+  if (!entry.presence || !entry.presenceDoc || !entry.presenceDesired) return true;
+  let allOk = true;
+  for (const [k, v] of Object.entries(entry.presenceDesired)) {
+    const enc = await encryptPresenceValueOrNull(entry.presenceDoc, v);
+    if (enc) entry.presence.broadcast(k, enc);
+    else allOk = false;
+  }
+  return allOk;
+}
+
+/** While encrypt OR decrypt is failing (keyhive key not yet synced for this peer/doc),
+ *  re-attempt both on a timer so presence recovers automatically once the key arrives.
+ *  Stops itself once a cycle fully succeeds. Idempotent (one timer per entry). */
+function schedulePresenceRetry(entry: DocEntry): void {
+  if (entry.presenceRetry) return;
+  entry.presenceRetry = setInterval(async () => {
+    if (!entry.presence) { clearInterval(entry.presenceRetry); entry.presenceRetry = null; return; }
+    const outOk = await flushPresenceOut(entry);
+    const inOk = entry.presenceSend ? await entry.presenceSend() : true;
+    if (outOk && inOk) {
+      clearInterval(entry.presenceRetry);
+      entry.presenceRetry = null;
+    }
+  }, 5000);
 }
 
 /** Return the (only) repo. */
@@ -422,6 +481,10 @@ interface DocEntry {
   pinnedVersion: number | null; // null = live view
   subscriptions: Map<number, SubInfo>; // subId → filter + poster
   presence: any | null; // PresenceClass instance
+  presenceDoc?: any;                          // keyhive doc used to encrypt/decrypt presence
+  presenceDesired?: Record<string, unknown>;  // plaintext local presence state (viewing, focusedField)
+  presenceSend?: () => Promise<boolean>;      // decrypt incoming peer states + post; true if all decrypted
+  presenceRetry?: any;                        // retry timer: re-attempts encrypt/decrypt until keys are available
   validationSubscribed: boolean;
 }
 const docRegistry = new Map<string, DocEntry>();
@@ -855,7 +918,9 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
             const keyB64 = khBridge!.verifyingKeyPeerIdWithoutSuffix(peerId as any);
             const keyBytes = Uint8Array.from(atob(keyB64), (c) => c.charCodeAt(0));
             const identifier = new khBridge!.Identifier(keyBytes);
-            const access = await khIntegration!.bestAccessForDoc(identifier, `automerge:${docId}` as any);
+            // shareConfig is consulted off the keyhive queue (during sync-message
+            // handling), so serialize this keyhive access too.
+            const access = await runOnKeyhiveQueue(() => khIntegration!.bestAccessForDoc(identifier, `automerge:${docId}` as any));
             return access !== undefined;
           } catch {
             return false;
@@ -890,8 +955,12 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
           },
         });
 
-        khOps = new KeyhiveOps(khIntegration.keyhive, khBridge as any, {
-          persist: () => khIntegration!.keyhiveStorage.saveKeyhiveWithHash(khIntegration!.keyhive),
+        // Serialize ALL keyhive access through the bridge's shared queue: KeyhiveOps
+        // calls keyhive WASM (which is non-reentrant) and previously ran unserialized,
+        // racing with the bridge's own queued calls and our frequent presence calls.
+        const khSerial = serializeKeyhive(khIntegration.keyhive);
+        khOps = new KeyhiveOps(khSerial, khBridge as any, {
+          persist: () => khIntegration!.keyhiveStorage.saveKeyhiveWithHash(khSerial),
           syncKeyhive: () => khIntegration!.networkAdapter.syncKeyhive(),
           // The official bridge derives the keyhive DocumentId from the automerge
           // doc id directly, so there is no explicit doc registration step.
@@ -932,7 +1001,8 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
 
         // --- Debug: dump keyhive archive contents ---
         try {
-          const kh = khIntegration.keyhive;
+          // Use the serialized proxy so these init-time reads don't race the bridge.
+          const kh = khOps?.kh ?? khIntegration.keyhive;
           const me = await kh.individual;
           const stats = await kh.stats();
           const pendingHashes = await kh.pendingEventHashes();
@@ -1376,34 +1446,38 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
           console.warn('[worker] presence-subscribe: keyhive doc not ready; skipping');
         } else {
           const presence = new PresenceClass({ handle });
-          presence.start({
-            initialState: {
-              viewing: await encryptPresenceValue(doc, true),
-              focusedField: await encryptPresenceValue(doc, null),
-            },
-            heartbeatMs: 5000,
-            peerTtlMs: 15000,
-          });
-          const sendPresence = async () => {
+          // Start with empty state so presence ALWAYS starts (and can receive) even when
+          // this peer can't encrypt yet; the real state is broadcast (and retried) below.
+          presence.start({ initialState: {}, heartbeatMs: 5000, peerTtlMs: 15000 });
+          entry.presence = presence;
+          entry.presenceDoc = doc;
+          entry.presenceDesired = { viewing: true, focusedField: null };
+
+          // Decrypt incoming peer states and post them; returns true only if every
+          // channel decrypted (false ⇒ key not synced yet ⇒ schedule a retry).
+          const sendPresence = async (): Promise<boolean> => {
             const raw = presence.getPeerStates().value;
             const peers: Record<string, any> = {};
+            let allOk = true;
             for (const [peerId, st] of Object.entries<any>(raw)) {
               const value: Record<string, unknown> = {};
               for (const [ch, enc] of Object.entries<any>(st?.value ?? {})) {
-                try {
-                  value[ch] = await decryptPresenceValue(doc, enc as Uint8Array);
-                } catch {
-                  // Peer not yet key-synced; skip this channel (resolves on next update/snapshot).
-                }
+                try { value[ch] = await decryptPresenceValue(doc, enc as Uint8Array); }
+                catch { allOk = false; }
               }
               peers[peerId] = { ...st, value };
             }
             (self as any).postMessage({ type: 'update-presence', docId: msg.docId, peers } satisfies WorkerToMain);
+            if (!allOk) schedulePresenceRetry(entry);
+            return allOk;
           };
-          presence.on('update', sendPresence);
-          presence.on('goodbye', sendPresence);
-          presence.on('snapshot', sendPresence);
-          entry.presence = presence;
+          entry.presenceSend = sendPresence;
+          presence.on('update', () => { void sendPresence(); });
+          presence.on('goodbye', () => { void sendPresence(); });
+          presence.on('snapshot', () => { void sendPresence(); });
+
+          // Broadcast our initial state; if the key isn't available yet, retry until it is.
+          if (!(await flushPresenceOut(entry))) schedulePresenceRetry(entry);
         }
       }
     } catch (err: any) {
@@ -1414,24 +1488,24 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
   if (msg.type === 'unsubscribe-presence') {
     const entry = docRegistry.get(msg.docId);
     if (entry?.presence) {
+      if (entry.presenceRetry) { clearInterval(entry.presenceRetry); entry.presenceRetry = null; }
       entry.presence.stop();
       entry.presence = null;
+      entry.presenceDoc = undefined;
+      entry.presenceDesired = undefined;
+      entry.presenceSend = undefined;
     }
   }
 
   if (msg.type === 'set-presence') {
     const entry = docRegistry.get(msg.docId);
+    // If presence hasn't started yet (subscribe still in flight), drop this update —
+    // the editor re-broadcasts on the next focus change, and the initial state is set
+    // by subscribe itself.
     if (entry?.presence) {
-      const doc = await getKhDoc(msg.docId);
-      if (doc) {
-        for (const [key, value] of Object.entries(msg.state)) {
-          try {
-            entry.presence.broadcast(key, await encryptPresenceValue(doc, value));
-          } catch (err: any) {
-            console.warn('[worker] presence encrypt failed:', errMsg(err));
-          }
-        }
-      }
+      // Update desired local state, then encrypt+broadcast what we can; retry the rest.
+      entry.presenceDesired = { ...(entry.presenceDesired ?? {}), ...msg.state };
+      if (!(await flushPresenceOut(entry))) schedulePresenceRetry(entry);
     }
   }
 
@@ -1449,6 +1523,7 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
       const entry = docRegistry.get(msg.docId);
       if (entry) {
         for (const subId of entry.subscriptions.keys()) subIdToDocId.delete(subId);
+        if (entry.presenceRetry) clearInterval(entry.presenceRetry);
         if (entry.presence) entry.presence.stop();
         docRegistry.delete(msg.docId);
       }
