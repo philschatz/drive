@@ -14,7 +14,6 @@ import relativeTimePlugin from 'dayjs/plugin/relativeTime';
 dayjs.extend(relativeTimePlugin);
 import { a1ToInternal } from '@/datagrid/helpers';
 import { type DocType, viewPathForType, iconForType } from '@/shared/doc-type-helpers';
-import { RelayLogPanel } from './RelayLogPanel';
 
 declare const __APP_VERSION__: string;
 declare const __BUILD_TIME__: string;
@@ -905,8 +904,6 @@ export function Home({ path }: { path?: string }) {
           </p>
         )}
       </div>
-
-      <RelayLogPanel />
 
       <div className="flex items-center gap-2 mb-2">
         {installPrompt ? (

@@ -97,9 +97,7 @@ export type WorkerToMain =
   | { type: 'kh-state-changed' }
   // Rendezvous progress (emitted for both the sharer and the receiver so each
   // side can render a step-by-step indicator; the receiver also gets a `result`)
-  | { type: 'kh-rdv-event'; rendezvousId: string; status: RendezvousStatus; message?: string }
-  // Relay message log
-  | { type: 'relay-log'; entry: { id: number; ts: number; dir: 'sent' | 'recv'; message: any } };
+  | { type: 'kh-rdv-event'; rendezvousId: string; status: RendezvousStatus; message?: string };
 
 // Catch-all error surfacing: any uncaught error or unhandled promise rejection in the
 // worker is logged and forwarded to the main thread, which shows it in a banner. Registered
@@ -744,101 +742,18 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
             : `ws://${self.location?.hostname || 'localhost'}:${self.location?.port || 3000}`
         );
 
-        // --- Relay message logging (wire-level interception) ---
-        const ENC_ENCRYPTED_FLAG = 0x01;
-        let relayLogId = 0;
-
-        function toBase64(bytes: Uint8Array): string {
-          let binary = '';
-          for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-          const b64 = btoa(binary);
-          return b64.length > 256 ? b64.slice(0, 256) + '...' : b64;
-        }
-
-        function summarizeForLog(val: unknown): unknown {
-          if (val instanceof Uint8Array) {
-            if (val.length === 0) return '[0 bytes]';
-            if (val[0] === ENC_ENCRYPTED_FLAG) return { _encrypted: true, bytes: val.length };
-            return { bytes: val.length, base64: toBase64(val) };
-          }
-          if (Array.isArray(val)) {
-            return val.map(item => summarizeForLog(item));
-          }
-          if (val && typeof val === 'object') {
-            const out: Record<string, unknown> = {};
-            for (const [k, v] of Object.entries(val)) out[k] = summarizeForLog(v);
-            return out;
-          }
-          return val;
-        }
-
-        function decodeMessageForLog(msg: any): any {
-          const entry: any = { type: msg.type };
-          if (msg.senderId) entry.senderId = msg.senderId;
-          if (msg.targetId) entry.targetId = msg.targetId;
-          if (msg.documentId) entry.documentId = msg.documentId;
-          if (msg.peerMetadata) entry.peerMetadata = msg.peerMetadata;
-          if (msg.supportedProtocolVersions) entry.supportedProtocolVersions = msg.supportedProtocolVersions;
-          if (msg.selectedProtocolVersion) entry.selectedProtocolVersion = msg.selectedProtocolVersion;
-          // ephemeral message fields
-          if (msg.count !== undefined) entry.count = msg.count;
-          if (msg.sessionId) entry.sessionId = msg.sessionId;
-
-          if (msg.data && msg.data instanceof Uint8Array && msg.data.length > 0) {
-            try {
-              const decoded = cborDecode(msg.data);
-              if (decoded && typeof decoded === 'object' && decoded.signed instanceof Uint8Array) {
-                // KeyhiveMessageData: { contactCard: string, signed: Uint8Array }
-                const signedEntry: any = {
-                  signed: { _signed: true, bytes: decoded.signed.length, base64: toBase64(decoded.signed) },
-                };
-                if (decoded.contactCard) signedEntry.contactCard = decoded.contactCard;
-                entry.data = signedEntry;
-              } else {
-                // Some other CBOR structure — include full decoded content
-                entry.data = summarizeForLog(decoded);
-              }
-            } catch {
-              // Not valid CBOR — include raw bytes
-              if (msg.data[0] === ENC_ENCRYPTED_FLAG) {
-                entry.data = { _encrypted: true, bytes: msg.data.length };
-              } else {
-                entry.data = { bytes: msg.data.length, base64: toBase64(msg.data) };
-              }
-            }
-          } else if (msg.data) {
-            entry.data = { bytes: msg.data.byteLength ?? msg.data.length ?? 0 };
-          }
-          return entry;
-        }
-
-        function postRelayLog(dir: 'sent' | 'recv', msg: any) {
-          try {
-            const entry = { id: ++relayLogId, ts: Date.now(), dir, message: decodeMessageForLog(msg) };
-            (self as any).postMessage({ type: 'relay-log', entry } satisfies WorkerToMain);
-          } catch { /* never let logging break the app */ }
-        }
-
-        // Monkey-patch send — intercepts the Message object before CBOR encoding
-        const origSend = secureWs.send.bind(secureWs);
-        (secureWs as any).send = (message: any) => {
-          postRelayLog('sent', message);
-          return origSend(message);
-        };
-
-        // Monkey-patch receiveMessage — intercepts raw bytes from the WebSocket
+        // --- Rendezvous frame interception (wire-level) ---
+        // Monkey-patch receiveMessage: rendezvous frames ride the same socket but
+        // aren't automerge-repo protocol — handle them and DON'T forward to the repo.
         const origReceive = secureWs.receiveMessage.bind(secureWs);
         (secureWs as any).receiveMessage = (bytes: Uint8Array) => {
           try {
             const decoded = cborDecode(new Uint8Array(bytes));
-            // Rendezvous frames ride the same socket but aren't automerge-repo
-            // protocol — handle them and DON'T forward to the repo adapter.
             if (isRendezvousType(decoded?.type)) {
               handleRendezvousFrame(decoded);
               return;
             }
-            postRelayLog('recv', decoded);
-          } catch { /* ignore decode errors for logging */ }
+          } catch { /* not a rendezvous frame — fall through to the repo adapter */ }
           return origReceive(bytes);
         };
         // Expose the raw socket so rendezvous frames can bypass the repo adapter.
@@ -846,7 +761,6 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
         rdvSocket = (secureWs as any).socket;
         const origOnOpenForRdv = secureWs.onOpen;
         secureWs.onOpen = () => { rdvSocket = (secureWs as any).socket; origOnOpenForRdv(); };
-        // --- End relay message logging ---
 
         khIntegration = await khBridge.initializeAutomergeRepoKeyhive({
           storage: secureStorage,

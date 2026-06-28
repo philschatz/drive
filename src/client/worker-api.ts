@@ -4,7 +4,7 @@
  * The full document is never sent to the main thread — query is the only read path.
  */
 
-import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
+import { useState, useEffect, useRef } from 'preact/hooks';
 import type { WorkerToMain } from './automerge-worker';
 import type { ValidationError } from './automerge-worker';
 import type { PresenceState, PeerState } from '@automerge/automerge-repo';
@@ -119,20 +119,6 @@ let wsConnected = false;
 type PeerListListener = (peers: string[]) => void;
 const peerListListeners = new Set<PeerListListener>();
 
-// ── Relay message log ──────────────────────────────────────────────────────
-
-export interface RelayLogEntry {
-  id: number;
-  ts: number;
-  dir: 'sent' | 'recv';
-  message: any;
-}
-
-const MAX_RELAY_LOG = 500;
-let relayLogEntries: RelayLogEntry[] = [];
-type RelayLogListener = (entries: RelayLogEntry[]) => void;
-const relayLogListeners = new Set<RelayLogListener>();
-
 // ── Request/response plumbing ────────────────────────────────────────────────
 
 let nextId = 0;
@@ -197,8 +183,7 @@ export function onRendezvousEvent(fn: RendezvousEventListener): () => void {
 worker.onmessage = (e: MessageEvent<WorkerToMain>) => {
   const msg = e.data;
   // Skip routine traffic; keep diagnostically useful events.
-  const quiet = msg.type === 'relay-log'
-    || msg.type === 'result'
+  const quiet = msg.type === 'result'
     || msg.type === 'query-result'
     || msg.type === 'update-presence'
     || msg.type === 'open-doc-progress';
@@ -296,14 +281,6 @@ worker.onmessage = (e: MessageEvent<WorkerToMain>) => {
       if (cb) cb(msg.errors);
       break;
     }
-    case 'relay-log': {
-      if (relayLogEntries.length >= MAX_RELAY_LOG) {
-        relayLogEntries = relayLogEntries.slice(-(MAX_RELAY_LOG - 1));
-      }
-      relayLogEntries = [...relayLogEntries, msg.entry];
-      for (const fn of relayLogListeners) fn(relayLogEntries);
-      break;
-    }
   }
 };
 
@@ -379,25 +356,6 @@ export function usePeerList(): string[] {
   }, []);
 
   return peers;
-}
-
-// ── Relay log hook ─────────────────────────────────────────────────────────
-
-export function useRelayLog(): [RelayLogEntry[], () => void] {
-  const [entries, setEntries] = useState<RelayLogEntry[]>(() => relayLogEntries);
-
-  useEffect(() => {
-    const listener: RelayLogListener = (e) => setEntries(e);
-    relayLogListeners.add(listener);
-    return () => { relayLogListeners.delete(listener); };
-  }, []);
-
-  const clear = useCallback(() => {
-    relayLogEntries = [];
-    for (const fn of relayLogListeners) fn([]);
-  }, []);
-
-  return [entries, clear];
 }
 
 // ── jq filter constants ─────────────────────────────────────────────────────
