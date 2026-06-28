@@ -221,10 +221,35 @@ export class KeyhiveOps {
     const groupId = await this.ensureUserGroup({ create: true });
     if (!groupId) return;
     const group = await this.getGroupById(groupId);
-    if (!group) return;
+    if (!group) {
+      // A persisted id that won't resolve is a dangling reference; startup integrity
+      // checking (assertUserGroupIntact) fails fast on it, so we shouldn't reach here.
+      console.error(`[kh] assignGroupAsAdmin: user-group ${groupId.slice(0, 8)} not loadable`);
+      return;
+    }
     await this.addGroupAsAdmin(doc, group);
     await this.fx.persist();
     this.fx.syncKeyhive();
+  }
+
+  /**
+   * Fail fast if a user-group id is persisted but its group is missing from keyhive
+   * (a dangling reference — e.g. keyhive storage was migrated/reset while the IDB id
+   * survived). Left unchecked, the group can administer no docs, so reconcileHomeDocs
+   * sees zero accessible docs and prunes the whole home list. No-op when no id is set
+   * (first run) or the group resolves normally.
+   */
+  async assertUserGroupIntact(): Promise<void> {
+    const id = await this.fx.getUserGroupId();
+    if (!id) return;
+    const group = await this.getGroupById(id);
+    if (!group) {
+      throw new Error(
+        `User-group ${id} is persisted but missing from keyhive (dangling reference). ` +
+        `Keyhive's group ops were likely lost in a storage migration while the IDB ` +
+        `'user-group-id' survived. Clear that IDB key to recreate the group.`,
+      );
+    }
   }
 
   /** Add the user-group as admin to every document this device can reach. */

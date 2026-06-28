@@ -39,6 +39,13 @@ function getDb(): Promise<IDBDatabase> {
   return dbPromise;
 }
 
+/** Close the cached connection so the database can be deleted (full-reset flow). */
+export function closeDb(): void {
+  const p = dbPromise;
+  dbPromise = null;
+  if (p) p.then(db => db.close()).catch(() => {});
+}
+
 export async function idbGet<T>(key: string): Promise<T | null> {
   if (!idbAvailable()) return null;
   const db = await getDb();

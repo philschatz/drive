@@ -18,7 +18,7 @@ import {
   type IdentityInfo,
   type DeviceInfo,
 } from '../shared/keyhive-api';
-import { setCacheDisabled, clearAllCaches } from '../worker-api';
+import { setCacheDisabled, clearAllCaches, deleteAllData } from '../worker-api';
 import { idbGet, idbSet, isCacheDisabled } from '../idb-storage';
 import { getContactName, setContactName } from '../contact-names';
 import { RendezvousShare } from './RendezvousShare';
@@ -111,6 +111,20 @@ export function Settings({ path }: { path?: string }) {
       await clearAllCaches(); // clears caches, then reloads the page
     } catch (err: any) {
       setError('Failed to clear caches: ' + err.message);
+    }
+  };
+
+  const handleDeleteAllData = async () => {
+    const ok = confirm(
+      'Delete ALL local data?\n\nThis erases every document, your keyhive identity/keys, ' +
+      'contacts, and settings on this device, then reloads. This cannot be undone, and any ' +
+      'document not shared with another device will be lost permanently.',
+    );
+    if (!ok) return;
+    try {
+      await deleteAllData(); // terminates the worker, deletes all IndexedDB + localStorage, reloads
+    } catch (err: any) {
+      setError('Failed to delete data: ' + err.message);
     }
   };
 
@@ -382,6 +396,17 @@ export function Settings({ path }: { path?: string }) {
           <Label htmlFor="disable-cache" className="cursor-pointer">Disable cache</Label>
         </div>
         <Button size="sm" variant="destructive" onClick={handleClearCaches}>Clear Caches</Button>
+      </section>
+
+      {/* Danger zone */}
+      <section className="mb-6">
+        <h2 className="text-lg font-semibold mb-2">Danger Zone</h2>
+        <p className="text-xs text-muted-foreground mb-2">
+          Permanently erase all local data — every document, your identity/keys, contacts, and
+          settings — then reload as a fresh install. Documents not shared with another device are
+          lost forever. Use this to recover from a corrupted local state.
+        </p>
+        <Button size="sm" variant="destructive" onClick={handleDeleteAllData}>Delete All Data</Button>
       </section>
     </div>
   );

@@ -111,6 +111,19 @@ let PresenceClass: any;
 /** Convert keyhive doc-id bytes (== automerge BinaryDocumentId) → automerge doc id string. */
 let amDocIdFromBytes: ((bytes: Uint8Array) => string) | null = null;
 let khBridge: typeof import('@automerge/automerge-repo-keyhive') | null = null;
+// Suppress chatty log/debug/info output from the third-party keyhive bridge
+// (it has no log-level config): the [AMRepoKeyhive] firehose and the
+// [Streaming+] per-type metrics report. warn/error pass through so real
+// failures stay visible. Must run before the dynamic import of
+// @automerge/automerge-repo-keyhive below.
+const SILENCED_LOG_PREFIXES = ['[AMRepoKeyhive]', '[Streaming]', '[Streaming+]'];
+for (const level of ['log', 'debug', 'info'] as const) {
+  const orig = console[level].bind(console);
+  console[level] = (...args: unknown[]) => {
+    if (typeof args[0] === 'string' && SILENCED_LOG_PREFIXES.some((p) => (args[0] as string).startsWith(p))) return;
+    orig(...args);
+  };
+}
 try {
   console.log('[worker] importing modules...');
   // automerge-repo (subduction.37) builds Subduction internally, but its
@@ -636,7 +649,9 @@ async function reconcileHomeDocsOnce() {
     }
 
     // PRUNE entries the user-group can no longer access, but only when confirmed
-    // revoked (still reachable in the graph). Keep unsynced/offline docs.
+    // revoked (still reachable in the graph). Keep unsynced/offline docs. A dangling
+    // user-group (which would make EVERY doc look inaccessible and wipe the list) is
+    // caught at startup by assertUserGroupIntact, so this pass can trust the view.
     for (let i = list.length - 1; i >= 0; i--) {
       const e = list[i];
       if (accessibleAmIds.has(e.id)) continue;
@@ -1049,6 +1064,12 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
         console.error('[worker] keyhive init failed (continuing without encryption):', khErr);
         (self as any).postMessage({ type: 'kh-error', message: errMsg(khErr) } satisfies WorkerToMain);
       }
+
+      // Fail fast if the persisted user-group id no longer resolves in keyhive (a dangling
+      // reference, e.g. keyhive storage was migrated/reset while the IDB id survived).
+      // Continuing would let reconcileHomeDocs see zero accessible docs and prune the whole
+      // home list. Throwing here aborts init (outer catch posts 'error') before reconcile.
+      if (khOps) await khOps.assertUserGroupIntact();
 
       // Reconcile the home list to the docs the user-group can access. (Replaces the
       // old GC that self-revoked from reachable docs missing from the local list — the

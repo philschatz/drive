@@ -11,7 +11,7 @@ import type { PresenceState, PeerState } from '@automerge/automerge-repo';
 import { deepAssign } from '../shared/deep-assign';
 import type { RendezvousStatus } from '../shared/rendezvous-protocol';
 export type { RendezvousStatus } from '../shared/rendezvous-protocol';
-import { idbDelPrefix, settingGet, settingSetSync } from './idb-storage';
+import { idbDelPrefix, settingGet, settingSetSync, closeDb } from './idb-storage';
 import { setContactNamesDispatch, applyContactNamesFromWorker } from './contact-names';
 
 // Re-export for convenience
@@ -69,7 +69,7 @@ const worker = new Worker(
 
 // Log only diagnostically useful outgoing messages (skip routine traffic).
 function logSend(msg: { type: string } & Record<string, any>): void {
-  const quiet = msg.type === 'query'
+  const quiet = false && msg.type === 'query'
     || msg.type === 'subscribe-query'
     || msg.type === 'unsubscribe-query'
     || msg.type === 'subscribe-presence'
@@ -104,7 +104,7 @@ worker.postMessage(initMsg);
 
 // Best-effort: heal the synchronous localStorage mirror of the cache-disabled setting from
 // its IDB source of truth, in case localStorage was cleared but IDB still holds the flag.
-settingGet('cache-disabled').then(v => settingSetSync('cache-disabled', v)).catch(() => {});
+settingGet('cache-disabled').then(v => settingSetSync('cache-disabled', v)).catch(() => { });
 
 // ── Ready promises ──────────────────────────────────────────────────────────
 
@@ -114,7 +114,7 @@ export const workerReady = new Promise<void>(r => { resolveRepoReady = r; });
 let resolveKeyhiveReady!: () => void;
 let rejectKeyhiveReady!: (err: Error) => void;
 export const keyhiveReady = new Promise<void>((resolve, reject) => { resolveKeyhiveReady = resolve; rejectKeyhiveReady = reject; });
-keyhiveReady.catch(() => {}); // prevent unhandled rejection — callers handle the error
+keyhiveReady.catch(() => { }); // prevent unhandled rejection — callers handle the error
 
 // ── Worker peer ID ──────────────────────────────────────────────────────────
 
@@ -427,6 +427,39 @@ export async function setCacheDisabled(disabled: boolean): Promise<void> {
 export async function clearAllCaches(): Promise<void> {
   await request('clear-caches'); // worker clears its LRUs + idbDelPrefix('qc:')
   await idbDelPrefix('qc:'); // belt-and-suspenders in case the worker is unavailable
+  window.location.reload();
+}
+
+/**
+ * Nuclear reset: delete ALL local data — every IndexedDB database (automerge docs +
+ * keyhive ops in 'automerge-secure', settings/doc-list/contacts in 'app-storage') and
+ * localStorage — then reload. The worker is terminated first so it releases its open
+ * IndexedDB connections (otherwise deleteDatabase blocks). Irreversible.
+ */
+export async function deleteAllData(): Promise<void> {
+  // Terminate the worker so 'automerge-secure' (and its own idb connections) close.
+  worker.terminate();
+  closeDb(); // close the main thread's 'app-storage' connection
+
+  const known = ['app-storage', 'automerge-secure'];
+  let names = known;
+  // Chromium exposes indexedDB.databases() to catch any extra/legacy DBs; Firefox doesn't.
+  if (typeof (indexedDB as any).databases === 'function') {
+    try {
+      const dbs = await (indexedDB as any).databases();
+      const found = dbs.map((d: any) => d.name).filter((n: any): n is string => !!n);
+      names = [...new Set([...known, ...found])];
+    } catch { /* fall back to the known list */ }
+  }
+
+  await Promise.all(names.map(name => new Promise<void>((resolve) => {
+    const req = indexedDB.deleteDatabase(name);
+    req.onsuccess = () => resolve();
+    req.onerror = () => resolve();
+    req.onblocked = () => resolve(); // proceed; the reload finishes closing connections
+  })));
+
+  localStorage.clear();
   window.location.reload();
 }
 
