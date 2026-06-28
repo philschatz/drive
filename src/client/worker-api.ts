@@ -11,7 +11,7 @@ import type { PresenceState, PeerState } from '@automerge/automerge-repo';
 import { deepAssign } from '../shared/deep-assign';
 import type { RendezvousStatus } from '../shared/rendezvous-protocol';
 export type { RendezvousStatus } from '../shared/rendezvous-protocol';
-import { idbDelPrefix, settingGet, settingSetSync, closeDb } from './idb-storage';
+import { idbDelPrefix, settingGet, settingSetSync, closeDb, CACHE_PREFIX } from './idb-storage';
 import { setContactNamesDispatch, applyContactNamesFromWorker } from './contact-names';
 import { startWebRTCBridge } from './webrtc-bridge';
 
@@ -434,10 +434,10 @@ export async function setCacheDisabled(disabled: boolean): Promise<void> {
   window.location.reload();
 }
 
-/** Wipe the worker's performance caches (query/validation LRUs + IDB qc:*) and reload. */
+/** Wipe the worker's performance caches (query/validation LRUs + IDB cache:*) and reload. */
 export async function clearAllCaches(): Promise<void> {
-  await request('clear-caches'); // worker clears its LRUs + idbDelPrefix('qc:')
-  await idbDelPrefix('qc:'); // belt-and-suspenders in case the worker is unavailable
+  await request('clear-caches'); // worker clears its LRUs + idbDelPrefix(CACHE_PREFIX)
+  await idbDelPrefix(CACHE_PREFIX); // belt-and-suspenders in case the worker is unavailable
   window.location.reload();
 }
 

@@ -10,8 +10,65 @@
  */
 
 const DB_NAME = 'app-storage';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STORE_NAME = 'keyval';
+
+// ── Key registry ─────────────────────────────────────────────────────────────
+//
+// Every persisted key is namespaced by category so the deletion/restore semantics
+// are explicit:
+//   cache:*       deleting it changes nothing (regenerated on demand)
+//   settings:*    deleting it falls back to defaults; restoring it restores prefs
+//   data:*        required for a working app
+//   data:auth:*   identity/credential data (keyhive user-group)
+//   data:temporal:* reserved for "last-seen" state (e.g. last doc version opened) — no members yet
+
+/** Source-of-truth keys for non-cache, non-settings persisted data. */
+export const KEYS = {
+  docIds:             'data:my-doc-ids',
+  contactNames:       'data:contact-names',
+  knownContactGroups: 'data:known-contact-groups',
+  userGroupId:        'data:auth:user-group-id',
+} as const;
+
+/** Everything under this prefix is disposable cache (deletable with no effect). */
+export const CACHE_PREFIX = 'cache:';
+export const queryCacheKey = (docId: string, filter: string) =>
+  `${CACHE_PREFIX}query:${docId}:${hashStr(filter)}`;
+export const validationCacheKey = (docId: string) => `${CACHE_PREFIX}query:${docId}:validation`;
+export const docCachePrefix = (docId: string) => `${CACHE_PREFIX}query:${docId}:`;
+
+// One-time v1→v2 migration: legacy ad-hoc key names → category-prefixed names. Renamed
+// data/auth keys preserve their values; legacy cache (`qc:*`) and the removed device-linking
+// migration keys are dropped outright.
+const V2_RENAMES: Record<string, string> = {
+  'automerge-doc-ids':    KEYS.docIds,
+  'contact-names':        KEYS.contactNames,
+  'known-contact-groups': KEYS.knownContactGroups,
+  'user-group-id':        KEYS.userGroupId,
+};
+const V2_DELETE_KEYS = ['linked-devices', 'pending-group-adds'];
+const V2_DELETE_PREFIXES = ['qc:'];
+
+/** Rename/drop legacy keys inside the versionchange transaction (runs once on upgrade). */
+function migrateV1ToV2(store: IDBObjectStore): void {
+  const req = store.openCursor();
+  req.onsuccess = () => {
+    const cursor = req.result;
+    if (!cursor) return;
+    const key = cursor.key;
+    if (typeof key === 'string') {
+      const renamed = V2_RENAMES[key];
+      if (renamed) {
+        store.put(cursor.value, renamed);
+        cursor.delete();
+      } else if (V2_DELETE_KEYS.includes(key) || V2_DELETE_PREFIXES.some(p => key.startsWith(p))) {
+        cursor.delete();
+      }
+    }
+    cursor.continue();
+  };
+}
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
@@ -24,12 +81,18 @@ function getDb(): Promise<IDBDatabase> {
   if (dbPromise) return dbPromise;
   const opening = new Promise<IDBDatabase>((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
-    req.onupgradeneeded = () => {
+    req.onupgradeneeded = (event) => {
       const db = req.result;
       if (!db.objectStoreNames.contains(STORE_NAME)) {
         db.createObjectStore(STORE_NAME);
       }
+      // Rename legacy keys to their category-prefixed names. Only meaningful when an
+      // existing v1 DB is being upgraded (a brand-new DB has nothing to migrate).
+      if (event.oldVersion >= 1 && event.oldVersion < 2) {
+        migrateV1ToV2(req.transaction!.objectStore(STORE_NAME));
+      }
     };
+    req.onblocked = () => console.warn('[idb] upgrade blocked by an open connection at an older version');
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
   });

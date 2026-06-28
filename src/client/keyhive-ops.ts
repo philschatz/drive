@@ -235,7 +235,7 @@ export class KeyhiveOps {
 
   /**
    * Detect a dangling user-group: an id is persisted but its group is missing from
-   * keyhive (e.g. keyhive storage was migrated/reset while the IDB 'user-group-id'
+   * keyhive (e.g. keyhive storage was migrated/reset while the IDB user-group-id
    * survived). Returns the dangling id, or null when no id is set (fresh install) or
    * the group resolves normally. Callers surface this and skip reconcileHomeDocs — a
    * dangling group can administer no docs, so reconcile would see zero accessible docs

@@ -264,29 +264,29 @@ function handleRendezvousFrame(msg: any): void {
 // until renamed). Cleared when the user deletes the contact.
 /** Persist a contact's user-group; returns true if we already knew them. */
 async function addKnownContactGroup(groupId: string): Promise<boolean> {
-  const { idbGet, idbSet } = await import('./idb-storage');
-  const list = (await idbGet<string[]>('known-contact-groups')) ?? [];
+  const { idbGet, idbSet, KEYS } = await import('./idb-storage');
+  const list = (await idbGet<string[]>(KEYS.knownContactGroups)) ?? [];
   if (list.includes(groupId)) return true;
   list.push(groupId);
-  await idbSet('known-contact-groups', list);
+  await idbSet(KEYS.knownContactGroups, list);
   return false;
 }
 async function removeKnownContactGroup(groupId: string): Promise<void> {
-  const { idbGet, idbSet } = await import('./idb-storage');
-  const list = (await idbGet<string[]>('known-contact-groups')) ?? [];
+  const { idbGet, idbSet, KEYS } = await import('./idb-storage');
+  const list = (await idbGet<string[]>(KEYS.knownContactGroups)) ?? [];
   const next = list.filter(g => g !== groupId);
-  if (next.length !== list.length) await idbSet('known-contact-groups', next);
+  if (next.length !== list.length) await idbSet(KEYS.knownContactGroups, next);
 }
 
 // ── Contact-name store ───────────────────────────────────────────────────────
 // The worker is the single owner/writer of the persisted contact-name map (IDB
-// key 'contact-names'); the main thread keeps only a read cache, refreshed from
+// key KEYS.contactNames); the main thread keeps only a read cache, refreshed from
 // the 'contact-names-updated' broadcasts these helpers emit. Centralising the
 // writes here lets worker-internal flows (e.g. the rendezvous contact exchange)
 // name a contact directly, without a round-trip through the UI.
 async function getContactNames(): Promise<Record<string, string>> {
-  const { idbGet } = await import('./idb-storage');
-  return (await idbGet<Record<string, string>>('contact-names')) ?? {};
+  const { idbGet, KEYS } = await import('./idb-storage');
+  return (await idbGet<Record<string, string>>(KEYS.contactNames)) ?? {};
 }
 function broadcastContactNames(names: Record<string, string>): void {
   (self as any).postMessage({ type: 'contact-names-updated', names } satisfies WorkerToMain);
@@ -298,16 +298,16 @@ async function putContactName(agentId: string, name: string | undefined): Promis
   const names = await getContactNames();
   if (names[agentId] === trimmed) return;
   names[agentId] = trimmed;
-  const { idbSet } = await import('./idb-storage');
-  await idbSet('contact-names', names);
+  const { idbSet, KEYS } = await import('./idb-storage');
+  await idbSet(KEYS.contactNames, names);
   broadcastContactNames(names);
 }
 /** Forget a contact's name and drop them from the known registry, then broadcast. */
 async function deleteContactName(agentId: string): Promise<void> {
   const names = await getContactNames();
   delete names[agentId];
-  const { idbSet } = await import('./idb-storage');
-  await idbSet('contact-names', names);
+  const { idbSet, KEYS } = await import('./idb-storage');
+  await idbSet(KEYS.contactNames, names);
   // "Delete contact" must also drop them from the known registry, else they'd
   // reappear (by short id) on the next getKnownContacts.
   await removeKnownContactGroup(agentId);
@@ -431,62 +431,6 @@ function getRepo(): InstanceType<typeof Repo> {
   return secureRepo;
 }
 
-// --- User-group migration: fold legacy flat 'linked-devices' into a keyhive Group ---
-let linkedDevicesMigrated = false;
-
-/** One-time: move any 'linked-devices' agentIds into the personal user-group. */
-async function migrateLinkedDevices(): Promise<void> {
-  if (linkedDevicesMigrated || !khOps) return;
-  linkedDevicesMigrated = true;
-  try {
-    const { idbGet, idbSet } = await import('./idb-storage');
-    const legacy = (await idbGet<string[]>('linked-devices')) ?? [];
-    if (legacy.length === 0) return;
-    await khOps.ensureUserGroup({ create: true });
-    const pending = new Set<string>((await idbGet<string[]>('pending-group-adds')) ?? []);
-    const remaining: string[] = [];
-    for (const agentId of legacy) {
-      try {
-        await khOps.addDeviceToGroup(agentId);
-        pending.delete(agentId);
-      } catch {
-        // Device's contact card not synced yet — retry on the next keyhive state change.
-        remaining.push(agentId);
-        pending.add(agentId);
-      }
-    }
-    await idbSet('linked-devices', remaining);
-    await idbSet('pending-group-adds', [...pending]);
-  } catch (err) {
-    console.warn('[worker] migrateLinkedDevices failed:', err);
-  }
-}
-
-/** Retry adding any devices that couldn't be added to the group earlier. */
-async function drainPendingGroupAdds(): Promise<void> {
-  if (!khOps) return;
-  try {
-    const { idbGet, idbSet } = await import('./idb-storage');
-    const pending = (await idbGet<string[]>('pending-group-adds')) ?? [];
-    if (pending.length === 0) return;
-    if (!(await khOps.getUserGroupId())) return;
-    const stillPending: string[] = [];
-    for (const agentId of pending) {
-      try {
-        await khOps.addDeviceToGroup(agentId);
-      } catch {
-        stillPending.push(agentId);
-      }
-    }
-    await idbSet('pending-group-adds', stillPending);
-    const legacy = (await idbGet<string[]>('linked-devices')) ?? [];
-    const kept = legacy.filter((id) => stillPending.includes(id));
-    if (kept.length !== legacy.length) await idbSet('linked-devices', kept);
-  } catch (err) {
-    console.warn('[worker] drainPendingGroupAdds failed:', err);
-  }
-}
-
 // --- Doc registry for worker-owned subscriptions ---
 
 interface SubInfo {
@@ -543,8 +487,8 @@ function getOrCreateEntry(docId: string, handle: any): DocEntry {
 
 /**
  * Whether a summary subscription for a not-yet-open doc opens (loads + syncs via
- * repo.find) that doc in the background. The persisted qc: cache is always served first
- * for instant paint either way.
+ * repo.find) that doc in the background. The persisted cache:query: cache is always served
+ * first for instant paint either way.
  *  - true (default): after serving the cache, open the doc so it syncs and the summary
  *    refreshes live — without this an un-found doc never syncs, so a remote edit to a
  *    listed-but-unopened doc leaves the homepage stale until it is opened.
@@ -557,7 +501,7 @@ const jqCache = new LRU<string, (input: any) => any>(64);
 
 /**
  * When true, all performance caches are bypassed: the compiled-filter `jqCache`, the
- * query result cache (`queryResultCache` + IDB `qc:*`), and the validation cache. Hydrated
+ * query result cache (`queryResultCache` + IDB `cache:query:*`), and the validation cache. Hydrated
  * from the persisted `settings:cache-disabled` setting at init; updated on `set-cache-disabled`.
  */
 let cacheDisabled = false;
@@ -589,7 +533,8 @@ async function runCachedQuery(
     return { result, heads, lastModified, changed: true };
   }
 
-  const cacheKey = `qc:${docId}:${hashStr(filter)}`;
+  const { idbSet, queryCacheKey } = await import('./idb-storage');
+  const cacheKey = queryCacheKey(docId, filter);
   const json = JSON.stringify(result);
 
   const cached = queryResultCache.get(cacheKey);
@@ -599,7 +544,6 @@ async function runCachedQuery(
 
   const entry: QueryCacheEntry = { result, json, lastModified, heads };
   queryResultCache.set(cacheKey, entry);
-  const { idbSet } = await import('./idb-storage');
   idbSet(cacheKey, entry);
   return { result, heads, lastModified, changed: true };
 }
@@ -611,12 +555,12 @@ async function handleSubscribeQuery(docId: string, subId: number, filter: string
   // Serve from cache if available, for instant paint. Skipped when caching is disabled —
   // results then come only from the live query below.
   if (!cacheDisabled) {
-    const cacheKey = `qc:${docId}:${hashStr(filter)}`;
+    const { idbGet, queryCacheKey } = await import('./idb-storage');
+    const cacheKey = queryCacheKey(docId, filter);
     const memoryCached = queryResultCache.get(cacheKey);
     if (memoryCached) {
       post({ type: 'query-result', subId, result: memoryCached.result, heads: memoryCached.heads, lastModified: memoryCached.lastModified });
     } else {
-      const { idbGet } = await import('./idb-storage');
       const idbCached = await idbGet<QueryCacheEntry>(cacheKey);
       if (idbCached) {
         queryResultCache.set(cacheKey, idbCached);
@@ -709,7 +653,8 @@ async function pushToSubscriptions(docId: string) {
   // Evict stale cache entries for this doc that no longer have an active subscription
   // (e.g. a calendarQuery for a previous date range). Entries with active subscriptions
   // were already updated by runCachedQuery above.
-  const prefix = `qc:${docId}:`;
+  const { docCachePrefix } = await import('./idb-storage');
+  const prefix = docCachePrefix(docId);
   for (const key of queryResultCache.keys()) {
     if (key.startsWith(prefix) && !activeHashes.has(key.slice(prefix.length))) {
       console.log(`[worker] might want to (but will not) delete possibly stale key ${key}`);
@@ -717,25 +662,24 @@ async function pushToSubscriptions(docId: string) {
   }
 
   if (hasValidation) {
-    pushValidation(docId, activeDoc);
+    void pushValidation(docId, activeDoc);
   }
 }
 
-function pushValidation(docId: string, doc: any) {
+async function pushValidation(docId: string, doc: any) {
   const allErrors = validateDocument(doc);
   const errors = allErrors.slice(0, 100);
 
   // When cacheDisabled, skip the validation cache — always emit below.
   if (!cacheDisabled) {
     const json = JSON.stringify(errors);
-    const cacheKey = `qc:${docId}:validation`;
-
+    const { idbSet, validationCacheKey } = await import('./idb-storage');
+    const cacheKey = validationCacheKey(docId);
     const cached = queryResultCache.get(cacheKey);
-    if (cached && cached.json === json) return; // unchanged
-
+    if (cached && cached.json === json) return; // unchanged — skip the re-emit below
     const entry: QueryCacheEntry = { result: errors, json, heads: [] };
     queryResultCache.set(cacheKey, entry);
-    import('./idb-storage').then(({ idbSet }) => idbSet(cacheKey, entry));
+    idbSet(cacheKey, entry);
   }
 
   (self as any).postMessage({ type: 'update-validation', docId, errors } satisfies WorkerToMain);
@@ -792,9 +736,9 @@ async function reconcileHomeDocsOnce() {
   if (!khOps || !amDocIdFromBytes) return;
   try {
     const { accessibleKhIds, reachableKhIds } = await khOps.enumerateUserDocs();
-    const { idbGet, idbSet } = await import('./idb-storage');
+    const { idbGet, idbSet, KEYS } = await import('./idb-storage');
     type StoredDocEntry = { id: string; type?: string; name?: string; sharingGroupId?: string };
-    const list = (await idbGet<StoredDocEntry[]>('automerge-doc-ids')) ?? [];
+    const list = (await idbGet<StoredDocEntry[]>(KEYS.docIds)) ?? [];
     const knownIds = new Set(list.map(e => e.id));
     const accessibleAmIds = new Set(accessibleKhIds.map(k => amDocIdFromBytes!(base64ToBytes(k))));
     const reachableSet = new Set(reachableKhIds);
@@ -828,7 +772,7 @@ async function reconcileHomeDocsOnce() {
     }
 
     if (changed) {
-      await idbSet('automerge-doc-ids', list);
+      await idbSet(KEYS.docIds, list);
       (self as any).postMessage({ type: 'doc-list-updated', list } satisfies WorkerToMain);
       // Pre-load newly added docs so they show type/name on the homepage
       // instead of appearing as "?" until manually opened.
@@ -990,8 +934,6 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
             // user-group's accessible docs (e.g. a doc shared with us, or a newly
             // linked device gaining access to the user's whole library).
             void reconcileHomeDocs();
-            // Retry any device-group adds that were waiting on contact cards to sync.
-            void drainPendingGroupAdds();
             // Notify main thread so useAccess/Home can re-check access levels
             (self as any).postMessage({ type: 'kh-state-changed' } satisfies WorkerToMain);
           },
@@ -1014,17 +956,14 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
           findDoc: (docId) => secureRepo!.find(docId as any),
           saveEventBytes: (eventBytes) => khIntegration!.keyhiveStorage.saveEventBytesWithHash(eventBytes),
           getUserGroupId: async () => {
-            const { idbGet } = await import('./idb-storage');
-            return (await idbGet<string>('user-group-id')) ?? null;
+            const { idbGet, KEYS } = await import('./idb-storage');
+            return (await idbGet<string>(KEYS.userGroupId)) ?? null;
           },
           setUserGroupId: async (groupId) => {
-            const { idbSet } = await import('./idb-storage');
-            await idbSet('user-group-id', groupId);
+            const { idbSet, KEYS } = await import('./idb-storage');
+            await idbSet(KEYS.userGroupId, groupId);
           },
         });
-
-        // Fold any legacy flat linked-devices into a personal user-group (one-time).
-        void migrateLinkedDevices();
 
         const secureNs = secureRepo.networkSubsystem;
         secureNs.on('peer', postStatus);
@@ -1155,9 +1094,9 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
         // Pre-register docs with keyhive and push doc list + contact names BEFORE
         // kh-ready so code awaiting keyhiveReady can read them immediately.
         {
-          const { idbGet: idbGetDocs } = await import('./idb-storage');
+          const { idbGet: idbGetDocs, KEYS } = await import('./idb-storage');
           type StoredDocEntry = { id: string;[key: string]: any };
-          const earlyList = (await idbGetDocs<StoredDocEntry[]>('automerge-doc-ids')) ?? [];
+          const earlyList = (await idbGetDocs<StoredDocEntry[]>(KEYS.docIds)) ?? [];
           for (const entry of earlyList) {
             const khDocId = resolveKhDocId(entry.id);
             try {
@@ -1211,14 +1150,14 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
   if (msg.type === 'set-cache-disabled') {
     try {
       cacheDisabled = msg.disabled;
-      const { settingSet, idbDelPrefix } = await import('./idb-storage');
+      const { settingSet, idbDelPrefix, CACHE_PREFIX } = await import('./idb-storage');
       await settingSet('cache-disabled', msg.disabled);
       if (msg.disabled) {
         // Clear performance caches when disabling. (The caller reloads afterward, so the
         // in-memory LRUs are also wiped on restart; the IDB clear is the part that persists.)
         queryResultCache.clear();
         jqCache.clear();
-        await idbDelPrefix('qc:');
+        await idbDelPrefix(CACHE_PREFIX);
       }
       (self as any).postMessage({ type: 'result', id: msg.id, result: null } satisfies WorkerToMain);
     } catch (err) {
@@ -1231,8 +1170,8 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
     try {
       queryResultCache.clear();
       jqCache.clear();
-      const { idbDelPrefix } = await import('./idb-storage');
-      await idbDelPrefix('qc:');
+      const { idbDelPrefix, CACHE_PREFIX } = await import('./idb-storage');
+      await idbDelPrefix(CACHE_PREFIX);
       (self as any).postMessage({ type: 'result', id: msg.id, result: null } satisfies WorkerToMain);
     } catch (err) {
       (self as any).postMessage({ type: 'result', id: msg.id, error: errMsg(err) } satisfies WorkerToMain);
@@ -1242,9 +1181,9 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
 
   if (msg.type === 'get-doc-list') {
     try {
-      const { idbGet } = await import('./idb-storage');
+      const { idbGet, KEYS } = await import('./idb-storage');
       type StoredDocEntry = { id: string; type?: string; name?: string; sharingGroupId?: string };
-      const list = (await idbGet<StoredDocEntry[]>('automerge-doc-ids')) ?? [];
+      const list = (await idbGet<StoredDocEntry[]>(KEYS.docIds)) ?? [];
       (self as any).postMessage({ type: 'result', id: msg.id, result: list } satisfies WorkerToMain);
     } catch (err) {
       (self as any).postMessage({ type: 'result', id: msg.id, error: errMsg(err) } satisfies WorkerToMain);
@@ -1266,11 +1205,11 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
       // Add to IDB BEFORE enableSharing so reconcileHomeDocs (triggered by
       // keyhive sync during enableSharing) sees it as already known.
       {
-        const { idbGet: idbGetList, idbSet: idbSetList } = await import('./idb-storage');
+        const { idbGet: idbGetList, idbSet: idbSetList, KEYS } = await import('./idb-storage');
         type S = { id: string;[k: string]: any };
-        const earlyList = (await idbGetList<S[]>('automerge-doc-ids')) ?? [];
+        const earlyList = (await idbGetList<S[]>(KEYS.docIds)) ?? [];
         earlyList.unshift({ id: handle.documentId, ...(msg.metadata ?? {}) });
-        await idbSetList('automerge-doc-ids', earlyList);
+        await idbSetList(KEYS.docIds, earlyList);
         (self as any).postMessage({ type: 'doc-list-updated', list: earlyList } satisfies WorkerToMain);
       }
       await khOps.enableSharing(handle.documentId, docIdBytes);
@@ -1350,12 +1289,12 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
 
   if (msg.type === 'subscribe-validation') {
     // Serve from cache immediately (same pattern as query subscriptions)
-    const valCacheKey = `qc:${msg.docId}:validation`;
+    const { idbGet, validationCacheKey } = await import('./idb-storage');
+    const valCacheKey = validationCacheKey(msg.docId);
     const valMemCached = queryResultCache.get(valCacheKey);
     if (valMemCached) {
       (self as any).postMessage({ type: 'update-validation', docId: msg.docId, errors: valMemCached.result } satisfies WorkerToMain);
     } else {
-      const { idbGet } = await import('./idb-storage');
       const valIdbCached = await idbGet<QueryCacheEntry>(valCacheKey);
       if (valIdbCached) {
         queryResultCache.set(valCacheKey, valIdbCached);
@@ -1564,12 +1503,12 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
 
   if (msg.type === 'remove-me-from-doc') {
     try {
-      const { idbGet, idbSet } = await import('./idb-storage');
+      const { idbGet, idbSet, idbDelPrefix, KEYS, docCachePrefix } = await import('./idb-storage');
       type StoredDocEntry = { id: string;[key: string]: any };
-      const list = (await idbGet<StoredDocEntry[]>('automerge-doc-ids')) ?? [];
+      const list = (await idbGet<StoredDocEntry[]>(KEYS.docIds)) ?? [];
       const removedEntry = list.find(e => e.id === msg.docId);
       const filtered = list.filter(e => e.id !== msg.docId);
-      await idbSet('automerge-doc-ids', filtered);
+      await idbSet(KEYS.docIds, filtered);
       // Clean up active subscriptions and query cache for removed doc
       const entry = docRegistry.get(msg.docId);
       if (entry) {
@@ -1578,9 +1517,8 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
         if (entry.presence) entry.presence.stop();
         docRegistry.delete(msg.docId);
       }
-      queryResultCache.deletePrefix(`qc:${msg.docId}:`);
-      const { idbDelPrefix } = await import('./idb-storage');
-      await idbDelPrefix(`qc:${msg.docId}:`);
+      queryResultCache.deletePrefix(docCachePrefix(msg.docId));
+      await idbDelPrefix(docCachePrefix(msg.docId));
       // Remove the current user (their user-group) from the doc's keyhive ACL.
       // No dismissed-list bookkeeping: losing group access is what makes the doc
       // drop off the home list (here and on the user's other devices) at the next
@@ -1698,9 +1636,9 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
   if (msg.type === 'kh-get-known-contacts') {
     try {
       if (!khOps) throw new Error('Keyhive not available');
-      const { idbGet } = await import('./idb-storage');
+      const { idbGet, KEYS } = await import('./idb-storage');
       const contactNames = await getContactNames();
-      const knownGroups = (await idbGet<string[]>('known-contact-groups')) ?? [];
+      const knownGroups = (await idbGet<string[]>(KEYS.knownContactGroups)) ?? [];
       // Contacts are keyed by user-group id (sharing is group-only): union the
       // named contacts with received-but-unnamed ones from the known registry.
       const contactGroupIds = [...new Set([...Object.keys(contactNames), ...knownGroups])];

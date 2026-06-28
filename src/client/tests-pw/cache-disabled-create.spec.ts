@@ -37,7 +37,7 @@ test('cache disabled: created doc survives reload', async ({ browser }) => {
         req.onsuccess = () => {
           const db = req.result;
           const tx = db.transaction('keyval', 'readonly');
-          const g = tx.objectStore('keyval').get('automerge-doc-ids');
+          const g = tx.objectStore('keyval').get('data:my-doc-ids');
           g.onsuccess = () => resolve(g.result ?? null);
           g.onerror = () => resolve('ERR');
         };
@@ -63,7 +63,7 @@ test('cache disabled: created doc survives reload', async ({ browser }) => {
         req.onsuccess = () => {
           const db = req.result;
           const tx = db.transaction('keyval', 'readonly');
-          const g = tx.objectStore('keyval').get('automerge-doc-ids');
+          const g = tx.objectStore('keyval').get('data:my-doc-ids');
           g.onsuccess = () => resolve(g.result ?? null);
           g.onerror = () => resolve('ERR');
         };

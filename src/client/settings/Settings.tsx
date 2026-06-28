@@ -15,7 +15,7 @@ import {
 } from '../shared/keyhive-api';
 import { useDevices } from '../shared/use-devices';
 import { setCacheDisabled, clearAllCaches, deleteAllData } from '../worker-api';
-import { idbGet, idbSet, isCacheDisabled } from '../idb-storage';
+import { idbGet, idbSet, isCacheDisabled, KEYS } from '../idb-storage';
 import { getContactName, setContactName } from '../contact-names';
 export function Settings({ path }: { path?: string }) {
   const [identity, setIdentity] = useState<IdentityInfo | null>(null);
@@ -97,8 +97,8 @@ export function Settings({ path }: { path?: string }) {
   const handleExport = async () => {
     try {
       const [docList, contactNames] = await Promise.all([
-        idbGet<unknown[]>('automerge-doc-ids').then(v => v ?? []),
-        idbGet<Record<string, string>>('contact-names').then(v => v ?? {}),
+        idbGet<unknown[]>(KEYS.docIds).then(v => v ?? []),
+        idbGet<Record<string, string>>(KEYS.contactNames).then(v => v ?? {}),
       ]);
       const payload = { version: 1, exportedAt: new Date().toISOString(), docList, contactNames };
       const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
@@ -130,10 +130,9 @@ export function Settings({ path }: { path?: string }) {
           throw new Error('Invalid backup: contactNames must be an object.');
         // Legacy backups may carry an `invites` field — it's no longer used, so ignore it.
         await Promise.all([
-          idbSet('automerge-doc-ids', payload.docList),
-          idbSet('contact-names', payload.contactNames),
+          idbSet(KEYS.docIds, payload.docList),
+          idbSet(KEYS.contactNames, payload.contactNames),
         ]);
-        localStorage.setItem('automerge-doc-ids', JSON.stringify(payload.docList));
         window.location.reload();
       } catch (err: any) {
         setError('Import failed: ' + err.message);
