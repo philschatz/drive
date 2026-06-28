@@ -5,6 +5,7 @@ import { getMyAccess, onKeyhiveStateChanged } from '../shared/keyhive-api';
 import { peerColor, peerDisplayName } from '../shared/presence';
 import { Button } from '@/components/ui/button';
 import { Alert } from '@/components/ui/alert';
+import { DeleteButton } from '@/components/ui/delete-button';
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator } from '@/components/ui/dropdown-menu';
 import { Progress } from '@/components/ui/progress';
 import { AccessIcon } from '@/components/AccessIcon';
@@ -653,9 +654,11 @@ export function Home({ path }: { path?: string }) {
     }
   }, []);
 
+  const docLabel = (entry: DocEntry) =>
+    entry.type === 'Calendar' ? 'calendar' : entry.type === 'TaskList' ? 'task list' : entry.type === 'DataGrid' ? 'spreadsheet' : 'document';
+
   const handleDelete = async (entry: DocEntry) => {
-    const label = entry.type === 'Calendar' ? 'calendar' : entry.type === 'TaskList' ? 'task list' : entry.type === 'DataGrid' ? 'spreadsheet' : 'document';
-    if (!confirm(`Delete "${entry.name || 'Untitled'}" ${label}?`)) return;
+    const label = docLabel(entry);
     removeDocId(entry.documentId);
     setMessage(`${label.charAt(0).toUpperCase() + label.slice(1)} deleted`);
     setError('');
@@ -880,13 +883,12 @@ export function Home({ path }: { path?: string }) {
                 <AccessIcon access={entry.access ?? null} style={{ fontSize: 18 }} />
               </span>
               {!noEntryAccess && (
-                <button
-                  className="inline-flex items-center justify-center h-8 w-8 rounded-md text-destructive hover:bg-destructive/10 cursor-pointer"
-                  title="Delete"
-                  onClick={() => handleDelete(entry)}
-                >
-                  <span className="material-symbols-outlined">delete</span>
-                </button>
+                <DeleteButton
+                  className="h-8 w-8"
+                  iconSize={18}
+                  confirmMessage={`Delete "${entry.name || 'Untitled'}" ${docLabel(entry)}?`}
+                  onConfirm={() => handleDelete(entry)}
+                />
               )}
               <a
                 href={`#/source/${entry.documentId}`}

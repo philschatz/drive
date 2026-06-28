@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'preact/hooks';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Alert } from '@/components/ui/alert';
+import { DeleteButton } from '@/components/ui/delete-button';
 import { EditableName } from '@/components/EditableName';
 import { getDocMembers, getKnownContacts } from '../shared/keyhive-api';
 import { keyhiveReady } from '../shared/automerge';
@@ -126,8 +127,6 @@ export function Contacts({ path }: { path?: string }) {
   useEffect(() => { refresh(); }, [refresh]);
 
   const handleDelete = (contact: ContactEntry) => {
-    const name = getContactName(contact.agentId) || contact.agentId.slice(0, 12);
-    if (!confirm(`Remove contact "${name}"?`)) return;
     removeContactName(contact.agentId).catch(err => {
       console.error('[Contacts] Failed to remove contact:', err);
       setError(`Failed to remove contact: ${err?.message ?? 'storage error'}`);
@@ -194,13 +193,12 @@ export function Contacts({ path }: { path?: string }) {
                   <span className="material-symbols-outlined" style={{ fontSize: 14 }}>smartphone</span>
                   {contact.deviceIds.length}
                 </span>
-                <button
-                  className="inline-flex items-center justify-center h-6 w-6 rounded-md text-destructive hover:bg-destructive/10 ml-auto"
-                  title="Remove contact"
-                  onClick={() => handleDelete(contact)}
-                >
-                  <span className="material-symbols-outlined" style={{ fontSize: 16 }}>delete</span>
-                </button>
+                <DeleteButton
+                  className="h-6 w-6 ml-auto"
+                  tooltip="Remove contact"
+                  confirmMessage={`Remove contact "${getContactName(contact.agentId) || contact.agentId.slice(0, 12)}"?`}
+                  onConfirm={() => handleDelete(contact)}
+                />
               </div>
               <div className="ml-6 mt-1 flex flex-col gap-0.5">
                 {contact.docs.length === 0 && (

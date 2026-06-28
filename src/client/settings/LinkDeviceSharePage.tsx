@@ -9,6 +9,7 @@
 import { useState, useEffect, useCallback } from 'preact/hooks';
 import { Button } from '@/components/ui/button';
 import { Alert } from '@/components/ui/alert';
+import { DeleteButton } from '@/components/ui/delete-button';
 import {
   listDevices,
   removeDevice,
@@ -45,7 +46,6 @@ export function LinkDeviceSharePage({ path }: { path?: string }) {
   }, [refresh]);
 
   const handleRemoveDevice = async (agentId: string) => {
-    if (!confirm(`Remove device ${agentId.slice(0, 16)}…?`)) return;
     try {
       await removeDevice(agentId);
       setMessage('Device removed.');
@@ -99,13 +99,11 @@ export function LinkDeviceSharePage({ path }: { path?: string }) {
               <span className="text-xs text-muted-foreground capitalize">{dev.role}</span>
               {dev.isMe && <span className="text-xs bg-primary/10 text-primary px-1 rounded">This device</span>}
               {!dev.isMe && (
-                <button
-                  className="text-muted-foreground hover:text-destructive p-0.5 rounded"
-                  title="Remove device"
-                  onClick={() => handleRemoveDevice(dev.agentId)}
-                >
-                  <span className="material-symbols-outlined" style={{ fontSize: 16 }}>delete</span>
-                </button>
+                <DeleteButton
+                  tooltip="Remove device"
+                  confirmMessage={`Remove device ${dev.agentId.slice(0, 16)}…?`}
+                  onConfirm={() => handleRemoveDevice(dev.agentId)}
+                />
               )}
             </div>
           ))}

@@ -7,6 +7,7 @@
 import { useState, useEffect, useCallback } from 'preact/hooks';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Button } from '@/components/ui/button';
+import { DeleteButton } from '@/components/ui/delete-button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import {
   getDocMembers,
@@ -109,7 +110,6 @@ export function AccessControl({ docId, access: accessProp }: AccessControlProps)
   };
 
   const handleRevoke = async (agentId: string) => {
-    if (!confirm('Remove this member? Their keys will be rotated.')) return;
     setLoading(true);
     try {
       await revokeMember(agentId, docId);
@@ -201,14 +201,14 @@ export function AccessControl({ docId, access: accessProp }: AccessControlProps)
                         <SelectItem value="admin">Admin</SelectItem>
                       </SelectContent>
                     </Select>
-                    <button
-                      className="inline-flex items-center justify-center h-7 w-7 rounded text-destructive hover:bg-destructive/10"
-                      title="Remove member"
-                      onClick={() => handleRevoke(member.agentId)}
+                    <DeleteButton
+                      className="rounded"
+                      iconSize={14}
+                      tooltip="Remove member"
+                      confirmMessage="Remove this member? Their keys will be rotated."
+                      onConfirm={() => handleRevoke(member.agentId)}
                       disabled={loading}
-                    >
-                      <span className="material-symbols-outlined" style={{ fontSize: 14 }}>close</span>
-                    </button>
+                    />
                   </div>
                 ) : (
                   <span className="text-xs text-muted-foreground capitalize">{member.role}</span>
