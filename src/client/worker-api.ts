@@ -119,6 +119,17 @@ keyhiveReady.catch(() => { }); // prevent unhandled rejection — callers handle
 let _workerPeerId = '';
 export function getWorkerPeerId(): string { return _workerPeerId; }
 
+// This user's own user-group id (base64), cached for sync access so presence
+// consumers can hide ALL of the local user's devices (not just the current one)
+// and group remote peers by user. Best-effort: populated once keyhive is ready and
+// refreshed whenever a group is (re)created via ensureUserGroup; null until then.
+let _workerUserGroupId: string | null = null;
+export function getWorkerUserGroupId(): string | null { return _workerUserGroupId; }
+keyhiveReady
+  .then(() => getIdentity())
+  .then((id) => { _workerUserGroupId = id.userGroupId; })
+  .catch(() => { /* never became ready — leave null */ });
+
 // ── Connection status ───────────────────────────────────────────────────────
 
 type ConnectionListener = (connected: boolean) => void;
@@ -698,8 +709,10 @@ export function getKnownContacts(excludeDocId: string): Promise<MemberInfo[]> {
 }
 
 /** Ensure this device has a personal user-group; returns its id (base64). */
-export function ensureUserGroup(opts?: { create?: boolean; adoptGroupId?: string; waitForSync?: boolean }): Promise<{ userGroupId: string | null }> {
-  return khRequest('kh-ensure-user-group', { create: opts?.create, adoptGroupId: opts?.adoptGroupId, waitForSync: opts?.waitForSync });
+export async function ensureUserGroup(opts?: { create?: boolean; adoptGroupId?: string; waitForSync?: boolean }): Promise<{ userGroupId: string | null }> {
+  const res = await khRequest<{ userGroupId: string | null }>('kh-ensure-user-group', { create: opts?.create, adoptGroupId: opts?.adoptGroupId, waitForSync: opts?.waitForSync });
+  if (res.userGroupId) _workerUserGroupId = res.userGroupId;
+  return res;
 }
 
 /** Link another device into this user's group (converges groups, adds the peer if admin). */

@@ -3,7 +3,7 @@ import { subscribeQuery, updateDoc } from '../worker-api';
 import type { PeerState } from '../shared/automerge';
 import { peerColor, initPresence, type PresenceState } from '../shared/presence';
 import { EditorTitleBar } from '../shared/EditorTitleBar';
-import type { PeerFieldInfo } from '../shared/presence';
+import { peerDisplayName, type PeerFieldInfo } from '../shared/presence';
 import { useGridCommands, commitReorder, commitAutofill, type GridCommandState, type GridCommandContext } from './commands';
 import { CommandMenuBar, CommandToolbar, CommandContextMenuContent } from './CommandBar';
 import { CommandSearch } from './CommandSearch';
@@ -989,7 +989,10 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
       const row = visibleRowIds.indexOf(rowId);
       if (col >= 0 && row >= 0) {
         const key = `${col}:${row}`;
-        if (!map[key]) map[key] = { color: peerColor(peer.peerId), peerId: peer.peerId };
+        if (!map[key]) {
+          const userGroupId = peer.value?.userGroupId;
+          map[key] = { color: peerColor(peer.peerId, userGroupId), peerId: peer.peerId, userGroupId };
+        }
       }
     }
     return map;
@@ -1645,7 +1648,7 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
                             key={colId}
                             className={'datagrid-cell' + (isSelected && !refInfo && !isEditing ? ' selected' : '') + (inRange && isMultiSelect ? ' in-range' : '') + (inAutofillTarget ? ' autofill-target' : '') + (isRowSelected || selectedCols.has(ci) ? ' header-selected' : '') + (peers ? ' peer-focused' : '') + (refInfo ? ' formula-ref-highlight' : '') + (isMcSource ? ' dist-source' : mcStats ? ' dist-dependent' : '') + (spillTargetsRef.current.has(`${effectiveSheetId}:${rowId}:${colId}`) ? ' spill-target' : '') + (isEvaluating ? ' evaluating' : '') + frozenClass}
                             style={Object.keys(cellStyle).length > 0 ? cellStyle : undefined}
-                            title={mcStats ? `μ=${mcStats.mean.toFixed(2)} σ=${mcStats.stdev.toFixed(2)} [P5=${mcStats.p5.toFixed(2)}, P95=${mcStats.p95.toFixed(2)}]` : peers ? `Peer ${peers.peerId.slice(0, 8)}` : undefined}
+                            title={mcStats ? `μ=${mcStats.mean.toFixed(2)} σ=${mcStats.stdev.toFixed(2)} [P5=${mcStats.p5.toFixed(2)}, P95=${mcStats.p95.toFixed(2)}]` : peers ? `${peerDisplayName(peers.peerId, peers.userGroupId)} is editing` : undefined}
                             data-cell-col={ci}
                             data-cell-row={ri}
                             onMouseDown={(e: any) => {

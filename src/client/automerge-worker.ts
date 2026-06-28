@@ -1493,7 +1493,16 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
           presence.start({ initialState: {}, heartbeatMs: 5000, peerTtlMs: 15000 });
           entry.presence = presence;
           entry.presenceDoc = doc;
-          entry.presenceDesired = { viewing: true, focusedField: null };
+          // Advertise our user-group id so peers can resolve us to a contact name and
+          // collapse our devices into one identity. Broadcast as its own encrypted
+          // channel by flushPresenceOut below. Omitted if no group exists yet (fresh
+          // install) — viewing a shared doc generally implies group membership.
+          const userGroupId = await khOps?.getUserGroupId();
+          entry.presenceDesired = {
+            viewing: true,
+            focusedField: null,
+            ...(userGroupId ? { userGroupId } : {}),
+          };
 
           // Decrypt incoming peer states and post them; returns true only if every
           // channel decrypted (false ⇒ key not synced yet ⇒ schedule a retry).

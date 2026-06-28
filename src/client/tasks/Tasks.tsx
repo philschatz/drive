@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'preact/hooks'
 import './tasks.css';
 import { subscribeQuery, updateDoc, deepAssign } from '../worker-api';
 import type { PeerState } from '../shared/automerge';
-import { peerColor, peerDisplayName, initPresence, type PresenceState } from '../shared/presence';
+import { peerColor, peerDisplayName, initPresence, type PresenceState, type PeerFieldInfo } from '../shared/presence';
 import { EditorTitleBar } from '../shared/EditorTitleBar';
 import { useDocumentHistory } from '../shared/useDocumentHistory';
 import { useAccess } from '../shared/useAccess';
@@ -162,7 +162,7 @@ export function Tasks({ docId, rest, readOnly }: { docId?: string; rest?: string
   }, [editorState, focusPath, docId]);
 
   const peerFocusedFields = useMemo(() => {
-    const result: Record<string, { color: string; peerId: string }> = {};
+    const result: Record<string, PeerFieldInfo> = {};
     if (!editorState) return result;
     for (const peer of Object.values(peerStates)) {
       const pf = peer.value?.focusedField;
@@ -171,7 +171,8 @@ export function Tasks({ docId, rest, readOnly }: { docId?: string; rest?: string
       const prop = pf[2] as string;
       const inputIds = PATH_PROP_TO_FIELDS[prop];
       if (inputIds) {
-        const info = { color: peerColor(peer.peerId), peerId: peer.peerId };
+        const userGroupId = peer.value?.userGroupId;
+        const info = { color: peerColor(peer.peerId, userGroupId), peerId: peer.peerId, userGroupId };
         for (const id of inputIds) result[id] = info;
       }
     }
@@ -236,11 +237,12 @@ export function Tasks({ docId, rest, readOnly }: { docId?: string; rest?: string
 
   const peerList = Object.values(peerStates).filter(p => p.value?.viewing);
   const peerEditingTasks = useMemo(() => {
-    const result: Record<string, { color: string; peerId: string }> = {};
+    const result: Record<string, PeerFieldInfo> = {};
     for (const peer of Object.values(peerStates)) {
       const pf = peer.value?.focusedField;
       if (pf && pf[0] === 'tasks' && pf[1]) {
-        result[pf[1] as string] = { color: peerColor(peer.peerId), peerId: peer.peerId };
+        const userGroupId = peer.value?.userGroupId;
+        result[pf[1] as string] = { color: peerColor(peer.peerId, userGroupId), peerId: peer.peerId, userGroupId };
       }
     }
     return result;
@@ -266,7 +268,7 @@ export function Tasks({ docId, rest, readOnly }: { docId?: string; rest?: string
         }}
         docId={docId}
         peers={peerList}
-        peerTitle={(peer) => `${peerDisplayName(peer.peerId)}${peer.value?.focusedField ? ' (editing)' : ''}`}
+        peerTitle={(peer) => `${peerDisplayName(peer.peerId, peer.value?.userGroupId)}${peer.value?.focusedField ? ' (editing)' : ''}`}
         onToggleHistory={history.toggleHistory}
         historyActive={history.active}
         onToggleValidation={() => setShowValidation(v => !v)}

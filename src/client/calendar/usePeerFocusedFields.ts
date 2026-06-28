@@ -1,14 +1,14 @@
 import { useMemo } from 'preact/hooks';
 import type { PeerState } from '../shared/automerge';
-import { peerColor, type PresenceState } from '../shared/presence';
+import { peerColor, type PresenceState, type PeerFieldInfo } from '../shared/presence';
 import { PATH_PROP_TO_FIELDS, type EditorState } from './calendar-utils';
 
 export function usePeerFocusedFields(
   peerStates: Record<string, PeerState<PresenceState>>,
   editorState: EditorState | null,
-): Record<string, { color: string; peerId: string }> {
+): Record<string, PeerFieldInfo> {
   return useMemo(() => {
-    const result: Record<string, { color: string; peerId: string }> = {};
+    const result: Record<string, PeerFieldInfo> = {};
     if (!editorState) return result;
     for (const peer of Object.values(peerStates)) {
       const pf = peer.value?.focusedField;
@@ -17,7 +17,8 @@ export function usePeerFocusedFields(
       const prop = pf[2] as string;
       const inputIds = PATH_PROP_TO_FIELDS[prop];
       if (inputIds) {
-        const info = { color: peerColor(peer.peerId), peerId: peer.peerId };
+        const userGroupId = peer.value?.userGroupId;
+        const info = { color: peerColor(peer.peerId, userGroupId), peerId: peer.peerId, userGroupId };
         for (const id of inputIds) result[id] = info;
       }
     }

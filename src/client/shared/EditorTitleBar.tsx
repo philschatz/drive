@@ -1,11 +1,14 @@
 import type { ComponentChildren } from 'preact';
 import { useWsStatus, usePeerTransports, getWorkerPeerId } from './automerge';
-import { peerDisplayName, PeerDot } from './presence';
+import { getWorkerUserGroupId } from '../worker-api';
+import { peerDisplayName, peerIdentityKey, PeerDot, type PresenceState } from './presence';
 import { AccessControl } from '../components/AccessControl';
 import { useAccess } from './useAccess';
 
 interface PeerLike {
   peerId: string;
+  /** Decrypted presence value, if any — carries the peer's user-group id. */
+  value?: PresenceState | null;
 }
 
 export function EditorTitleBar<P extends PeerLike>({
@@ -85,17 +88,33 @@ export function EditorTitleBar<P extends PeerLike>({
 
       {/* Right side */}
       <div className="flex items-center gap-1 sm:gap-1.5 ml-auto shrink-0">
-        {/* Peer dots — clipped to ~4 dots on narrow screens */}
+        {/* Peer dots — clipped to ~4 dots on narrow screens. Devices of the same user
+            collapse to a single dot (keyed by user-group id); all of the local user's
+            own devices are hidden, not just the current one. */}
         <div className="flex items-center gap-1 max-w-[72px] sm:max-w-none overflow-hidden">
-          {peers.filter(p => p.peerId !== getWorkerPeerId()).map(peer => (
-            <PeerDot
-              key={peer.peerId}
-              peerId={peer.peerId}
-              direct={transports[peer.peerId] === 'direct'}
-              label={peerTitle ? peerTitle(peer) : peerDisplayName(peer.peerId)}
-              sizeClass="w-3 h-3"
-            />
-          ))}
+          {(() => {
+            const myPeerId = getWorkerPeerId();
+            const myGroup = getWorkerUserGroupId();
+            const seen = new Set<string>();
+            return peers.filter(peer => {
+              if (peer.peerId === myPeerId) return false;
+              const ug = peer.value?.userGroupId;
+              if (myGroup && ug === myGroup) return false; // another of my own devices
+              const id = peerIdentityKey(peer.peerId, ug);
+              if (seen.has(id)) return false; // collapse a user's devices to one dot
+              seen.add(id);
+              return true;
+            }).map(peer => (
+              <PeerDot
+                key={peerIdentityKey(peer.peerId, peer.value?.userGroupId)}
+                peerId={peer.peerId}
+                userGroupId={peer.value?.userGroupId}
+                direct={transports[peer.peerId] === 'direct'}
+                label={peerTitle ? peerTitle(peer) : peerDisplayName(peer.peerId, peer.value?.userGroupId)}
+                sizeClass="w-3 h-3"
+              />
+            ));
+          })()}
         </div>
 
         <span

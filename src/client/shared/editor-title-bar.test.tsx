@@ -11,7 +11,12 @@ jest.mock('./automerge', () => ({
 jest.mock('./presence', () => ({
   peerColor: (id: string) => `#${id.slice(0, 6)}`,
   peerDisplayName: (id: string) => `Peer ${id.slice(0, 8)}`,
+  peerIdentityKey: (id: string, ug?: string | null) => ug || id.split('-')[0],
   PeerDot: ({ peerId, label }: any) => <span title={label ?? `Peer ${peerId}`} />,
+}));
+
+jest.mock('../worker-api', () => ({
+  getWorkerUserGroupId: jest.fn(() => null),
 }));
 
 jest.mock('./keyhive-api', () => ({

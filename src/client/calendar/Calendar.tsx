@@ -210,7 +210,7 @@ function CalendarInner({ docId, readOnly, initialEventId }: { docId: string; rea
         }}
         docId={docId}
         peers={peerList}
-        peerTitle={(peer) => `${peerDisplayName(peer.peerId)}${peer.value?.focusedField ? ' (editing)' : ''}`}
+        peerTitle={(peer) => `${peerDisplayName(peer.peerId, peer.value?.userGroupId)}${peer.value?.focusedField ? ' (editing)' : ''}`}
         onToggleHistory={history.toggleHistory}
         historyActive={history.active}
         onToggleValidation={() => setShowValidation(v => !v)}

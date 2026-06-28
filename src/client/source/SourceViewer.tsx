@@ -196,11 +196,12 @@ export function SourceViewer({ docId, rest }: { docId?: string; rest?: string; p
   }, [addLogEntry]);
 
   const peerFocusedPaths = useMemo(() => {
-    const result: Array<{ path: Path; color: string; peerId: string }> = [];
+    const result: Array<{ path: Path; color: string; peerId: string; userGroupId?: string }> = [];
     for (const peer of Object.values(peerStates)) {
       const pf = peer.value?.focusedField;
       if (pf && pf.length > 0) {
-        result.push({ path: pf, color: peerColor(peer.peerId), peerId: peer.peerId });
+        const userGroupId = peer.value?.userGroupId;
+        result.push({ path: pf, color: peerColor(peer.peerId, userGroupId), peerId: peer.peerId, userGroupId });
       }
     }
     return result;
@@ -413,7 +414,7 @@ export function SourceViewer({ docId, rest }: { docId?: string; rest?: string; p
         }}
         docId={docId}
         peers={peerList}
-        peerTitle={(peer) => `${peerDisplayName(peer.peerId)}${peer.value?.focusedField ? ' (editing)' : ''}`}
+        peerTitle={(peer) => `${peerDisplayName(peer.peerId, peer.value?.userGroupId)}${peer.value?.focusedField ? ' (editing)' : ''}`}
         showSourceLink={false}
 
       >

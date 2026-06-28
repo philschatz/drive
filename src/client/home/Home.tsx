@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'preact/hooks'
 import { useConnectionStatus, usePeerList, usePeerTransports } from '../shared/automerge';
 import { createDoc, updateDoc, subscribeQuery, fetchDocList, removeDocId, onDocListUpdated, HOME_SUMMARY_QUERY } from '../worker-api';
 import { getMyAccess, onKeyhiveStateChanged } from '../shared/keyhive-api';
-import { peerDisplayName, PeerDot } from '../shared/presence';
+import { PeerDot } from '../shared/presence';
 import { Button } from '@/components/ui/button';
 import { Alert } from '@/components/ui/alert';
 import { DeleteButton } from '@/components/ui/delete-button';
@@ -26,7 +26,6 @@ interface DocEntry {
   count: number | null;
   lastUpdated: string | null;
   loading: boolean;
-  peers: string[];
   /** null = no access / revoked, undefined = not yet checked */
   access?: string | null;
 }
@@ -79,7 +78,6 @@ export function Home({ path }: { path?: string }) {
               count: null,
               lastUpdated: null,
               loading: true,
-              peers: [],
             },
         );
       });
@@ -850,14 +848,6 @@ export function Home({ path }: { path?: string }) {
               <span className="material-symbols-outlined" style={{ width: '1.2rem', textAlign: 'center', color: '#666' }}>{icon}</span>
               <a href={viewPath} className="text-sm flex-1 hover:underline flex items-center gap-1" style={noEntryAccess ? { textDecoration: 'line-through', opacity: 0.6 } : undefined}>
                 {entry.name || 'Untitled'}
-                {entry.peers.map(peerId => (
-                  <PeerDot
-                    key={peerId}
-                    peerId={peerId}
-                    direct={transports[peerId] === 'direct'}
-                    label={`${peerDisplayName(peerId)} is viewing`}
-                  />
-                ))}
               </a>
               {entry.loading ? (
                 <Progress className="w-16" value={0} title="Loading..." />

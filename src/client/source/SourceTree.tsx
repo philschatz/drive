@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'preact/hooks';
 
 import type { ValidationError } from '../../shared/schemas';
+import { peerDisplayName } from '../shared/presence';
 
 type Path = (string | number)[];
 
@@ -8,6 +9,8 @@ interface PeerFocus {
   path: Path;
   color: string;
   peerId: string;
+  /** User-group id of the peer, if advertised — resolves a contact display name. */
+  userGroupId?: string;
 }
 
 interface SourceTreeProps {
@@ -267,7 +270,7 @@ function SourceNode({ name, value, path, depth, editable, onEdit, onDelete, onAd
             <span className="source-bracket">{bracket[0]}</span>
           )}
           {exactFocusPeers.map((p, i) => (
-            <span key={i} className="source-peer-dot" style={{ backgroundColor: p.color }} title={`Peer ${p.peerId.slice(0, 8)} is editing`} />
+            <span key={i} className="source-peer-dot" style={{ backgroundColor: p.color }} title={`${peerDisplayName(p.peerId, p.userGroupId)} is editing`} />
           ))}
           {editable && (
             <span className="source-actions">
@@ -357,7 +360,7 @@ function SourceNode({ name, value, path, depth, editable, onEdit, onDelete, onAd
           </span>
         )}
         {exactFocusPeers.map((p, i) => (
-          <span key={i} className="source-peer-dot" style={{ backgroundColor: p.color }} title={`Peer ${p.peerId.slice(0, 8)} is editing`} />
+          <span key={i} className="source-peer-dot" style={{ backgroundColor: p.color }} title={`${peerDisplayName(p.peerId, p.userGroupId)} is editing`} />
         ))}
         {editable && !editing && (
           <span className="source-actions">
