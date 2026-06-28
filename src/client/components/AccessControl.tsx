@@ -223,8 +223,7 @@ export function AccessControl({ docId, access: accessProp }: AccessControlProps)
               <h3 className="text-sm font-medium mb-2">Share with a contact</h3>
               {contacts.length === 0 ? (
                 <p className="text-xs text-muted-foreground mb-3">
-                  You have no contacts yet. <a href="#/settings" className="underline">Add a friend</a> first,
-                  then you can share documents with them.
+                  <a href="#/add-friend" className="underline">Add a friend</a>
                 </p>
               ) : (
                 <div className="flex items-center gap-2 mb-3">

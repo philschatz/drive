@@ -5,25 +5,20 @@
 import { useState, useEffect, useCallback } from 'preact/hooks';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Alert } from '@/components/ui/alert';
-import { DeleteButton } from '@/components/ui/delete-button';
+import { DeviceList } from '@/components/DeviceList';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import {
   getIdentity,
-  listDevices,
-  removeDevice,
   ensureUserGroup,
-  onKeyhiveStateChanged,
-  onRendezvousEvent,
   type IdentityInfo,
-  type DeviceInfo,
 } from '../shared/keyhive-api';
+import { useDevices } from '../shared/use-devices';
 import { setCacheDisabled, clearAllCaches, deleteAllData } from '../worker-api';
 import { idbGet, idbSet, isCacheDisabled } from '../idb-storage';
 import { getContactName, setContactName } from '../contact-names';
 export function Settings({ path }: { path?: string }) {
   const [identity, setIdentity] = useState<IdentityInfo | null>(null);
-  const [devices, setDevices] = useState<DeviceInfo[]>([]);
   const [displayName, setDisplayName] = useState('');
   // The last persisted name, to skip no-op saves (e.g. a blur with no change, which
   // would otherwise create a user group from an accidental focus).
@@ -35,18 +30,17 @@ export function Settings({ path }: { path?: string }) {
   const [loading, setLoading] = useState(true);
   const [cacheDisabled] = useState(isCacheDisabled());
 
+  // The device list, its live refresh, and removal are owned by the shared hook.
+  const { devices, removeDevice } = useDevices({ onError: setError, onMessage: setMessage });
+
   const refresh = useCallback(async () => {
     try {
-      const [id, devs] = await Promise.all([
-        getIdentity(),
-        listDevices(),
-      ]);
+      const id = await getIdentity();
       setIdentity(id);
       // Your name is stored as a User Group contact (keyed by user-group id), not by device.
       const name = (id.userGroupId && getContactName(id.userGroupId)) || '';
       setDisplayName(name);
       setSavedName(name);
-      setDevices(devs);
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -55,15 +49,6 @@ export function Settings({ path }: { path?: string }) {
   }, []);
 
   useEffect(() => { refresh(); }, [refresh]);
-
-  // Keep the device list current when a link completes. On the sharer device the
-  // 'linked' rendezvous event fires the moment the new device finishes; on either
-  // device a keyhive state change (membership synced via the relay) also refreshes.
-  useEffect(() => {
-    const offRdv = onRendezvousEvent((e) => { if (e.status === 'linked') refresh(); });
-    const offState = onKeyhiveStateChanged(() => refresh());
-    return () => { offRdv(); offState(); };
-  }, [refresh]);
 
   // Save your name as a User Group contact, creating the user group if it doesn't
   // exist yet (so the name has a stable, share-able identity to attach to).
@@ -83,17 +68,6 @@ export function Settings({ path }: { path?: string }) {
       setSavingName(false);
     }
   };
-
-  const handleRemoveDevice = async (agentId: string) => {
-    try {
-      await removeDevice(agentId);
-      setMessage('Device removed.');
-      await refresh();
-    } catch (err: any) {
-      setError('Failed to remove device: ' + err.message);
-    }
-  };
-
 
   const handleToggleCacheDisabled = async (v: boolean) => {
     try {
@@ -274,34 +248,7 @@ export function Settings({ path }: { path?: string }) {
       {/* Devices */}
       <section className="mb-6">
         <h2 className="text-lg font-semibold mb-2">Devices</h2>
-        <p className="text-xs text-muted-foreground mb-2">
-          Each device has its own cryptographic key. Add devices so you can reach your documents from your phone, laptop, or tablet.
-        </p>
-        {devices.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No linked devices.</p>
-        ) : (
-          <div className="space-y-1">
-            {devices.map((dev, i) => (
-              <div key={i} className="flex items-center gap-2 py-1 border-b border-border">
-                <span className="material-symbols-outlined text-muted-foreground" style={{ fontSize: 16 }}>
-                  {dev.isMe ? 'smartphone' : 'devices'}
-                </span>
-                <span className="text-sm flex-1 truncate font-mono" title={dev.agentId}>
-                  {dev.agentId.slice(0, 16)}...
-                </span>
-                <span className="text-xs text-muted-foreground capitalize">{dev.role}</span>
-                {dev.isMe && <span className="text-xs bg-primary/10 text-primary px-1 rounded">This device</span>}
-                {!dev.isMe && (
-                  <DeleteButton
-                    tooltip="Remove device"
-                    confirmMessage={`Remove device ${dev.agentId.slice(0, 16)}…?`}
-                    onConfirm={() => handleRemoveDevice(dev.agentId)}
-                  />
-                )}
-              </div>
-            ))}
-          </div>
-        )}
+        <DeviceList devices={devices} onRemove={removeDevice} />
 
         {/* Link another device — full flow on its own page */}
         <div className="mt-4">

@@ -1317,17 +1317,42 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
     }
   }
 
-  // --- Presence temporarily disabled ---
   if (msg.type === 'subscribe-presence') {
-    // no-op
+    try {
+      const handle = await getOrLoadHandle(msg.docId);
+      const entry = getOrCreateEntry(msg.docId, handle);
+      if (!entry.presence) {
+        const presence = new PresenceClass({ handle });
+        presence.start({ initialState: { viewing: true, focusedField: null }, heartbeatMs: 5000, peerTtlMs: 15000 });
+        const sendPresence = () => {
+          const peers = { ...presence.getPeerStates().value };
+          (self as any).postMessage({ type: 'update-presence', docId: msg.docId, peers } satisfies WorkerToMain);
+        };
+        presence.on('update', sendPresence);
+        presence.on('goodbye', sendPresence);
+        presence.on('snapshot', sendPresence);
+        entry.presence = presence;
+      }
+    } catch (err: any) {
+      console.warn('[worker] presence-subscribe failed:', errMsg(err));
+    }
   }
 
   if (msg.type === 'unsubscribe-presence') {
-    // no-op
+    const entry = docRegistry.get(msg.docId);
+    if (entry?.presence) {
+      entry.presence.stop();
+      entry.presence = null;
+    }
   }
 
   if (msg.type === 'set-presence') {
-    // no-op
+    const entry = docRegistry.get(msg.docId);
+    if (entry?.presence) {
+      for (const [key, value] of Object.entries(msg.state)) {
+        entry.presence.broadcast(key, value);
+      }
+    }
   }
 
   // --- Doc list mutations (IDB-backed) ---

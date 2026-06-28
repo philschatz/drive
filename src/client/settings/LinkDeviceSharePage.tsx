@@ -6,54 +6,22 @@
  * this user. The new device opens the link (the receiver `LinkDevicePage`) to finish.
  */
 
-import { useState, useEffect, useCallback } from 'preact/hooks';
+import { useState } from 'preact/hooks';
 import { Button } from '@/components/ui/button';
 import { Alert } from '@/components/ui/alert';
-import { DeleteButton } from '@/components/ui/delete-button';
-import {
-  listDevices,
-  removeDevice,
-  rendezvousCreateDeviceLink,
-  onKeyhiveStateChanged,
-  onRendezvousEvent,
-  type DeviceInfo,
-} from '../shared/keyhive-api';
+import { DeviceList } from '@/components/DeviceList';
+import { useDevices } from '../shared/use-devices';
+import { rendezvousCreateDeviceLink } from '../shared/keyhive-api';
 import { RendezvousShare } from './RendezvousShare';
 import { buildLinkDeviceRendezvousUrl } from './LinkDevicePage';
 
 export function LinkDeviceSharePage({ path }: { path?: string }) {
-  const [devices, setDevices] = useState<DeviceInfo[]>([]);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   // Bump to (re)mount RendezvousShare; >0 means the share has been started.
   const [started, setStarted] = useState(0);
 
-  const refresh = useCallback(async () => {
-    try {
-      setDevices(await listDevices());
-    } catch (err: any) {
-      setError(err.message);
-    }
-  }, []);
-
-  useEffect(() => { refresh(); }, [refresh]);
-
-  // Refresh the device list when a link completes or membership syncs over the relay.
-  useEffect(() => {
-    const offRdv = onRendezvousEvent((e) => { if (e.status === 'linked') refresh(); });
-    const offState = onKeyhiveStateChanged(() => refresh());
-    return () => { offRdv(); offState(); };
-  }, [refresh]);
-
-  const handleRemoveDevice = async (agentId: string) => {
-    try {
-      await removeDevice(agentId);
-      setMessage('Device removed.');
-      await refresh();
-    } catch (err: any) {
-      setError('Failed to remove device: ' + err.message);
-    }
-  };
+  const { devices, removeDevice } = useDevices({ onError: setError, onMessage: setMessage });
 
   return (
     <div className="max-w-screen-md mx-auto p-4">
@@ -80,35 +48,7 @@ export function LinkDeviceSharePage({ path }: { path?: string }) {
         </Alert>
       )}
 
-      <p className="text-xs text-muted-foreground mb-2">
-        Each device has its own cryptographic key. Add devices so you can reach your documents from your phone, laptop, or tablet.
-      </p>
-
-      {devices.length === 0 ? (
-        <p className="text-sm text-muted-foreground">No linked devices.</p>
-      ) : (
-        <div className="space-y-1">
-          {devices.map((dev, i) => (
-            <div key={i} className="flex items-center gap-2 py-1 border-b border-border">
-              <span className="material-symbols-outlined text-muted-foreground" style={{ fontSize: 16 }}>
-                {dev.isMe ? 'smartphone' : 'devices'}
-              </span>
-              <span className="text-sm flex-1 truncate font-mono" title={dev.agentId}>
-                {dev.agentId.slice(0, 16)}...
-              </span>
-              <span className="text-xs text-muted-foreground capitalize">{dev.role}</span>
-              {dev.isMe && <span className="text-xs bg-primary/10 text-primary px-1 rounded">This device</span>}
-              {!dev.isMe && (
-                <DeleteButton
-                  tooltip="Remove device"
-                  confirmMessage={`Remove device ${dev.agentId.slice(0, 16)}…?`}
-                  onConfirm={() => handleRemoveDevice(dev.agentId)}
-                />
-              )}
-            </div>
-          ))}
-        </div>
-      )}
+      <DeviceList devices={devices} onRemove={removeDevice} />
 
       <div className="mt-4">
         <h2 className="text-lg font-semibold mb-2">Invite Another Device</h2>

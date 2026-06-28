@@ -36,7 +36,7 @@
       "name": "Playwright Tests",
       "type": "node",
       "request": "launch",
-      "runtimeArgs": ["${workspaceFolder}/node_modules/.bin/playwright", "test"],
+      "runtimeArgs": ["${workspaceFolder}/node_modules/.bin/playwright", "test", "--ui"],
       "console": "integratedTerminal",
       "skipFiles": ["<node_internals>/**"]
     },
@@ -47,7 +47,8 @@
       "runtimeArgs": [
         "${workspaceFolder}/node_modules/.bin/playwright",
         "test",
-        "${relativeFile}"
+        "${relativeFile}",
+        "--ui"
       ],
       "console": "integratedTerminal",
       "skipFiles": ["<node_internals>/**"]
