@@ -72,6 +72,7 @@
     "express": "^5.2.1",
     "hyperformula": "^3.2.0",
     "ical.js": "^2.1.0",
+    "jsqr": "^1.4.0",
     "lucide-react": "^1.21.0",
     "material-symbols": "^0.45.4",
     "multer": "^2.0.2",
