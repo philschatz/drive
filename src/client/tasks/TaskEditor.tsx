@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
-import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
+import { Select, SelectTrigger, SelectContent, SelectItem } from '@/components/ui/select';
 import type { Task } from './schema';
 import { PresenceDot } from '../shared/presence';
 import type { PeerFieldInfo } from '../shared/presence';
@@ -138,9 +138,7 @@ export function TaskEditor({ uid, task, isNew, opened, onSave, onDelete, onClose
               <SelectTrigger
                 onFocus={() => focusField('ted-progress')}
                 onBlur={blurField}
-              >
-                <SelectValue />
-              </SelectTrigger>
+              />
               <SelectContent>
                 {PROGRESS_OPTIONS.map(o => (
                   <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>

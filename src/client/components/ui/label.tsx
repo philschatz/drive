@@ -1,21 +1,20 @@
-import * as LabelPrimitive from "@radix-ui/react-label";
-import { cva, type VariantProps } from "class-variance-authority";
-import { cn } from "@/lib/utils";
+import { Text } from "@radix-ui/themes";
 
-const labelVariants = cva(
-  "text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70"
-);
+/**
+ * Adapter rendering a styled <label> via @radix-ui/themes Text.
+ */
 
-function Label({
-  className,
-  ...props
-}: React.ComponentPropsWithoutRef<typeof LabelPrimitive.Root> &
-  VariantProps<typeof labelVariants>) {
+export interface LabelProps {
+  className?: string;
+  children?: any;
+  [key: string]: any;
+}
+
+function Label({ className, children, ...props }: LabelProps) {
   return (
-    <LabelPrimitive.Root
-      className={cn(labelVariants(), className)}
-      {...props}
-    />
+    <Text as="label" size="2" weight="medium" className={className} {...props}>
+      {children}
+    </Text>
   );
 }
 

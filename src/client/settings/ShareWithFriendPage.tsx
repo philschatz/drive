@@ -8,6 +8,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'preact/hooks';
+import { Icon } from '@/components/ui/icon';
 import { Button } from '@/components/ui/button';
 import { Alert } from '@/components/ui/alert';
 import { getIdentity, ensureUserGroup, rendezvousCreateShare } from '../shared/keyhive-api';
@@ -51,7 +52,7 @@ export function ShareWithFriendPage({ path }: { path?: string }) {
           href="#/"
           className="inline-flex items-center justify-center h-9 w-9 rounded-md hover:bg-accent hover:text-accent-foreground"
         >
-          <span className="material-symbols-outlined">arrow_back</span>
+          <Icon name="arrow_back" />
         </a>
         <h1 className="text-2xl font-bold">Add a Friend</h1>
       </div>

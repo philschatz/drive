@@ -1,30 +1,45 @@
+@import "@radix-ui/themes/styles.css";
 @import "tailwindcss";
-@import "material-symbols/outlined.css";
 @source "./shared";
 
 @custom-variant dark (&:is(.dark *));
 
+/* The app's color tokens are the @radix-ui/themes light palette, captured as
+   literals (gray = neutral, blue accent = brand, red = destructive). Tailwind v4
+   only emits utilities for tokens with concrete color values, so these can't be
+   var() aliases — but the values are taken directly from Themes (accent-9,
+   gray-12, red-9, etc.), so every existing color utility renders in the Themes
+   palette, matching the Themes components. The app is hardcoded to
+   appearance light; revisit if a dark mode is added. */
 @theme {
-  --color-background: hsl(0 0% 100%);
-  --color-foreground: hsl(0 0% 3.9%);
-  --color-card: hsl(0 0% 100%);
-  --color-card-foreground: hsl(0 0% 3.9%);
-  --color-popover: hsl(0 0% 100%);
-  --color-popover-foreground: hsl(0 0% 3.9%);
-  --color-primary: hsl(0 0% 9%);
-  --color-primary-foreground: hsl(0 0% 98%);
-  --color-secondary: hsl(0 0% 96.1%);
-  --color-secondary-foreground: hsl(0 0% 9%);
-  --color-muted: hsl(0 0% 96.1%);
-  --color-muted-foreground: hsl(0 0% 45.1%);
-  --color-accent: hsl(0 0% 96.1%);
-  --color-accent-foreground: hsl(0 0% 9%);
-  --color-destructive: hsl(0 84.2% 60.2%);
-  --color-destructive-foreground: hsl(0 0% 98%);
-  --color-border: hsl(0 0% 89.8%);
-  --color-input: hsl(0 0% 89.8%);
-  --color-ring: hsl(0 0% 3.9%);
+  --color-background: white;            /* Themes --color-background */
+  --color-foreground: #202020;          /* gray-12 */
+  --color-card: white;                  /* panel-solid */
+  --color-card-foreground: #202020;     /* gray-12 */
+  --color-popover: white;               /* panel-solid */
+  --color-popover-foreground: #202020;  /* gray-12 */
+  --color-primary: #0090ff;             /* accent-9 */
+  --color-primary-foreground: white;    /* accent-contrast */
+  --color-secondary: #f0f0f0;           /* gray-3 */
+  --color-secondary-foreground: #202020;/* gray-12 */
+  --color-muted: #f0f0f0;               /* gray-3 */
+  --color-muted-foreground: #646464;    /* gray-11 */
+  --color-accent: #e8e8e8;              /* gray-4 (hover surface) */
+  --color-accent-foreground: #202020;   /* gray-12 */
+  --color-destructive: #e5484d;         /* red-9 */
+  --color-destructive-foreground: white;/* red-contrast */
+  --color-border: #d9d9d9;              /* gray-6 */
+  --color-input: #d9d9d9;               /* gray-6 */
+  --color-ring: #5eb1ef;                /* accent-8 */
   --radius: 0.5rem;
+}
+
+/* Radix Themes popovers (Select, DropdownMenu, Popover, Tooltip, HoverCard) rely
+   on DOM stacking order rather than a high z-index. The custom Sheet drawer sits
+   at z-[200], so without this its panel paints over any popover opened inside it.
+   Lift all Themes popper content above the Sheet. */
+.rt-PopperContent {
+  z-index: 250;
 }
 
 @keyframes slideIn {
@@ -42,19 +57,12 @@
 
 @layer base {
   * {
-    @apply border-border;
+    border-color: var(--color-border);
   }
   body {
-    @apply bg-background text-foreground;
+    background-color: var(--color-background);
+    color: var(--color-foreground);
     margin: 0;
     padding: 0 !important;
-  }
-  .material-symbols-outlined {
-    font-size: 18px;
-    line-height: 1;
-    vertical-align: middle;
-  }
-  .material-symbols-outlined.icon-filled {
-    font-variation-settings: 'FILL' 1;
   }
 }

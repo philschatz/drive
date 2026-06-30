@@ -1,6 +1,7 @@
 import { useEffect, useRef, useCallback, useContext } from 'preact/hooks';
 import { createPortal } from 'preact/compat';
 import { createContext } from 'preact';
+import { Theme } from '@radix-ui/themes';
 import { cn } from "@/lib/utils";
 
 const SheetCtx = createContext<{ onClose: () => void }>({ onClose: () => {} });
@@ -27,10 +28,15 @@ function Sheet({ open, onOpenChange, children }: SheetProps) {
 
   if (!open) return null;
 
+  // The portal renders to document.body, OUTSIDE the app's <Theme> root, so any
+  // @radix-ui/themes components inside the Sheet (and their own portals, e.g.
+  // Select.Content) would render unthemed/unstyled. Re-establish the Theme here.
   return createPortal(
-    <SheetCtx.Provider value={{ onClose: handleClose }}>
-      {children}
-    </SheetCtx.Provider>,
+    <Theme appearance="light" accentColor="blue" grayColor="gray" radius="medium">
+      <SheetCtx.Provider value={{ onClose: handleClose }}>
+        {children}
+      </SheetCtx.Provider>
+    </Theme>,
     document.body,
   );
 }

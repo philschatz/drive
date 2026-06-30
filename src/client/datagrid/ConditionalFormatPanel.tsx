@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback } from 'preact/hooks';
+import { Icon } from '@/components/ui/icon';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
-  Select, SelectTrigger, SelectValue, SelectContent, SelectItem,
+  Select, SelectTrigger, SelectContent, SelectItem,
 } from '@/components/ui/select';
 import { colIndexToLetter, shortId } from './helpers';
 import type { ConditionalFormatRule, ConditionalFormatRange, DataGridCellFormat } from './schema';
@@ -287,9 +288,7 @@ export function ConditionalFormatPanel({
             <div>
               <Label>Condition</Label>
               <Select value={conditionType} onValueChange={setConditionType}>
-                <SelectTrigger className="mt-1">
-                  <SelectValue />
-                </SelectTrigger>
+                <SelectTrigger className="mt-1" />
                 <SelectContent>
                   {CONDITION_TYPES.map(c => (
                     <SelectItem key={c.value} value={c.value}>{c.label}</SelectItem>
@@ -322,7 +321,7 @@ export function ConditionalFormatPanel({
                   className="h-8 w-8"
                   onClick={() => setFmtBold(!fmtBold)}
                 >
-                  <span className="material-symbols-outlined" style={{ fontSize: '1rem' }}>format_bold</span>
+                  <Icon name="format_bold" size="1rem" />
                 </Button>
                 <Button
                   variant={fmtItalic ? 'active' : 'outline'}
@@ -330,7 +329,7 @@ export function ConditionalFormatPanel({
                   className="h-8 w-8"
                   onClick={() => setFmtItalic(!fmtItalic)}
                 >
-                  <span className="material-symbols-outlined" style={{ fontSize: '1rem' }}>format_italic</span>
+                  <Icon name="format_italic" size="1rem" />
                 </Button>
                 <div className="flex items-center gap-1">
                   <span className="text-xs text-muted-foreground">Text:</span>
@@ -408,26 +407,26 @@ export function ConditionalFormatPanel({
                 <div className="flex gap-1">
                   {!isFirst && (
                     <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => moveRule(id, 'up')} title="Move up (lower priority)">
-                      <span className="material-symbols-outlined" style={{ fontSize: '1rem' }}>arrow_upward</span>
+                      <Icon name="arrow_upward" size="1rem" />
                     </Button>
                   )}
                   {!isLast && (
                     <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => moveRule(id, 'down')} title="Move down (higher priority)">
-                      <span className="material-symbols-outlined" style={{ fontSize: '1rem' }}>arrow_downward</span>
+                      <Icon name="arrow_downward" size="1rem" />
                     </Button>
                   )}
                   <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => startEdit(id)}>
-                    <span className="material-symbols-outlined" style={{ fontSize: '1rem' }}>edit</span>
+                    <Icon name="edit" size="1rem" />
                   </Button>
                   <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => deleteRule(id)}>
-                    <span className="material-symbols-outlined" style={{ fontSize: '1rem' }}>delete</span>
+                    <Icon name="delete" size="1rem" />
                   </Button>
                 </div>
               </div>
               );
             })}
             <Button onClick={startNew} size="sm" className="mt-2">
-              <span className="material-symbols-outlined mr-1" style={{ fontSize: '1rem' }}>add</span>
+              <Icon name="add" size="1rem" className="mr-1" />
               Add rule
             </Button>
           </>

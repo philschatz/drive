@@ -1,53 +1,78 @@
 import { forwardRef } from "preact/compat";
-import { cva, type VariantProps } from "class-variance-authority";
-import { cn } from "@/lib/utils";
-import type { JSX } from "preact";
+import { Button as RTButton, IconButton } from "@radix-ui/themes";
 
-const buttonVariants = cva(
-  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 cursor-pointer",
-  {
-    variants: {
-      variant: {
-        default: "bg-primary text-primary-foreground shadow hover:bg-primary/90",
-        destructive: "bg-destructive text-destructive-foreground shadow-sm hover:bg-destructive/90",
-        outline: "border border-input bg-background shadow-sm hover:bg-accent hover:text-accent-foreground",
-        active: "bg-blue-100 text-blue-800 border border-blue-200 shadow-sm hover:bg-blue-200",
-        secondary: "bg-secondary text-secondary-foreground shadow-sm hover:bg-secondary/80",
-        ghost: "hover:bg-gray-200 hover:text-accent-foreground",
-        link: "text-primary underline-offset-4 hover:underline",
-      },
-      size: {
-        default: "h-9 px-4 py-2",
-        sm: "h-8 rounded-md px-3 text-xs",
-        lg: "h-10 rounded-md px-8",
-        icon: "h-9 w-9",
-      },
-    },
-    defaultVariants: {
-      variant: "default",
-      size: "default",
-    },
-  }
-);
+/**
+ * Adapter over @radix-ui/themes Button. Preserves the legacy shadcn-style
+ * `variant`/`size` API so existing call-sites keep working, mapping each to the
+ * Themes variant/color/size system. `size="icon"` renders a Themes IconButton.
+ */
 
-export interface ButtonProps
-  extends JSX.HTMLAttributes<HTMLButtonElement>,
-    VariantProps<typeof buttonVariants> {
-  disabled?: boolean;
-  type?: "button" | "submit" | "reset";
+type Variant =
+  | "default"
+  | "destructive"
+  | "outline"
+  | "active"
+  | "secondary"
+  | "ghost"
+  | "link";
+
+type Size = "default" | "sm" | "lg" | "icon";
+
+const VARIANT: Record<string, { variant: any; color?: any }> = {
+  default: { variant: "solid" },
+  destructive: { variant: "solid", color: "red" },
+  outline: { variant: "outline" },
+  active: { variant: "soft", color: "blue" },
+  secondary: { variant: "soft", color: "gray" },
+  ghost: { variant: "ghost" },
+  link: { variant: "ghost" },
+};
+
+const SIZE: Record<string, "1" | "2" | "3"> = {
+  sm: "1",
+  default: "2",
+  lg: "3",
+};
+
+export interface ButtonProps {
+  variant?: Variant;
+  size?: Size;
+  className?: string;
+  children?: any;
+  [key: string]: any;
 }
 
 const Button = forwardRef<HTMLButtonElement, ButtonProps>(
-  ({ className, variant, size, ...props }, ref) => {
+  ({ variant = "default", size = "default", className, children, ...props }, ref) => {
+    const v = VARIANT[variant] ?? VARIANT.default;
+    if (size === "icon") {
+      return (
+        <IconButton
+          ref={ref as any}
+          variant={v.variant}
+          color={v.color}
+          size="2"
+          className={className}
+          {...props}
+        >
+          {children}
+        </IconButton>
+      );
+    }
     return (
-      <button
-        className={cn(buttonVariants({ variant, size, className: className as string }))}
-        ref={ref}
+      <RTButton
+        ref={ref as any}
+        variant={v.variant}
+        color={v.color}
+        size={SIZE[size] ?? "2"}
+        className={className}
         {...props}
-      />
+      >
+        {children}
+      </RTButton>
     );
   }
 );
 Button.displayName = "Button";
 
-export { Button, buttonVariants };
+export { Button };

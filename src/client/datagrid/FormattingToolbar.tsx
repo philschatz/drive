@@ -1,6 +1,7 @@
 import { Button } from '@/components/ui/button';
+import { Icon } from '@/components/ui/icon';
 import {
-  Select, SelectTrigger, SelectValue, SelectContent, SelectItem,
+  Select, SelectTrigger, SelectContent, SelectItem,
 } from '@/components/ui/select';
 import {
   DropdownMenu, DropdownMenuTrigger, DropdownMenuContent,
@@ -69,9 +70,7 @@ export function FormattingToolbar({ currentFormat, hasSelection, onFormatChange 
         onValueChange={(v: string) => onFormatChange({ fontFamily: v === 'default' ? undefined : v })}
         disabled={!hasSelection}
       >
-        <SelectTrigger className="h-7 w-[120px] text-xs">
-          <SelectValue placeholder="Font" />
-        </SelectTrigger>
+        <SelectTrigger className="h-7 w-[120px] text-xs" placeholder="Font" />
         <SelectContent>
           <SelectItem value="default">Default</SelectItem>
           {FONT_FAMILIES.map(f => (
@@ -86,9 +85,7 @@ export function FormattingToolbar({ currentFormat, hasSelection, onFormatChange 
         onValueChange={(v: string) => onFormatChange({ fontSize: v === 'default' ? undefined : Number(v) })}
         disabled={!hasSelection}
       >
-        <SelectTrigger className="h-7 w-[56px] text-xs">
-          <SelectValue placeholder="Size" />
-        </SelectTrigger>
+        <SelectTrigger className="h-7 w-[56px] text-xs" placeholder="Size" />
         <SelectContent>
           <SelectItem value="default">-</SelectItem>
           {FONT_SIZES.map(s => (
@@ -122,9 +119,7 @@ export function FormattingToolbar({ currentFormat, hasSelection, onFormatChange 
         onValueChange={(v: string) => onFormatChange({ numFmt: v === 'auto' ? undefined : v })}
         disabled={!hasSelection}
       >
-        <SelectTrigger className="h-7 w-[100px] text-xs">
-          <SelectValue placeholder="Format" />
-        </SelectTrigger>
+        <SelectTrigger className="h-7 w-[100px] text-xs" placeholder="Format" />
         <SelectContent>
           {NUMBER_FORMATS.map(f => (
             <SelectItem key={f.value} value={f.value}>{f.label}</SelectItem>
@@ -170,7 +165,7 @@ export function ColorPicker({ value, onChange, onReset, icon, title, disabled, d
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button variant="ghost" size="icon" className="h-7 w-7 relative" disabled={disabled} title={title}>
-          <span className="material-symbols-outlined" style={{ fontSize: '1rem' }}>{icon}</span>
+          <Icon name={icon} size="1rem" />
           <div
             className="absolute bottom-0.5 left-1.5 right-1.5 h-0.5 rounded-sm"
             style={{ background: value || defaultColor }}
@@ -183,7 +178,7 @@ export function ColorPicker({ value, onChange, onReset, icon, title, disabled, d
             className="w-full text-left text-xs px-2 py-1 mb-2 rounded hover:bg-accent cursor-pointer flex items-center gap-1"
             onClick={onReset}
           >
-            <span className="material-symbols-outlined" style={{ fontSize: '0.9rem' }}>format_color_reset</span>
+            <Icon name="format_color_reset" size="0.9rem" />
             No fill
           </button>
         )}
@@ -224,7 +219,7 @@ export function BorderPicker({ onApply, disabled }: {
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button variant="outline" size="icon" className="h-7 w-7" disabled={disabled} title="Borders">
-          <span className="material-symbols-outlined" style={{ fontSize: '1rem' }}>border_all</span>
+          <Icon name="border_all" size="1rem" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent className="p-2 w-auto" align="start">
@@ -236,7 +231,7 @@ export function BorderPicker({ onApply, disabled }: {
               title={preset.label}
               onClick={() => onApply(preset.sides)}
             >
-              <span className="material-symbols-outlined" style={{ fontSize: '1.1rem' }}>{preset.icon}</span>
+              <Icon name={preset.icon} size="1.1rem" />
             </button>
           ))}
         </div>

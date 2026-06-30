@@ -15,9 +15,10 @@ import { hashHistory } from './hash-history';
 import { UpdateBanner } from './components/UpdateBanner';
 import { WorkerErrorBanner } from './components/WorkerErrorBanner';
 import { Toaster } from './components/ui/toast';
+import { Theme } from '@radix-ui/themes';
 export function App() {
   return (
-    <>
+    <Theme appearance="light" accentColor="blue" grayColor="gray" radius="medium">
     <WorkerErrorBanner />
     <UpdateBanner />
     <Toaster />
@@ -45,6 +46,6 @@ export function App() {
       <SourceViewer path="/source/:docId/:rest*" />
       <SourceViewer path="/source/:docId" />
     </Router>
-    </>
+    </Theme>
   );
 }

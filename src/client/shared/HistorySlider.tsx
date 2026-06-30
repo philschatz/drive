@@ -1,4 +1,5 @@
 import { useRef, useEffect } from 'preact/hooks';
+import { Icon } from '@/components/ui/icon';
 import type { DocumentHistory } from './useDocumentHistory';
 
 function formatTime(ts: number): string {
@@ -48,14 +49,14 @@ export function HistorySlider({ history, dismissable = true }: { history: Docume
             onClick={history.jumpToLatest}
             title="Jump to latest"
           >
-            <span className="material-symbols-outlined" style={{ fontSize: 16 }}>fast_forward</span>
+            <Icon name="fast_forward" size={16} />
           </button>
           <button
             className="inline-flex items-center justify-center h-6 w-6 rounded-md hover:bg-accent hover:text-accent-foreground text-muted-foreground"
             onClick={() => { if (confirm('Revert the document to this version? This cannot be undone.')) history.undoToVersion(); }}
             title="Undo to this version"
           >
-            <span className="material-symbols-outlined" style={{ fontSize: 16 }}>undo</span>
+            <Icon name="undo" size={16} />
           </button>
         </>
       )}
@@ -65,7 +66,7 @@ export function HistorySlider({ history, dismissable = true }: { history: Docume
           onClick={history.toggleHistory}
           title="Close history"
         >
-          <span className="material-symbols-outlined" style={{ fontSize: 16 }}>close</span>
+          <Icon name="close" size={16} />
         </button>
       )}
     </div>

@@ -1,3 +1,5 @@
+import * as Toolbar from '@radix-ui/react-toolbar';
+import { Icon } from '@/components/ui/icon';
 import {
   Menubar, MenubarMenu, MenubarTrigger, MenubarContent,
   MenubarItem, MenubarCheckboxItem, MenubarSeparator, MenubarShortcut,
@@ -7,7 +9,7 @@ import {
   ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuShortcut,
 } from '@/components/ui/context-menu';
 import {
-  Select, SelectTrigger, SelectValue, SelectContent, SelectItem,
+  Select, SelectTrigger, SelectContent, SelectItem,
 } from '@/components/ui/select';
 import {
   DropdownMenu, DropdownMenuTrigger, DropdownMenuContent,
@@ -50,7 +52,7 @@ function MenuEntry({ entry }: { entry: ResolvedEntry }) {
     return (
       <MenubarSub>
         <MenubarSubTrigger disabled={!entry.isEnabled}>
-          {entry.icon && <span className="material-symbols-outlined mr-2" style={{ fontSize: '1rem' }}>{entry.icon}</span>}
+          {entry.icon && <Icon name={entry.icon} size="1rem" className="mr-2" />}
           {entry.label}
         </MenubarSubTrigger>
         <MenubarSubContent className={isColor ? 'p-2 min-w-0' : undefined}>
@@ -83,7 +85,7 @@ function MenuEntry({ entry }: { entry: ResolvedEntry }) {
   if (entry.isChecked !== undefined && entry.icon) {
     return (
       <MenubarItem disabled={!entry.isEnabled} onSelect={entry.execute} style={entry.style}>
-        <span className={`mr-2 rounded-sm ${entry.isChecked ? 'material-symbols-outlined icon-filled' : 'material-symbols-outlined'}`}>{entry.icon}</span>
+        <Icon name={entry.icon} className="mr-2 rounded-sm" />
         {entry.label}
         {entry.shortcut && <MenubarShortcut>{entry.shortcut}</MenubarShortcut>}
       </MenubarItem>
@@ -107,7 +109,7 @@ function MenuEntry({ entry }: { entry: ResolvedEntry }) {
 
   return (
     <MenubarItem disabled={!entry.isEnabled} onSelect={entry.execute} style={entry.style}>
-      {entry.icon && <span className="material-symbols-outlined mr-2">{entry.icon}</span>}
+      {entry.icon && <Icon name={entry.icon} className="mr-2" />}
       {entry.label}
       {entry.shortcut && <MenubarShortcut>{entry.shortcut}</MenubarShortcut>}
     </MenubarItem>
@@ -124,10 +126,10 @@ interface CommandToolbarProps {
 
 export function CommandToolbar({ entries }: CommandToolbarProps) {
   return (
-    <div className="flex items-center gap-1">
+    <Toolbar.Root className="flex items-center gap-1" aria-label="Spreadsheet formatting" loop>
       {entries.map((entry, i) => {
         if (entry.kind === 'separator') {
-          return <div key={`sep-${i}`} className="w-px h-6 bg-border mx-1" />;
+          return <Toolbar.Separator key={`sep-${i}`} orientation="vertical" className="w-px h-6 bg-border mx-1" />;
         }
 
         if (entry.kind === 'submenu') {
@@ -139,21 +141,23 @@ export function CommandToolbar({ entries }: CommandToolbarProps) {
         return (
           <span key={entry.id} className="contents">
             {entry.toolbarDividerBefore && (
-              <div className="w-px h-6 bg-border mx-1" />
+              <Toolbar.Separator orientation="vertical" className="w-px h-6 bg-border mx-1" />
             )}
-            <Button
-              variant={variant}
-              size="icon"
-              onClick={entry.execute}
-              disabled={!entry.isEnabled}
-              title={entry.shortcut ? `${entry.label} (${entry.shortcut})` : entry.label}
-            >
-              {entry.icon && <span className="material-symbols-outlined">{entry.icon}</span>}
-            </Button>
+            <Toolbar.Button asChild>
+              <Button
+                variant={variant}
+                size="icon"
+                onClick={entry.execute}
+                disabled={!entry.isEnabled}
+                title={entry.shortcut ? `${entry.label} (${entry.shortcut})` : entry.label}
+              >
+                {entry.icon && <Icon name={entry.icon} />}
+              </Button>
+            </Toolbar.Button>
           </span>
         );
       })}
-    </div>
+    </Toolbar.Root>
   );
 }
 
@@ -175,9 +179,7 @@ function ToolbarSubmenuEntry({ entry }: { entry: ResolvedEntry & { kind: 'submen
           }}
           disabled={!entry.isEnabled}
         >
-          <SelectTrigger className="h-7 w-[120px] text-xs">
-            <SelectValue placeholder="Font" />
-          </SelectTrigger>
+          <SelectTrigger className="h-7 w-[120px] text-xs" placeholder="Font" />
           <SelectContent>
             {entry.children.map(child => {
               if (child.kind !== 'command') return null;
@@ -230,7 +232,7 @@ function ToolbarSubmenuEntry({ entry }: { entry: ResolvedEntry & { kind: 'submen
         {divider}
         <div className="flex items-center">
           <Button variant="ghost" size="icon" className="h-7 w-7 rounded-r-none" onClick={decrement} disabled={!entry.isEnabled} title="Decrease font size">
-            <span className="material-symbols-outlined" style={{ fontSize: '1rem' }}>remove</span>
+            <Icon name="remove" size="1rem" />
           </Button>
           <input
             type="text"
@@ -253,7 +255,7 @@ function ToolbarSubmenuEntry({ entry }: { entry: ResolvedEntry & { kind: 'submen
             }}
           />
           <Button variant="ghost" size="icon" className="h-7 w-7 rounded-l-none" onClick={increment} disabled={!entry.isEnabled} title="Increase font size">
-            <span className="material-symbols-outlined" style={{ fontSize: '1rem' }}>add</span>
+            <Icon name="add" size="1rem" />
           </Button>
         </div>
       </span>
@@ -323,9 +325,7 @@ function ToolbarSubmenuEntry({ entry }: { entry: ResolvedEntry & { kind: 'submen
           }}
           disabled={!entry.isEnabled}
         >
-          <SelectTrigger className="h-7 w-[110px] text-xs">
-            <SelectValue placeholder="Format" />
-          </SelectTrigger>
+          <SelectTrigger className="h-7 w-[110px] text-xs" placeholder="Format" />
           <SelectContent>
             {entry.children.map(child => {
               if (child.kind !== 'command') return null;
@@ -345,7 +345,7 @@ function ToolbarSubmenuEntry({ entry }: { entry: ResolvedEntry & { kind: 'submen
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="ghost" size="icon" className="h-7 w-7" disabled={!entry.isEnabled} title="Borders">
-              <span className="material-symbols-outlined" style={{ fontSize: '1rem' }}>border_all</span>
+              <Icon name="border_all" size="1rem" />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent className="p-2 w-auto" align="start">
@@ -359,7 +359,7 @@ function ToolbarSubmenuEntry({ entry }: { entry: ResolvedEntry & { kind: 'submen
                     title={child.label}
                     onClick={child.execute}
                   >
-                    {child.icon && <span className="material-symbols-outlined" style={{ fontSize: '1.1rem' }}>{child.icon}</span>}
+                    {child.icon && <Icon name={child.icon} size="1.1rem" />}
                   </button>
                 );
               })}
@@ -375,7 +375,7 @@ function ToolbarSubmenuEntry({ entry }: { entry: ResolvedEntry & { kind: 'submen
     <span className="contents">
       {divider}
       <Button variant="ghost" size="icon" disabled={!entry.isEnabled} title={entry.label}>
-        {entry.icon && <span className="material-symbols-outlined">{entry.icon}</span>}
+        {entry.icon && <Icon name={entry.icon} />}
       </Button>
     </span>
   );
@@ -404,7 +404,7 @@ export function CommandContextMenuContent({ entries }: CommandContextMenuContent
             className={entry.danger ? 'text-destructive focus:text-destructive' : undefined}
             onSelect={entry.execute}
           >
-            {entry.icon && <span className="material-symbols-outlined" style={{ fontSize: '1rem' }}>{entry.icon}</span>}
+            {entry.icon && <Icon name={entry.icon} size="1rem" />}
             {entry.label}
             {entry.shortcut && <ContextMenuShortcut>{entry.shortcut}</ContextMenuShortcut>}
           </ContextMenuItem>

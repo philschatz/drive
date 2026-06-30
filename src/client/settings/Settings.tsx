@@ -3,7 +3,8 @@
  */
 
 import { useState, useEffect, useCallback } from 'preact/hooks';
-import { Button, buttonVariants } from '@/components/ui/button';
+import { Icon } from '@/components/ui/icon';
+import { Button } from '@/components/ui/button';
 import { Alert } from '@/components/ui/alert';
 import { DeviceList } from '@/components/DeviceList';
 import { Switch } from '@/components/ui/switch';
@@ -159,7 +160,7 @@ export function Settings({ path }: { path?: string }) {
           href="#/"
           className="inline-flex items-center justify-center h-9 w-9 rounded-md hover:bg-accent hover:text-accent-foreground"
         >
-          <span className="material-symbols-outlined">arrow_back</span>
+          <Icon name="arrow_back" />
         </a>
         <h1 className="text-2xl font-bold">Settings</h1>
       </div>
@@ -237,10 +238,12 @@ export function Settings({ path }: { path?: string }) {
           </Button>
         </div>
         <div className="mt-3 flex items-center gap-2">
-          <a href="#/add-friend" className={buttonVariants({ variant: 'outline', size: 'sm' })}>
-            <span className="material-symbols-outlined mr-1" style={{ fontSize: 16 }}>person_add</span>
-            Add Friend
-          </a>
+          <Button asChild variant="outline" size="sm">
+            <a href="#/add-friend">
+              <Icon name="person_add" size={16} className="mr-1" />
+              Add Friend
+            </a>
+          </Button>
         </div>
       </section>
 
@@ -251,10 +254,12 @@ export function Settings({ path }: { path?: string }) {
 
         {/* Link another device — full flow on its own page */}
         <div className="mt-4">
-          <a href="#/link-device" className={buttonVariants({ variant: 'outline', size: 'sm' })}>
-            <span className="material-symbols-outlined mr-1" style={{ fontSize: 16 }}>devices</span>
-            Link Device
-          </a>
+          <Button asChild variant="outline" size="sm">
+            <a href="#/link-device">
+              <Icon name="devices" size={16} className="mr-1" />
+              Link Device
+            </a>
+          </Button>
         </div>
       </section>
 

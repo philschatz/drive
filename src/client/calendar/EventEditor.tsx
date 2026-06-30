@@ -5,7 +5,7 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
+import { Select, SelectTrigger, SelectContent, SelectItem } from '@/components/ui/select';
 import type { CalendarEvent } from './schema';
 import { PresenceDot } from '../shared/presence';
 import type { PeerFieldInfo } from '../shared/presence';
@@ -232,9 +232,7 @@ export function EventEditor({ uid, event, masterEvent, recurrenceDate, isNew, op
             <div>
               <Label>Calendar</Label>
               <Select value={selectedCalDocId} onValueChange={(v: string) => setSelectedCalDocId(v)}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
+                <SelectTrigger />
                 <SelectContent>
                   {calendars.map(c => (
                     <SelectItem key={c.docId} value={c.docId}>
@@ -323,9 +321,7 @@ export function EventEditor({ uid, event, masterEvent, recurrenceDate, isNew, op
                     id="ed-freq"
                     onFocus={() => focusField('ed-freq')}
                     onBlur={blurField}
-                  >
-                    <SelectValue />
-                  </SelectTrigger>
+                  />
                   <SelectContent>
                     {FREQ_OPTIONS.map(o => (
                       <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
@@ -365,9 +361,7 @@ export function EventEditor({ uid, event, masterEvent, recurrenceDate, isNew, op
                   <div className="mt-3">
                     <Label>Ends</Label>
                     <Select value={endType} onValueChange={(v: string) => setEndType(v || 'never')}>
-                      <SelectTrigger id="ed-ends">
-                        <SelectValue />
-                      </SelectTrigger>
+                      <SelectTrigger id="ed-ends" />
                       <SelectContent>
                         {END_OPTIONS.map(o => (
                           <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>

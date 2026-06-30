@@ -1,52 +1,43 @@
-import { cva, type VariantProps } from "class-variance-authority";
-import { cn } from "@/lib/utils";
+import { Callout, Text } from "@radix-ui/themes";
 
-const alertVariants = cva(
-  "relative w-full rounded-lg border px-4 py-3 text-sm [&>svg+div]:translate-y-[-3px] [&>svg]:absolute [&>svg]:left-4 [&>svg]:top-4 [&>svg]:text-foreground [&>svg~*]:pl-7",
-  {
-    variants: {
-      variant: {
-        default: "bg-background text-foreground",
-        destructive: "border-destructive/50 text-destructive dark:border-destructive [&>svg]:text-destructive",
-        success: "border-green-500/50 text-green-700 bg-green-50 dark:text-green-400",
-      },
-    },
-    defaultVariants: {
-      variant: "default",
-    },
-  }
-);
+/**
+ * Adapter over @radix-ui/themes Callout, preserving the legacy Alert API
+ * (variant default/destructive/success + Alert/AlertTitle/AlertDescription).
+ * Call-sites style the banner layout via className (flex/justify-between),
+ * which wins over Callout's default layout because Themes CSS loads first.
+ */
 
-function Alert({
-  className,
-  variant,
-  ...props
-}: React.HTMLAttributes<HTMLDivElement> & VariantProps<typeof alertVariants>) {
+const COLOR: Record<string, any> = {
+  default: "gray",
+  destructive: "red",
+  success: "green",
+};
+
+export interface AlertProps {
+  variant?: "default" | "destructive" | "success";
+  className?: string;
+  children?: any;
+  [key: string]: any;
+}
+
+function Alert({ variant = "default", className, children, ...props }: AlertProps) {
   return (
-    <div
-      role="alert"
-      className={cn(alertVariants({ variant }), className)}
-      {...props}
-    />
+    <Callout.Root role="alert" color={COLOR[variant] ?? "gray"} className={className} {...props}>
+      {children}
+    </Callout.Root>
   );
 }
 
-function AlertTitle({ className, ...props }: React.HTMLAttributes<HTMLHeadingElement>) {
+function AlertTitle({ children, ...props }: { className?: string; children?: any; [k: string]: any }) {
   return (
-    <h5
-      className={cn("mb-1 font-medium leading-none tracking-tight", className)}
-      {...props}
-    />
+    <Text as="div" weight="bold" {...(props as any)}>
+      {children}
+    </Text>
   );
 }
 
-function AlertDescription({ className, ...props }: React.HTMLAttributes<HTMLParagraphElement>) {
-  return (
-    <div
-      className={cn("text-sm [&_p]:leading-relaxed", className)}
-      {...props}
-    />
-  );
+function AlertDescription({ children, ...props }: { className?: string; children?: any; [k: string]: any }) {
+  return <Callout.Text {...(props as any)}>{children}</Callout.Text>;
 }
 
-export { Alert, AlertTitle, AlertDescription, alertVariants };
+export { Alert, AlertTitle, AlertDescription };

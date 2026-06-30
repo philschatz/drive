@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'preact/hooks';
+import { Icon } from '@/components/ui/icon';
 import { type ComponentChildren } from 'preact';
 import { openDoc } from '../worker-api';
 import { Progress } from '../components/ui/progress';
@@ -52,7 +53,7 @@ export function DocLoader({ docId, children }: { docId: string | undefined; chil
   if (status === 'error') return (
     <div className="p-6 max-w-sm mx-auto mt-12 flex items-start gap-3">
       <a href="#/" className="text-muted-foreground hover:text-foreground shrink-0">
-        <span className="material-symbols-outlined" style={{ fontSize: 20 }}>arrow_back</span>
+        <Icon name="arrow_back" size={20} />
       </a>
       <p className="text-sm text-destructive">{error}</p>
     </div>

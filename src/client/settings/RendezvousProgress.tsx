@@ -10,6 +10,7 @@
  */
 
 import { useWsStatus } from '../worker-api';
+import { Icon } from '@/components/ui/icon';
 import type { RendezvousStatus } from '../worker-api';
 
 interface RendezvousProgressProps {
@@ -59,12 +60,11 @@ function StepRow({ state, label }: { state: StepState; label: string }) {
   const textColor = state === 'pending' ? 'text-muted-foreground/60' : 'text-foreground';
   return (
     <div className="flex items-center gap-2">
-      <span
-        className={`material-symbols-outlined ${color} ${state === 'active' ? 'animate-spin' : ''}`}
-        style={{ fontSize: 18 }}
-      >
-        {icon}
-      </span>
+      <Icon
+        name={icon}
+        size={18}
+        className={`${color} ${state === 'active' ? 'animate-spin' : ''}`}
+      />
       <span className={`text-xs ${textColor}`}>{label}</span>
     </div>
   );
@@ -92,7 +92,7 @@ export function RendezvousProgress({
     return (
       <div className="space-y-1.5">
         <div className="flex items-center gap-2">
-          <span className="material-symbols-outlined text-destructive" style={{ fontSize: 18 }}>error</span>
+          <Icon name="error" size={18} className="text-destructive" />
           <span className="text-xs text-destructive">{errorMessage}</span>
         </div>
         {idRow}

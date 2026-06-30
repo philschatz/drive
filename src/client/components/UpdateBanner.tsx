@@ -1,4 +1,5 @@
 import { useVersionCheck } from '@/shared/useVersionCheck';
+import { Icon } from '@/components/ui/icon';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 
@@ -17,7 +18,7 @@ export function UpdateBanner() {
       tabIndex={0}
       onKeyDown={(e) => { if (e.key === 'Enter') reload(); }}
     >
-      <span class="material-symbols-outlined text-primary">update</span>
+      <Icon name="update" className="text-primary" />
       <span class="text-sm text-foreground">
         New version available{buildTime ? ` (deployed ${dayjs(buildTime).fromNow()})` : ''}
       </span>
@@ -26,7 +27,7 @@ export function UpdateBanner() {
         onClick={(e) => { e.stopPropagation(); dismiss(); }}
         aria-label="Dismiss"
       >
-        <span class="material-symbols-outlined text-base">close</span>
+        <Icon name="close" size={16} />
       </button>
     </div>
   );

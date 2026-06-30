@@ -5,10 +5,11 @@
  */
 
 import { useState, useEffect, useCallback } from 'preact/hooks';
+import { Icon } from '@/components/ui/icon';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Button } from '@/components/ui/button';
 import { DeleteButton } from '@/components/ui/delete-button';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Select, SelectContent, SelectItem, SelectTrigger } from '@/components/ui/select';
 import {
   getDocMembers,
   getMyAccess,
@@ -22,7 +23,6 @@ import {
 } from '../shared/keyhive-api';
 import { getContactName, mergeCachedContacts } from '../contact-names';
 import { EditableName } from './EditableName';
-import { AccessIcon } from './AccessIcon';
 
 interface AccessControlProps {
   /** Automerge document ID. */
@@ -143,12 +143,21 @@ export function AccessControl({ docId, access: accessProp }: AccessControlProps)
 
   return (
     <>
+      {/* Single trigger: always clickable to open the panel, but rendered dimmed
+          when you're not an admin (can't change sharing). The icon is a lock when
+          you have no access at all, otherwise a share icon. The tooltip surfaces
+          your current role either way. */}
       <button
-        className="inline-flex items-center justify-center h-9 w-9 rounded-md hover:bg-accent hover:text-accent-foreground"
-        title={accessProp ? `${accessProp} · Share & permissions` : 'Share & permissions'}
+        className={`inline-flex items-center justify-center h-9 w-9 rounded-md hover:bg-accent hover:text-accent-foreground${accessProp?.toLowerCase() === 'admin' ? '' : ' opacity-50'}`}
+        title={accessProp?.toLowerCase() === 'admin'
+          ? 'Share & permissions'
+          : accessProp
+            ? `Your access: ${accessProp.charAt(0).toUpperCase() + accessProp.slice(1)}`
+            : 'No access'}
+        aria-label="Share & permissions"
         onClick={() => setOpen(true)}
       >
-        <AccessIcon access={accessProp ?? null} style={{ fontSize: 18 }} title="" />
+        <Icon name={accessProp == null ? 'lock' : 'share'} size={18} />
       </button>
       <Sheet open={open} onOpenChange={setOpen}>
         <SheetContent>
@@ -165,7 +174,7 @@ export function AccessControl({ docId, access: accessProp }: AccessControlProps)
 
           {loaded && myAccess === null && members.length === 0 && (
             <div className="mt-4 flex items-center gap-2 p-3 bg-muted rounded text-sm text-muted-foreground">
-              <span className="material-symbols-outlined" style={{ fontSize: 18 }}>lock</span>
+              <Icon name="lock" size={18} />
               You no longer have access to this document
             </div>
           )}
@@ -178,13 +187,7 @@ export function AccessControl({ docId, access: accessProp }: AccessControlProps)
             )}
             {members.map(member => (
               <div key={member.agentId} className="flex items-center gap-2 py-1.5 border-b border-border">
-                <span
-                  className="material-symbols-outlined text-muted-foreground"
-                  style={{ fontSize: 16 }}
-                  title={member.type === 'group' ? 'User (all their devices)' : 'Single device'}
-                >
-                  {member.type === 'group' ? 'group' : 'smartphone'}
-                </span>
+                <Icon name={member.type === 'group' ? 'group' : 'smartphone'} size={16} className="text-muted-foreground" title={member.type === 'group' ? 'User (all their devices)' : 'Single device'} />
                 <EditableName
                   agentId={member.agentId}
                   suffix={member.isMe ? <span className="text-xs text-muted-foreground ml-1">(you)</span> : undefined}
@@ -192,9 +195,7 @@ export function AccessControl({ docId, access: accessProp }: AccessControlProps)
                 {isAdmin ? (
                   <div className="flex items-center gap-1">
                     <Select value={member.role ?? 'read'} onValueChange={(val: string) => handleChangeRole(member.agentId, val)}>
-                      <SelectTrigger className="h-7 text-xs w-20">
-                        <SelectValue />
-                      </SelectTrigger>
+                      <SelectTrigger className="h-7 text-xs w-20" />
                       <SelectContent>
                         <SelectItem value="read">Read</SelectItem>
                         <SelectItem value="edit">Edit</SelectItem>
@@ -228,9 +229,7 @@ export function AccessControl({ docId, access: accessProp }: AccessControlProps)
               ) : (
                 <div className="flex items-center gap-2 mb-3">
                   <Select value={selectedContact} onValueChange={setSelectedContact}>
-                    <SelectTrigger className="h-8 text-xs flex-1">
-                      <SelectValue />
-                    </SelectTrigger>
+                    <SelectTrigger className="h-8 text-xs flex-1" />
                     <SelectContent>
                       {[...contacts]
                         .map(c => ({ contact: c, name: getContactName(c.agentId) }))
@@ -249,9 +248,7 @@ export function AccessControl({ docId, access: accessProp }: AccessControlProps)
                     </SelectContent>
                   </Select>
                   <Select value={inviteRole} onValueChange={setInviteRole}>
-                    <SelectTrigger className="h-8 text-xs w-24">
-                      <SelectValue />
-                    </SelectTrigger>
+                    <SelectTrigger className="h-8 text-xs w-24" />
                     <SelectContent>
                       <SelectItem value="read">Read</SelectItem>
                       <SelectItem value="edit">Edit</SelectItem>

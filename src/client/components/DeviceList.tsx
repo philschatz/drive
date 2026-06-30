@@ -7,6 +7,7 @@
  */
 
 import { DeleteButton } from '@/components/ui/delete-button';
+import { Icon } from '@/components/ui/icon';
 import type { DeviceInfo } from '@/shared/keyhive-api';
 
 export function DeviceList({ devices, onRemove }: {
@@ -24,9 +25,7 @@ export function DeviceList({ devices, onRemove }: {
         <div className="space-y-1">
           {devices.map((dev, i) => (
             <div key={i} className="flex items-center gap-2 py-1 border-b border-border">
-              <span className="material-symbols-outlined text-muted-foreground" style={{ fontSize: 16 }}>
-                {dev.isMe ? 'smartphone' : 'devices'}
-              </span>
+              <Icon name={dev.isMe ? 'smartphone' : 'devices'} size={16} className="text-muted-foreground" />
               <span className="text-sm flex-1 truncate font-mono" title={dev.agentId}>
                 {dev.agentId.slice(0, 16)}...
               </span>

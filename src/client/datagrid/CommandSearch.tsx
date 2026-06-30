@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'preact/hooks';
+import { Icon } from '@/components/ui/icon';
 import type { SearchableEntry } from './commands';
 
 interface CommandSearchProps {
@@ -63,7 +64,7 @@ export function CommandSearch({ entries }: CommandSearchProps) {
   return (
     <div className="relative">
       <div className="relative">
-        <span className="material-symbols-outlined absolute left-1.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" style={{ fontSize: '0.875rem' }}>search</span>
+        <Icon name="search" size="0.875rem" className="absolute left-1.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
         <input
           ref={inputRef}
           type="text"
@@ -101,7 +102,7 @@ export function CommandSearch({ entries }: CommandSearchProps) {
               onMouseEnter={() => setHighlightIndex(i)}
             >
               {entry.icon && (
-                <span className="material-symbols-outlined shrink-0" style={{ fontSize: '1rem' }}>{entry.icon}</span>
+                <Icon name={entry.icon} size="1rem" className="shrink-0" />
               )}
               <span className="truncate">{entry.label}</span>
               <span className="ml-1 text-xs text-muted-foreground truncate">{entry.group}</span>

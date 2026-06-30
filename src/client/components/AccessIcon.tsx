@@ -37,14 +37,16 @@ interface AccessIconProps {
   title?: string;
 }
 
+import { Icon } from '@/components/ui/icon';
+
 export function AccessIcon({ access, style, className, title }: AccessIconProps) {
   return (
-    <span
-      className={`material-symbols-outlined${className ? ' ' + className : ''}`}
+    <Icon
+      name={accessIcon(access)}
+      className={className}
       style={style}
+      size={style?.fontSize ?? 18}
       title={title ?? accessTitle(access)}
-    >
-      {accessIcon(access)}
-    </span>
+    />
   );
 }

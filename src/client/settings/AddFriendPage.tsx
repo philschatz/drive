@@ -12,6 +12,7 @@
  */
 
 import { useState, useCallback, useEffect } from 'preact/hooks';
+import { Icon } from '@/components/ui/icon';
 import { Button } from '@/components/ui/button';
 import { receiveContactCard, rendezvousReceive, getIdentity, onRendezvousEvent } from '../shared/keyhive-api';
 import type { RendezvousStatus } from '../worker-api';
@@ -181,7 +182,7 @@ export function AddFriendPage({ cardData }: AddFriendPageProps) {
   return (
     <div className="max-w-md mx-auto p-8 text-center">
       <h1 className="text-xl font-bold mb-4">
-        <span className="material-symbols-outlined align-middle mr-1" style={{ fontSize: 24 }}>person_add</span>
+        <Icon name="person_add" size={24} className="align-middle mr-1" />
         Add Friend
       </h1>
 
@@ -205,7 +206,7 @@ export function AddFriendPage({ cardData }: AddFriendPageProps) {
       ) : saved ? (
         <div>
           <p className="text-sm text-green-600 font-medium mb-4">
-            <span className="material-symbols-outlined align-middle mr-1" style={{ fontSize: 16 }}>check_circle</span>
+            <Icon name="check_circle" size={16} className="align-middle mr-1" />
             {name.trim() ? `You and ${name.trim()} are now contacts.` : "You're now contacts."}
           </p>
           <p className="text-xs text-muted-foreground mb-4">
@@ -219,7 +220,7 @@ export function AddFriendPage({ cardData }: AddFriendPageProps) {
       ) : contactGroupId ? (
         <div>
           <p className="text-sm text-green-600 font-medium mb-4">
-            <span className="material-symbols-outlined align-middle mr-1" style={{ fontSize: 16 }}>check_circle</span>
+            <Icon name="check_circle" size={16} className="align-middle mr-1" />
             Contact received
           </p>
           <p className="text-sm text-muted-foreground mb-3">{status}</p>

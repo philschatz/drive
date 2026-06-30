@@ -57,7 +57,8 @@ describe('EditorTitleBar', () => {
 
   it('renders icon and title', () => {
     render(<EditorTitleBar icon="calendar_month" title="My Calendar" />);
-    expect(screen.getByText('calendar_month')).toBeDefined();
+    // Icons render as inline SVGs (@radix-ui/react-icons), not glyph text.
+    expect(document.querySelector('svg')).toBeTruthy();
     expect(screen.getByText('My Calendar')).toBeDefined();
   });
 
@@ -85,7 +86,12 @@ describe('EditorTitleBar', () => {
     const onBlur = jest.fn();
     render(<EditorTitleBar icon="grid" title="Test" titleEditable onTitleBlur={onBlur} />);
     const input = screen.getByDisplayValue('Test') as HTMLInputElement;
-    fireEvent.blur(input);
+    // preact/compat (loaded via @radix-ui/react-icons) maps onBlur to the
+    // bubbling `focusout` event. testing-library's synthetic fireEvent.blur emits
+    // a non-bubbling `blur` that the focusout listener never sees, so drive the
+    // real DOM focus transition instead — jsdom emits a bubbling focusout.
+    input.focus();
+    input.blur();
     expect(onBlur).toHaveBeenCalled();
   });
 
@@ -173,7 +179,8 @@ describe('EditorTitleBar', () => {
 
   it('has back link to home', () => {
     render(<EditorTitleBar icon="grid" title="Test" />);
-    const backLink = screen.getByText('arrow_back').closest('a') as HTMLAnchorElement;
+    const backLink = document.querySelector('a[href="#/"]') as HTMLAnchorElement;
+    expect(backLink).toBeTruthy();
     expect(backLink.getAttribute('href')).toBe('#/');
   });
 

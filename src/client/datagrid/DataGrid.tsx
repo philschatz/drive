@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'preact/hooks';
+import { Icon } from '@/components/ui/icon';
 import { subscribeQuery, updateDoc } from '../worker-api';
 import type { PeerState } from '../shared/automerge';
 import { peerColor, initPresence, type PresenceState } from '../shared/presence';
@@ -1337,7 +1338,7 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
     <DocLoader docId={docId}>
     <div className="datagrid-page">
       <EditorTitleBar
-        icon="grid_on"
+        icon="table"
         title={gridName}
         titleEditable={canEdit}
         onTitleFocus={() => { titleFocusedRef.current = true; }}
@@ -1477,7 +1478,7 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
                       <>
                         {gap && (
                           <th key={`unhide-col-${ci}`} className="datagrid-col-unhide" onClick={() => unhideColumns(gap.hiddenIds)} title={`Show ${gap.hiddenIds.length} hidden column${gap.hiddenIds.length > 1 ? 's' : ''}`}>
-                            <span className="material-symbols-outlined" style={{ fontSize: '0.75rem' }}>unfold_more</span>
+                            <Icon name="unfold_more" size="0.75rem" />
                           </th>
                         )}
                         <th
@@ -1498,7 +1499,7 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
                   {/* Trailing unhide button if columns are hidden at the end */}
                   {colHiddenGaps.find(g => g.beforeVisualIndex === columnDefs.length) && (
                     <th className="datagrid-col-unhide" onClick={() => unhideColumns(colHiddenGaps.find(g => g.beforeVisualIndex === columnDefs.length)!.hiddenIds)}>
-                      <span className="material-symbols-outlined" style={{ fontSize: '0.75rem' }}>unfold_more</span>
+                      <Icon name="unfold_more" size="0.75rem" />
                     </th>
                   )}
                 </tr>
@@ -1545,7 +1546,7 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
                       {rowGap && (
                         <tr key={`unhide-row-${ri}`} className="datagrid-row-unhide-tr">
                           <td className="datagrid-row-unhide" colSpan={visibleColIds.length + 1} onClick={() => unhideRows(rowGap.hiddenIds)} title={`Show ${rowGap.hiddenIds.length} hidden row${rowGap.hiddenIds.length > 1 ? 's' : ''}`}>
-                            <span className="material-symbols-outlined" style={{ fontSize: '0.75rem' }}>unfold_more</span>
+                            <Icon name="unfold_more" size="0.75rem" />
                           </td>
                         </tr>
                       )}

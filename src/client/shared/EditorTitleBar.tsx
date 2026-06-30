@@ -1,4 +1,5 @@
 import type { ComponentChildren } from 'preact';
+import { Icon } from '@/components/ui/icon';
 import { useWsStatus, usePeerTransports, getWorkerPeerId } from './automerge';
 import { getWorkerUserGroupId } from '../worker-api';
 import { peerDisplayName, peerIdentityKey, PeerDot, type PresenceState } from './presence';
@@ -60,12 +61,10 @@ export function EditorTitleBar<P extends PeerLike>({
         href="#/"
         className="inline-flex items-center justify-center h-9 w-9 rounded-md hover:bg-accent hover:text-accent-foreground shrink-0"
       >
-        <span className="material-symbols-outlined">arrow_back</span>
+        <Icon name="arrow_back" />
       </a>
 
-      <span className="material-symbols-outlined text-muted-foreground shrink-0" style={{ fontSize: 20 }}>
-        {icon}
-      </span>
+      <Icon name={icon} size={20} className="text-muted-foreground shrink-0" />
 
       {titleEditable ? (
         <input
@@ -139,7 +138,7 @@ export function EditorTitleBar<P extends PeerLike>({
             onClick={onToggleValidation}
             title={validationActive ? 'Hide validation errors' : `${validationCount} validation error${validationCount !== 1 ? 's' : ''}`}
           >
-            <span className="material-symbols-outlined text-amber-500" style={{ fontSize: 18 }}>warning</span>
+            <Icon name="warning" size={18} className="text-amber-500" />
             <span className="text-xs text-amber-600 font-medium">{validationCount! > 99 ? '99+' : validationCount}</span>
           </button>
         )}
@@ -150,7 +149,7 @@ export function EditorTitleBar<P extends PeerLike>({
             onClick={onToggleHistory}
             title={historyActive ? 'Close history' : 'Browse history'}
           >
-            <span className="material-symbols-outlined" style={{ fontSize: 18 }}>history</span>
+            <Icon name="history" size={18} />
           </button>
         )}
 
@@ -160,7 +159,7 @@ export function EditorTitleBar<P extends PeerLike>({
             className="inline-flex items-center justify-center h-9 w-9 rounded-md hover:bg-accent hover:text-accent-foreground"
             title="Edit Source"
           >
-            <span className="material-symbols-outlined" style={{ fontSize: 18 }}>code</span>
+            <Icon name="code" size={18} />
           </a>
         )}
 

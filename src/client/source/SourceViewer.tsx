@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'preact/hooks';
+import { Icon } from '@/components/ui/icon';
 import type { PeerState } from '../shared/automerge';
 import { openDoc, subscribeQuery, updateDoc, getDocHistory, debugGetVersionPatches, setDocVersion } from '../worker-api';
 import { peerColor, peerDisplayName, initPresence, type PresenceState } from '../shared/presence';
@@ -420,7 +421,7 @@ export function SourceViewer({ docId, rest }: { docId?: string; rest?: string; p
       >
         {snapshot && (
           <Button variant="outline" size="sm" onClick={handleDownloadJson}>
-            <span className="material-symbols-outlined" style={{ fontSize: 16 }}>download</span> JSON
+            <Icon name="download" size={16} /> JSON
           </Button>
         )}
       </EditorTitleBar>

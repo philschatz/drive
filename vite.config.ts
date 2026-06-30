@@ -13,19 +13,35 @@ const automergeEntry = resolve(__dirname, 'node_modules/@automerge/automerge/dis
 // Radix UI's Presence component calls getComputedStyle(node) in a ref callback,
 // but under Preact's compat layer the ref value may not be a DOM Element.
 // Match by code content (not path) because Vite pre-bundles deps into single files.
+const RADIX_PRESENCE_NEEDLE = 'stylesRef.current = node2 ? getComputedStyle(node2) : null';
+const RADIX_PRESENCE_FIXED = 'stylesRef.current = (node2 instanceof Element) ? getComputedStyle(node2) : null';
+
+const patchRadix = (code: string) =>
+  code.includes(RADIX_PRESENCE_NEEDLE) ? code.split(RADIX_PRESENCE_NEEDLE).join(RADIX_PRESENCE_FIXED) : code;
+
 function radixPreactPatchPlugin(): Plugin {
   return {
     name: 'radix-preact-patch',
     transform(code) {
-      if (code.includes('stylesRef.current = node2 ? getComputedStyle(node2) : null')) {
-        return code.replace(
-          'stylesRef.current = node2 ? getComputedStyle(node2) : null;',
-          'stylesRef.current = (node2 instanceof Element) ? getComputedStyle(node2) : null;',
-        );
-      }
+      const out = patchRadix(code);
+      return out === code ? undefined : out;
     },
   };
 }
+
+// The transform plugin above runs in the production build, but NOT on deps that
+// Vite pre-bundles (optimizeDeps) for dev — those bypass the normal plugin
+// pipeline. @radix-ui/themes pulls @radix-ui/react-presence and @radix-ui/react-menu
+// into pre-bundled chunks, so without patching them there too the Presence guard
+// and submenu grace-area fix wouldn't apply in dev. Patch during dep
+// optimization, mirroring automergeRepoReservedMethodOptimizePlugin below.
+const radixPresenceOptimizePlugin = {
+  name: 'radix-preact-patch-optimize',
+  transform(code: string) {
+    const out = patchRadix(code);
+    return out === code ? null : { code: out, map: null };
+  },
+};
 
 function automergeWasmPlugin(): Plugin {
   return {
@@ -263,7 +279,7 @@ export default defineConfig(async () => {
     // pre-bundling so automerge-repo stays optimized (keeping its CJS deps like
     // `debug` working through interop). Production (rolldown) is unaffected.
     rolldownOptions: {
-      plugins: [automergeRepoReservedMethodOptimizePlugin as never],
+      plugins: [automergeRepoReservedMethodOptimizePlugin as never, radixPresenceOptimizePlugin as never],
     },
   } as never,
   };

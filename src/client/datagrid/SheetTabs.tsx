@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'preact/hooks';
+import { Icon } from '@/components/ui/icon';
 import type { RefObject } from 'preact';
 
 export interface SheetTabInfo {
@@ -121,7 +122,7 @@ export function SheetTabs({ sheets, currentSheetId, onSelect, onAdd, onRename, o
           onClick={() => setHiddenMenuOpen(o => !o)}
           title="Sheets"
         >
-          <span className="material-symbols-outlined" style={{ fontSize: '20px' }}>menu</span>
+          <Icon name="menu" size="20px" />
         </button>
         {hiddenMenuOpen && (
           <div className="sheet-hidden-popup">
@@ -135,9 +136,7 @@ export function SheetTabs({ sheets, currentSheetId, onSelect, onAdd, onRename, o
                   setHiddenMenuOpen(false);
                 }}
               >
-                <span className="material-symbols-outlined" style={{ fontSize: '16px', width: '22px', marginRight: '4px' }}>
-                  {sheet.id === currentSheetId ? 'check' : ''}
-                </span>
+                <Icon name={sheet.id === currentSheetId ? 'check' : ''} size="16px', width: '22px', marginRight: '4px" />
                 {sheet.name}
               </button>
             ))}
@@ -145,7 +144,7 @@ export function SheetTabs({ sheets, currentSheetId, onSelect, onAdd, onRename, o
         )}
       </div>
       <button className="sheet-tab-add" onClick={onAdd} title="Add sheet">
-        <span className="material-symbols-outlined" style={{ fontSize: '20px' }}>add</span>
+        <Icon name="add" size="20px" />
       </button>
       <div className="sheet-tabs-scroll">
       {visibleSheets.map((sheet, i) => {

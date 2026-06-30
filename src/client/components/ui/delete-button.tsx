@@ -1,4 +1,5 @@
 import { cn } from "@/lib/utils";
+import { Icon } from '@/components/ui/icon';
 
 export interface DeleteButtonProps {
   /** The actual delete/revoke action, called only after the user confirms. */
@@ -44,7 +45,7 @@ export function DeleteButton({
       disabled={disabled}
       onClick={handleClick}
     >
-      <span className="material-symbols-outlined" style={{ fontSize: iconSize }}>delete</span>
+      <Icon name="delete" size={iconSize} />
     </button>
   );
 }

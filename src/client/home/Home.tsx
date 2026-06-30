@@ -1,4 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'preact/hooks';
+import { Table } from '@radix-ui/themes';
+import { Icon } from '@/components/ui/icon';
 import { useConnectionStatus, usePeerList, usePeerTransports } from '../shared/automerge';
 import { createDoc, updateDoc, subscribeQuery, fetchDocList, removeDocId, onDocListUpdated, HOME_SUMMARY_QUERY } from '../worker-api';
 import { getMyAccess, onKeyhiveStateChanged } from '../shared/keyhive-api';
@@ -789,44 +791,44 @@ export function Home({ path }: { path?: string }) {
       <div className="flex items-center gap-2 mb-2 flex-wrap">
         <a href="#/calendars/">
           <Button variant="outline">
-            <span className="material-symbols-outlined">date_range</span> All calendars
+            <Icon name="date_range" /> All calendars
           </Button>
         </a>
         <a href="#/contacts">
           <Button variant="outline">
-            <span className="material-symbols-outlined">contacts</span> Contacts
+            <Icon name="contacts" /> Contacts
           </Button>
         </a>
         <a href="#/settings">
           <Button variant="outline">
-            <span className="material-symbols-outlined">settings</span> Settings
+            <Icon name="settings" /> Settings
           </Button>
         </a>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="outline">
-              <span className="material-symbols-outlined">add</span> New
+              <Icon name="add" /> New
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent>
             <DropdownMenuItem onSelect={handleCreateCalendar}>
-              <span className="material-symbols-outlined">date_range</span> Calendar
+              <Icon name="date_range" /> Calendar
             </DropdownMenuItem>
             <DropdownMenuItem onSelect={handleCreateTaskList}>
-              <span className="material-symbols-outlined">checklist</span> Task list
+              <Icon name="checklist" /> Task list
             </DropdownMenuItem>
             <DropdownMenuItem onSelect={handleCreateDataGrid}>
-              <span className="material-symbols-outlined">grid_on</span> Spreadsheet
+              <Icon name="grid_on" /> Spreadsheet
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem onSelect={() => icsInputRef.current?.click()}>
-              <span className="material-symbols-outlined">date_range</span> Import .ics
+              <Icon name="date_range" /> Import .ics
             </DropdownMenuItem>
             <DropdownMenuItem onSelect={() => xlsInputRef.current?.click()}>
-              <span className="material-symbols-outlined">grid_on</span> Import .xlsx
+              <Icon name="grid_on" /> Import .xlsx
             </DropdownMenuItem>
             <DropdownMenuItem onSelect={() => jsonInputRef.current?.click()}>
-              <span className="material-symbols-outlined">code</span> Import .json
+              <Icon name="code" /> Import .json
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
@@ -835,68 +837,89 @@ export function Home({ path }: { path?: string }) {
         <input type="file" ref={jsonInputRef} accept=".json,application/json" style={{ display: 'none' }} onChange={handleImportJson as any} />
       </div>
 
-      <div className="flex flex-col">
-        {sortedEntries.map(entry => {
-          const noEntryAccess = entry.access === null;
-          const viewPath = viewPathForType(entry.type, entry.documentId);
-          const icon = iconForType(entry.type);
-          return (
-            <div
-              key={entry.documentId}
-              className="flex items-center gap-2 py-1 px-1 flex-nowrap border-b border-border"
-            >
-              <span className="material-symbols-outlined" style={{ width: '1.2rem', textAlign: 'center', color: '#666' }}>{icon}</span>
-              <a href={viewPath} className="text-sm flex-1 hover:underline flex items-center gap-1" style={noEntryAccess ? { textDecoration: 'line-through', opacity: 0.6 } : undefined}>
-                {entry.name || 'Untitled'}
-              </a>
-              {entry.loading ? (
-                <Progress className="w-16" value={0} title="Loading..." />
-              ) : entry.access === null ? (
-                <span className="text-xs text-muted-foreground flex items-center gap-1" title="You no longer have access to updates">
-                  No access
-                </span>
-              ) : (
-                <>
-                  <a href={viewPath} className="text-xs text-muted-foreground no-underline" style={{ minWidth: '4rem', textAlign: 'right' }} title={entry.lastUpdated || undefined}>
-                    {relativeTime(entry.lastUpdated)}
-                  </a>
-                  <a href={viewPath} className="text-xs text-muted-foreground no-underline">
-                    ({(entry.count ?? 0).toLocaleString()})
-                  </a>
-                </>
-              )}
-              <span className="inline-flex items-center justify-center h-8 w-8 text-muted-foreground">
-                <AccessIcon access={entry.access ?? null} style={{ fontSize: 18 }} />
-              </span>
-              {!noEntryAccess && (
-                <DeleteButton
-                  className="h-8 w-8"
-                  iconSize={18}
-                  confirmMessage={`Delete "${entry.name || 'Untitled'}" ${docLabel(entry)}?`}
-                  onConfirm={() => handleDelete(entry)}
-                />
-              )}
-              <a
-                href={`#/source/${entry.documentId}`}
-                className="inline-flex items-center justify-center h-8 w-8 rounded-md text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-                title="View Source"
-              >
-                <span className="material-symbols-outlined">code</span>
-              </a>
-            </div>
-          );
-        })}
-        {entries.length === 0 && (
-          <p className="text-sm text-muted-foreground py-4">
-            {listLoading ? 'Loading documents…' : 'No documents yet.'}
-          </p>
-        )}
-      </div>
+      {sortedEntries.length > 0 && (
+        <Table.Root variant="surface" size="1">
+          <Table.Header>
+            <Table.Row>
+              {/* Name absorbs the free width so the metadata columns pack together on the right */}
+              <Table.ColumnHeaderCell style={{ width: '100%' }}>Name</Table.ColumnHeaderCell>
+              <Table.ColumnHeaderCell align="right" style={{ whiteSpace: 'nowrap' }}>Updated</Table.ColumnHeaderCell>
+              <Table.ColumnHeaderCell align="right" style={{ whiteSpace: 'nowrap' }}>Items</Table.ColumnHeaderCell>
+              <Table.ColumnHeaderCell align="center" style={{ whiteSpace: 'nowrap' }}>Access</Table.ColumnHeaderCell>
+              <Table.ColumnHeaderCell align="right" style={{ whiteSpace: 'nowrap' }}></Table.ColumnHeaderCell>
+            </Table.Row>
+          </Table.Header>
+          <Table.Body>
+            {sortedEntries.map(entry => {
+              const noEntryAccess = entry.access === null;
+              const viewPath = viewPathForType(entry.type, entry.documentId);
+              const icon = iconForType(entry.type);
+              return (
+                <Table.Row key={entry.documentId} align="center">
+                  <Table.RowHeaderCell>
+                    <a href={viewPath} className="hover:underline flex items-center gap-1.5" style={noEntryAccess ? { textDecoration: 'line-through', opacity: 0.6 } : undefined}>
+                      <Icon name={icon} />
+                      {entry.name || 'Untitled'}
+                    </a>
+                  </Table.RowHeaderCell>
+                  <Table.Cell align="right" style={{ whiteSpace: 'nowrap' }}>
+                    {entry.loading ? (
+                      <Progress className="w-16" value={0} title="Loading..." />
+                    ) : entry.access === null ? (
+                      <span className="text-xs text-muted-foreground" title="You no longer have access to updates">No access</span>
+                    ) : (
+                      <a href={viewPath} className="text-xs text-muted-foreground no-underline" title={entry.lastUpdated || undefined}>
+                        {relativeTime(entry.lastUpdated)}
+                      </a>
+                    )}
+                  </Table.Cell>
+                  <Table.Cell align="right">
+                    {entry.loading || entry.access === null ? '' : (
+                      <a href={viewPath} className="text-xs text-muted-foreground no-underline">
+                        {(entry.count ?? 0).toLocaleString()}
+                      </a>
+                    )}
+                  </Table.Cell>
+                  <Table.Cell align="center">
+                    <span className="inline-flex items-center justify-center text-muted-foreground">
+                      <AccessIcon access={entry.access ?? null} style={{ fontSize: 18 }} />
+                    </span>
+                  </Table.Cell>
+                  <Table.Cell align="right">
+                    <div className="flex items-center justify-end gap-1">
+                      {!noEntryAccess && (
+                        <DeleteButton
+                          className="h-8 w-8"
+                          iconSize={18}
+                          confirmMessage={`Delete "${entry.name || 'Untitled'}" ${docLabel(entry)}?`}
+                          onConfirm={() => handleDelete(entry)}
+                        />
+                      )}
+                      <a
+                        href={`#/source/${entry.documentId}`}
+                        className="inline-flex items-center justify-center h-8 w-8 rounded-md text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+                        title="View Source"
+                      >
+                        <Icon name="code" />
+                      </a>
+                    </div>
+                  </Table.Cell>
+                </Table.Row>
+              );
+            })}
+          </Table.Body>
+        </Table.Root>
+      )}
+      {entries.length === 0 && (
+        <p className="text-sm text-muted-foreground py-4">
+          {listLoading ? 'Loading documents…' : 'No documents yet.'}
+        </p>
+      )}
 
       <div className="flex items-center gap-2 mb-2">
         {installPrompt ? (
           <Button variant="outline" size="sm" onClick={handleInstall}>
-            <span className="material-symbols-outlined">install_mobile</span> Add to Homescreen
+            <Icon name="install_mobile" /> Add to Homescreen
           </Button>
         ) : !isStandalone && (
           <span className="text-xs text-muted-foreground">

@@ -12,6 +12,7 @@
  */
 
 import { useState, useCallback, useEffect } from 'preact/hooks';
+import { Icon } from '@/components/ui/icon';
 import { Button } from '@/components/ui/button';
 import { QRCodeDisplay } from '@/components/ui/qr-code';
 import { receiveContactCard, linkDevice, getLinkPayload, rendezvousJoinDeviceLink, onRendezvousEvent } from '../shared/keyhive-api';
@@ -164,7 +165,7 @@ export function LinkDevicePage({ cardData }: LinkDevicePageProps) {
   return (
     <div className="max-w-md mx-auto p-8 text-center">
       <h1 className="text-xl font-bold mb-4">
-        <span className="material-symbols-outlined align-middle mr-1" style={{ fontSize: 24 }}>devices</span>
+        <Icon name="devices" size={24} className="align-middle mr-1" />
         Link Device
       </h1>
 
@@ -222,7 +223,7 @@ export function LinkDevicePage({ cardData }: LinkDevicePageProps) {
                 </>
               ) : (
                 <p className="text-sm text-green-600 font-medium mb-4">
-                  <span className="material-symbols-outlined align-middle mr-1" style={{ fontSize: 16 }}>check_circle</span>
+                  <Icon name="check_circle" size={16} className="align-middle mr-1" />
                   Linking complete
                 </p>
               )}

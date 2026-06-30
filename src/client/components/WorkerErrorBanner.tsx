@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'preact/hooks';
+import { Icon } from '@/components/ui/icon';
 import { onWorkerError } from '@/worker-api';
 
 /**
@@ -16,7 +17,7 @@ export function WorkerErrorBanner() {
 
   return (
     <div class="fixed top-0 inset-x-0 z-50 flex items-center justify-center gap-3 bg-destructive px-4 py-2 text-destructive-foreground shadow-md">
-      <span class="material-symbols-outlined text-base">error</span>
+      <Icon name="error" size={16} />
       <span class="text-sm">{message}</span>
       <a
         href="#/settings"
@@ -29,7 +30,7 @@ export function WorkerErrorBanner() {
         onClick={() => setMessage(null)}
         aria-label="Dismiss"
       >
-        <span class="material-symbols-outlined text-base">close</span>
+        <Icon name="close" size={16} />
       </button>
     </div>
   );

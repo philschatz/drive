@@ -64,7 +64,7 @@ describe('AccessControl', () => {
 
     render(<AccessControl docId="doc-1" access="admin" />);
     // Open the sheet
-    screen.getByTitle('admin · Share & permissions').click();
+    screen.getByTitle('Share & permissions').click();
 
     // The "no access" message should NOT be visible while loading
     expect(screen.queryByText('You no longer have access to this document')).toBeNull();
@@ -76,7 +76,7 @@ describe('AccessControl', () => {
     mockGetKnownContacts.mockResolvedValue([]);
 
     render(<AccessControl docId="doc-1" access={null} />);
-    screen.getByTitle('Share & permissions').click();
+    screen.getByTitle('No access').click();
 
     await waitFor(() => {
       expect(screen.getByText('You no longer have access to this document')).toBeDefined();
@@ -89,7 +89,7 @@ describe('AccessControl', () => {
     mockGetKnownContacts.mockReturnValue(new Promise(() => {}));
 
     render(<AccessControl docId="doc-1" access={null} />);
-    screen.getByTitle('Share & permissions').click();
+    screen.getByTitle('No access').click();
 
     // Wait a tick — message should still not appear
     await new Promise(r => setTimeout(r, 50));
@@ -106,7 +106,7 @@ describe('AccessControl', () => {
     mockGetKnownContacts.mockResolvedValue([]);
 
     render(<AccessControl docId="doc-1" access="admin" />);
-    screen.getByTitle('admin · Share & permissions').click();
+    screen.getByTitle('Share & permissions').click();
 
     await waitFor(() => {
       expect(mockGetMyAccess).toHaveBeenCalled();

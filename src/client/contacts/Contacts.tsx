@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'preact/hooks';
-import { Button, buttonVariants } from '@/components/ui/button';
+import { Icon } from '@/components/ui/icon';
+import { Button } from '@/components/ui/button';
 import { Alert } from '@/components/ui/alert';
 import { DeleteButton } from '@/components/ui/delete-button';
 import { EditableName } from '@/components/EditableName';
@@ -144,16 +145,18 @@ export function Contacts({ path }: { path?: string }) {
           href="#/"
           className="inline-flex items-center justify-center h-9 w-9 rounded-md hover:bg-accent hover:text-accent-foreground"
         >
-          <span className="material-symbols-outlined">arrow_back</span>
+          <Icon name="arrow_back" />
         </a>
         <h1 className="text-2xl font-bold">Contacts</h1>
         <Button variant="outline" size="sm" onClick={refresh} disabled={loading} title="Refresh">
-          <span className="material-symbols-outlined" style={{ fontSize: 16 }}>refresh</span>
+          <Icon name="refresh" size={16} />
         </Button>
-        <a href="#/add-friend" className={`${buttonVariants({ variant: 'outline', size: 'sm' })} ml-auto`}>
-          <span className="material-symbols-outlined mr-1" style={{ fontSize: 16 }}>person_add</span>
-          Add Friend
-        </a>
+        <Button asChild variant="outline" size="sm" className="ml-auto">
+          <a href="#/add-friend">
+            <Icon name="person_add" size={16} className="mr-1" />
+            Add Friend
+          </a>
+        </Button>
       </div>
 
       {error && (
@@ -176,13 +179,7 @@ export function Contacts({ path }: { path?: string }) {
           return (
             <div key={contact.agentId} className="py-2 border-b border-border">
               <div className="flex items-center gap-2">
-                <span
-                  className="material-symbols-outlined text-muted-foreground"
-                  style={{ fontSize: 16 }}
-                  title={contact.isGroup ? 'User (all their devices)' : 'Single device'}
-                >
-                  {contact.isGroup ? 'group' : 'smartphone'}
-                </span>
+                <Icon name={contact.isGroup ? 'group' : 'smartphone'} size={16} className="text-muted-foreground" title={contact.isGroup ? 'User (all their devices)' : 'Single device'} />
                 <EditableName agentId={contact.agentId} />
                 <span
                   className="inline-flex items-center gap-0.5 text-xs text-muted-foreground"
@@ -190,7 +187,7 @@ export function Contacts({ path }: { path?: string }) {
                     .map(id => getContactName(id) || `${id.slice(0, 8)}…`)
                     .join('\n')}`}
                 >
-                  <span className="material-symbols-outlined" style={{ fontSize: 14 }}>smartphone</span>
+                  <Icon name="smartphone" size={14} />
                   {contact.deviceIds.length}
                 </span>
                 <DeleteButton
@@ -206,7 +203,7 @@ export function Contacts({ path }: { path?: string }) {
                 )}
                 {visibleDocs.map(d => (
                   <div key={d.docId} className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                    <span className="material-symbols-outlined" style={{ fontSize: 14 }}>{iconForType(d.docType)}</span>
+                    <Icon name={iconForType(d.docType)} size={14} />
                     <a href={viewPathForType(d.docType, d.docId)} className="hover:underline hover:text-foreground">
                       {d.docName}
                     </a>

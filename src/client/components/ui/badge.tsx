@@ -1,31 +1,30 @@
-import { cva, type VariantProps } from "class-variance-authority";
-import { cn } from "@/lib/utils";
+import { Badge as RTBadge } from "@radix-ui/themes";
 
-const badgeVariants = cva(
-  "inline-flex items-center rounded-md border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2",
-  {
-    variants: {
-      variant: {
-        default: "border-transparent bg-primary text-primary-foreground shadow hover:bg-primary/80",
-        secondary: "border-transparent bg-secondary text-secondary-foreground hover:bg-secondary/80",
-        destructive: "border-transparent bg-destructive text-destructive-foreground shadow hover:bg-destructive/80",
-        outline: "text-foreground",
-      },
-    },
-    defaultVariants: {
-      variant: "default",
-    },
-  }
-);
+/**
+ * Adapter over @radix-ui/themes Badge, preserving the legacy `variant` API.
+ */
 
-export interface BadgeProps
-  extends React.HTMLAttributes<HTMLDivElement>,
-    VariantProps<typeof badgeVariants> {}
+const VARIANT: Record<string, { variant: any; color?: any }> = {
+  default: { variant: "solid" },
+  secondary: { variant: "soft", color: "gray" },
+  destructive: { variant: "solid", color: "red" },
+  outline: { variant: "outline" },
+};
 
-function Badge({ className, variant, ...props }: BadgeProps) {
+export interface BadgeProps {
+  variant?: "default" | "secondary" | "destructive" | "outline";
+  className?: string;
+  children?: any;
+  [key: string]: any;
+}
+
+function Badge({ variant = "default", className, children, ...props }: BadgeProps) {
+  const v = VARIANT[variant] ?? VARIANT.default;
   return (
-    <div className={cn(badgeVariants({ variant }), className)} {...props} />
+    <RTBadge variant={v.variant} color={v.color} className={className} {...props}>
+      {children}
+    </RTBadge>
   );
 }
 
-export { Badge, badgeVariants };
+export { Badge };

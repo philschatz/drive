@@ -7,46 +7,36 @@ import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert';
 import * as fs from 'fs';
 import * as path from 'path';
 
+// These wrappers now render @radix-ui/themes components, so the tests assert
+// behavior (roles, tags, events, prop passthrough) rather than specific Tailwind
+// classes, which are no longer emitted by the components themselves.
+
 // ---------------------------------------------------------------------------
 // Button
 // ---------------------------------------------------------------------------
 
 describe('Button', () => {
-  it('renders with default variant', () => {
+  it('renders a button with its label', () => {
     render(<Button>Click me</Button>);
-    const btn = screen.getByRole('button', { name: 'Click me' });
-    expect(btn).toBeDefined();
-    expect(btn.className).toContain('bg-primary');
+    expect(screen.getByRole('button', { name: 'Click me' })).toBeDefined();
   });
 
-  it('renders destructive variant', () => {
-    render(<Button variant="destructive">Delete</Button>);
-    const btn = screen.getByRole('button', { name: 'Delete' });
-    expect(btn.className).toContain('bg-destructive');
-  });
+  it.each(['default', 'destructive', 'outline', 'ghost', 'secondary'] as const)(
+    'renders %s variant as a button',
+    (variant) => {
+      render(<Button variant={variant}>{variant}</Button>);
+      expect(screen.getByRole('button', { name: variant })).toBeDefined();
+    }
+  );
 
-  it('renders outline variant', () => {
-    render(<Button variant="outline">Outline</Button>);
-    const btn = screen.getByRole('button', { name: 'Outline' });
-    expect(btn.className).toContain('border');
-  });
-
-  it('renders ghost variant', () => {
-    render(<Button variant="ghost">Ghost</Button>);
-    const btn = screen.getByRole('button', { name: 'Ghost' });
-    expect(btn.className).toContain('hover:bg-gray-200');
-  });
-
-  it('applies size classes', () => {
+  it('renders sm size as a button', () => {
     render(<Button size="sm">Small</Button>);
-    const btn = screen.getByRole('button', { name: 'Small' });
-    expect(btn.className).toContain('h-8');
+    expect(screen.getByRole('button', { name: 'Small' })).toBeDefined();
   });
 
-  it('applies icon size', () => {
+  it('renders icon size as a button (IconButton)', () => {
     render(<Button size="icon">X</Button>);
-    const btn = screen.getByRole('button', { name: 'X' });
-    expect(btn.className).toContain('w-9');
+    expect(screen.getByRole('button', { name: 'X' })).toBeDefined();
   });
 
   it('forwards onClick handler', () => {
@@ -58,14 +48,12 @@ describe('Button', () => {
 
   it('renders as disabled', () => {
     render(<Button disabled>Disabled</Button>);
-    const btn = screen.getByRole('button', { name: 'Disabled' });
-    expect(btn).toHaveProperty('disabled', true);
+    expect(screen.getByRole('button', { name: 'Disabled' })).toHaveProperty('disabled', true);
   });
 
   it('merges custom className', () => {
     render(<Button className="custom-class">Styled</Button>);
-    const btn = screen.getByRole('button', { name: 'Styled' });
-    expect(btn.className).toContain('custom-class');
+    expect(screen.getByRole('button', { name: 'Styled' }).className).toContain('custom-class');
   });
 });
 
@@ -74,34 +62,17 @@ describe('Button', () => {
 // ---------------------------------------------------------------------------
 
 describe('Badge', () => {
-  it('renders with default variant', () => {
-    render(<Badge>Default</Badge>);
-    const badge = screen.getByText('Default');
-    expect(badge.className).toContain('bg-primary');
-  });
-
-  it('renders secondary variant', () => {
-    render(<Badge variant="secondary">Secondary</Badge>);
-    const badge = screen.getByText('Secondary');
-    expect(badge.className).toContain('bg-secondary');
-  });
-
-  it('renders destructive variant', () => {
-    render(<Badge variant="destructive">Error</Badge>);
-    const badge = screen.getByText('Error');
-    expect(badge.className).toContain('bg-destructive');
-  });
-
-  it('renders outline variant', () => {
-    render(<Badge variant="outline">Outline</Badge>);
-    const badge = screen.getByText('Outline');
-    expect(badge.className).toContain('text-foreground');
-  });
+  it.each(['default', 'secondary', 'destructive', 'outline'] as const)(
+    'renders %s variant with its text',
+    (variant) => {
+      render(<Badge variant={variant}>{variant}</Badge>);
+      expect(screen.getByText(variant)).toBeDefined();
+    }
+  );
 
   it('merges custom className', () => {
     render(<Badge className="my-badge">Custom</Badge>);
-    const badge = screen.getByText('Custom');
-    expect(badge.className).toContain('my-badge');
+    expect(screen.getByText('Custom').className).toContain('my-badge');
   });
 });
 
@@ -112,17 +83,15 @@ describe('Badge', () => {
 describe('Input', () => {
   it('renders a text input by default', () => {
     render(<Input placeholder="Name" />);
-    const input = screen.getByPlaceholderText('Name') as HTMLInputElement;
-    expect(input.tagName).toBe('INPUT');
+    expect((screen.getByPlaceholderText('Name') as HTMLInputElement).tagName).toBe('INPUT');
   });
 
   it('renders with specified type', () => {
     render(<Input type="email" placeholder="Email" />);
-    const input = screen.getByPlaceholderText('Email') as HTMLInputElement;
-    expect(input.type).toBe('email');
+    expect((screen.getByPlaceholderText('Email') as HTMLInputElement).type).toBe('email');
   });
 
-  it('forwards value and onChange', () => {
+  it('forwards value and onInput', () => {
     const onInput = jest.fn();
     render(<Input value="hello" onInput={onInput} />);
     const input = screen.getByDisplayValue('hello') as HTMLInputElement;
@@ -132,14 +101,12 @@ describe('Input', () => {
 
   it('applies disabled state', () => {
     render(<Input disabled placeholder="Disabled" />);
-    const input = screen.getByPlaceholderText('Disabled') as HTMLInputElement;
-    expect(input.disabled).toBe(true);
+    expect((screen.getByPlaceholderText('Disabled') as HTMLInputElement).disabled).toBe(true);
   });
 
   it('merges custom className', () => {
-    render(<Input className="wide-input" placeholder="Wide" />);
-    const input = screen.getByPlaceholderText('Wide');
-    expect(input.className).toContain('wide-input');
+    const { container } = render(<Input className="wide-input" placeholder="Wide" />);
+    expect(container.querySelector('.wide-input')).toBeTruthy();
   });
 });
 
@@ -150,20 +117,17 @@ describe('Input', () => {
 describe('Textarea', () => {
   it('renders a textarea element', () => {
     render(<Textarea placeholder="Description" />);
-    const textarea = screen.getByPlaceholderText('Description');
-    expect(textarea.tagName).toBe('TEXTAREA');
+    expect(screen.getByPlaceholderText('Description').tagName).toBe('TEXTAREA');
   });
 
   it('applies disabled state', () => {
     render(<Textarea disabled placeholder="No edit" />);
-    const textarea = screen.getByPlaceholderText('No edit') as HTMLTextAreaElement;
-    expect(textarea.disabled).toBe(true);
+    expect((screen.getByPlaceholderText('No edit') as HTMLTextAreaElement).disabled).toBe(true);
   });
 
   it('merges custom className', () => {
-    render(<Textarea className="tall" placeholder="Tall" />);
-    const textarea = screen.getByPlaceholderText('Tall');
-    expect(textarea.className).toContain('tall');
+    const { container } = render(<Textarea className="tall" placeholder="Tall" />);
+    expect(container.querySelector('.tall')).toBeTruthy();
   });
 });
 
@@ -174,71 +138,59 @@ describe('Textarea', () => {
 describe('Alert', () => {
   it('renders with role="alert"', () => {
     render(<Alert>Something happened</Alert>);
-    const alert = screen.getByRole('alert');
-    expect(alert).toBeDefined();
+    expect(screen.getByRole('alert')).toBeDefined();
   });
 
-  it('renders default variant', () => {
-    render(<Alert>Info</Alert>);
-    const alert = screen.getByRole('alert');
-    expect(alert.className).toContain('bg-background');
+  it.each(['default', 'destructive', 'success'] as const)('renders %s variant', (variant) => {
+    render(<Alert variant={variant}>msg</Alert>);
+    expect(screen.getByRole('alert')).toBeDefined();
   });
 
-  it('renders destructive variant', () => {
-    render(<Alert variant="destructive">Error!</Alert>);
-    const alert = screen.getByRole('alert');
-    expect(alert.className).toContain('border-destructive');
-  });
-
-  it('renders title and description', () => {
-    const el = (
-      <Alert>
-        <AlertTitle>Title</AlertTitle>
-        <AlertDescription>Description text</AlertDescription>
-      </Alert>
+  it('renders title and description text', () => {
+    render(
+      (
+        <Alert>
+          <AlertTitle>Title</AlertTitle>
+          <AlertDescription>Description text</AlertDescription>
+        </Alert>
+      ) as any
     );
-    render(el as any);
-    expect(screen.getByText('Title').tagName).toBe('H5');
+    expect(screen.getByText('Title')).toBeDefined();
     expect(screen.getByText('Description text')).toBeDefined();
   });
 
   it('merges custom className', () => {
     render(<Alert className="my-alert">Test</Alert>);
-    const alert = screen.getByRole('alert');
-    expect(alert.className).toContain('my-alert');
+    expect(screen.getByRole('alert').className).toContain('my-alert');
   });
 });
 
 // ---------------------------------------------------------------------------
-// Z-index layering: portaled components must render above the Sheet (z-[200])
+// Z-index layering: Themes popovers must render above the Sheet (z-[200]).
+// Themes popper content uses .rt-PopperContent, lifted in globals.css.
 // ---------------------------------------------------------------------------
 
 describe('z-index layering', () => {
-  const uiDir = path.resolve(__dirname);
-
-  function extractZIndices(filename: string): number[] {
-    const src = fs.readFileSync(path.join(uiDir, filename), 'utf-8');
-    const indices: number[] = [];
-    // Match z-50, z-[200], z-[250], etc.
+  function zIndices(src: string): number[] {
+    const out: number[] = [];
     for (const m of src.matchAll(/\bz-(\d+|\[\d+\])/g)) {
       const raw = m[1];
-      indices.push(raw.startsWith('[') ? parseInt(raw.slice(1, -1)) : parseInt(raw));
+      out.push(raw.startsWith('[') ? parseInt(raw.slice(1, -1)) : parseInt(raw));
     }
-    return indices;
+    return out;
   }
 
-  it('sheet.tsx z-index is documented as 200', () => {
-    const zValues = extractZIndices('sheet.tsx');
-    expect(zValues.length).toBeGreaterThan(0);
-    // All Sheet z-indices should be 200
-    for (const z of zValues) expect(z).toBe(200);
+  it('sheet.tsx z-index is 200', () => {
+    const src = fs.readFileSync(path.join(__dirname, 'sheet.tsx'), 'utf-8');
+    const zs = zIndices(src);
+    expect(zs.length).toBeGreaterThan(0);
+    for (const z of zs) expect(z).toBe(200);
   });
 
-  it.each(['select.tsx', 'tooltip.tsx'])('%s portaled content renders above sheet (z > 200)', (file) => {
-    const zValues = extractZIndices(file);
-    expect(zValues.length).toBeGreaterThan(0);
-    for (const z of zValues) {
-      expect(z).toBeGreaterThan(200);
-    }
+  it('globals.css lifts Themes popper content above the sheet (z > 200)', () => {
+    const css = fs.readFileSync(path.join(__dirname, '../../globals.css'), 'utf-8');
+    const m = css.match(/\.rt-PopperContent\s*\{[^}]*z-index:\s*(\d+)/);
+    expect(m).toBeTruthy();
+    expect(parseInt(m![1])).toBeGreaterThan(200);
   });
 });
