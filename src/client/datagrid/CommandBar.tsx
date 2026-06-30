@@ -14,7 +14,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { Button } from '@/components/ui/button';
 import type { ResolvedEntry, ResolvedMenu } from './commands';
-import { ColorPicker, FONT_SIZES } from './FormattingToolbar';
+import { ColorPicker, ColorPickerContent, FONT_SIZES } from './FormattingToolbar';
 
 // ------------------------------------------------------------
 // CommandMenuBar — renders the full menubar from resolved menus
@@ -45,7 +45,7 @@ function MenuEntry({ entry }: { entry: ResolvedEntry }) {
   if (entry.kind === 'separator') return <MenubarSeparator />;
 
   if (entry.kind === 'submenu') {
-    // Color submenus render a grid instead of individual menu items
+    // Color submenus render the same picker (reset + presets + custom) as the toolbar
     const isColor = entry.id === 'text-color' || entry.id === 'bg-color';
     return (
       <MenubarSub>
@@ -55,20 +55,12 @@ function MenuEntry({ entry }: { entry: ResolvedEntry }) {
         </MenubarSubTrigger>
         <MenubarSubContent className={isColor ? 'p-2 min-w-0' : undefined}>
           {isColor ? (
-            <div className="grid grid-cols-10 gap-1">
-              {entry.children.map(child => {
-                if (child.kind !== 'command' || child.label === '__reset__') return null;
-                return (
-                  <button
-                    key={child.id}
-                    className="w-5 h-5 rounded-sm border border-gray-300 cursor-pointer hover:ring-2 ring-blue-500 focus:ring-2 focus:outline-none"
-                    style={{ background: child.label }}
-                    title={child.label}
-                    onClick={child.execute}
-                  />
-                );
-              })}
-            </div>
+            <ColorPickerContent
+              value={colorSubmenuValue(entry)}
+              onChange={(c) => applyColorChoice(entry, c)}
+              onReset={colorSubmenuReset(entry)}
+              resetLabel={entry.id === 'text-color' ? 'Default' : 'No fill'}
+            />
           ) : (
             entry.children.map((child, i) => (
               <MenuEntry key={child.kind === 'command' ? child.id : child.kind === 'submenu' ? child.id : `sep-${i}`} entry={child} />
@@ -155,6 +147,28 @@ export function CommandToolbar({ entries }: CommandToolbarProps) {
       })}
     </div>
   );
+}
+
+// Color submenu helpers, shared by the menubar submenus and the toolbar pickers.
+// The currently-checked preset (the `__reset__` child is excluded — it represents
+// "no color set", not a chosen color).
+function colorSubmenuValue(entry: ResolvedEntry & { kind: 'submenu' }): string | undefined {
+  const child = entry.children.find(c => c.kind === 'command' && c.isChecked && c.label !== '__reset__');
+  return child?.kind === 'command' ? child.label : undefined;
+}
+
+// Apply a color: run the matching preset's command, or executeCustom for a custom value.
+function applyColorChoice(entry: ResolvedEntry & { kind: 'submenu' }, c: string) {
+  const child = entry.children.find(ch => ch.kind === 'command' && ch.label === c);
+  if (child && child.kind === 'command') child.execute();
+  else entry.executeCustom?.(c);
+}
+
+// The reset handler (clears the color), if this submenu has a `__reset__` child.
+function colorSubmenuReset(entry: ResolvedEntry & { kind: 'submenu' }): (() => void) | undefined {
+  const resetChild = entry.children.find(ch => ch.kind === 'command' && ch.label === '__reset__');
+  if (resetChild && resetChild.kind === 'command') return () => resetChild.execute();
+  return undefined;
 }
 
 // Render toolbar submenu entries as appropriate widgets
@@ -262,18 +276,14 @@ function ToolbarSubmenuEntry({ entry }: { entry: ResolvedEntry & { kind: 'submen
 
   // Text color picker
   if (entry.id === 'text-color') {
-    const currentChild = entry.children.find(c => c.kind === 'command' && c.isChecked);
-    const current = currentChild?.kind === 'command' ? currentChild.label : undefined;
     return (
       <span className="contents">
         {divider}
         <ColorPicker
-          value={current || undefined}
-          onChange={(c) => {
-            const child = entry.children.find(ch => ch.kind === 'command' && ch.label === c);
-            if (child && child.kind === 'command') child.execute();
-            else entry.executeCustom?.(c);
-          }}
+          value={colorSubmenuValue(entry)}
+          onChange={(c) => applyColorChoice(entry, c)}
+          onReset={colorSubmenuReset(entry)}
+          resetLabel="Default"
           icon="format_color_text"
           title="Text color"
           disabled={!entry.isEnabled}
@@ -284,22 +294,14 @@ function ToolbarSubmenuEntry({ entry }: { entry: ResolvedEntry & { kind: 'submen
 
   // Background color picker
   if (entry.id === 'bg-color') {
-    const bgChild = entry.children.find(c => c.kind === 'command' && c.isChecked && c.id !== 'bg-color-reset');
-    const current = bgChild?.kind === 'command' ? bgChild.label : undefined;
     return (
       <span className="contents">
         {divider}
         <ColorPicker
-          value={current || undefined}
-          onChange={(c) => {
-            const child = entry.children.find(ch => ch.kind === 'command' && ch.label === c);
-            if (child && child.kind === 'command') child.execute();
-            else entry.executeCustom?.(c);
-          }}
-          onReset={() => {
-            const resetChild = entry.children.find(ch => ch.kind === 'command' && ch.id === 'bg-color-reset');
-            if (resetChild && resetChild.kind === 'command') resetChild.execute();
-          }}
+          value={colorSubmenuValue(entry)}
+          onChange={(c) => applyColorChoice(entry, c)}
+          onReset={colorSubmenuReset(entry)}
+          resetLabel="No fill"
           icon="format_color_fill"
           title="Fill color"
           defaultColor="transparent"

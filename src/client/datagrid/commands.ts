@@ -1291,11 +1291,16 @@ function buildTextColorSubmenu(state: GridCommandState, ctx: GridCommandContext)
     kind: 'submenu', id: 'text-color', label: 'Text color', icon: 'format_color_text',
     isEnabled: state.hasSelection,
     executeCustom: (color: string) => applyFormatToSelection(ctx, { textColor: color }),
-    children: PRESET_COLORS.map(c => ({
-      kind: 'command' as const, id: `text-color-${c}`, label: c, isEnabled: state.hasSelection,
-      isChecked: state.currentCellFormat?.textColor === c,
-      execute: () => applyFormatToSelection(ctx, { textColor: c }),
-    })),
+    children: [
+      { kind: 'command', id: 'text-color-reset', label: '__reset__', isEnabled: state.hasSelection,
+        isChecked: !state.currentCellFormat?.textColor,
+        execute: () => applyFormatToSelection(ctx, { textColor: undefined }) },
+      ...PRESET_COLORS.map(c => ({
+        kind: 'command' as const, id: `text-color-${c}`, label: c, isEnabled: state.hasSelection,
+        isChecked: state.currentCellFormat?.textColor === c,
+        execute: () => applyFormatToSelection(ctx, { textColor: c }),
+      })),
+    ],
   };
 }
 

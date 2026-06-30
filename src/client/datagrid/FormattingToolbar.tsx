@@ -157,10 +157,55 @@ export function FormattingToolbar({ currentFormat, hasSelection, onFormatChange 
 // ColorPicker
 // ============================================================
 
-export function ColorPicker({ value, onChange, onReset, icon, title, disabled, defaultColor = '#000' }: {
+// The inner content of a color picker — a reset option, the preset grid, and a
+// custom color input. Shared by the toolbar ColorPicker dropdown and the menubar
+// color submenus so both look and behave identically.
+export function ColorPickerContent({ value, onChange, onReset, resetLabel = 'No fill' }: {
   value?: string;
   onChange: (color: string) => void;
   onReset?: () => void;
+  resetLabel?: string;
+}) {
+  return (
+    <>
+      {onReset && (
+        <button
+          className="w-full text-left text-xs px-2 py-1 mb-2 rounded hover:bg-accent cursor-pointer flex items-center gap-1"
+          onClick={onReset}
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: '0.9rem' }}>format_color_reset</span>
+          {resetLabel}
+        </button>
+      )}
+      <div className="grid grid-cols-10 gap-1 mb-2">
+        {PRESET_COLORS.map(color => (
+          <button
+            key={color}
+            className="w-5 h-5 rounded-sm border border-gray-300 cursor-pointer hover:ring-2 ring-blue-500 focus:ring-2 focus:outline-none"
+            style={{ background: color }}
+            title={color}
+            onClick={() => onChange(color)}
+          />
+        ))}
+      </div>
+      <div className="flex items-center gap-2 mt-1 pt-1 border-t">
+        <span className="text-xs text-muted-foreground">Custom:</span>
+        <input
+          type="color"
+          value={value || '#000000'}
+          onChange={(e) => onChange((e.target as HTMLInputElement).value)}
+          className="w-6 h-6 cursor-pointer border-0 p-0"
+        />
+      </div>
+    </>
+  );
+}
+
+export function ColorPicker({ value, onChange, onReset, resetLabel, icon, title, disabled, defaultColor = '#000' }: {
+  value?: string;
+  onChange: (color: string) => void;
+  onReset?: () => void;
+  resetLabel?: string;
   icon: string;
   title: string;
   disabled?: boolean;
@@ -178,35 +223,7 @@ export function ColorPicker({ value, onChange, onReset, icon, title, disabled, d
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent className="p-2 w-auto" align="start">
-        {onReset && (
-          <button
-            className="w-full text-left text-xs px-2 py-1 mb-2 rounded hover:bg-accent cursor-pointer flex items-center gap-1"
-            onClick={onReset}
-          >
-            <span className="material-symbols-outlined" style={{ fontSize: '0.9rem' }}>format_color_reset</span>
-            No fill
-          </button>
-        )}
-        <div className="grid grid-cols-10 gap-1 mb-2">
-          {PRESET_COLORS.map(color => (
-            <button
-              key={color}
-              className="w-5 h-5 rounded-sm border border-gray-300 cursor-pointer hover:ring-2 ring-blue-500 focus:ring-2 focus:outline-none"
-              style={{ background: color }}
-              title={color}
-              onClick={() => onChange(color)}
-            />
-          ))}
-        </div>
-        <div className="flex items-center gap-2 mt-1 pt-1 border-t">
-          <span className="text-xs text-muted-foreground">Custom:</span>
-          <input
-            type="color"
-            value={value || '#000000'}
-            onChange={(e) => onChange((e.target as HTMLInputElement).value)}
-            className="w-6 h-6 cursor-pointer border-0 p-0"
-          />
-        </div>
+        <ColorPickerContent value={value} onChange={onChange} onReset={onReset} resetLabel={resetLabel} />
       </DropdownMenuContent>
     </DropdownMenu>
   );
