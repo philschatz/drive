@@ -20,6 +20,7 @@
  */
 
 import type { WebRTCSignal } from '../shared/webrtc-signal';
+import { frameMessage, FrameReassembler } from './webrtc-chunk';
 
 /** Worker → bridge commands. */
 export type WorkerToBridgeMsg =
@@ -71,6 +72,8 @@ interface PeerConn {
   remoteDescSet: boolean;
   /** Watchdog that retries negotiation if the channel doesn't open in time. */
   openTimer: ReturnType<typeof setTimeout> | null;
+  /** Reassembles inbound chunked frames back into whole sync messages. */
+  reasm: FrameReassembler;
 }
 
 /**
@@ -132,12 +135,14 @@ export function startWebRTCBridge(port: MessagePort): () => void {
     };
     dc.onerror = () => { /* surfaced via onclose / ICE state */ };
     dc.onmessage = (e: MessageEvent) => {
-      const bytes = e.data instanceof ArrayBuffer
+      const frame = e.data instanceof ArrayBuffer
         ? new Uint8Array(e.data)
         : new Uint8Array(e.data as ArrayBufferLike);
-      // Copy out so the transferred buffer is owned solely by the worker.
-      const copy = bytes.slice();
-      post({ kind: 'data-in', peerId, bytes: copy }, [copy.buffer]);
+      // Frames arrive chunked (see webrtc-chunk); deliver only once a whole
+      // message has been reassembled. The result is a fresh buffer owned solely
+      // by the worker after transfer.
+      const full = entry.reasm.push(frame);
+      if (full) post({ kind: 'data-in', peerId, bytes: full }, [full.buffer]);
     };
   }
 
@@ -146,7 +151,7 @@ export function startWebRTCBridge(port: MessagePort): () => void {
     if (entry) return entry;
 
     const pc = new RTCPeerConnection({ iceServers });
-    entry = { pc, dc: null, open: false, initiator, pendingCandidates: [], remoteDescSet: false, openTimer: null };
+    entry = { pc, dc: null, open: false, initiator, pendingCandidates: [], remoteDescSet: false, openTimer: null, reasm: new FrameReassembler() };
     peers.set(peerId, entry);
 
     pc.onicecandidate = (e: RTCPeerConnectionIceEvent) => {
@@ -242,7 +247,11 @@ export function startWebRTCBridge(port: MessagePort): () => void {
       case 'data-out': {
         const entry = peers.get(msg.peerId);
         if (entry?.dc && entry.open) {
-          try { entry.dc.send(msg.bytes as unknown as ArrayBuffer); } catch (err) { console.warn('[webrtc] dc.send failed:', err); }
+          // Chunk into frames small enough for the channel's maxMessageSize; a
+          // large sync message would otherwise be rejected outright.
+          try {
+            for (const frame of frameMessage(msg.bytes)) entry.dc.send(frame as unknown as ArrayBuffer);
+          } catch (err) { console.warn('[webrtc] dc.send failed:', err); }
         }
         break;
       }

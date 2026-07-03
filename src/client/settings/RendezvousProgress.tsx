@@ -21,6 +21,8 @@ interface RendezvousProgressProps {
   waitingLabel: string;
   /** Human message for the "exchanging data" step. */
   transferLabel: string;
+  /** Extra detail appended to the transfer step (e.g. the payload size "24.3 KB"). */
+  transferDetail?: string;
   /** Human message for the final, completed step. */
   doneLabel: string;
   /** When set, the whole flow is shown as failed with this message. */
@@ -71,7 +73,7 @@ function StepRow({ state, label }: { state: StepState; label: string }) {
 }
 
 export function RendezvousProgress({
-  phase, rendezvousId, waitingLabel, transferLabel, doneLabel, errorMessage,
+  phase, rendezvousId, waitingLabel, transferLabel, transferDetail, doneLabel, errorMessage,
 }: RendezvousProgressProps) {
   const connected = useWsStatus('');
 
@@ -105,7 +107,7 @@ export function RendezvousProgress({
     { label: connected ? 'Connected to relay' : 'Connecting to relay…' },
     { label: waitingLabel },
     { label: 'Other device connected' },
-    { label: transferLabel },
+    { label: transferDetail ? `${transferLabel} · ${transferDetail}` : transferLabel },
     { label: doneLabel },
   ];
 

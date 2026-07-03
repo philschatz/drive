@@ -88,6 +88,7 @@ export function LinkDevicePage({ cardData }: LinkDevicePageProps) {
   const [processing, setProcessing] = useState(false);
   const [myCardUrl, setMyCardUrl] = useState('');
   const [phase, setPhase] = useState<RendezvousStatus | null>(null);
+  const [transferDetail, setTransferDetail] = useState<string>();
 
   // Rendezvous join path (preferred): the tiny QR carries only {id, key}.
   const rdv = cardData ? parseRendezvous(cardData) : null;
@@ -96,7 +97,9 @@ export function LinkDevicePage({ cardData }: LinkDevicePageProps) {
   useEffect(() => {
     if (!rdv) return;
     const off = onRendezvousEvent((e) => {
-      if (e.rendezvousId === rdv.rendezvousId && e.status !== 'error') setPhase(e.status);
+      if (e.rendezvousId !== rdv.rendezvousId || e.status === 'error') return;
+      setPhase(e.status);
+      if (e.status === 'sending' && e.message) setTransferDetail(e.message);
     });
     return off;
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -194,6 +197,7 @@ export function LinkDevicePage({ cardData }: LinkDevicePageProps) {
                 rendezvousId={rdv.rendezvousId}
                 waitingLabel="Connecting to your other device — keep both open…"
                 transferLabel="Exchanging keys…"
+                transferDetail={transferDetail}
                 doneLabel="Linked."
               />
             </div>

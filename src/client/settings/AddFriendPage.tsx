@@ -91,6 +91,7 @@ export function AddFriendPage({ cardData }: AddFriendPageProps) {
   const [saved, setSaved] = useState(false);
   const [processing, setProcessing] = useState(false);
   const [phase, setPhase] = useState<RendezvousStatus | null>(null);
+  const [transferDetail, setTransferDetail] = useState<string>();
 
   // Rendezvous receive path (preferred): the tiny QR carries only {id, key}.
   const rdv = cardData ? parseRendezvous(cardData) : null;
@@ -100,7 +101,9 @@ export function AddFriendPage({ cardData }: AddFriendPageProps) {
   useEffect(() => {
     if (!rdv) return;
     const off = onRendezvousEvent((e) => {
-      if (e.rendezvousId === rdv.rendezvousId && e.status !== 'error') setPhase(e.status);
+      if (e.rendezvousId !== rdv.rendezvousId || e.status === 'error') return;
+      setPhase(e.status);
+      if (e.status === 'sending' && e.message) setTransferDetail(e.message);
     });
     return off;
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -245,6 +248,7 @@ export function AddFriendPage({ cardData }: AddFriendPageProps) {
           rendezvousId={rdv.rendezvousId}
           waitingLabel="Connecting to your friend — keep this open…"
           transferLabel="Exchanging contact info…"
+          transferDetail={transferDetail}
           doneLabel="You're now contacts."
         />
       ) : (

@@ -234,9 +234,19 @@ function rdvEvent(rendezvousId: string, status: RendezvousStatus, message?: stri
   );
 }
 
+/** Human-readable byte size, e.g. 512 → "512 B", 1234 → "1.2 KB". */
+function formatBytes(n: number): string {
+  if (n < 1000) return `${n} B`;
+  return `${(n / 1000).toFixed(1)} KB`;
+}
+
 /** Encrypt and send a payload to the other peer on a rendezvous topic. */
 async function rdvSendPayload(rendezvousId: string, key: string, plaintext: string): Promise<void> {
   const framed = await encryptString(key, plaintext);
+  // The 'sending' step carries the on-the-wire size (12-byte IV + ciphertext) so
+  // the UI can show how much this device is uploading. Every send leg goes
+  // through here, so all of them report a size.
+  rdvEvent(rendezvousId, 'sending', formatBytes(framed.length));
   rdvSend({ type: RDV_MSG, rendezvousId, data: framed });
 }
 
@@ -1666,7 +1676,6 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
         // Leg 1: send our bundle as soon as the friend joins the channel.
         onPeer: () => {
           rdvEvent(rendezvousId, 'peer-joined');
-          rdvEvent(rendezvousId, 'sending');
           rdvSendPayload(rendezvousId, key, plaintext)
             .catch(err => rdvEvent(rendezvousId, 'error', errMsg(err)));
         },
@@ -1750,7 +1759,6 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
       if (!result.isOwnCard) {
         const myUserGroupId = await khOps.ensureUserGroup({ create: true });
         const myCard = await khOps.getContactCard();
-        rdvEvent(rendezvousId, 'sending');
         await rdvSendPayload(rendezvousId, key, JSON.stringify({ card: myCard, displayName: msg.displayName, userGroupId: myUserGroupId ?? undefined }));
       }
       rdvSend({ type: RDV_UNSUB, rendezvousId });
@@ -1782,7 +1790,6 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
         key,
         onPeer: () => {
           rdvEvent(rendezvousId, 'peer-joined');
-          rdvEvent(rendezvousId, 'sending');
           rdvSendPayload(rendezvousId, key, myPayload).catch(err =>
             rdvEvent(rendezvousId, 'error', errMsg(err)));
         },
@@ -1837,7 +1844,6 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
                 // Leg 2: send our now-adopted card back so the original adds us.
                 const myUserGroupId = await khOps!.ensureUserGroup({ create: true });
                 const myCard = await khOps!.getContactCard();
-                rdvEvent(rendezvousId, 'sending');
                 await rdvSendPayload(rendezvousId, key, JSON.stringify({ card: myCard, userGroupId: myUserGroupId }));
                 clearTimeout(timer);
                 rdvSessions.delete(rendezvousId);

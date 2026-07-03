@@ -35,6 +35,7 @@ export function RendezvousShare({
   const [rendezvousId, setRendezvousId] = useState('');
   const [error, setError] = useState('');
   const [phase, setPhase] = useState<RendezvousStatus | null>(null);
+  const [transferDetail, setTransferDetail] = useState<string>();
 
   useEffect(() => {
     let rid = '';
@@ -42,7 +43,10 @@ export function RendezvousShare({
     const offEvent = onRendezvousEvent((e) => {
       if (e.rendezvousId !== rid) return;
       if (e.status === 'error') setError(e.message ?? 'Something went wrong.');
-      else setPhase(e.status);
+      else {
+        setPhase(e.status);
+        if (e.status === 'sending' && e.message) setTransferDetail(e.message);
+      }
     });
     create()
       .then(({ rendezvousId, key }) => {
@@ -85,6 +89,7 @@ export function RendezvousShare({
         rendezvousId={rendezvousId}
         waitingLabel={waitingLabel}
         transferLabel={transferLabel}
+        transferDetail={transferDetail}
         doneLabel={doneLabel}
         errorMessage={error || null}
       />
