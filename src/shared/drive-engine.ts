@@ -675,11 +675,48 @@ export class DriveEngine {
     return { docId, docType, name, heads, lastModified, versions };
   }
 
-  /** Current version of a doc as a plain JS object (opens + waits for ready). */
-  async getDocJson(docId: string): Promise<any> {
+  /**
+   * A doc as a plain JS object (opens + waits for ready). With no `version`, the
+   * current view; otherwise the snapshot at that history index (0-based).
+   */
+  async getDocJson(docId: string, version?: number): Promise<any> {
     const handle = await this.getOrLoadHandle(docId);
     if (handle.whenReady) { try { await handle.whenReady(); } catch { /* keep going */ } }
-    return handle.doc() ?? null;
+    const doc = handle.doc();
+    if (!doc || version === undefined) return doc ?? null;
+    const history = this.Automerge.getHistory(doc);
+    if (version < 0 || version >= history.length) {
+      throw new Error(`version ${version} out of range (0..${history.length - 1})`);
+    }
+    return history[version].snapshot ?? null;
+  }
+
+  /**
+   * Automerge patch ops between two history versions (0-based indices). Defaults
+   * mirror the git-style range: `to` is the latest version, `from` is `to - 1`,
+   * so calling with no range shows what the most-recent change did. A `from` of
+   * -1 (or version 0 as the latest) diffs against the empty document.
+   */
+  async diffVersions(
+    docId: string, fromVersion?: number, toVersion?: number,
+  ): Promise<{ from: number; to: number; patches: any[] }> {
+    const handle = await this.getOrLoadHandle(docId);
+    if (handle.whenReady) { try { await handle.whenReady(); } catch { /* keep going */ } }
+    const doc = handle.doc();
+    if (!doc) throw new Error('document not ready');
+    const history = this.Automerge.getHistory(doc);
+    const n = history.length;
+    if (n === 0) throw new Error('document has no history');
+
+    const to = toVersion ?? (n - 1);
+    const from = fromVersion ?? (to - 1); // -1 ⇒ diff against the empty document
+    if (to < 0 || to >= n) throw new Error(`version ${to} out of range (0..${n - 1})`);
+    if (from < -1 || from >= n) throw new Error(`version ${from} out of range (-1..${n - 1})`);
+
+    const beforeHeads = from < 0 ? [] : [history[from].change.hash];
+    const afterHeads = [history[to].change.hash];
+    const patches = this.Automerge.diff(doc, beforeHeads, afterHeads);
+    return { from, to, patches };
   }
 
   private emitWatchUpdate(docId: string): void {

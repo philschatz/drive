@@ -48,6 +48,29 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 const realStdoutWrite = process.stdout.write.bind(process.stdout);
 const out = (line: string) => realStdoutWrite(line + '\n');
 
+/** A patch path (keys and array indices), slash-separated: `events/uid/title`, `list/3`. */
+function fmtPatchPath(path: unknown[]): string {
+  return path.length ? path.map(String).join('/') : '(root)';
+}
+
+/** One Automerge patch op on a single line: `<action> <path> [= value]`. */
+function fmtPatch(op: any): string {
+  const path = fmtPatchPath(Array.isArray(op?.path) ? op.path : []);
+  const a = String(op?.action ?? '?').padEnd(6);
+  switch (op?.action) {
+    case 'put':
+    case 'splice': return `${a} ${path} = ${JSON.stringify(op.value)}`;
+    case 'insert': return `${a} ${path} = ${JSON.stringify(op.values)}`;
+    case 'inc':    return `${a} ${path} += ${op.value}`;
+    case 'del':    return `${a} ${path}${op.length > 1 ? ` (×${op.length})` : ''}`;
+    default: {
+      const { action, path: _p, ...rest } = op ?? {};
+      const extra = Object.keys(rest).length ? ' ' + JSON.stringify(rest) : '';
+      return `${a} ${path}${extra}`;
+    }
+  }
+}
+
 /** Wait until the adapter's raw relay socket is OPEN (rendezvous frames are dropped otherwise). */
 async function waitForRelayConnection(adapter: any, timeoutMs: number): Promise<void> {
   const deadline = Date.now() + timeoutMs;
@@ -176,6 +199,11 @@ async function requireLinked(kv: NodeKVStore): Promise<void> {
   process.exit(1);
 }
 
+/** Reject after `ms` — opening a doc blocks on whenReady() (it may still be syncing). */
+function withTimeout<T>(p: Promise<T>, ms: number, message: string): Promise<T> {
+  return Promise.race([p, sleep(ms).then(() => Promise.reject(new Error(message)))]);
+}
+
 /** Poll (up to ~20s) for the keyhive group graph to sync so accessible docs surface. */
 async function waitForDocs(engine: DriveEngine): Promise<string[]> {
   console.error('[cli] waiting for documents to sync…');
@@ -236,25 +264,28 @@ async function main(): Promise<void> {
       for (const id of ids) {
         const meta = await engine.getDocMeta(id);
         const at = meta.lastModified ? new Date(meta.lastModified * 1000).toISOString() : 'unknown';
-        out(`${id}  versions=${meta.versions ?? 0}  updated=${at}`);
+        const parts = [id];
+        if (meta.docType) parts.push(`type=${meta.docType}`);
+        if (meta.name) parts.push(`name=${JSON.stringify(meta.name)}`);
+        parts.push(`versions=${meta.versions ?? 0}`, `updated=${at}`);
+        out(parts.join('  '));
       }
       process.exit(0);
     });
 
-  // ── show: render a document's current version as JSON, then exit ────────────
-  withDataDir(program.command('show <docId>'))
-    .description("render a document's current version as JSON to stdout, then exit")
-    .action(async (docId: string, opts: CliOpts) => {
+  // ── show: render a document version as JSON, then exit ──────────────────────
+  withDataDir(program.command('show'))
+    .argument('<docId>', 'document id')
+    .argument('[version]', 'history index to render (0-based; default: current version)', intArg)
+    .description('render a document version as JSON to stdout, then exit')
+    .action(async (docId: string, version: number | undefined, opts: CliOpts) => {
       const { engine, kv } = await startEngine(opts);
       await requireLinked(kv);
-      console.error('[cli] loading document…');
-      // getDocJson blocks on whenReady() (the doc may still be syncing) — cap it
-      // so an inaccessible/never-arriving doc fails cleanly instead of hanging.
-      const timeout = sleep(30_000).then(() =>
-        Promise.reject(new Error('timed out waiting for the document to sync (is it accessible to this device?)')));
+      console.error(`[cli] loading document${version === undefined ? '' : ` @ v${version}`}…`);
       let doc: any;
       try {
-        doc = await Promise.race([engine.getDocJson(docId), timeout]);
+        doc = await withTimeout(engine.getDocJson(docId, version), 30_000,
+          'timed out waiting for the document to sync (is it accessible to this device?)');
       } catch (err) {
         console.error('[cli]', err instanceof Error ? err.message : String(err));
         process.exit(1);
@@ -264,6 +295,29 @@ async function main(): Promise<void> {
         process.exit(1);
       }
       out(JSON.stringify(doc, null, 2));
+      process.exit(0);
+    });
+
+  // ── diff: Automerge patch ops between two versions, then exit ───────────────
+  withDataDir(program.command('diff'))
+    .argument('<docId>', 'document id')
+    .argument('[from]', 'from history index (0-based; -1 = empty doc; default: to - 1)', intArg)
+    .argument('[to]', 'to history index (0-based; default: latest version)', intArg)
+    .description('print the JSON patch ops between two document versions to stdout, then exit')
+    .action(async (docId: string, from: number | undefined, to: number | undefined, opts: CliOpts) => {
+      const { engine, kv } = await startEngine(opts);
+      await requireLinked(kv);
+      console.error('[cli] loading document…');
+      let result: { from: number; to: number; patches: any[] };
+      try {
+        result = await withTimeout(engine.diffVersions(docId, from, to), 30_000,
+          'timed out waiting for the document to sync (is it accessible to this device?)');
+      } catch (err) {
+        console.error('[cli]', err instanceof Error ? err.message : String(err));
+        process.exit(1);
+      }
+      console.error(`[cli] diff v${result.from} → v${result.to} (${result.patches.length} op(s))`);
+      for (const op of result.patches) out(fmtPatch(op));
       process.exit(0);
     });
 

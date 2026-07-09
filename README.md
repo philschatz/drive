@@ -98,7 +98,8 @@ encrypted (keyhive) and identifies as one of your linked devices.
 ```bash
 npm run cli -- accept-invite "<link>"  # link this device (Settings -> Link Device in the app), then exit
 npm run cli -- list                    # print every accessible document: id, versions, last-modified
-npm run cli -- show <docId>            # render a document's current version as JSON to stdout
+npm run cli -- show <docId> [version]  # render a document version as JSON to stdout (default: current)
+npm run cli -- diff <docId> [from] [to] # print Automerge patch ops between two versions (default: latest change)
 npm run cli -- sync                    # keep the recent docs open and sync continuously (Ctrl-C to stop)
 ```
 
