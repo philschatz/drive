@@ -2,7 +2,7 @@
  * Settings page — device management and identity info.
  */
 
-import { useState, useEffect, useCallback } from 'preact/hooks';
+import { useState, useEffect, useCallback } from 'react';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Alert } from '@/components/ui/alert';
 import { DeviceList } from '@/components/DeviceList';
@@ -18,7 +18,7 @@ import { useDevices } from '../shared/use-devices';
 import { setCacheDisabled, clearAllCaches, deleteAllData } from '../worker-api';
 import { idbGet, idbSet, isCacheDisabled, KEYS } from '../idb-storage';
 import { getContactName, setContactName } from '../contact-names';
-export function Settings({ path }: { path?: string }) {
+export function Settings() {
   const [identity, setIdentity] = useState<IdentityInfo | null>(null);
   const [displayName, setDisplayName] = useState('');
   // The last persisted name, to skip no-op saves (e.g. a blur with no change, which

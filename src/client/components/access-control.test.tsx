@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/preact';
+import { render, screen, waitFor } from '@testing-library/react';
 
 let mockGetDocMembers: jest.Mock;
 let mockGetMyAccess: jest.Mock;

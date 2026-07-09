@@ -1,5 +1,5 @@
-import { useState, useRef, useCallback, useEffect } from 'preact/hooks';
-import type { RefObject } from 'preact';
+import { useState, useRef, useCallback, useEffect } from 'react';
+import type { RefObject } from 'react';
 
 export interface SheetTabInfo {
   id: string;
@@ -160,7 +160,7 @@ export function SheetTabs({ sheets, currentSheetId, onSelect, onAdd, onRename, o
             data-sheet-tab={sheet.id}
             className={'sheet-tab' + (isActive ? ' active' : '') + (showDropLeft ? ' drop-left' : '') + (showDropRight ? ' drop-right' : '')}
             onClick={() => { if (!isRenaming) onSelect(sheet.id); }}
-            onDblClick={() => startRename(sheet.id, sheet.name)}
+            onDoubleClick={() => startRename(sheet.id, sheet.name)}
             onMouseDown={(e: any) => handleTabMouseDown(sheet.id, e)}
             onContextMenu={() => {
               onContextMenu(sheet.id);

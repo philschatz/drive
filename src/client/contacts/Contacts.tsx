@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'preact/hooks';
+import { useState, useEffect, useCallback } from 'react';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Alert } from '@/components/ui/alert';
 import { DeleteButton } from '@/components/ui/delete-button';
@@ -24,7 +24,7 @@ interface ContactEntry {
   deviceIds: string[];
 }
 
-export function Contacts({ path }: { path?: string }) {
+export function Contacts() {
   const [contacts, setContacts] = useState<ContactEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');

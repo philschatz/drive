@@ -11,7 +11,8 @@
  *    QR code for the original device to open and finish the handshake.
  */
 
-import { useState, useCallback, useEffect } from 'preact/hooks';
+import { useState, useCallback, useEffect } from 'react';
+import { useParams } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { QRCodeDisplay } from '@/components/ui/qr-code';
 import { receiveContactCard, linkDevice, getLinkPayload, rendezvousJoinDeviceLink, onRendezvousEvent } from '../shared/keyhive-api';
@@ -32,10 +33,6 @@ export function buildLinkDeviceRendezvousUrl(rendezvousId: string, key: string):
   return `${base}#/link-device/r.${rendezvousId}.${key}`;
 }
 
-interface LinkDevicePageProps {
-  cardData?: string;
-  path?: string;
-}
 
 function b64urlToBytes(b64url: string): Uint8Array {
   const b64 = b64url.replace(/-/g, '+').replace(/_/g, '/');
@@ -81,7 +78,8 @@ function decodeLinkData(b64url: string): { cardJson: string; userGroupId: string
   return { cardJson: raw, userGroupId: null };
 }
 
-export function LinkDevicePage({ cardData }: LinkDevicePageProps) {
+export function LinkDevicePage() {
+  const { cardData } = useParams();
   const [status, setStatus] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);

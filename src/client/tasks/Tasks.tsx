@@ -1,4 +1,5 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from 'preact/hooks';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useParams } from 'react-router-dom';
 import './tasks.css';
 import { subscribeQuery, updateDoc, deepAssign } from '../worker-api';
 import type { PeerState } from '../shared/automerge';
@@ -56,7 +57,8 @@ function sortedTasks(tasks: Record<string, Task>): { uid: string; task: Task }[]
   return [...incomplete, ...done];
 }
 
-export function Tasks({ docId, rest, readOnly }: { docId?: string; rest?: string; readOnly?: boolean; path?: string }) {
+export function Tasks({ readOnly }: { readOnly?: boolean }) {
+  const { docId, '*': rest } = useParams();
   const taskId = rest?.startsWith('tasks/') ? rest.slice(6).split('/')[0] : undefined;
   const [listName, setListName] = useState('Tasks');
   const [listDesc, setListDesc] = useState('');

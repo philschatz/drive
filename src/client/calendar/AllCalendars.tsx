@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from 'preact/hooks';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import '@schedule-x/theme-default/dist/index.css';
 import './calendar.css';
 import type { PeerState } from '../shared/automerge';
@@ -28,7 +28,7 @@ interface LoadedCalendar {
 
 const defaultTZ = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
-export function AllCalendars({ path }: { path?: string }) {
+export function AllCalendars() {
   const [calendars, setCalendars] = useState<LoadedCalendar[]>([]);
   const [status, setStatus] = useState('Loading calendars...');
   const [settingsDocId, setSettingsDocId] = useState<string | null>(null);

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'preact/hooks';
+import { useState, useEffect, useCallback, useRef } from 'react';
 
 import type { ValidationError } from '../../shared/schemas';
 import { peerDisplayName } from '../shared/presence';

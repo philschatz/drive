@@ -4,7 +4,7 @@
  * The full document is never sent to the main thread — query is the only read path.
  */
 
-import { useState, useEffect, useRef } from 'preact/hooks';
+import { useState, useEffect, useRef } from 'react';
 import type { WorkerToMain } from './automerge-worker';
 import type { ValidationError } from './automerge-worker';
 import type { PresenceState, PeerState } from '@automerge/automerge-repo';

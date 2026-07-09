@@ -1,5 +1,5 @@
 import { defineConfig, Plugin } from 'vite';
-import preact from '@preact/preset-vite';
+import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import wasm from 'vite-plugin-wasm';
 import { VitePWA } from 'vite-plugin-pwa';
@@ -9,23 +9,6 @@ import { writeFileSync } from 'fs';
 import { relayPlugin } from './src/backend/relay-plugin';
 
 const automergeEntry = resolve(__dirname, 'node_modules/@automerge/automerge/dist/mjs/entrypoints/fullfat_base64.js');
-
-// Radix UI's Presence component calls getComputedStyle(node) in a ref callback,
-// but under Preact's compat layer the ref value may not be a DOM Element.
-// Match by code content (not path) because Vite pre-bundles deps into single files.
-function radixPreactPatchPlugin(): Plugin {
-  return {
-    name: 'radix-preact-patch',
-    transform(code) {
-      if (code.includes('stylesRef.current = node2 ? getComputedStyle(node2) : null')) {
-        return code.replace(
-          'stylesRef.current = node2 ? getComputedStyle(node2) : null;',
-          'stylesRef.current = (node2 instanceof Element) ? getComputedStyle(node2) : null;',
-        );
-      }
-    },
-  };
-}
 
 function automergeWasmPlugin(): Plugin {
   return {
@@ -161,15 +144,9 @@ export default defineConfig(async () => {
   base,
   plugins: [
     wasm(),
-    // @preact/preset-vite 2.10.5's `transform-hook-names` plugin does a dynamic
-    // `import("zimmerframe")`, which fails to resolve under vite 8's bundled
-    // config/plugin context ("No exports main defined") and aborts the transform
-    // on every hooks module in dev. Drop just that plugin — preact devtools and
-    // prefresh HMR still work; only the devtools hook-name labels are lost.
-    ...(preact() as Plugin[]).filter((p) => p && p.name !== 'preact:transform-hook-names'),
+    react(),
     tailwindcss(),
     relayPlugin(),
-    radixPreactPatchPlugin(),
     automergeWasmPlugin(),
     keyhiveWasmPlugin(),
     versionJsonPlugin(),
@@ -230,7 +207,7 @@ export default defineConfig(async () => {
       '@automerge/automerge-subduction/slim': resolve(__dirname, 'node_modules/@automerge/automerge-subduction/dist/esm/slim.js'),
       '@automerge/automerge-subduction': subductionEntry,
     },
-    dedupe: ['preact', '@preact/signals', '@preact/signals-core'],
+    dedupe: ['react', 'react-dom'],
   },
   server: {
     fs: {
@@ -242,7 +219,7 @@ export default defineConfig(async () => {
   },
   optimizeDeps: {
     include: [
-      '@preact/signals', '@preact/signals-core', 'preact/hooks', 'preact/compat', 'buffer/', 'exceljs',
+      'buffer/', 'exceljs',
       // Worker-only deps: pre-optimize at startup so vite doesn't discover them
       // mid-load and trigger a "new dependencies optimized, reloading" cycle on
       // first cold start. The Rolldown optimize plugin below rewrites their reserved methods.
@@ -256,7 +233,12 @@ export default defineConfig(async () => {
     // so without this exclusion the full 2.4 MB base64 string ends up in the
     // pre-bundled chunk and OOMs the Chromium renderer during dev-mode testing.
     //
-    exclude: ['@automerge/automerge', '@automerge/automerge-subduction', '@keyhive/keyhive'],
+    // IronCalc's wasm-bindgen glue loads its .wasm via `new URL('wasm_bg.wasm',
+    // import.meta.url)`, which esbuild pre-bundling doesn't rewrite (→ 404). Exclude
+    // both so Vite serves them as source ESM with import.meta.url intact and
+    // vite-plugin-wasm resolves the binary.
+    exclude: ['@automerge/automerge', '@automerge/automerge-subduction', '@keyhive/keyhive',
+      '@ironcalc/workbook', '@ironcalc/wasm'],
     // automerge-repo (subduction.37) names Repo methods `import(...)`/`export(...)`
     // (reserved words); without rewriting them, vite's dev import-analysis misparses
     // `import(` as a dynamic import and corrupts the pre-bundled chunk. Fix it during

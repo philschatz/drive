@@ -1,4 +1,5 @@
-import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { useParams } from 'react-router-dom';
 import '@schedule-x/theme-default/dist/index.css';
 import './calendar.css';
 import { subscribeQuery, updateDoc, deepAssign } from '../worker-api';
@@ -23,7 +24,8 @@ import { useEventMutations } from './useEventMutations';
 import { usePeerFocusedFields } from './usePeerFocusedFields';
 import { getInitialDateRange, makeSXCallbacks } from './calendar-utils';
 
-export function Calendar({ docId, rest, readOnly }: { docId?: string; rest?: string; readOnly?: boolean; path?: string }) {
+export function Calendar({ readOnly }: { readOnly?: boolean }) {
+  const { docId, '*': rest } = useParams();
   const eventId = rest?.startsWith('events/') ? rest.slice(7).split('/')[0] : undefined;
   return (
     <DocLoader docId={docId}>

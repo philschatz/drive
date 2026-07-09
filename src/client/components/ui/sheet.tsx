@@ -1,6 +1,6 @@
-import { useEffect, useRef, useCallback, useContext } from 'preact/hooks';
-import { createPortal } from 'preact/compat';
-import { createContext } from 'preact';
+import { useEffect, useRef, useCallback, useContext } from 'react';
+import { createPortal } from 'react-dom';
+import { createContext } from 'react';
 import { cn } from "@/lib/utils";
 
 const SheetCtx = createContext<{ onClose: () => void }>({ onClose: () => {} });

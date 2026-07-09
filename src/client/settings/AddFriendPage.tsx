@@ -11,18 +11,14 @@
  * add them as a known contact, then let the user assign a human-readable name.
  */
 
-import { useState, useCallback, useEffect } from 'preact/hooks';
+import { useState, useCallback, useEffect } from 'react';
+import { useParams } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { receiveContactCard, rendezvousReceive, getIdentity, onRendezvousEvent } from '../shared/keyhive-api';
 import type { RendezvousStatus } from '../worker-api';
 import { setContactName, getContactName } from '../contact-names';
 import { RendezvousProgress } from './RendezvousProgress';
 import { deflate, inflate } from 'pako';
-
-interface AddFriendPageProps {
-  cardData?: string;
-  path?: string;
-}
 
 /** Parse the rendezvous URL form `r.<id>.<key>` (base64url parts; '.' separates). */
 function parseRendezvous(cardData: string): { rendezvousId: string; key: string } | null {
@@ -81,7 +77,8 @@ function decodeFriendData(b64url: string): { cardJson: string; displayName?: str
   return { cardJson: raw };
 }
 
-export function AddFriendPage({ cardData }: AddFriendPageProps) {
+export function AddFriendPage() {
+  const { cardData } = useParams();
   const [status, setStatus] = useState('');
   const [error, setError] = useState<string | null>(null);
   // A contact is identified by its user-group id (its share target), never by a

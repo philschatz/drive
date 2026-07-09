@@ -1,4 +1,4 @@
-import type { ComponentChildren } from 'preact';
+import type { ReactNode } from 'react';
 import { useWsStatus, usePeerTransports, getWorkerPeerId } from './automerge';
 import { getWorkerUserGroupId } from '../worker-api';
 import { peerDisplayName, peerIdentityKey, PeerDot, type PresenceState } from './presence';
@@ -47,7 +47,7 @@ export function EditorTitleBar<P extends PeerLike>({
   onToggleValidation?: () => void;
   validationActive?: boolean;
   validationCount?: number;
-  children?: ComponentChildren;
+  children?: ReactNode;
 }) {
   const connected = useWsStatus(docId!);
   const transports = usePeerTransports();

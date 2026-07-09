@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from 'preact/hooks';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import type { SearchableEntry } from './commands';
 
 interface CommandSearchProps {
@@ -38,7 +38,7 @@ export function CommandSearch({ entries }: CommandSearchProps) {
     inputRef.current?.blur();
   }, []);
 
-  const handleKeyDown = (e: KeyboardEvent) => {
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'ArrowDown') {
       e.preventDefault();
       setHighlightIndex(i => Math.min(i + 1, filtered.length - 1));

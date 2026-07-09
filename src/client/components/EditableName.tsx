@@ -1,4 +1,4 @@
-import { useState, useRef } from 'preact/hooks';
+import { useState, useRef } from 'react';
 import { getContactName, setContactName } from '../contact-names';
 
 export function EditableName({ agentId, suffix }: { agentId: string; suffix?: any }) {

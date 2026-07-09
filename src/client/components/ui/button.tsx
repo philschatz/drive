@@ -1,7 +1,7 @@
-import { forwardRef } from "preact/compat";
+import { forwardRef } from "react";
 import { cva, type VariantProps } from "class-variance-authority";
 import { cn } from "@/lib/utils";
-import type { JSX } from "preact";
+import type { ButtonHTMLAttributes } from "react";
 
 const buttonVariants = cva(
   "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0 cursor-pointer",
@@ -31,7 +31,7 @@ const buttonVariants = cva(
 );
 
 export interface ButtonProps
-  extends JSX.HTMLAttributes<HTMLButtonElement>,
+  extends ButtonHTMLAttributes<HTMLButtonElement>,
     VariantProps<typeof buttonVariants> {
   disabled?: boolean;
   type?: "button" | "submit" | "reset";

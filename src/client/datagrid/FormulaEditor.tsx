@@ -1,4 +1,4 @@
-import { useRef, useEffect, useCallback } from 'preact/hooks';
+import { useRef, useEffect, useCallback } from 'react';
 import type { EditorView, ViewUpdate } from '@codemirror/view';
 import { letterToColIndex } from './helpers';
 

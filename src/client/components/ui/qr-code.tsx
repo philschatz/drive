@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'preact/hooks';
+import { useState, useEffect } from 'react';
 import QRCode from 'qrcode';
 import { showToast } from './toast';
 

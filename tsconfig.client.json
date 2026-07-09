@@ -5,7 +5,7 @@
     "module": "ESNext",
     "moduleResolution": "bundler",
     "jsx": "react-jsx",
-    "jsxImportSource": "preact",
+    "jsxImportSource": "react",
     "strict": true,
     "skipLibCheck": true,
     "esModuleInterop": true,
@@ -14,8 +14,6 @@
     "noEmit": true,
     "types": ["vite/client"],
     "paths": {
-      "react": ["./node_modules/preact/compat/"],
-      "react-dom": ["./node_modules/preact/compat/"],
       "@/*": ["./src/client/*"]
     }
   },

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'preact/hooks';
+import { useState, useEffect } from 'react';
 import { subscribeValidation, type ValidationError } from '../worker-api';
 
 export type { ValidationError };

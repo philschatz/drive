@@ -7,7 +7,7 @@
  * carries a real group id (a friend can't be granted doc access without it).
  */
 
-import { useState, useEffect, useCallback } from 'preact/hooks';
+import { useState, useEffect, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import { Alert } from '@/components/ui/alert';
 import { getIdentity, ensureUserGroup, rendezvousCreateShare } from '../shared/keyhive-api';
@@ -16,7 +16,7 @@ import { keyhiveReady } from '../shared/automerge';
 import { RendezvousShare } from './RendezvousShare';
 import { buildAddFriendRendezvousUrl } from './AddFriendPage';
 
-export function ShareWithFriendPage({ path }: { path?: string }) {
+export function ShareWithFriendPage() {
   const [savedName, setSavedName] = useState('');
   const [error, setError] = useState('');
   // Bump to (re)mount RendezvousShare; >0 means the share has been started.

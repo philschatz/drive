@@ -6,7 +6,7 @@
  * camera indicator turns off.
  */
 
-import { useEffect, useRef, useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'react';
 import jsQR from 'jsqr';
 import { Button } from '@/components/ui/button';
 

@@ -1,21 +1,6 @@
 import * as MenubarPrimitive from "@radix-ui/react-menubar";
 import { cn } from "@/lib/utils";
 
-// Under preact, Radix's DismissableLayer doesn't recognize a nested submenu as a
-// "branch" of its parent menu (a branch-containment check that works in React
-// fails here). So interacting with a submenu looks like an interaction *outside*
-// the parent: moving the pointer in fires focus-outside (dismissing the menu),
-// and clicking a submenu item fires pointer-down-outside (dismissing the menu
-// before the item's select runs, so the change never applies). Guard both — but
-// only when the interaction target is itself inside a menu, so genuine
-// outside-clicks (and Escape, and item selection) still close the menu normally.
-const keepOpenWhenInsideMenu = (e: { detail?: { originalEvent?: Event }; preventDefault: () => void }) => {
-  const target = e.detail?.originalEvent?.target as Element | null;
-  if (target && typeof target.closest === "function" && target.closest('[role="menu"]')) {
-    e.preventDefault();
-  }
-};
-
 const MenubarMenu = MenubarPrimitive.Menu;
 
 function Menubar({
@@ -61,11 +46,6 @@ function MenubarContent({
         align={align}
         alignOffset={alignOffset}
         sideOffset={sideOffset}
-        // See keepOpenWhenInsideMenu: keep the parent menu open while interacting
-        // with its submenu (focus moving in, or clicking a submenu item), but
-        // still dismiss on genuine outside interactions.
-        onFocusOutside={keepOpenWhenInsideMenu}
-        onPointerDownOutside={keepOpenWhenInsideMenu}
         className={cn(
           "z-50 min-w-[14rem] overflow-hidden rounded-md border bg-popover p-1 text-popover-foreground shadow-md data-[state=open]:animate-in data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2",
           className

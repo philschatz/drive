@@ -1,4 +1,4 @@
-import { useRef, useEffect } from 'preact/hooks';
+import { useRef, useEffect } from 'react';
 import type { DocumentHistory } from './useDocumentHistory';
 
 function formatTime(ts: number): string {

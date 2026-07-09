@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'preact/hooks';
+import { useState, useEffect, useCallback } from 'react';
 import { getMyAccess, onKeyhiveStateChanged } from './keyhive-api';
 
 export type AccessLevel = 'admin' | 'edit' | 'read' | 'relay' | null;

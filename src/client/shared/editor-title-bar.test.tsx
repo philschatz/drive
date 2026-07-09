@@ -1,4 +1,4 @@
-import { render, screen, fireEvent } from '@testing-library/preact';
+import { render, screen, fireEvent } from '@testing-library/react';
 
 // Mock automerge module before importing EditorTitleBar
 jest.mock('./automerge', () => ({

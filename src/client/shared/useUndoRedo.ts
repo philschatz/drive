@@ -1,4 +1,4 @@
-import { useRef, useState, useCallback, useEffect } from 'preact/hooks';
+import { useRef, useState, useCallback, useEffect } from 'react';
 import { getDocHistory, restoreDocToVersion } from '../worker-api';
 
 export { toPlain, syncToTarget } from '../../shared/sync-to-target';

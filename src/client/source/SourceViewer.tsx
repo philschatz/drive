@@ -1,4 +1,5 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from 'preact/hooks';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
 import type { PeerState } from '../shared/automerge';
 import { openDoc, subscribeQuery, updateDoc, getDocHistory, debugGetVersionPatches, setDocVersion } from '../worker-api';
 import { peerColor, peerDisplayName, initPresence, type PresenceState } from '../shared/presence';
@@ -9,7 +10,6 @@ import { usePresenceLog, PresenceLogTable } from '../shared/PresenceLog';
 import { SourceTree } from './SourceTree';
 import { validateDocument } from '../../shared/schemas';
 import { ValidationPanel } from '../shared/ValidationPanel';
-import { hashHistory } from '../hash-history';
 import { Progress } from '@/components/ui/progress';
 import { Button } from '@/components/ui/button';
 import { JqPanel } from './JqPanel';
@@ -172,7 +172,9 @@ function ClipboardInspector() {
 }
 
 
-export function SourceViewer({ docId, rest }: { docId?: string; rest?: string; path?: string }) {
+export function SourceViewer() {
+  const { docId, '*': rest } = useParams();
+  const navigate = useNavigate();
   const [status, setStatus] = useState('Loading document...');
   const [loadProgress, setLoadProgress] = useState<number | null>(null);
   const [currentDoc, setCurrentDoc] = useState<any>(null);
@@ -439,7 +441,7 @@ export function SourceViewer({ docId, rest }: { docId?: string; rest?: string; p
               variant="dark"
               onClickError={(err) => {
                 const pathStr = err.path.map((s: string | number) => encodeURIComponent(String(s))).join('/');
-                hashHistory.replace(`/source/${docId}/${pathStr}`);
+                navigate(`/source/${docId}/${pathStr}`, { replace: true });
                 setRevealPath(null);
                 requestAnimationFrame(() => setRevealPath(err.path));
               }}

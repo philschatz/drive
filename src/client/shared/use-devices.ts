@@ -8,7 +8,7 @@
  * name-saving and the cache toggle, so the hook must not own that state).
  */
 
-import { useState, useEffect, useCallback, useRef } from 'preact/hooks';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   listDevices,
   removeDevice as apiRemoveDevice,

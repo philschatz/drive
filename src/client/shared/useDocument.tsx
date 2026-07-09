@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'preact/hooks';
-import { type ComponentChildren } from 'preact';
+import { useState, useEffect } from 'react';
+import { type ReactNode } from 'react';
 import { openDoc } from '../worker-api';
 import { Progress } from '../components/ui/progress';
 
@@ -46,7 +46,7 @@ export function useDocument(docId: string | undefined) {
  * so their subscribeQuery effects can serve cached data while the doc syncs.
  * Shows a thin fixed progress bar at the top during loading.
  */
-export function DocLoader({ docId, children }: { docId: string | undefined; children: ComponentChildren }) {
+export function DocLoader({ docId, children }: { docId: string | undefined; children: ReactNode }) {
   const { status, progress, error } = useDocument(docId);
 
   if (status === 'error') return (

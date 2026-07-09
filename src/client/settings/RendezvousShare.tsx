@@ -11,7 +11,7 @@
  * event status(es) that mean "done".
  */
 
-import { useState, useEffect } from 'preact/hooks';
+import { useState, useEffect } from 'react';
 import { rendezvousCancel, onRendezvousEvent } from '../shared/keyhive-api';
 import type { RendezvousStatus } from '../worker-api';
 import { QRCodeDisplay } from '@/components/ui/qr-code';

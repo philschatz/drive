@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'preact/hooks';
+import { useState, useRef, useCallback } from 'react';
 import { getDocHistory, setDocVersion, restoreDocToVersion } from '../worker-api';
 
 export interface DocumentHistory {

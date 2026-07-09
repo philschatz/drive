@@ -6,7 +6,7 @@
  * this user. The new device opens the link (the receiver `LinkDevicePage`) to finish.
  */
 
-import { useState } from 'preact/hooks';
+import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Alert } from '@/components/ui/alert';
 import { DeviceList } from '@/components/DeviceList';
@@ -15,7 +15,7 @@ import { rendezvousCreateDeviceLink } from '../shared/keyhive-api';
 import { RendezvousShare } from './RendezvousShare';
 import { buildLinkDeviceRendezvousUrl } from './LinkDevicePage';
 
-export function LinkDeviceSharePage({ path }: { path?: string }) {
+export function LinkDeviceSharePage() {
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
   // Bump to (re)mount RendezvousShare; >0 means the share has been started.

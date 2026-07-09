@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'preact/hooks';
+import { useState, useEffect } from 'react';
 import { onWorkerError } from '@/worker-api';
 
 /**
@@ -15,21 +15,21 @@ export function WorkerErrorBanner() {
   if (!message) return null;
 
   return (
-    <div class="fixed top-0 inset-x-0 z-50 flex items-center justify-center gap-3 bg-destructive px-4 py-2 text-destructive-foreground shadow-md">
-      <span class="material-symbols-outlined text-base">error</span>
-      <span class="text-sm">{message}</span>
+    <div className="fixed top-0 inset-x-0 z-50 flex items-center justify-center gap-3 bg-destructive px-4 py-2 text-destructive-foreground shadow-md">
+      <span className="material-symbols-outlined text-base">error</span>
+      <span className="text-sm">{message}</span>
       <a
         href="#/settings"
-        class="ml-2 shrink-0 rounded border border-current px-2 py-0.5 text-sm font-medium hover:bg-destructive-foreground/10"
+        className="ml-2 shrink-0 rounded border border-current px-2 py-0.5 text-sm font-medium hover:bg-destructive-foreground/10"
       >
         Open Settings
       </a>
       <button
-        class="ml-1 shrink-0 opacity-80 hover:opacity-100"
+        className="ml-1 shrink-0 opacity-80 hover:opacity-100"
         onClick={() => setMessage(null)}
         aria-label="Dismiss"
       >
-        <span class="material-symbols-outlined text-base">close</span>
+        <span className="material-symbols-outlined text-base">close</span>
       </button>
     </div>
   );

@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from 'preact/hooks';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { run, JqError } from '../../shared/jq';
 
 const JQ_BUILTINS = [

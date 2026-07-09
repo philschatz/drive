@@ -1,6 +1,7 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from 'preact/hooks';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useConnectionStatus, usePeerList, usePeerTransports } from '../shared/automerge';
 import { createDoc, updateDoc, subscribeQuery, fetchDocList, removeDocId, onDocListUpdated, HOME_SUMMARY_QUERY } from '../worker-api';
+import { buildDefaultGrid } from '../datagrid/model-bridge';
 import { getMyAccess, onKeyhiveStateChanged } from '../shared/keyhive-api';
 import { PeerDot } from '../shared/presence';
 import { Button } from '@/components/ui/button';
@@ -46,7 +47,7 @@ function applyQueryResult(prev: DocEntry[], docId: string, result: any, lastModi
   });
 }
 
-export function Home({ path }: { path?: string }) {
+export function Home() {
   const [entries, setEntries] = useState<DocEntry[]>([]);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
@@ -140,10 +141,8 @@ export function Home({ path }: { path?: string }) {
     const name = prompt('Spreadsheet name:', 'Untitled');
     if (name === null) return;
     const resolvedName = name || 'Untitled';
-    const sid = () => Math.random().toString(36).slice(2, 10);
-    const sheetId = sid();
-    const rows: Record<string, { index: number }> = {};
-    for (let i = 1; i <= 10; i++) rows[sid()] = { index: i };
+    const sheetId = Math.random().toString(36).slice(2, 10);
+    const { rows, columns } = buildDefaultGrid();
     const { docId } = await createDoc({
       '@type': 'DataGrid',
       name: resolvedName,
@@ -152,7 +151,7 @@ export function Home({ path }: { path?: string }) {
           '@type': 'Sheet',
           name: 'Sheet 1',
           index: 1,
-          columns: { [sid()]: { index: 1 }, [sid()]: { index: 2 }, [sid()]: { index: 3 } },
+          columns,
           rows,
           cells: {},
         },

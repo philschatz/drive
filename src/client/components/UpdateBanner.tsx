@@ -11,22 +11,22 @@ export function UpdateBanner() {
 
   return (
     <div
-      class="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 rounded-lg border border-border bg-card px-4 py-3 shadow-lg cursor-pointer hover:bg-accent transition-colors"
+      className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3 rounded-lg border border-border bg-card px-4 py-3 shadow-lg cursor-pointer hover:bg-accent transition-colors"
       onClick={reload}
       role="button"
       tabIndex={0}
       onKeyDown={(e) => { if (e.key === 'Enter') reload(); }}
     >
-      <span class="material-symbols-outlined text-primary">update</span>
-      <span class="text-sm text-foreground">
+      <span className="material-symbols-outlined text-primary">update</span>
+      <span className="text-sm text-foreground">
         New version available{buildTime ? ` (deployed ${dayjs(buildTime).fromNow()})` : ''}
       </span>
       <button
-        class="ml-2 text-muted-foreground hover:text-foreground transition-colors"
+        className="ml-2 text-muted-foreground hover:text-foreground transition-colors"
         onClick={(e) => { e.stopPropagation(); dismiss(); }}
         aria-label="Dismiss"
       >
-        <span class="material-symbols-outlined text-base">close</span>
+        <span className="material-symbols-outlined text-base">close</span>
       </button>
     </div>
   );

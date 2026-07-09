@@ -1,4 +1,4 @@
-import { renderHook, act, waitFor } from '@testing-library/preact';
+import { renderHook, act, waitFor } from '@testing-library/react';
 
 let mockGetMyAccess: jest.Mock;
 const stateChangeListeners = new Set<() => void>();

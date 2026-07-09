@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'preact/hooks';
+import { useState, useCallback, useRef } from 'react';
 import type { CalendarEvent } from './schema';
 import { generateUid, type EditorState } from './calendar-utils';
 import { toDateStr } from './recurrence';

@@ -1,4 +1,4 @@
-import { useMemo } from 'preact/hooks';
+import { useMemo } from 'react';
 import type { PeerState } from '../shared/automerge';
 import { peerColor, type PresenceState, type PeerFieldInfo } from '../shared/presence';
 import { PATH_PROP_TO_FIELDS, type EditorState } from './calendar-utils';
