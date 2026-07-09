@@ -17,19 +17,11 @@ import { QRCodeDisplay } from '@/components/ui/qr-code';
 import { receiveContactCard, linkDevice, getLinkPayload, rendezvousJoinDeviceLink, onRendezvousEvent } from '../shared/keyhive-api';
 import type { RendezvousStatus } from '../worker-api';
 import { RendezvousProgress } from './RendezvousProgress';
+import { parseRendezvousToken, buildRendezvousUrl } from '../../shared/rendezvous-url';
 import { deflate, inflate } from 'pako';
 
-/** Parse the rendezvous URL form `r.<id>.<key>` (base64url parts; '.' separates). */
-function parseRendezvous(cardData: string): { rendezvousId: string; key: string } | null {
-  if (!cardData.startsWith('r.')) return null;
-  const parts = cardData.split('.');
-  if (parts.length !== 3 || !parts[1] || !parts[2]) return null;
-  return { rendezvousId: parts[1], key: parts[2] };
-}
-
 export function buildLinkDeviceRendezvousUrl(rendezvousId: string, key: string): string {
-  const base = window.location.origin + window.location.pathname;
-  return `${base}#/link-device/r.${rendezvousId}.${key}`;
+  return buildRendezvousUrl(window.location.origin + window.location.pathname, rendezvousId, key);
 }
 
 interface LinkDevicePageProps {
@@ -91,7 +83,7 @@ export function LinkDevicePage({ cardData }: LinkDevicePageProps) {
   const [transferDetail, setTransferDetail] = useState<string>();
 
   // Rendezvous join path (preferred): the tiny QR carries only {id, key}.
-  const rdv = cardData ? parseRendezvous(cardData) : null;
+  const rdv = cardData ? parseRendezvousToken(cardData) : null;
 
   // Mirror the sharer's step-by-step progress (and channel id) on this device.
   useEffect(() => {

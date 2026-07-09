@@ -13,30 +13,19 @@ const DB_NAME = 'app-storage';
 const DB_VERSION = 2;
 const STORE_NAME = 'keyval';
 
-// ── Key registry ─────────────────────────────────────────────────────────────
-//
-// Every persisted key is namespaced by category so the deletion/restore semantics
-// are explicit:
-//   cache:*       deleting it changes nothing (regenerated on demand)
-//   settings:*    deleting it falls back to defaults; restoring it restores prefs
-//   data:*        required for a working app
-//   data:auth:*   identity/credential data (keyhive user-group)
-//   data:temporal:* reserved for "last-seen" state (e.g. last doc version opened) — no members yet
+// Key registry, cache-key builders, settings schema, and hashStr live in the
+// environment-agnostic src/shared/storage-keys.ts (shared with DriveEngine and
+// the node KVStore). Imported for local use and re-exported so existing
+// `./idb-storage` importers are unaffected — the key names stay a single source
+// of truth.
+import {
+  KEYS, CACHE_PREFIX, queryCacheKey, validationCacheKey, docCachePrefix,
+  hashStr, SETTINGS_PREFIX, SETTINGS_DEFAULTS,
+} from '../shared/storage-keys';
+import type { SettingsSchema, SettingName } from '../shared/storage-keys';
 
-/** Source-of-truth keys for non-cache, non-settings persisted data. */
-export const KEYS = {
-  docIds:             'data:my-doc-ids',
-  contactNames:       'data:contact-names',
-  knownContactGroups: 'data:known-contact-groups',
-  userGroupId:        'data:auth:user-group-id',
-} as const;
-
-/** Everything under this prefix is disposable cache (deletable with no effect). */
-export const CACHE_PREFIX = 'cache:';
-export const queryCacheKey = (docId: string, filter: string) =>
-  `${CACHE_PREFIX}query:${docId}:${hashStr(filter)}`;
-export const validationCacheKey = (docId: string) => `${CACHE_PREFIX}query:${docId}:validation`;
-export const docCachePrefix = (docId: string) => `${CACHE_PREFIX}query:${docId}:`;
+export { KEYS, CACHE_PREFIX, queryCacheKey, validationCacheKey, docCachePrefix, hashStr };
+export type { QueryCacheEntry } from '../shared/storage-keys';
 
 // One-time v1→v2 migration: legacy ad-hoc key names → category-prefixed names. Renamed
 // data/auth keys preserve their values; legacy cache (`qc:*`) and the removed device-linking
@@ -172,24 +161,10 @@ export function _resetConnectionForTest(): void {
 
 // ── Settings registry ───────────────────────────────────────────────────────
 //
-// All app settings are enumerated here with their types and defaults. IndexedDB is
+// The settings schema + defaults live in ../shared/storage-keys.ts. IndexedDB is
 // the source of truth (readable from both threads); localStorage holds only a
 // synchronous read-mirror for main-thread call sites that need the value during render
 // (web workers have no localStorage, so the worker hydrates its own copy from IDB).
-
-const SETTINGS_PREFIX = 'settings:';
-
-/** The single source of all app settings: their types and default values. */
-interface SettingsSchema {
-  'cache-disabled': boolean;
-  // future settings get one line here + a default below
-}
-
-const SETTINGS_DEFAULTS: SettingsSchema = {
-  'cache-disabled': false,
-};
-
-type SettingName = keyof SettingsSchema;
 
 /** Read a setting from IndexedDB (source of truth), falling back to its default. */
 export async function settingGet<K extends SettingName>(name: K): Promise<SettingsSchema[K]> {
@@ -218,14 +193,3 @@ export function settingSetSync<K extends SettingName>(name: K, value: SettingsSc
 
 /** Synchronous reader for the worker-cache toggle (e.g. the Settings UI). */
 export function isCacheDisabled(): boolean { return settingGetSync('cache-disabled'); }
-
-// ── Shared utilities (used by both worker and main thread) ──────────────────
-
-/** djb2 string hash → base-36. Used for query cache keys. */
-export function hashStr(s: string): string {
-  let h = 5381;
-  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
-  return (h >>> 0).toString(36);
-}
-
-export interface QueryCacheEntry { result: any; json: string; lastModified?: number; heads: string[] }

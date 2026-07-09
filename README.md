@@ -89,6 +89,25 @@ curl -X PUT http://localhost:3000/dav/default/event.ics \
 
 Supported methods: PROPFIND, MKCALENDAR, GET, PUT, DELETE, REPORT.
 
+## Headless CLI
+
+A Node peer that syncs over the relay without a browser — useful for backups or a
+long-lived sync node. It runs the same engine as the app, so it is end-to-end
+encrypted (keyhive) and identifies as one of your linked devices.
+
+```bash
+npm run cli -- accept-invite "<link>"  # link this device (Settings -> Link Device in the app), then exit
+npm run cli -- list                    # print every accessible document: id, versions, last-modified
+npm run cli -- show <docId>            # render a document's current version as JSON to stdout
+npm run cli -- sync                    # keep the recent docs open and sync continuously (Ctrl-C to stop)
+```
+
+Run once with `accept-invite` to link the device; the identity is stored under
+`--data-dir` (default `./.data/cli`, or `$AUTOMERGE_DATA_DIR`) and reused afterwards.
+Diagnostics go to stderr, so `show <docId> > doc.json` yields clean JSON. Use
+`--help` on any subcommand for its options (`--relay`, `--data-dir`, and the
+`sync` tuning flags with their defaults).
+
 ## Environment Variables
 
 - `PORT` - Server port (default 3000)

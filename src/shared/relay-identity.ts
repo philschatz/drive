@@ -16,3 +16,9 @@
  * (so `bestAccessForDoc` returns undefined → the relay is never sent documents).
  */
 export const RELAY_PEER_ID = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=';
+
+/**
+ * The hosted production relay. Used by the browser worker (over `wss:`) and as the
+ * CLI's default relay. Override the CLI with --relay / DRIVE_RELAY_URL.
+ */
+export const PRODUCTION_RELAY_URL = 'wss://drive-relay-ebe030e3546f.herokuapp.com';

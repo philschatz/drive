@@ -17,19 +17,12 @@ import { receiveContactCard, rendezvousReceive, getIdentity, onRendezvousEvent }
 import type { RendezvousStatus } from '../worker-api';
 import { setContactName, getContactName } from '../contact-names';
 import { RendezvousProgress } from './RendezvousProgress';
+import { parseRendezvousToken } from '../../shared/rendezvous-url';
 import { deflate, inflate } from 'pako';
 
 interface AddFriendPageProps {
   cardData?: string;
   path?: string;
-}
-
-/** Parse the rendezvous URL form `r.<id>.<key>` (base64url parts; '.' separates). */
-function parseRendezvous(cardData: string): { rendezvousId: string; key: string } | null {
-  if (!cardData.startsWith('r.')) return null;
-  const parts = cardData.split('.');
-  if (parts.length !== 3 || !parts[1] || !parts[2]) return null;
-  return { rendezvousId: parts[1], key: parts[2] };
 }
 
 export function buildAddFriendRendezvousUrl(rendezvousId: string, key: string): string {
@@ -94,7 +87,7 @@ export function AddFriendPage({ cardData }: AddFriendPageProps) {
   const [transferDetail, setTransferDetail] = useState<string>();
 
   // Rendezvous receive path (preferred): the tiny QR carries only {id, key}.
-  const rdv = cardData ? parseRendezvous(cardData) : null;
+  const rdv = cardData ? parseRendezvousToken(cardData) : null;
 
   // Subscribe to progress for this channel so the receiver shows the same
   // step-by-step indicator (and channel id) the sharer does.
