@@ -29,6 +29,7 @@ import { isRendezvousType } from '../shared/rendezvous-protocol';
 import { PRODUCTION_RELAY_URL } from '../shared/relay-identity';
 import { parseRendezvousToken } from '../shared/rendezvous-url';
 import { DriveEngine, type WatchUpdate } from '../shared/drive-engine';
+import { relativeTime } from '../shared/relative-time';
 import { NodeKVStore } from './node-kvstore';
 import { ensureKeyhiveNodeShim, initSubductionNode } from './keyhive-node-shim';
 import { KEYS } from '../shared/storage-keys';
@@ -261,10 +262,12 @@ async function main(): Promise<void> {
       await requireLinked(kv);
       const ids = await waitForDocs(engine);
       console.error(`[cli] ${ids.length} accessible document(s).`);
-      for (const id of ids) {
-        const meta = await engine.getDocMeta(id);
-        const at = meta.lastModified ? new Date(meta.lastModified * 1000).toISOString() : 'unknown';
-        const parts = [id];
+      const metas = await Promise.all(ids.map(id => engine.getDocMeta(id)));
+      // Most-recently-updated first (docs with no known time sort last).
+      metas.sort((a, b) => (b.lastModified ?? 0) - (a.lastModified ?? 0));
+      for (const meta of metas) {
+        const at = meta.lastModified ? relativeTime(new Date(meta.lastModified * 1000)) : 'unknown';
+        const parts = [meta.docId];
         if (meta.docType) parts.push(`type=${meta.docType}`);
         if (meta.name) parts.push(`name=${JSON.stringify(meta.name)}`);
         parts.push(`versions=${meta.versions ?? 0}`, `updated=${at}`);

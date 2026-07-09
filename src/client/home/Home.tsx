@@ -15,6 +15,7 @@ import relativeTimePlugin from 'dayjs/plugin/relativeTime';
 dayjs.extend(relativeTimePlugin);
 import { a1ToInternal } from '@/datagrid/helpers';
 import { type DocType, viewPathForType, iconForType } from '@/shared/doc-type-helpers';
+import { relativeTime } from '../../shared/relative-time';
 
 declare const __APP_VERSION__: string;
 declare const __BUILD_TIME__: string;
@@ -28,11 +29,6 @@ interface DocEntry {
   loading: boolean;
   /** null = no access / revoked, undefined = not yet checked */
   access?: string | null;
-}
-
-function relativeTime(ts: string | null): string {
-  if (!ts) return '';
-  return dayjs(ts).fromNow();
 }
 
 function applyQueryResult(prev: DocEntry[], docId: string, result: any, lastModified?: number): DocEntry[] {
