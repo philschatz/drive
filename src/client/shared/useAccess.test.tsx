@@ -89,6 +89,26 @@ describe('useAccess', () => {
     expect(result.current.canEdit).toBe(false);
   });
 
+  it('a stale response for a previous docId does not overwrite the current doc access', async () => {
+    // docId 'A' resolves slowly; docId 'B' resolves fast. After switching to 'B',
+    // the late 'A' response must be ignored (cancellation guard).
+    let resolveA!: (v: string) => void;
+    mockGetMyAccess.mockImplementation((id: string) => {
+      if (id === 'doc-A') return new Promise<string>(r => { resolveA = r; });
+      return Promise.resolve('Admin'); // doc-B
+    });
+
+    const { result, rerender } = renderHook((id: string) => useAccess(id), { initialProps: 'doc-A' });
+    // Switch to doc-B before doc-A's request resolves.
+    rerender('doc-B');
+    await waitFor(() => expect(result.current.access).toBe('admin'));
+
+    // The stale doc-A response arrives late — it must NOT clobber doc-B's access.
+    await act(async () => { resolveA('Read'); });
+    expect(result.current.access).toBe('admin');
+    expect(result.current.canEdit).toBe(true);
+  });
+
   it('re-fetches access when keyhive state changes (grant)', async () => {
     mockGetMyAccess.mockResolvedValue('Read');
     const { result } = renderHook(() => useAccess('kh-doc-1'));

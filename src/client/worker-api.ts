@@ -14,6 +14,7 @@ export type { RendezvousStatus } from '../shared/rendezvous-protocol';
 import { idbDelPrefix, settingGet, settingSetSync, closeDb, CACHE_PREFIX } from './idb-storage';
 import { setContactNamesDispatch, applyContactNamesFromWorker } from './contact-names';
 import { startWebRTCBridge } from './webrtc-bridge';
+import { WorkerClient } from './worker-client';
 
 // Re-export for convenience
 export { deepAssign };
@@ -62,6 +63,11 @@ function logSend(msg: { type: string } & Record<string, any>): void {
   console.log('[main] → send', msg.type, msg);
 }
 
+// The resilient request/response + subscription core. Owns pending requests, the
+// ready gates, the fatal-error fan-out, and query/presence/validation subs. The
+// on-the-wire protocol is unchanged — worker-api just wires the real Worker to it.
+const client = new WorkerClient(worker, { log: logSend });
+
 // Wire up the contact-names dispatch hook (avoids a circular import with contact-names)
 setContactNamesDispatch((type, agentId, name) =>
   // Route through request() so the caller can await persistence and a failed write
@@ -79,27 +85,16 @@ worker.postMessage(initMsg);
 // its IDB source of truth, in case localStorage was cleared but IDB still holds the flag.
 settingGet('cache-disabled').then(v => settingSetSync('cache-disabled', v)).catch(() => { });
 
-// ── Ready promises ──────────────────────────────────────────────────────────
+// ── Ready promises + fatal-error surface (owned by the WorkerClient) ─────────
 
-let resolveRepoReady: () => void;
-let rejectRepoReady!: (err: Error) => void;
-export const workerReady = new Promise<void>((resolve, reject) => { resolveRepoReady = resolve; rejectRepoReady = reject; });
-workerReady.catch(() => { }); // prevent unhandled rejection — callers handle the error
+export const workerReady = client.workerReady;
+export const keyhiveReady = client.keyhiveReady;
 
-// Fatal worker-init error (e.g. a dangling user-group). Surfaced to the UI as a banner.
-let workerFatalError: string | null = null;
-const workerErrorListeners = new Set<(message: string) => void>();
-export function getWorkerError(): string | null { return workerFatalError; }
+/** Latest fatal/data-warning message, or null. Surfaced to the UI as a banner. */
+export function getWorkerError(): string | null { return client.getWorkerError(); }
 export function onWorkerError(fn: (message: string) => void): () => void {
-  workerErrorListeners.add(fn);
-  if (workerFatalError) fn(workerFatalError); // replay for late subscribers
-  return () => { workerErrorListeners.delete(fn); };
+  return client.onWorkerError(fn);
 }
-
-let resolveKeyhiveReady!: () => void;
-let rejectKeyhiveReady!: (err: Error) => void;
-export const keyhiveReady = new Promise<void>((resolve, reject) => { resolveKeyhiveReady = resolve; rejectKeyhiveReady = reject; });
-keyhiveReady.catch(() => { }); // prevent unhandled rejection — callers handle the error
 
 // ── WebRTC bridge (main thread owns RTCPeerConnection) ───────────────────────
 // The repo's network adapter lives in the worker, but RTCPeerConnection is
@@ -116,8 +111,7 @@ keyhiveReady.catch(() => { }); // prevent unhandled rejection — callers handle
 
 // ── Worker peer ID ──────────────────────────────────────────────────────────
 
-let _workerPeerId = '';
-export function getWorkerPeerId(): string { return _workerPeerId; }
+export function getWorkerPeerId(): string { return client.getWorkerPeerId(); }
 
 // This user's own user-group id (base64), cached for sync access so presence
 // consumers can hide ALL of the local user's devices (not just the current one)
@@ -173,41 +167,19 @@ export function usePeerTransports(): Record<string, PeerTransport> {
   return snapshot;
 }
 
-// ── Request/response plumbing ────────────────────────────────────────────────
-
-let nextId = 0;
-const pending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void; sent: number; type: string }>();
-
-const subscriptionCallbacks = new Map<number, (result: any, heads: string[], lastModified?: number) => void>();
-const presenceCallbacks = new Map<string, (peers: Record<string, PeerState<PresenceState>>) => void>();
-const validationCallbacks = new Map<string, (errors: ValidationError[]) => void>();
-const openDocProgressCallbacks = new Map<number, (pct: number, message: string) => void>();
-
-let nextSubId = 0;
+// ── Request/response plumbing (delegated to the WorkerClient core) ───────────
 
 function request<T>(type: string, payload: Record<string, any> = {}): Promise<T> {
-  return workerReady.then(() => {
-    const id = ++nextId;
-    return new Promise<T>((resolve, reject) => {
-      pending.set(id, { resolve, reject, sent: performance.now(), type });
-      const msg = { type, id, ...payload };
-      logSend(msg);
-      worker.postMessage(msg);
-    });
-  });
+  return client.request<T>(type, payload);
 }
 
 function fire(type: string, payload: Record<string, any> = {}): void {
-  workerReady.then(() => {
-    const msg = { type, ...payload };
-    logSend(msg);
-    worker.postMessage(msg);
-  }).catch(() => { }); // worker never became ready — nothing to send
+  client.fire(type, payload);
 }
 
 /** Keyhive requests gate on keyhiveReady (which implies workerReady). */
 function khRequest<T>(type: string, payload: Record<string, any> = {}): Promise<T> {
-  return keyhiveReady.then(() => request<T>(type, payload));
+  return client.khRequest<T>(type, payload);
 }
 
 // ── Keyhive state change notifications ──────────────────────────────────────
@@ -243,34 +215,11 @@ worker.onmessage = (e: MessageEvent<WorkerToMain>) => {
     || msg.type === 'open-doc-progress';
   if (!quiet) console.log('[main] ← recv', msg.type, msg);
 
-  switch (msg.type) {
-    // --- Lifecycle ---
-    case 'ready':
-      _workerPeerId = msg.peerId;
-      resolveRepoReady();
-      break;
-    case 'kh-ready':
-      resolveKeyhiveReady();
-      break;
-    case 'kh-error':
-      console.error('Keyhive init failed:', msg.message);
-      rejectKeyhiveReady(new Error(msg.message));
-      break;
-    case 'error':
-      console.error('Automerge worker error:', msg.message);
-      workerFatalError = msg.message;
-      rejectRepoReady(new Error(msg.message)); // settle workerReady so request()-gated UI stops hanging
-      rejectKeyhiveReady(new Error(msg.message)); // and keyhiveReady (no-op if already resolved)
-      for (const fn of workerErrorListeners) fn(msg.message);
-      break;
-    case 'data-warning':
-      // Non-fatal: the worker is up (ready/kh-ready still posted), but local data has a
-      // problem (e.g. a dangling user-group). Surface a banner without blocking the app.
-      console.warn('Worker data warning:', msg.message);
-      workerFatalError = msg.message;
-      for (const fn of workerErrorListeners) fn(msg.message);
-      break;
+  // Lifecycle gates, request results, and query/presence/validation deliveries
+  // are owned by the WorkerClient core; everything else is app-level routing.
+  if (client.route(msg)) return;
 
+  switch (msg.type) {
     // --- Connectivity ---
     case 'peer-connected':
     case 'peer-disconnected':
@@ -303,47 +252,22 @@ worker.onmessage = (e: MessageEvent<WorkerToMain>) => {
     case 'kh-rdv-event':
       for (const fn of rdvEventListeners) fn(msg);
       break;
-
-    // --- Request/response results (doc + keyhive share the same pending map) ---
-    case 'result': {
-      const p = pending.get(msg.id);
-      if (p) {
-        pending.delete(msg.id);
-        const elapsed = performance.now() - p.sent;
-        if (elapsed > 100) console.log(`[main] ⏱ ${p.type} took ${Math.round(elapsed).toLocaleString()}ms`);
-        if (msg.error) p.reject(new Error(msg.error));
-        else p.resolve(msg.result);
-      }
-      break;
-    }
-    case 'query-result': {
-      const cb = subscriptionCallbacks.get(msg.subId);
-      if (cb) {
-        if (msg.error) console.warn('[worker-api] query-result error subId=%d:', msg.subId, msg.error);
-        else cb(msg.result, msg.heads, msg.lastModified);
-      }
-      break;
-    }
-    case 'update-presence': {
-      const cb = presenceCallbacks.get(msg.docId);
-      if (cb) cb(msg.peers);
-      break;
-    }
-    case 'open-doc-progress': {
-      const cb = openDocProgressCallbacks.get(msg.id);
-      if (cb) cb(msg.pct, msg.message);
-      break;
-    }
-    case 'update-validation': {
-      const cb = validationCallbacks.get(msg.docId);
-      if (cb) cb(msg.errors);
-      break;
-    }
   }
 };
 
+// The worker crashed or sent an unreadable message (e.g. a hostile peer payload
+// crashed it). Reject every in-flight request, settle the ready gates, mark the
+// worker dead so future requests reject instead of hanging, and show the banner.
+// `.message` is empty for cross-origin/module load failures, so fall back.
 worker.onerror = (e) => {
-  console.error('Automerge worker failed to load:', e.message);
+  console.error('Automerge worker crashed:', e.message);
+  client.fail(e.message
+    ? `The document engine crashed: ${e.message}. Reload the page to reconnect.`
+    : 'The document engine crashed unexpectedly. Reload the page to reconnect.');
+};
+worker.onmessageerror = () => {
+  console.error('Automerge worker sent an unreadable message');
+  client.fail('The document engine sent a message that could not be read (it may have crashed). Reload the page.');
 };
 
 // ── Connection status hooks ─────────────────────────────────────────────────
@@ -512,21 +436,7 @@ export function openDoc(
   docId: string,
   opts?: { onProgress?: (pct: number, message: string) => void },
 ): Promise<{ docId: string }> {
-  const { onProgress } = opts ?? {};
-  return workerReady.then(() => {
-    const id = ++nextId;
-    if (onProgress) openDocProgressCallbacks.set(id, onProgress);
-    return new Promise<{ docId: string }>((resolve, reject) => {
-      pending.set(id, {
-        resolve: (v) => { openDocProgressCallbacks.delete(id); resolve(v); },
-        reject: (e) => { openDocProgressCallbacks.delete(id); reject(e); },
-        sent: performance.now(), type: 'open-doc',
-      });
-      const msg = { type: 'open-doc' as const, id, docId };
-      logSend(msg);
-      worker.postMessage(msg);
-    });
-  });
+  return client.openDoc(docId, opts);
 }
 
 /**
@@ -562,18 +472,9 @@ export function subscribeQuery(
   docId: string,
   filter: string,
   onResult: (result: any, heads: string[], lastModified?: number) => void,
+  onError?: (error: string) => void,
 ): () => void {
-  const subId = ++nextSubId;
-
-  subscriptionCallbacks.set(subId, (result, heads, lastModified) => {
-    onResult(result, heads, lastModified);
-  });
-  fire('subscribe-query', { subId, docId, filter });
-
-  return () => {
-    subscriptionCallbacks.delete(subId);
-    fire('unsubscribe-query', { subId });
-  };
+  return client.subscribeQuery(docId, filter, onResult, onError);
 }
 
 // ── Validation subscriptions ────────────────────────────────────────────────
@@ -587,12 +488,7 @@ export function subscribeValidation(
   docId: string,
   onResult: (errors: ValidationError[]) => void,
 ): () => void {
-  validationCallbacks.set(docId, onResult);
-  fire('subscribe-validation', { docId });
-  return () => {
-    validationCallbacks.delete(docId);
-    fire('unsubscribe-validation', { docId });
-  };
+  return client.subscribeValidation(docId, onResult);
 }
 
 /**
@@ -602,15 +498,7 @@ export function queryDoc(
   docId: string,
   filter: string,
 ): Promise<{ result: any; heads: string[] }> {
-  return workerReady.then(() => {
-    const id = ++nextId;
-    return new Promise((resolve, reject) => {
-      pending.set(id, { resolve, reject, sent: performance.now(), type: 'query' });
-      const msg = { type: 'query' as const, id, docId, filter };
-      logSend(msg);
-      worker.postMessage(msg);
-    });
-  });
+  return client.queryDoc(docId, filter);
 }
 
 // ── History & undo ──────────────────────────────────────────────────────────
@@ -646,12 +534,7 @@ export function subscribePresence(
   docId: string,
   onUpdate: (peers: Record<string, PeerState<PresenceState>>) => void,
 ): () => void {
-  presenceCallbacks.set(docId, onUpdate);
-  fire('subscribe-presence', { docId });
-  return () => {
-    presenceCallbacks.delete(docId);
-    fire('unsubscribe-presence', { docId });
-  };
+  return client.subscribePresence(docId, onUpdate);
 }
 
 export function setPresence(docId: string, state: Partial<PresenceState>): void {

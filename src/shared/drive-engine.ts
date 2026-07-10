@@ -940,9 +940,19 @@ export class DriveEngine {
           progress(100, 'Ready');
           emit({ type: 'result', id: msg.id, result: { docId: msg.docId } });
         } else {
-          handle.whenReady().then(() => {
-            progress(100, 'Ready');
-            emit({ type: 'result', id: msg.id, result: { docId: msg.docId } });
+          // Await readiness OR unavailability so a doc no online peer has resolves
+          // the wait (as 'unavailable') instead of hanging forever. In this
+          // automerge-repo (subduction.37) `Repo.find()` already rejects on
+          // unavailable — caught below — but a handle that reaches this branch and
+          // then goes unavailable is reported as an error rather than left pending.
+          handle.whenReady(['ready', 'unavailable']).then(() => {
+            const nowReady = handle.isReady ? handle.isReady() : true;
+            if (nowReady) {
+              progress(100, 'Ready');
+              emit({ type: 'result', id: msg.id, result: { docId: msg.docId } });
+            } else {
+              emit({ type: 'result', id: msg.id, error: 'Document is unavailable — no connected peer has it yet.' });
+            }
           }).catch((err: any) => {
             emit({ type: 'result', id: msg.id, error: errMsg(err) });
           });
