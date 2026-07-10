@@ -12,8 +12,19 @@ import { registerCustomFunctions, getDistributionRegistry, clearDistributionRegi
 import { buildSheetData, cellToHfValue, sortedEntries, internalToA1, a1ToInternal } from './helpers';
 import { runMonteCarlo, type MCResults } from './monte-carlo';
 import { sampleDistribution, computeStats, type DistributionInfo, type DistributionStats } from './distributions';
+import { sheetStructureChanged, changedCellKeys, planMonteCarloBudget } from './hf-diff';
 
 registerCustomFunctions();
+
+// --- Untrusted-content work caps (H9) ---
+// A hostile shared sheet can contain a distribution function (=NORMAL(0,1)) or a
+// customFormula conditional-format rule over a huge range; without caps these pin
+// the worker. Caps bound the work and log (never silently drop) when they truncate.
+const MC_SAMPLES = 500;
+const MC_MAX_SAMPLED_CELLS = 2000;       // max cells tracked per Monte-Carlo iteration
+const MC_MAX_TOTAL_SAMPLES = 400_000;    // max (cells × iterations) of Monte-Carlo work
+const MC_MAX_DIST_CELLS = 500;           // max distinct distribution source cells
+const COND_FORMAT_MAX_CELLS = 20_000;    // max cells evaluated across all customFormula rules
 
 // --- Types ---
 
@@ -187,22 +198,31 @@ function unsubscribe(subId: number) {
   }
 }
 
-/** Rebuild HyperFormula from all collected sheet data and evaluate. */
-function rebuildAndEvaluate() {
-  if (!formulaData && depsData.size === 0) return;
+// HF sheet index i ↔ document sheetId. Set on every full rebuild; stays valid
+// across incremental (non-structural) updates so evaluateAndPost can map results.
+let sheetOrder: string[] = [];
+
+const sheetNameLookupFor = (merged: Map<string, SheetInfo>) => (id: string) => merged.get(id)?.name;
+const sheetRowColLookupFor = (merged: Map<string, SheetInfo>) => (id: string) => {
+  const s = merged.get(id);
+  if (!s) return undefined;
+  return { rowIds: s.rows, colIds: s.cols };
+};
+
+/**
+ * Full rebuild: destroy + buildFromSheets (re-parses EVERY formula). Only needed
+ * for structural changes (row/col set, sheet set, cross-sheet deps). Plain cell
+ * value edits use the incremental path (applyIncrementalCells) instead — H6.
+ */
+function buildWorkbook(): boolean {
+  if (!formulaData && depsData.size === 0) return false;
   const merged = getMergedSheetData();
-  if (merged.size === 0) return;
+  if (merged.size === 0) return false;
 
-  // Build sheets data for HyperFormula
   const sheetsHfData: Record<string, (string | number | boolean | null)[][]> = {};
-  const sheetOrder: string[] = []; // track sheet IDs in order
-
-  const sheetNameLookup = (id: string) => merged.get(id)?.name;
-  const sheetRowColLookup = (id: string) => {
-    const s = merged.get(id);
-    if (!s) return undefined;
-    return { rowIds: s.rows, colIds: s.cols };
-  };
+  const order: string[] = [];
+  const sheetNameLookup = sheetNameLookupFor(merged);
+  const sheetRowColLookup = sheetRowColLookupFor(merged);
 
   // Active sheet first, then deps
   const activeInfo = merged.get(activeSheetId);
@@ -211,31 +231,30 @@ function rebuildAndEvaluate() {
       activeInfo.cells, activeInfo.rows, activeInfo.cols,
       sheetNameLookup, sheetRowColLookup,
     );
-    sheetOrder.push(activeSheetId);
+    order.push(activeSheetId);
   }
-
   for (const [sid, info] of merged) {
     if (sid === activeSheetId) continue;
     sheetsHfData[info.name] = buildSheetData(
       info.cells, info.rows, info.cols,
       sheetNameLookup, sheetRowColLookup,
     );
-    sheetOrder.push(sid);
+    order.push(sid);
   }
 
-  // Rebuild HF
   hf?.destroy();
   clearDistributionRegistry();
   hf = HyperFormula.buildFromSheets(sheetsHfData, hfConfig);
   addGoogleSheetsNamedExpressions(hf);
+  sheetOrder = order;
 
   // Work around HyperFormula's build-phase array analysis: formulas containing
   // SEARCH with range arguments get marked as array formulas, causing downstream
   // cells (e.g. SPLIT) to receive ranges instead of scalars. Re-setting error
   // cells forces HF to re-evaluate without the stale array marking.
   const errorAddrs: { sheet: number; col: number; row: number; formula: string }[] = [];
-  for (let si = 0; si < sheetOrder.length; si++) {
-    const info = merged.get(sheetOrder[si])!;
+  for (let si = 0; si < order.length; si++) {
+    const info = merged.get(order[si])!;
     for (let row = 0; row < info.rows.length; row++) {
       for (let col = 0; col < info.cols.length; col++) {
         const addr = { sheet: si, col, row };
@@ -255,12 +274,64 @@ function rebuildAndEvaluate() {
     hf.resumeEvaluation();
   }
 
+  return true;
+}
+
+/**
+ * Apply cell-value changes to the existing HyperFormula instance via the
+ * incremental setCellContents API (no destroy/rebuild → no full re-parse). All
+ * changes must target the given already-built sheet. Returns false if any change
+ * can't be resolved to a known HF address, so the caller can fall back to rebuild.
+ */
+function applyIncrementalCells(sheetId: string, cellKeys: string[]): boolean {
+  if (!hf || cellKeys.length === 0) return !!hf;
+  const merged = getMergedSheetData();
+  const info = merged.get(sheetId);
+  if (!info) return false;
+  const sheetNum = hf.getSheetId(info.name);
+  if (sheetNum === undefined) return false;
+  const rowIdx = new Map(info.rows.map((id, i) => [id, i]));
+  const colIdx = new Map(info.cols.map((id, i) => [id, i]));
+  const sheetNameLookup = sheetNameLookupFor(merged);
+  const sheetRowColLookup = sheetRowColLookupFor(merged);
+
+  let ok = true;
+  hf.suspendEvaluation();
+  try {
+    for (const key of cellKeys) {
+      const sep = key.indexOf(':');
+      const rowId = key.slice(0, sep);
+      const colId = key.slice(sep + 1);
+      const r = rowIdx.get(rowId);
+      const c = colIdx.get(colId);
+      if (r === undefined || c === undefined) { ok = false; break; }
+      const raw = info.cells[key]?.value;
+      const val = cellToHfValue(raw, r, c, info.rows, info.cols, sheetNameLookup, sheetRowColLookup);
+      hf.setCellContents({ sheet: sheetNum, col: c, row: r }, val);
+    }
+  } finally {
+    hf.resumeEvaluation();
+  }
+  return ok;
+}
+
+/**
+ * Re-read every formula/spill cell from the current HF instance and post results.
+ * Cheap relative to a rebuild (reads, no parsing). Monte Carlo is only run on a
+ * full rebuild (runMC=true) because its distribution registry is populated during
+ * the full evaluation pass.
+ */
+function evaluateAndPost(runMC: boolean) {
+  if (!hf) return;
+  const merged = getMergedSheetData();
+
   // Evaluate all formula cells and collect results
   const values: Record<string, string | number> = {};
   const errors: Record<string, string> = {};
   for (let si = 0; si < sheetOrder.length; si++) {
     const sid = sheetOrder[si];
-    const info = merged.get(sid)!;
+    const info = merged.get(sid);
+    if (!info) continue;
     for (let row = 0; row < info.rows.length; row++) {
       for (let col = 0; col < info.cols.length; col++) {
         const cellKey = `${info.rows[row]}:${info.cols[col]}`;
@@ -282,7 +353,8 @@ function rebuildAndEvaluate() {
   const spillTargetKeys: string[] = [];
   for (let si = 0; si < sheetOrder.length; si++) {
     const sid = sheetOrder[si];
-    const info = merged.get(sid)!;
+    const info = merged.get(sid);
+    if (!info) continue;
     const { width, height } = hf.getSheetDimensions(si);
     for (let row = 0; row < height; row++) {
       for (let col = 0; col < width; col++) {
@@ -311,15 +383,31 @@ function rebuildAndEvaluate() {
   (self as any).postMessage({ type: 'computed-values', values, spillTargets: spillTargetKeys, errors });
 
   // Evaluate conditional format custom formulas
-  if (pendingCondFormatRules.length > 0 && activeInfo) {
-    evaluateCondFormats(activeInfo);
+  if (pendingCondFormatRules.length > 0) {
+    const activeInfo = merged.get(activeSheetId);
+    if (activeInfo) evaluateCondFormats(activeInfo);
   }
 
-  // Auto-run Monte Carlo if distributions were detected
-  const registry = getDistributionRegistry();
-  if (registry.size > 0) {
-    runMCInWorker(sheetOrder, merged, registry);
+  // Auto-run Monte Carlo only after a full rebuild (registry is populated then).
+  if (runMC) {
+    const registry = getDistributionRegistry();
+    if (registry.size > 0) maybeRunMonteCarlo(merged, registry);
   }
+}
+
+/** Full rebuild + evaluate. Use for structural changes and initial load. */
+function rebuildAndEvaluate() {
+  if (!buildWorkbook()) return;
+  evaluateAndPost(true);
+}
+
+/** Gate/budget Monte Carlo auto-run so hostile distribution content can't pin the worker (H9). */
+function maybeRunMonteCarlo(merged: Map<string, SheetInfo>, registry: Map<string, DistributionInfo>) {
+  if (registry.size > MC_MAX_DIST_CELLS) {
+    console.warn(`[hf-worker] Monte Carlo skipped: ${registry.size} distribution cells exceeds cap ${MC_MAX_DIST_CELLS}`);
+    return;
+  }
+  runMCInWorker(sheetOrder, merged, registry);
 }
 
 /**
@@ -348,6 +436,12 @@ function evaluateCondFormats(activeInfo: SheetInfo) {
   // Ensure HF has room for the temp cell by adding a row
   hf.addRows(0, [tmpRow, 1]);
 
+  // H9: cap the total cells evaluated across all customFormula rules. A hostile
+  // rule over a huge range would otherwise parse+set+eval per cell with no bound.
+  let budget = COND_FORMAT_MAX_CELLS;
+  let truncated = false;
+
+  outer:
   for (const rule of pendingCondFormatRules) {
     if (rule.conditionType !== 'customFormula' || !rule.conditionValue) continue;
 
@@ -363,6 +457,8 @@ function evaluateCondFormats(activeInfo: SheetInfo) {
 
       for (let r = rStart; r <= rEnd; r++) {
         for (let c = cStart; c <= cEnd; c++) {
+          if (budget <= 0) { truncated = true; results[rule.id] = matches; break outer; }
+          budget--;
           // Re-anchor R1C1 offsets to this cell, then serialize to A1 for HyperFormula.
           // a1ToInternal parses R1C1 with (r, c) as anchor so R[0]C[0] resolves to the
           // current cell; internalToA1 produces the absolute A1 address to evaluate.
@@ -386,6 +482,10 @@ function evaluateCondFormats(activeInfo: SheetInfo) {
     results[rule.id] = matches;
   }
 
+  if (truncated) {
+    console.warn(`[hf-worker] Conditional formatting: customFormula evaluation truncated at ${COND_FORMAT_MAX_CELLS} cells`);
+  }
+
   // Clear the temp row
   try { hf.removeRows(0, [tmpRow, 1]); } catch { /* ok */ }
 
@@ -395,7 +495,6 @@ function evaluateCondFormats(activeInfo: SheetInfo) {
 function runMCInWorker(sheetOrder: string[], mergedData: Map<string, SheetInfo>, registry: Map<string, DistributionInfo>) {
   if (!hf || registry.size === 0) return;
 
-  const MC_SAMPLES = 500;
   const distCells: { sheet: number; col: number; row: number; info: DistributionInfo; key: string }[] = [];
   for (const [key, info] of registry) {
     const parts = key.split(':');
@@ -408,7 +507,7 @@ function runMCInWorker(sheetOrder: string[], mergedData: Map<string, SheetInfo>,
   );
 
   const sheetNames = hf.getSheetNames();
-  const allCellKeys: string[] = [];
+  let allCellKeys: string[] = [];
   for (let si = 0; si < sheetNames.length; si++) {
     const { height, width } = hf.getSheetDimensions(si);
     for (let r = 0; r < height; r++) {
@@ -418,9 +517,29 @@ function runMCInWorker(sheetOrder: string[], mergedData: Map<string, SheetInfo>,
     }
   }
 
+  // H9: bound Monte-Carlo work so a distribution in a huge sheet can't pin the worker.
+  const totalCells = allCellKeys.length;
+  const budget = planMonteCarloBudget(totalCells, MC_SAMPLES, {
+    maxSampledCells: MC_MAX_SAMPLED_CELLS,
+    maxTotalSamples: MC_MAX_TOTAL_SAMPLES,
+  });
+  if (budget.cellsTruncated) {
+    // Always keep the distribution source cells; truncate the rest.
+    const sourceKeySet = new Set(distCells.map(dc => `${dc.sheet}:${dc.col}:${dc.row}`));
+    const sourceCells = allCellKeys.filter(k => sourceKeySet.has(k));
+    const others = allCellKeys.filter(k => !sourceKeySet.has(k))
+      .slice(0, Math.max(0, budget.sampledCells - sourceCells.length));
+    console.warn(`[hf-worker] Monte Carlo: sampling ${sourceCells.length + others.length} of ${totalCells} cells (capped at ${MC_MAX_SAMPLED_CELLS})`);
+    allCellKeys = [...sourceCells, ...others];
+  }
+  const iterations = budget.iterations;
+  if (budget.iterationsReduced) {
+    console.warn(`[hf-worker] Monte Carlo: reduced to ${iterations} iterations (cell×iteration budget ${MC_MAX_TOTAL_SAMPLES})`);
+  }
+
   const allSamples = new Map<string, number[]>();
 
-  for (let iter = 0; iter < MC_SAMPLES; iter++) {
+  for (let iter = 0; iter < iterations; iter++) {
     // Replace distribution cells with sampled values
     for (const dc of distCells) {
       hf!.setCellContents({ sheet: dc.sheet, col: dc.col, row: dc.row }, [[sampleDistribution(dc.info)]]);
@@ -448,7 +567,7 @@ function runMCInWorker(sheetOrder: string[], mergedData: Map<string, SheetInfo>,
   const sourceKeys: string[] = [];
 
   for (const [key, samples] of allSamples) {
-    if (samples.length < MC_SAMPLES * 0.5) continue;
+    if (samples.length < iterations * 0.5) continue;
     const stats = computeStats(samples);
     if (sources.has(key) || stats.stdev > 1e-10) {
       // Convert numeric key "si:c:r" to "sheetId:rowId:colId"
@@ -466,8 +585,10 @@ function runMCInWorker(sheetOrder: string[], mergedData: Map<string, SheetInfo>,
   (self as any).postMessage({ type: 'mc-results', cells, sources: sourceKeys });
 }
 
-/** Resolve transitive cross-sheet dependencies and update subscription 2. */
-function resolveDeps() {
+/** Resolve transitive cross-sheet dependencies and update subscription 2.
+ *  Returns true when the set of dependency sheets changed (a structural change
+ *  that forces a full rebuild once the new deps arrive). */
+function resolveDeps(): boolean {
   const newDepSheets = new Set<string>();
 
   // Scan all formula cells in all loaded sheets for cross-sheet refs
@@ -502,6 +623,8 @@ function resolveDeps() {
       depsSubId = subscribe(query);
     }
   }
+
+  return changed;
 }
 
 // --- Port message handler (from automerge worker) ---
@@ -513,9 +636,26 @@ function handlePortMessage(e: MessageEvent) {
   if (msg.subId === formulaSubId) {
     // Active sheet formula cells
     if (msg.error || !msg.result) return;
-    formulaData = msg.result as SheetInfo;
-    resolveDeps();
-    rebuildAndEvaluate();
+    const prev = formulaData;
+    const next = msg.result as SheetInfo;
+    formulaData = next;
+    const depsChanged = resolveDeps();
+    // Structural change (or new deps, or no HF yet) → full rebuild. Otherwise apply
+    // only the changed cells incrementally so a plain value edit doesn't re-parse the
+    // whole workbook (H6). For a local edit already applied via `set-cell`, the diff
+    // is empty here → just re-post (no rebuild).
+    if (depsChanged || !hf || sheetStructureChanged(prev, next)) {
+      rebuildAndEvaluate();
+    } else {
+      const changes = changedCellKeys(prev!, next);
+      if (changes.length === 0) {
+        evaluateAndPost(false);
+      } else if (applyIncrementalCells(activeSheetId, changes)) {
+        evaluateAndPost(false);
+      } else {
+        rebuildAndEvaluate();
+      }
+    }
   } else if (msg.subId === depsSubId) {
     // Dependency cells (any sheet, including active)
     if (msg.error || !msg.result) return;
@@ -573,7 +713,7 @@ self.onmessage = (e: MessageEvent<MainToHf>) => {
   }
 
   if (msg.type === 'set-cell') {
-    // Incremental local edit — update cached formula/dep data and re-evaluate
+    // Incremental local edit — update cached formula/dep data and re-evaluate.
     const info = msg.sheetId === activeSheetId ? formulaData : depsData.get(msg.sheetId);
     if (info) {
       const cellKey = `${msg.rowId}:${msg.colId}`;
@@ -582,11 +722,17 @@ self.onmessage = (e: MessageEvent<MainToHf>) => {
       } else {
         info.cells[cellKey] = { value: msg.value };
       }
-      // Check if this introduced new cross-sheet deps
-      if (msg.value.startsWith('=')) {
-        resolveDeps();
+      // A new cross-sheet ref changes the dependency set → full rebuild (structural).
+      const depsChanged = msg.value.startsWith('=') ? resolveDeps() : false;
+      if (depsChanged || !hf) {
+        // No HF yet, or deps changed — rebuild (deps data will also arrive and rebuild).
+        rebuildAndEvaluate();
+      } else if (applyIncrementalCells(msg.sheetId, [cellKey])) {
+        // Fast path: patch the single edited cell, no full re-parse (H6).
+        evaluateAndPost(false);
+      } else {
+        rebuildAndEvaluate();
       }
-      rebuildAndEvaluate();
     }
   }
 

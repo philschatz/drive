@@ -20,7 +20,10 @@ export function formatToCss(format: DataGridCellFormat | undefined): Record<stri
   if (format.fontFamily) style.fontFamily = format.fontFamily;
   if (format.fontSize) style.fontSize = `${format.fontSize}pt`;
   if (format.textColor) style.color = format.textColor;
-  if (format.bgColor) style.background = format.bgColor;
+  // Use backgroundColor (NOT the `background` shorthand): the shorthand accepts
+  // `url(...)`, so a hostile doc's bgColor could trigger an external fetch. Colors
+  // are validated in the schema; this is the defense-in-depth render fix (M3).
+  if (format.bgColor) style.backgroundColor = format.bgColor;
   if (format.hAlign) style.textAlign = format.hAlign;
   if (format.vAlign) style.verticalAlign = format.vAlign === 'middle' ? 'middle' : format.vAlign;
   if (format.wrapText) { style.whiteSpace = 'normal'; style.wordWrap = 'break-word'; }
@@ -227,18 +230,27 @@ function cellInAnyRange(
   ranges: Record<string, ConditionalFormatRange>,
   rowIdx: number,
   colIdx: number,
-  rowIds: string[],
-  colIds: string[],
+  rowIdxMap: Map<string, number>,
+  colIdxMap: Map<string, number>,
 ): boolean {
   for (const range of Object.values(ranges)) {
-    const rStart = rowIds.indexOf(range.rangeRowStart);
-    const rEnd = rowIds.indexOf(range.rangeRowEnd);
-    const cStart = colIds.indexOf(range.rangeColStart);
-    const cEnd = colIds.indexOf(range.rangeColEnd);
-    if (rStart === -1 || rEnd === -1 || cStart === -1 || cEnd === -1) continue;
+    const rStart = rowIdxMap.get(range.rangeRowStart);
+    const rEnd = rowIdxMap.get(range.rangeRowEnd);
+    const cStart = colIdxMap.get(range.rangeColStart);
+    const cEnd = colIdxMap.get(range.rangeColEnd);
+    if (rStart === undefined || rEnd === undefined || cStart === undefined || cEnd === undefined) continue;
     if (rowIdx >= rStart && rowIdx <= rEnd && colIdx >= cStart && colIdx <= cEnd) return true;
   }
   return false;
+}
+
+/** Build id → index lookup maps for a sheet's row/col id lists. */
+export function buildIndexMaps(rowIds: string[], colIds: string[]): { rowIdxMap: Map<string, number>; colIdxMap: Map<string, number> } {
+  const rowIdxMap = new Map<string, number>();
+  rowIds.forEach((id, i) => rowIdxMap.set(id, i));
+  const colIdxMap = new Map<string, number>();
+  colIds.forEach((id, i) => colIdxMap.set(id, i));
+  return { rowIdxMap, colIdxMap };
 }
 
 // ============================================================
@@ -255,14 +267,15 @@ export function evaluateConditionalFormats(
 ): DataGridCellFormat | undefined {
   if (!rules) return undefined;
 
-  const rowIdx = rowIds.indexOf(rowId);
-  const colIdx = colIds.indexOf(colId);
-  if (rowIdx === -1 || colIdx === -1) return undefined;
+  const { rowIdxMap, colIdxMap } = buildIndexMaps(rowIds, colIds);
+  const rowIdx = rowIdxMap.get(rowId);
+  const colIdx = colIdxMap.get(colId);
+  if (rowIdx === undefined || colIdx === undefined) return undefined;
 
   const sorted = Object.values(rules).sort((a, b) => a.index - b.index);
 
   for (const rule of sorted) {
-    if (!cellInAnyRange(rule.ranges, rowIdx, colIdx, rowIds, colIds)) continue;
+    if (!cellInAnyRange(rule.ranges, rowIdx, colIdx, rowIdxMap, colIdxMap)) continue;
     if (matchesCondition(cellValue, rule.conditionType, rule.conditionValue)) {
       return rule.format;
     }
@@ -280,13 +293,15 @@ export function resolveConditionalFormat(
   rowId: string,
   colId: string,
   cellValue: string,
-  rowIds: string[],
-  colIds: string[],
+  rowIdxMap: Map<string, number>,
+  colIdxMap: Map<string, number>,
   condFormatResults: { matches: Map<string, Set<string>> } | null,
 ): DataGridCellFormat | undefined {
-  const rowIdx = rowIds.indexOf(rowId);
-  const colIdx = colIds.indexOf(colId);
-  if (rowIdx === -1 || colIdx === -1) return undefined;
+  // rowIdxMap/colIdxMap are precomputed once per render (id → index) so this hot
+  // per-cell path is O(rules × ranges), not O(rules × ranges × rows) of indexOf scans.
+  const rowIdx = rowIdxMap.get(rowId);
+  const colIdx = colIdxMap.get(colId);
+  if (rowIdx === undefined || colIdx === undefined) return undefined;
 
   const cellKey = `${rowId}:${colId}`;
   // Higher index = higher priority: newly-added rules take precedence.
@@ -294,7 +309,7 @@ export function resolveConditionalFormat(
     .sort((a, b) => b[1].index - a[1].index);
 
   for (const [ruleId, rule] of sorted) {
-    if (!cellInAnyRange(rule.ranges, rowIdx, colIdx, rowIds, colIds)) continue;
+    if (!cellInAnyRange(rule.ranges, rowIdx, colIdx, rowIdxMap, colIdxMap)) continue;
 
     if (rule.conditionType === 'customFormula') {
       if (condFormatResults?.matches.get(ruleId)?.has(cellKey)) {

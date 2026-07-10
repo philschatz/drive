@@ -15,7 +15,7 @@ import {
   getDisplayValue,
 } from './helpers';
 import { FormulaEditor, type FormulaHighlight, isRange } from './FormulaEditor';
-import { buildFormatCache, formatToCss, formatDisplayValue, isAccountingFormat, resolveConditionalFormat } from './formatting';
+import { buildFormatCache, buildIndexMaps, formatToCss, formatDisplayValue, isAccountingFormat, resolveConditionalFormat } from './formatting';
 import type { DataGridCellFormat } from './schema';
 import { SheetTabs } from './SheetTabs';
 import { useUndoRedo } from '../shared/useUndoRedo';
@@ -260,6 +260,13 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
   const formatCache = useMemo(() => {
     return buildFormatCache(currentSheet?.formats, sortedRowIds, sortedColIds);
   }, [currentSheet?.formats, sortedRowIds, sortedColIds]);
+
+  // Precompute id → index maps once per render for conditional-format resolution
+  // (avoids O(rules × ranges × rows) indexOf scans per cell).
+  const { rowIdxMap: cfRowIdxMap, colIdxMap: cfColIdxMap } = useMemo(
+    () => buildIndexMaps(sortedRowIds, sortedColIds),
+    [sortedRowIds, sortedColIds],
+  );
 
   const columnDefs = useMemo(() => {
     if (!currentSheet?.columns) return [];
@@ -1588,7 +1595,7 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
                         if (currentSheet?.conditionalFormats) {
                           const condFmt = resolveConditionalFormat(
                             currentSheet.conditionalFormats, rowId, colId, display,
-                            sortedRowIds, sortedColIds, condFormatResultsRef.current,
+                            cfRowIdxMap, cfColIdxMap, condFormatResultsRef.current,
                           );
                           if (condFmt) {
                             const condCss = formatToCss(condFmt);
