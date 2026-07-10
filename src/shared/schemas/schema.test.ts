@@ -199,6 +199,102 @@ describe('Calendar data dependencies', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Calendar recurrence & render robustness (Group B — DoS / crash hardening)
+// ---------------------------------------------------------------------------
+
+describe('Calendar recurrence & render robustness', () => {
+  function calWithEvent(ev: any) {
+    return { '@type': 'Calendar', name: 'cal', events: { e1: { '@type': 'Event', ...ev } } };
+  }
+
+  it('flags byMonthDay of 0', () => {
+    const errors = validateDocument(calWithEvent({ start: '2025-01-15', recurrenceRule: { frequency: 'monthly', byMonthDay: [0] } }));
+    expect(hasPath(errors, ['events', 'e1', 'recurrenceRule', 'byMonthDay', 0])).toBe(true);
+  });
+
+  it('flags byMonthDay above 31', () => {
+    const errors = validateDocument(calWithEvent({ start: '2025-01-15', recurrenceRule: { frequency: 'monthly', byMonthDay: [32] } }));
+    expect(errors.some(e => e.path.includes('byMonthDay'))).toBe(true);
+  });
+
+  it('flags byMonthDay below -31', () => {
+    const errors = validateDocument(calWithEvent({ start: '2025-01-15', recurrenceRule: { frequency: 'monthly', byMonthDay: [-40] } }));
+    expect(errors.some(e => e.path.includes('byMonthDay'))).toBe(true);
+  });
+
+  it('accepts a valid negative byMonthDay', () => {
+    const errors = validateDocument(calWithEvent({ start: '2025-01-15', recurrenceRule: { frequency: 'monthly', byMonthDay: [-1] } }));
+    expect(errors.some(e => e.path.includes('byMonthDay'))).toBe(false);
+  });
+
+  it('accepts monthly byMonthDay of 31', () => {
+    const errors = validateDocument(calWithEvent({ start: '2025-01-15', recurrenceRule: { frequency: 'monthly', byMonthDay: [31] } }));
+    expect(errors).toEqual([]);
+  });
+
+  it('flags weekly frequency with an empty byDay', () => {
+    const errors = validateDocument(calWithEvent({ start: '2025-01-15T10:00:00', recurrenceRule: { frequency: 'weekly', byDay: [] } }));
+    expect(errors.some(e => e.path.includes('byDay') && e.kind === 'dependency')).toBe(true);
+  });
+
+  it('flags interval of 0', () => {
+    const errors = validateDocument(calWithEvent({ start: '2025-01-15', recurrenceRule: { frequency: 'daily', interval: 0 } }));
+    expect(hasPath(errors, ['events', 'e1', 'recurrenceRule', 'interval'])).toBe(true);
+  });
+
+  it('flags count of 0', () => {
+    const errors = validateDocument(calWithEvent({ start: '2025-01-15', recurrenceRule: { frequency: 'daily', count: 0 } }));
+    expect(hasPath(errors, ['events', 'e1', 'recurrenceRule', 'count'])).toBe(true);
+  });
+
+  it('flags an unparseable start that passes the regex', () => {
+    const errors = validateDocument(calWithEvent({ start: '2025-13-01' }));
+    expect(errors.some(e => e.path.includes('start'))).toBe(true);
+  });
+
+  it('flags an unparseable duration that passes the regex', () => {
+    const errors = validateDocument(calWithEvent({ start: '2025-01-15T10:00:00', duration: 'P' }));
+    expect(errors.some(e => e.path.includes('duration'))).toBe(true);
+  });
+
+  it('flags an invalid timeZone', () => {
+    const errors = validateDocument(calWithEvent({ start: '2025-01-15T10:00:00', timeZone: 'Bogus/Zone' }));
+    expect(errors.some(e => e.path.includes('timeZone'))).toBe(true);
+  });
+
+  it('flags a non-hex event color', () => {
+    const errors = validateDocument(calWithEvent({ start: '2025-01-15', color: 'red' }));
+    expect(errors.some(e => e.path.includes('color'))).toBe(true);
+  });
+
+  it('flags a non-hex document color', () => {
+    const errors = validateDocument({ '@type': 'Calendar', name: 'cal', color: 'blue', events: {} });
+    expect(hasPath(errors, ['color'])).toBe(true);
+  });
+
+  it('accepts a 3-digit hex color (app legitimately uses these)', () => {
+    const errors = validateDocument({ '@type': 'Calendar', name: 'cal', color: '#fff', events: {} });
+    expect(errors).toEqual([]);
+  });
+
+  it('accepts a local-datetime start with seconds', () => {
+    const errors = validateDocument(calWithEvent({ start: '2025-01-15T10:00:00' }));
+    expect(errors.some(e => e.path.includes('start'))).toBe(false);
+  });
+
+  it('produces no errors for a well-formed recurring event (no false positives)', () => {
+    const errors = validateDocument(calWithEvent({
+      start: '2025-01-15T10:00:00',
+      duration: 'PT1H',
+      timeZone: 'America/New_York',
+      color: '#039be5',
+      recurrenceRule: { frequency: 'weekly', interval: 2, byDay: [{ day: 'mo' }, { day: 'we' }], count: 5 },
+    }));
+    expect(errors).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // TaskList document
 // ---------------------------------------------------------------------------
 

@@ -279,6 +279,13 @@ export function validateNode(value: unknown, schema: SchemaNode, path: (string |
 export const LOCAL_DATE_TIME_RE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2})?)?$/;
 export const UTC_DATE_TIME_RE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})?)?$/;
 export const DURATION_RE = /^-?P(\d+W|\d+D)?(T(\d+H)?(\d+M)?(\d+S)?)?$/;
+/**
+ * Hex color: `#rgb`, `#rrggbb`, or `#rrggbbaa`. Accepts the 3-digit shorthand and
+ * the 8-digit (with-alpha) form the app can legitimately produce, and rejects any
+ * non-hex string that would land unescaped in a CSS custom property / schedule-x
+ * color config. Shared so other document types (Group E) reuse the same rule.
+ */
+export const HEX_COLOR_RE = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
 export const DAY_VALUES = ['mo', 'tu', 'we', 'th', 'fr', 'sa', 'su'] as const;
 export const FREQ_VALUES = ['yearly', 'monthly', 'weekly', 'daily', 'hourly', 'minutely', 'secondly'] as const;
 export const PROGRESS_VALUES = ['needs-action', 'in-process', 'completed', 'failed', 'cancelled'] as const;
