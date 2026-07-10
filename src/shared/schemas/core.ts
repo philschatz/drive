@@ -2,6 +2,8 @@
  * Core schema DSL, validator, shared sub-schemas, and types.
  */
 
+import { Temporal } from 'temporal-polyfill';
+
 // ---------------------------------------------------------------------------
 // JMAP building-block types (RFC 8984)
 // ---------------------------------------------------------------------------
@@ -286,6 +288,13 @@ export const DURATION_RE = /^-?P(\d+W|\d+D)?(T(\d+H)?(\d+M)?(\d+S)?)?$/;
  * color config. Shared so other document types (Group E) reuse the same rule.
  */
 export const HEX_COLOR_RE = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
+/**
+ * A `byMonth` value (RFC 8984): a month number 1..13 (13 allows leap months in
+ * non-Gregorian rscale calendars) optionally suffixed with "L" for a leap month.
+ * The ICS importer stores these as `String(monthNumber)` (see backend/parser.ts),
+ * so no leading zeros are expected, but we tolerate one to stay lenient.
+ */
+export const MONTH_VALUE_RE = /^(0?[1-9]|1[0-3])L?$/;
 export const DAY_VALUES = ['mo', 'tu', 'we', 'th', 'fr', 'sa', 'su'] as const;
 export const FREQ_VALUES = ['yearly', 'monthly', 'weekly', 'daily', 'hourly', 'minutely', 'secondly'] as const;
 export const PROGRESS_VALUES = ['needs-action', 'in-process', 'completed', 'failed', 'cancelled'] as const;
@@ -388,3 +397,187 @@ export const alertSchema = obj({
   acknowledged: str({ pattern: UTC_DATE_TIME_RE, optional: true }),
   action: str({ enum: ['display', 'email'], optional: true }),
 });
+
+// ---------------------------------------------------------------------------
+// Shared dependency-check helpers
+//
+// These mirror the parsing the renderers do at runtime (Temporal for
+// dates/durations/zones) so crafted values that slip past the loose regexes but
+// crash a renderer surface as validation errors instead. They are pure so both
+// the Calendar and TaskList checkers can share them without duplicating logic.
+// ---------------------------------------------------------------------------
+
+/**
+ * True if `s` parses as a JSCalendar local date ("YYYY-MM-DD") or local
+ * date-time ("YYYY-MM-DDTHH:mm[:ss]"). Values ≤10 chars are treated as all-day
+ * dates, matching how the recurrence engine interprets `start`.
+ */
+export function isParseableLocalDateTime(s: string): boolean {
+  try {
+    if (s.length <= 10) Temporal.PlainDate.from(s.substring(0, 10));
+    else Temporal.PlainDateTime.from(s.substring(0, 19));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** True if `s` parses as an ISO 8601 duration (e.g. "PT1H", "P1DT2H30M"). */
+export function isParseableDuration(s: string): boolean {
+  try {
+    Temporal.Duration.from(s);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** True if `tz` is a time zone Temporal can resolve (IANA id or fixed offset). */
+export function isParseableTimeZone(tz: string): boolean {
+  try {
+    Temporal.PlainDateTime.from('2020-01-01T00:00:00').toZonedDateTime(tz);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * True if a stored `href`/`uri` uses a scheme that can execute script when
+ * rendered into an anchor or iframe. The app only ever stores http(s)/mailto/
+ * tel-style URLs (from ICS import, conference/url properties) and opaque
+ * attachment payloads, so a `javascript:`/`vbscript:`/`data:text/html` value is
+ * always malformed and worth flagging as defense-in-depth. Whitespace and
+ * control characters are stripped first because browsers ignore them when
+ * resolving the scheme.
+ */
+export function isDangerousUri(value: string): boolean {
+  const stripped = value.replace(/[\u0000-\u0020]+/g, '').toLowerCase();
+  return (
+    stripped.startsWith('javascript:') ||
+    stripped.startsWith('vbscript:') ||
+    stripped.startsWith('data:text/html')
+  );
+}
+
+/**
+ * Cross-field validation for a JSCalendar RecurrenceRule, shared by Calendar and
+ * TaskList. `rulePath` is the path to the rule object (e.g. ['events', uid,
+ * 'recurrenceRule']) so error paths land on the offending sub-field.
+ *
+ * Covers correctness rules the schema's per-field bounds cannot express:
+ * mutually-exclusive count/until, `by*` index values of 0 (nonsensical and, for
+ * byMonthDay, a source of infinite expansion loops), out-of-range byMonth
+ * strings, an empty byDay on a byDay-driven frequency, and nthOfPeriod misuse.
+ */
+export function checkRecurrenceRuleDeps(
+  rule: any,
+  rulePath: (string | number)[],
+  errors: ValidationError[],
+): void {
+  if (!rule || typeof rule !== 'object') return;
+
+  if (rule.count != null && rule.until != null) {
+    errors.push({ path: rulePath, message: 'count and until are mutually exclusive', kind: 'dependency' });
+  }
+
+  // byMonthDay must be 1..31 or -31..-1. The schema bounds the range, but 0 is
+  // not expressible there and drives the monthly expansion into an infinite loop.
+  if (Array.isArray(rule.byMonthDay)) {
+    rule.byMonthDay.forEach((v: any, i: number) => {
+      if (v === 0) {
+        errors.push({
+          path: [...rulePath, 'byMonthDay', i],
+          message: 'byMonthDay must be 1..31 or -31..-1 (0 is not allowed)',
+          kind: 'dependency',
+        });
+      }
+    });
+  }
+
+  // byYearDay / byWeekNo / bySetPosition are signed indices; 0 is meaningless
+  // ("the 0th day/week/occurrence") and never produced legitimately.
+  for (const field of ['byYearDay', 'byWeekNo', 'bySetPosition'] as const) {
+    if (Array.isArray(rule[field])) {
+      rule[field].forEach((v: any, i: number) => {
+        if (v === 0) {
+          errors.push({
+            path: [...rulePath, field, i],
+            message: `${field} must not be 0`,
+            kind: 'dependency',
+          });
+        }
+      });
+    }
+  }
+
+  // byMonth values are month strings "1".."13" (optionally "L"-suffixed for
+  // leap months). Anything else is malformed.
+  if (Array.isArray(rule.byMonth)) {
+    rule.byMonth.forEach((v: any, i: number) => {
+      if (typeof v !== 'string' || !MONTH_VALUE_RE.test(v)) {
+        errors.push({
+          path: [...rulePath, 'byMonth', i],
+          message: `byMonth value "${v}" is not a valid month (expected "1".."13", optionally suffixed with "L")`,
+          kind: 'dependency',
+        });
+      }
+    });
+  }
+
+  const freq = rule.frequency;
+
+  // A byDay-driven frequency (weekly and finer) with an empty byDay produces no
+  // occurrences and previously looped forever during expansion.
+  if (freq && Array.isArray(rule.byDay) && rule.byDay.length === 0) {
+    if (freq !== 'yearly' && freq !== 'monthly') {
+      errors.push({
+        path: [...rulePath, 'byDay'],
+        message: `${freq} frequency with an empty byDay produces no occurrences`,
+        kind: 'dependency',
+      });
+    }
+  }
+
+  if (Array.isArray(rule.byDay)) {
+    for (let i = 0; i < rule.byDay.length; i++) {
+      const nth = rule.byDay[i]?.nthOfPeriod;
+      if (nth == null) continue;
+      if (nth === 0) {
+        errors.push({
+          path: [...rulePath, 'byDay', i, 'nthOfPeriod'],
+          message: 'nthOfPeriod must not be 0',
+          kind: 'dependency',
+        });
+      } else if (freq && freq !== 'yearly' && freq !== 'monthly') {
+        errors.push({
+          path: [...rulePath, 'byDay', i, 'nthOfPeriod'],
+          message: `nthOfPeriod is only valid with yearly or monthly frequency, got "${freq}"`,
+          kind: 'dependency',
+        });
+      }
+    }
+  }
+}
+
+/**
+ * Validate that every key of a `recurrenceOverrides` map is a parseable local
+ * date / date-time (the keys are occurrence identifiers). `basePath` is the path
+ * to the recurrenceOverrides object.
+ */
+export function checkRecurrenceOverrideKeys(
+  overrides: any,
+  basePath: (string | number)[],
+  errors: ValidationError[],
+): void {
+  if (!overrides || typeof overrides !== 'object') return;
+  for (const key of Object.keys(overrides)) {
+    if (!isParseableLocalDateTime(key)) {
+      errors.push({
+        path: [...basePath, key],
+        message: `recurrenceOverrides key "${key}" is not a valid date/time`,
+        kind: 'dependency',
+      });
+    }
+  }
+}

@@ -1,4 +1,3 @@
-import { Temporal } from 'temporal-polyfill';
 import {
   type ValidationError, type SchemaNode,
   type UTCDateTime, type LocalDateTime, type Duration, type PatchObject,
@@ -8,6 +7,8 @@ import {
   STATUS_VALUES, FREEBUSY_VALUES, PRIVACY_VALUES, PROGRESS_VALUES,
   boolMap, linkSchema, virtualLocationSchema, recurrenceRuleSchema,
   participantSchema, alertSchema,
+  isParseableLocalDateTime, isParseableDuration, isParseableTimeZone,
+  isDangerousUri, checkRecurrenceRuleDeps, checkRecurrenceOverrideKeys,
 } from '../../shared/schemas/core';
 
 export interface NDay {
@@ -132,7 +133,37 @@ export const calendarDocumentSchema = obj({
   events: record(calendarEventSchema),
 });
 
+/**
+ * Flag stored `href`/`uri` values that use a script-executing scheme
+ * (javascript:, etc.). Checked on links, attachments, and virtualLocations,
+ * which are the only event fields that hold URLs.
+ */
+function checkEventUris(ev: any, p: (string | number)[], errors: ValidationError[]): void {
+  const scan = (map: any, field: string, key: 'href' | 'uri') => {
+    if (!map || typeof map !== 'object') return;
+    for (const [id, item] of Object.entries(map)) {
+      const v = (item as any)?.[key];
+      if (typeof v === 'string' && isDangerousUri(v)) {
+        errors.push({
+          path: [...p, field, id, key],
+          message: `${key} "${v}" uses a disallowed URL scheme`,
+          kind: 'dependency',
+        });
+      }
+    }
+  };
+  scan(ev.links, 'links', 'href');
+  scan(ev.attachments, 'attachments', 'href');
+  scan(ev.virtualLocations, 'virtualLocations', 'uri');
+}
+
 export function checkCalendarDependencies(doc: any, errors: ValidationError[]): void {
+  // The document-level default time zone drives event rendering, so it must
+  // resolve just like a per-event timeZone.
+  if (typeof doc.timeZone === 'string' && doc.timeZone && !isParseableTimeZone(doc.timeZone)) {
+    errors.push({ path: ['timeZone'], message: `timeZone "${doc.timeZone}" is not a valid time zone`, kind: 'dependency' });
+  }
+
   const events = doc.events;
   if (!events || typeof events !== 'object') return;
 
@@ -140,78 +171,35 @@ export function checkCalendarDependencies(doc: any, errors: ValidationError[]): 
     const ev = event as any;
     const p = ['events', uid];
 
-    if (ev.recurrenceRule?.count != null && ev.recurrenceRule?.until != null) {
-      errors.push({ path: [...p, 'recurrenceRule'], message: 'count and until are mutually exclusive', kind: 'dependency' });
+    if (ev.recurrenceRule) {
+      checkRecurrenceRuleDeps(ev.recurrenceRule, [...p, 'recurrenceRule'], errors);
     }
 
-    // byMonthDay must be 1..31 or -31..-1. The schema bounds the range, but 0 is
-    // not expressible there and drives the monthly expansion into an infinite loop.
-    if (Array.isArray(ev.recurrenceRule?.byMonthDay)) {
-      ev.recurrenceRule.byMonthDay.forEach((v: any, i: number) => {
-        if (v === 0) {
-          errors.push({
-            path: [...p, 'recurrenceRule', 'byMonthDay', i],
-            message: 'byMonthDay must be 1..31 or -31..-1 (0 is not allowed)',
-            kind: 'dependency',
-          });
-        }
-      });
-    }
-
-    // A byDay-driven frequency (weekly) with an empty byDay produces no
-    // occurrences and previously looped forever during expansion.
-    if (ev.recurrenceRule?.frequency && Array.isArray(ev.recurrenceRule.byDay) && ev.recurrenceRule.byDay.length === 0) {
-      const freq = ev.recurrenceRule.frequency;
-      if (freq !== 'yearly' && freq !== 'monthly') {
-        errors.push({
-          path: [...p, 'recurrenceRule', 'byDay'],
-          message: `${freq} frequency with an empty byDay produces no occurrences`,
-          kind: 'dependency',
-        });
-      }
+    // recurrenceOverrides keys are occurrence identifiers (local date/date-time).
+    if (ev.recurrenceOverrides) {
+      checkRecurrenceOverrideKeys(ev.recurrenceOverrides, [...p, 'recurrenceOverrides'], errors);
     }
 
     // Time-parse safety net: mirror the Temporal parsing schedule-x does at render
     // time so crafted values that pass the loose regexes but crash the renderer
     // surface as validation errors instead.
-    if (typeof ev.start === 'string' && ev.start) {
-      const allDay = ev.start.length <= 10;
-      try {
-        if (allDay) Temporal.PlainDate.from(ev.start.substring(0, 10));
-        else Temporal.PlainDateTime.from(ev.start.substring(0, 19));
-      } catch {
-        errors.push({ path: [...p, 'start'], message: `start "${ev.start}" is not a valid date/time`, kind: 'dependency' });
-      }
+    if (typeof ev.start === 'string' && ev.start && !isParseableLocalDateTime(ev.start)) {
+      errors.push({ path: [...p, 'start'], message: `start "${ev.start}" is not a valid date/time`, kind: 'dependency' });
     }
-    if (typeof ev.duration === 'string' && ev.duration) {
-      try {
-        Temporal.Duration.from(ev.duration);
-      } catch {
-        errors.push({ path: [...p, 'duration'], message: `duration "${ev.duration}" is not a valid ISO 8601 duration`, kind: 'dependency' });
-      }
+    if (typeof ev.recurrenceId === 'string' && ev.recurrenceId && !isParseableLocalDateTime(ev.recurrenceId)) {
+      errors.push({ path: [...p, 'recurrenceId'], message: `recurrenceId "${ev.recurrenceId}" is not a valid date/time`, kind: 'dependency' });
     }
-    if (typeof ev.timeZone === 'string' && ev.timeZone) {
-      try {
-        Temporal.PlainDateTime.from('2020-01-01T00:00:00').toZonedDateTime(ev.timeZone);
-      } catch {
-        errors.push({ path: [...p, 'timeZone'], message: `timeZone "${ev.timeZone}" is not a valid time zone`, kind: 'dependency' });
-      }
+    if (typeof ev.duration === 'string' && ev.duration && !isParseableDuration(ev.duration)) {
+      errors.push({ path: [...p, 'duration'], message: `duration "${ev.duration}" is not a valid ISO 8601 duration`, kind: 'dependency' });
+    }
+    if (typeof ev.timeZone === 'string' && ev.timeZone && !isParseableTimeZone(ev.timeZone)) {
+      errors.push({ path: [...p, 'timeZone'], message: `timeZone "${ev.timeZone}" is not a valid time zone`, kind: 'dependency' });
+    }
+    if (typeof ev.recurrenceIdTimeZone === 'string' && ev.recurrenceIdTimeZone && !isParseableTimeZone(ev.recurrenceIdTimeZone)) {
+      errors.push({ path: [...p, 'recurrenceIdTimeZone'], message: `recurrenceIdTimeZone "${ev.recurrenceIdTimeZone}" is not a valid time zone`, kind: 'dependency' });
     }
 
-    if (ev.recurrenceRule?.byDay && ev.recurrenceRule.frequency) {
-      const freq = ev.recurrenceRule.frequency;
-      if (freq !== 'yearly' && freq !== 'monthly') {
-        for (let i = 0; i < ev.recurrenceRule.byDay.length; i++) {
-          if (ev.recurrenceRule.byDay[i]?.nthOfPeriod != null) {
-            errors.push({
-              path: [...p, 'recurrenceRule', 'byDay', i, 'nthOfPeriod'],
-              message: `nthOfPeriod is only valid with yearly or monthly frequency, got "${freq}"`,
-              kind: 'dependency',
-            });
-          }
-        }
-      }
-    }
+    checkEventUris(ev, p, errors);
 
     if (ev.participants) {
       for (const [pid, part] of Object.entries(ev.participants)) {

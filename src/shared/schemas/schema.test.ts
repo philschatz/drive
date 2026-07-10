@@ -610,6 +610,340 @@ describe('DataGrid data dependencies', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Calendar: extended recurrence & field validation (Group E)
+// ---------------------------------------------------------------------------
+
+describe('Calendar extended validation', () => {
+  function calWithEvent(ev: any) {
+    return { '@type': 'Calendar', name: 'cal', events: { e1: { '@type': 'Event', ...ev } } };
+  }
+
+  it('flags byYearDay of 0', () => {
+    const errors = validateDocument(calWithEvent({ start: '2025-01-15', recurrenceRule: { frequency: 'yearly', byYearDay: [0] } }));
+    expect(hasPath(errors, ['events', 'e1', 'recurrenceRule', 'byYearDay', 0])).toBe(true);
+  });
+
+  it('accepts a valid byYearDay', () => {
+    const errors = validateDocument(calWithEvent({ start: '2025-01-15', recurrenceRule: { frequency: 'yearly', byYearDay: [100, -1] } }));
+    expect(errors.some(e => e.path.includes('byYearDay'))).toBe(false);
+  });
+
+  it('flags byWeekNo of 0', () => {
+    const errors = validateDocument(calWithEvent({ start: '2025-01-15', recurrenceRule: { frequency: 'yearly', byWeekNo: [0] } }));
+    expect(hasPath(errors, ['events', 'e1', 'recurrenceRule', 'byWeekNo', 0])).toBe(true);
+  });
+
+  it('flags bySetPosition of 0', () => {
+    const errors = validateDocument(calWithEvent({ start: '2025-01-15', recurrenceRule: { frequency: 'monthly', bySetPosition: [0] } }));
+    expect(hasPath(errors, ['events', 'e1', 'recurrenceRule', 'bySetPosition', 0])).toBe(true);
+  });
+
+  it('flags an invalid byMonth value', () => {
+    const errors = validateDocument(calWithEvent({ start: '2025-01-15', recurrenceRule: { frequency: 'yearly', byMonth: ['13x'] } }));
+    expect(hasPath(errors, ['events', 'e1', 'recurrenceRule', 'byMonth', 0])).toBe(true);
+  });
+
+  it('flags a byMonth of "0"', () => {
+    const errors = validateDocument(calWithEvent({ start: '2025-01-15', recurrenceRule: { frequency: 'yearly', byMonth: ['0'] } }));
+    expect(errors.some(e => e.path.includes('byMonth'))).toBe(true);
+  });
+
+  it('accepts valid byMonth values (importer stores "1".."12")', () => {
+    const errors = validateDocument(calWithEvent({ start: '2025-01-15', recurrenceRule: { frequency: 'yearly', byMonth: ['1', '6', '12'] } }));
+    expect(errors.some(e => e.path.includes('byMonth'))).toBe(false);
+  });
+
+  it('flags an nthOfPeriod of 0', () => {
+    const errors = validateDocument(calWithEvent({ start: '2025-01-15', recurrenceRule: { frequency: 'monthly', byDay: [{ day: 'mo', nthOfPeriod: 0 }] } }));
+    expect(errors.some(e => e.path.includes('nthOfPeriod'))).toBe(true);
+  });
+
+  it('flags an unparseable recurrenceOverrides key', () => {
+    const errors = validateDocument(calWithEvent({
+      start: '2025-01-15',
+      recurrenceRule: { frequency: 'daily' },
+      recurrenceOverrides: { 'not-a-date': { excluded: true } },
+    }));
+    expect(errors.some(e => e.path.includes('recurrenceOverrides') && e.message.includes('not-a-date'))).toBe(true);
+  });
+
+  it('accepts a valid recurrenceOverrides key', () => {
+    const errors = validateDocument(calWithEvent({
+      start: '2025-01-15T10:00:00',
+      recurrenceRule: { frequency: 'daily' },
+      recurrenceOverrides: { '2025-01-16T10:00:00': { excluded: true } },
+    }));
+    expect(errors.some(e => e.path.includes('recurrenceOverrides'))).toBe(false);
+  });
+
+  it('flags an invalid document-level timeZone', () => {
+    const errors = validateDocument({ '@type': 'Calendar', name: 'cal', timeZone: 'Bogus/Zone', events: {} });
+    expect(hasPath(errors, ['timeZone'])).toBe(true);
+  });
+
+  it('flags an invalid recurrenceIdTimeZone', () => {
+    const errors = validateDocument(calWithEvent({ start: '2025-01-15', recurrenceIdTimeZone: 'Bogus/Zone' }));
+    expect(errors.some(e => e.path.includes('recurrenceIdTimeZone'))).toBe(true);
+  });
+
+  it('flags an unparseable recurrenceId', () => {
+    const errors = validateDocument(calWithEvent({ start: '2025-01-15', recurrenceId: '2025-13-01' }));
+    expect(errors.some(e => e.path.includes('recurrenceId'))).toBe(true);
+  });
+
+  it('flags a javascript: URL in links', () => {
+    const errors = validateDocument(calWithEvent({
+      start: '2025-01-15',
+      links: { l1: { '@type': 'Link', href: 'javascript:alert(1)' } },
+    }));
+    expect(hasPath(errors, ['events', 'e1', 'links', 'l1', 'href'])).toBe(true);
+  });
+
+  it('flags a javascript: URI in virtualLocations (whitespace-obfuscated)', () => {
+    const errors = validateDocument(calWithEvent({
+      start: '2025-01-15',
+      virtualLocations: { v1: { '@type': 'VirtualLocation', uri: '  java\tscript:alert(1)' } },
+    }));
+    expect(errors.some(e => e.path.includes('virtualLocations') && e.path.includes('uri'))).toBe(true);
+  });
+
+  it('accepts safe URLs in links / attachments / virtualLocations', () => {
+    const errors = validateDocument(calWithEvent({
+      start: '2025-01-15',
+      links: { l1: { '@type': 'Link', href: 'https://example.com/x' } },
+      attachments: { a1: { '@type': 'Link', href: 'mailto:a@b.com' } },
+      virtualLocations: { v1: { '@type': 'VirtualLocation', uri: 'https://zoom.us/j/123' } },
+    }));
+    expect(errors).toEqual([]);
+  });
+
+  it('produces no errors for a fully-populated well-formed event (no false positives)', () => {
+    const errors = validateDocument({
+      '@type': 'Calendar', name: 'cal', color: '#039be5', timeZone: 'America/New_York',
+      events: {
+        e1: {
+          '@type': 'Event',
+          start: '2025-01-15T10:00:00', duration: 'PT1H', timeZone: 'America/New_York',
+          recurrenceId: '2025-01-15T10:00:00', recurrenceIdTimeZone: 'America/New_York',
+          recurrenceRule: {
+            frequency: 'monthly', interval: 2,
+            byMonth: ['1', '7'], byMonthDay: [15], byYearDay: [100], byWeekNo: [10], bySetPosition: [1],
+            byDay: [{ day: 'mo', nthOfPeriod: 2 }], count: 5,
+          },
+          recurrenceOverrides: { '2025-03-15T10:00:00': { excluded: true } },
+          links: { l1: { '@type': 'Link', href: 'https://example.com' } },
+          virtualLocations: { v1: { '@type': 'VirtualLocation', uri: 'https://meet.example/room' } },
+        },
+      },
+    });
+    expect(errors).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task: extended field validation (Group E)
+// ---------------------------------------------------------------------------
+
+describe('Task extended validation', () => {
+  function taskListWith(t: any) {
+    return { '@type': 'TaskList', name: 'tasks', tasks: { t1: { '@type': 'Task', ...t } } };
+  }
+
+  it('flags a non-hex task color', () => {
+    const errors = validateDocument(taskListWith({ color: 'red' }));
+    expect(hasPath(errors, ['tasks', 't1', 'color'])).toBe(true);
+  });
+
+  it('accepts a hex task color', () => {
+    const errors = validateDocument(taskListWith({ color: '#00ff00' }));
+    expect(errors.some(e => e.path.includes('color'))).toBe(false);
+  });
+
+  it('flags a non-hex document color', () => {
+    const errors = validateDocument({ '@type': 'TaskList', name: 'tasks', color: 'blue', tasks: {} });
+    expect(hasPath(errors, ['color'])).toBe(true);
+  });
+
+  it('flags an unparseable start that passes the regex', () => {
+    const errors = validateDocument(taskListWith({ start: '2025-13-01' }));
+    expect(errors.some(e => e.path.includes('start'))).toBe(true);
+  });
+
+  it('flags an unparseable due that passes the regex', () => {
+    const errors = validateDocument(taskListWith({ due: '2025-02-30' }));
+    expect(errors.some(e => e.path.includes('due') && e.message.includes('valid date/time'))).toBe(true);
+  });
+
+  it('flags an invalid estimatedDuration', () => {
+    const errors = validateDocument(taskListWith({ estimatedDuration: 'P' }));
+    expect(hasPath(errors, ['tasks', 't1', 'estimatedDuration'])).toBe(true);
+  });
+
+  it('flags an invalid task timeZone', () => {
+    const errors = validateDocument(taskListWith({ timeZone: 'Bogus/Zone' }));
+    expect(errors.some(e => e.path.includes('timeZone'))).toBe(true);
+  });
+
+  it('flags an invalid document-level timeZone', () => {
+    const errors = validateDocument({ '@type': 'TaskList', name: 'tasks', timeZone: 'Bogus/Zone', tasks: {} });
+    expect(hasPath(errors, ['timeZone'])).toBe(true);
+  });
+
+  it('shares recurrence checks (byMonthDay 0)', () => {
+    const errors = validateDocument(taskListWith({ recurrenceRule: { frequency: 'monthly', byMonthDay: [0] } }));
+    expect(errors.some(e => e.path.includes('byMonthDay'))).toBe(true);
+  });
+
+  it('produces no errors for a well-formed task (no false positives)', () => {
+    const errors = validateDocument(taskListWith({
+      title: 'Do thing', color: '#4a86e8',
+      start: '2025-06-01', due: '2025-06-15', estimatedDuration: 'PT2H', timeZone: 'America/New_York',
+      progress: 'in-process', percentComplete: 50, priority: 3,
+    }));
+    expect(errors).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// DataGrid: colors & range direction (Group E)
+// ---------------------------------------------------------------------------
+
+describe('DataGrid extended validation', () => {
+  it('flags a non-hex conditional-format textColor', () => {
+    const doc = {
+      '@type': 'DataGrid', name: 'g',
+      sheets: {
+        s1: {
+          '@type': 'Sheet', name: 'Sheet 1', index: 1,
+          columns: { c1: { index: 1 } }, rows: { r1: { index: 1 } }, cells: {},
+          conditionalFormats: {
+            cf1: {
+              index: 1, conditionType: 'gt', conditionValue: '5',
+              ranges: { rg1: { rangeRowStart: 'r1', rangeRowEnd: 'r1', rangeColStart: 'c1', rangeColEnd: 'c1' } },
+              format: { textColor: 'red' },
+            },
+          },
+        },
+      },
+    };
+    expect(hasPath(validateDocument(doc), ['sheets', 's1', 'conditionalFormats', 'cf1', 'format', 'textColor'])).toBe(true);
+  });
+
+  it('flags a non-hex format bgColor and border color', () => {
+    const doc = {
+      '@type': 'DataGrid', name: 'g',
+      sheets: {
+        s1: {
+          '@type': 'Sheet', name: 'Sheet 1', index: 1,
+          columns: { c1: { index: 1 } }, rows: { r1: { index: 1 } }, cells: {},
+          formats: {
+            f1: {
+              index: 1, rangeRowStart: 'r1', rangeRowEnd: 'r1', rangeColStart: 'c1', rangeColEnd: 'c1',
+              format: { bgColor: 'yellow', borderTop: { style: 'thin', color: 'black' } },
+            },
+          },
+        },
+      },
+    };
+    const errors = validateDocument(doc);
+    expect(hasPath(errors, ['sheets', 's1', 'formats', 'f1', 'format', 'bgColor'])).toBe(true);
+    expect(hasPath(errors, ['sheets', 's1', 'formats', 'f1', 'format', 'borderTop', 'color'])).toBe(true);
+  });
+
+  it('accepts hex colors from the color picker / presets', () => {
+    const doc = {
+      '@type': 'DataGrid', name: 'g',
+      sheets: {
+        s1: {
+          '@type': 'Sheet', name: 'Sheet 1', index: 1,
+          columns: { c1: { index: 1 } }, rows: { r1: { index: 1 } }, cells: {},
+          formats: {
+            f1: {
+              index: 1, rangeRowStart: 'r1', rangeRowEnd: 'r1', rangeColStart: 'c1', rangeColEnd: 'c1',
+              format: { textColor: '#000000', bgColor: '#ffff00', borderTop: { style: 'thin', color: '#000000' } },
+            },
+          },
+        },
+      },
+    };
+    expect(validateDocument(doc)).toEqual([]);
+  });
+
+  it('flags a reversed conditional-format range (start col after end col)', () => {
+    const doc = {
+      '@type': 'DataGrid', name: 'g',
+      sheets: {
+        s1: {
+          '@type': 'Sheet', name: 'Sheet 1', index: 1,
+          columns: { c1: { index: 1 }, c2: { index: 2 }, c3: { index: 3 } },
+          rows: { r1: { index: 1 }, r2: { index: 2 } },
+          cells: {},
+          conditionalFormats: {
+            cf1: {
+              index: 1, conditionType: 'gt', conditionValue: '5',
+              ranges: { rg1: { rangeRowStart: 'r1', rangeRowEnd: 'r2', rangeColStart: 'c3', rangeColEnd: 'c1' } },
+              format: {},
+            },
+          },
+        },
+      },
+    };
+    const errors = validateDocument(doc);
+    expect(errors.some(e => e.message.includes('reversed range') && e.message.includes('column'))).toBe(true);
+  });
+
+  it('flags a reversed format range (start row after end row)', () => {
+    const doc = {
+      '@type': 'DataGrid', name: 'g',
+      sheets: {
+        s1: {
+          '@type': 'Sheet', name: 'Sheet 1', index: 1,
+          columns: { c1: { index: 1 }, c2: { index: 2 } },
+          rows: { r1: { index: 1 }, r2: { index: 2 } },
+          cells: {},
+          formats: {
+            f1: {
+              index: 1, rangeRowStart: 'r2', rangeRowEnd: 'r1', rangeColStart: 'c1', rangeColEnd: 'c2',
+              format: {},
+            },
+          },
+        },
+      },
+    };
+    const errors = validateDocument(doc);
+    expect(errors.some(e => e.message.includes('reversed range') && e.message.includes('row'))).toBe(true);
+  });
+
+  it('accepts a forward range and still reports missing ids', () => {
+    const forward = {
+      '@type': 'DataGrid', name: 'g',
+      sheets: {
+        s1: {
+          '@type': 'Sheet', name: 'Sheet 1', index: 1,
+          columns: { c1: { index: 1 }, c2: { index: 2 } },
+          rows: { r1: { index: 1 }, r2: { index: 2 } },
+          cells: {},
+          formats: {
+            f1: {
+              index: 1, rangeRowStart: 'r1', rangeRowEnd: 'r2', rangeColStart: 'c1', rangeColEnd: 'c2',
+              format: {},
+            },
+          },
+        },
+      },
+    };
+    expect(validateDocument(forward)).toEqual([]);
+
+    // A missing id still reports non-existent, and does not spuriously report reversed.
+    const missing = JSON.parse(JSON.stringify(forward));
+    missing.sheets.s1.formats.f1.rangeColEnd = 'gone';
+    const errors = validateDocument(missing);
+    expect(errors.some(e => e.message.includes('non-existent column "gone"'))).toBe(true);
+    expect(errors.some(e => e.message.includes('reversed range'))).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Edge cases
 // ---------------------------------------------------------------------------
 

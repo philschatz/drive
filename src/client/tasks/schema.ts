@@ -3,9 +3,11 @@ import {
   type LocalDateTime, type Duration, type PatchObject,
   type VirtualLocation, type Link,
   str, num, bool, obj, record, validateNode,
-  LOCAL_DATE_TIME_RE, DURATION_RE,
+  LOCAL_DATE_TIME_RE, DURATION_RE, HEX_COLOR_RE,
   FREEBUSY_VALUES, PRIVACY_VALUES, PROGRESS_VALUES,
   boolMap, linkSchema, virtualLocationSchema, recurrenceRuleSchema,
+  isParseableLocalDateTime, isParseableDuration, isParseableTimeZone,
+  checkRecurrenceRuleDeps, checkRecurrenceOverrideKeys,
 } from '../../shared/schemas/core';
 import type { RecurrenceRule } from '../calendar/schema';
 
@@ -53,7 +55,7 @@ export const taskSchema = obj({
   locale: str({ optional: true }),
   keywords: boolMap,
   categories: boolMap,
-  color: str({ optional: true }),
+  color: str({ pattern: HEX_COLOR_RE, optional: true }),
   recurrenceRule: recurrenceRuleSchema,
   recurrenceOverrides: record(obj({}), { optional: true }),
   excluded: bool({ optional: true }),
@@ -72,12 +74,17 @@ export const taskDocumentSchema = obj({
   '@type': str({ enum: ['TaskList'] }),
   name: str(),
   description: str({ optional: true }),
-  color: str({ optional: true }),
+  color: str({ pattern: HEX_COLOR_RE, optional: true }),
   timeZone: str({ optional: true }),
   tasks: record(taskSchema),
 });
 
 export function checkTaskDependencies(doc: any, errors: ValidationError[]): void {
+  // The document-level default time zone must resolve, like a per-task timeZone.
+  if (typeof doc.timeZone === 'string' && doc.timeZone && !isParseableTimeZone(doc.timeZone)) {
+    errors.push({ path: ['timeZone'], message: `timeZone "${doc.timeZone}" is not a valid time zone`, kind: 'dependency' });
+  }
+
   const tasks = doc.tasks;
   if (!tasks || typeof tasks !== 'object') return;
 
@@ -89,8 +96,26 @@ export function checkTaskDependencies(doc: any, errors: ValidationError[]): void
       errors.push({ path: [...p, 'due'], message: `due "${t.due}" is before start "${t.start}"`, kind: 'dependency' });
     }
 
-    if (t.recurrenceRule?.count != null && t.recurrenceRule?.until != null) {
-      errors.push({ path: [...p, 'recurrenceRule'], message: 'count and until are mutually exclusive', kind: 'dependency' });
+    if (t.recurrenceRule) {
+      checkRecurrenceRuleDeps(t.recurrenceRule, [...p, 'recurrenceRule'], errors);
+    }
+    if (t.recurrenceOverrides) {
+      checkRecurrenceOverrideKeys(t.recurrenceOverrides, [...p, 'recurrenceOverrides'], errors);
+    }
+
+    // Time-parse safety net: mirror the Temporal parsing the renderers do so
+    // crafted values that pass the loose regexes surface as validation errors.
+    if (typeof t.start === 'string' && t.start && !isParseableLocalDateTime(t.start)) {
+      errors.push({ path: [...p, 'start'], message: `start "${t.start}" is not a valid date/time`, kind: 'dependency' });
+    }
+    if (typeof t.due === 'string' && t.due && !isParseableLocalDateTime(t.due)) {
+      errors.push({ path: [...p, 'due'], message: `due "${t.due}" is not a valid date/time`, kind: 'dependency' });
+    }
+    if (typeof t.estimatedDuration === 'string' && t.estimatedDuration && !isParseableDuration(t.estimatedDuration)) {
+      errors.push({ path: [...p, 'estimatedDuration'], message: `estimatedDuration "${t.estimatedDuration}" is not a valid ISO 8601 duration`, kind: 'dependency' });
+    }
+    if (typeof t.timeZone === 'string' && t.timeZone && !isParseableTimeZone(t.timeZone)) {
+      errors.push({ path: [...p, 'timeZone'], message: `timeZone "${t.timeZone}" is not a valid time zone`, kind: 'dependency' });
     }
 
     if (t.progress === 'completed' && t.percentComplete != null && t.percentComplete !== 100) {

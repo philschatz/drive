@@ -1,6 +1,7 @@
 import {
   type ValidationError,
   str, num, bool, obj, record,
+  HEX_COLOR_RE,
 } from '../../shared/schemas/core';
 
 export interface DataGridColumn {
@@ -106,7 +107,7 @@ const dataGridRowSchema = obj({
 
 const dataGridBorderSchema = obj({
   style: str({ enum: ['thin', 'medium', 'thick', 'dashed', 'dotted', 'double'], optional: true }),
-  color: str({ optional: true }),
+  color: str({ pattern: HEX_COLOR_RE, optional: true }),
 }, { optional: true });
 
 const dataGridCellFormatSchema = obj({
@@ -116,8 +117,10 @@ const dataGridCellFormatSchema = obj({
   strikethrough: bool({ optional: true }),
   fontFamily: str({ optional: true }),
   fontSize: num({ min: 1, max: 400, optional: true }),
-  textColor: str({ optional: true }),
-  bgColor: str({ optional: true }),
+  // Colors are written exclusively by <input type="color"> / the preset swatches,
+  // which always emit `#rrggbb`; HEX_COLOR_RE also tolerates `#rgb`/`#rrggbbaa`.
+  textColor: str({ pattern: HEX_COLOR_RE, optional: true }),
+  bgColor: str({ pattern: HEX_COLOR_RE, optional: true }),
   hAlign: str({ enum: ['left', 'center', 'right', 'justify'], optional: true }),
   vAlign: str({ enum: ['top', 'middle', 'bottom'], optional: true }),
   wrapText: bool({ optional: true }),
@@ -197,7 +200,7 @@ function checkSheetDependencies(
   const formats = sheet.formats;
   if (formats) {
     for (const [id, fmt] of Object.entries(formats)) {
-      validateRangeIds(fmt, id, rowIds, colIds, [...pathPrefix, 'formats'], errors);
+      validateRangeIds(fmt, id, rows, columns, [...pathPrefix, 'formats'], errors);
     }
   }
 
@@ -207,7 +210,7 @@ function checkSheetDependencies(
       const ranges = (rule as any).ranges;
       if (ranges) {
         for (const [rangeId, range] of Object.entries(ranges)) {
-          validateRangeIds(range, `${id}.ranges.${rangeId}`, rowIds, colIds, [...pathPrefix, 'conditionalFormats'], errors);
+          validateRangeIds(range, `${id}.ranges.${rangeId}`, rows, columns, [...pathPrefix, 'conditionalFormats'], errors);
         }
       }
     }
@@ -323,27 +326,55 @@ export function checkDataGridDependencies(doc: any, errors: ValidationError[]): 
 function validateRangeIds(
   rangeObj: any,
   rangeId: string,
-  rowIds: Set<string>,
-  colIds: Set<string>,
+  rows: Record<string, any>,
+  columns: Record<string, any>,
   pathPrefix: string[],
   errors: ValidationError[],
 ): void {
-  for (const field of ['rangeRowStart', 'rangeRowEnd'] as const) {
-    if (typeof rangeObj[field] === 'string' && !rowIds.has(rangeObj[field])) {
+  // A range is stored as start/end row+column IDs. Beyond checking those IDs
+  // exist, a "reversed" range (start after end, e.g. an A1 range entered as
+  // `C10:A1`) silently matches no cells at render time — the containment test
+  // requires start <= idx <= end. We compare the entities' `.index` because the
+  // renderers order rows/columns by that field.
+  const checkAxis = (
+    startField: 'rangeRowStart' | 'rangeColStart',
+    endField: 'rangeRowEnd' | 'rangeColEnd',
+    entities: Record<string, any>,
+    kind: 'row' | 'column',
+  ) => {
+    const startId = rangeObj[startField];
+    const endId = rangeObj[endField];
+    const startExists = typeof startId === 'string' && startId in entities;
+    const endExists = typeof endId === 'string' && endId in entities;
+
+    if (typeof startId === 'string' && !startExists) {
       errors.push({
-        path: [...pathPrefix, rangeId, field],
-        message: `References non-existent row "${rangeObj[field]}"`,
+        path: [...pathPrefix, rangeId, startField],
+        message: `References non-existent ${kind} "${startId}"`,
         kind: 'dependency',
       });
     }
-  }
-  for (const field of ['rangeColStart', 'rangeColEnd'] as const) {
-    if (typeof rangeObj[field] === 'string' && !colIds.has(rangeObj[field])) {
+    if (typeof endId === 'string' && !endExists) {
       errors.push({
-        path: [...pathPrefix, rangeId, field],
-        message: `References non-existent column "${rangeObj[field]}"`,
+        path: [...pathPrefix, rangeId, endField],
+        message: `References non-existent ${kind} "${endId}"`,
         kind: 'dependency',
       });
     }
-  }
+
+    if (startExists && endExists) {
+      const startIdx = entities[startId]?.index;
+      const endIdx = entities[endId]?.index;
+      if (typeof startIdx === 'number' && typeof endIdx === 'number' && startIdx > endIdx) {
+        errors.push({
+          path: [...pathPrefix, rangeId, startField],
+          message: `Range ${kind} start "${startId}" is after end "${endId}" (reversed range)`,
+          kind: 'dependency',
+        });
+      }
+    }
+  };
+
+  checkAxis('rangeRowStart', 'rangeRowEnd', rows, 'row');
+  checkAxis('rangeColStart', 'rangeColEnd', columns, 'column');
 }
