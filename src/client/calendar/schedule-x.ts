@@ -19,37 +19,44 @@ export interface MultiCalEventLookupMap {
 
 export function mapToSXEvents(expanded: ExpandedEvent[], calTZ: string, calColor: string): { sxEvents: any[]; eventLookup: EventLookupMap } {
   const eventLookup: EventLookupMap = {};
-  const sxEvents = expanded.map(item => {
-    const ev = item.ev;
-    const id = (item.uid + (item.recurrenceDate ? '--' + item.recurrenceDate : '')).replace(/[^a-zA-Z0-9_-]/g, '_');
-    eventLookup[id] = item;
-    const allDay = isAllDay(ev);
-    const startStr = ev.start || '';
-    const tz = ev.timeZone || calTZ;
-    let sxStart: any, sxEnd: any;
-    if (allDay) {
-      sxStart = Temporal.PlainDate.from(startStr.substring(0, 10));
-      const dur = Temporal.Duration.from(ev.duration || 'P1D');
-      sxEnd = sxStart.add(dur).subtract({ days: 1 });
-      // Clamp: time-only durations (PT1H) produce end < start on PlainDate
-      if (Temporal.PlainDate.compare(sxEnd, sxStart) < 0) sxEnd = sxStart;
-    } else {
-      const pdt = Temporal.PlainDateTime.from(startStr.substring(0, 19));
-      sxStart = pdt.toZonedDateTime(tz);
-      const dur = Temporal.Duration.from(ev.duration || 'PT1H');
-      sxEnd = sxStart.add(dur);
+  const sxEvents: any[] = [];
+  for (const item of expanded) {
+    // A single event with a crafted start/duration/timeZone must not throw out of
+    // refreshCalendar and blank the whole calendar \u2014 skip just that event.
+    try {
+      const ev = item.ev;
+      const id = (item.uid + (item.recurrenceDate ? '--' + item.recurrenceDate : '')).replace(/[^a-zA-Z0-9_-]/g, '_');
+      const allDay = isAllDay(ev);
+      const startStr = ev.start || '';
+      const tz = ev.timeZone || calTZ;
+      let sxStart: any, sxEnd: any;
+      if (allDay) {
+        sxStart = Temporal.PlainDate.from(startStr.substring(0, 10));
+        const dur = Temporal.Duration.from(ev.duration || 'P1D');
+        sxEnd = sxStart.add(dur).subtract({ days: 1 });
+        // Clamp: time-only durations (PT1H) produce end < start on PlainDate
+        if (Temporal.PlainDate.compare(sxEnd, sxStart) < 0) sxEnd = sxStart;
+      } else {
+        const pdt = Temporal.PlainDateTime.from(startStr.substring(0, 19));
+        sxStart = pdt.toZonedDateTime(tz);
+        const dur = Temporal.Duration.from(ev.duration || 'PT1H');
+        sxEnd = sxStart.add(dur);
+      }
+      const isPast = allDay
+        ? Temporal.PlainDate.compare(sxEnd, Temporal.Now.plainDateISO()) < 0
+        : Temporal.Instant.compare(sxEnd.toInstant(), Temporal.Now.instant()) < 0;
+      eventLookup[id] = item;
+      sxEvents.push({
+        id,
+        title: (ev.title || 'Untitled') + (item.isRecurring ? ' \u21bb' : ''),
+        start: sxStart,
+        end: sxEnd,
+        calendarId: isPast ? 'cal-past' : 'cal',
+      });
+    } catch (err) {
+      console.warn(`Skipping malformed calendar event "${item.uid}":`, err);
     }
-    const isPast = allDay
-      ? Temporal.PlainDate.compare(sxEnd, Temporal.Now.plainDateISO()) < 0
-      : Temporal.Instant.compare(sxEnd.toInstant(), Temporal.Now.instant()) < 0;
-    return {
-      id,
-      title: (ev.title || 'Untitled') + (item.isRecurring ? ' \u21bb' : ''),
-      start: sxStart,
-      end: sxEnd,
-      calendarId: isPast ? 'cal-past' : 'cal',
-    };
-  });
+  }
   return { sxEvents, eventLookup };
 }
 
@@ -157,8 +164,14 @@ export function mapMultiCalToSXEvents(
     const expanded = rebuildExpanded(src.events || {}, rangeStart, rangeEnd);
     for (const item of expanded) {
       const id = (src.docId + '__' + item.uid + (item.recurrenceDate ? '--' + item.recurrenceDate : '')).replace(/[^a-zA-Z0-9_-]/g, '_');
-      eventLookup[id] = { ...item, calDocId: src.docId };
-      sxEvents.push(eventToSX(id, item, calTZ, calId, pastId));
+      // Skip a single malformed event instead of throwing out of the whole map.
+      try {
+        const sx = eventToSX(id, item, calTZ, calId, pastId);
+        eventLookup[id] = { ...item, calDocId: src.docId };
+        sxEvents.push(sx);
+      } catch (err) {
+        console.warn(`Skipping malformed calendar event "${item.uid}":`, err);
+      }
     }
   }
 

@@ -25,10 +25,18 @@ export function parseDuration(dur: string): { days: number; hours: number; minut
   return { days: parseInt(m[1] || '0'), hours: parseInt(m[2] || '0'), minutes: parseInt(m[3] || '0') };
 }
 
+// Hard backstop against pathological rules (crafted CRDT JSON / malicious .ics).
+// Validation is advisory, so the generator itself must never hang: every loop
+// advances/checks a counter regardless of whether an occurrence is produced.
+const MAX_ITERATIONS = 20000;
+
 export function generateDates(startStr: string, rule: any, rangeStart: string, rangeEnd: string): string[] {
   const dates: string[] = [];
-  const interval = rule.interval || 1;
-  const maxCount = rule.count || 730;
+  // Clamp interval/count so interval:0 (never advances) and count:0/negative
+  // (never terminates via count) cannot spin forever.
+  const rawInterval = rule.interval;
+  const interval = typeof rawInterval === 'number' && rawInterval >= 1 ? Math.floor(rawInterval) : 1;
+  const maxCount = typeof rule.count === 'number' && rule.count >= 1 ? Math.floor(rule.count) : 730;
   const untilStr = rule.until ? rule.until.substring(0, 10) : null;
   const allDay = startStr.length <= 10;
   const timePart = allDay ? '' : startStr.substring(10);
@@ -37,6 +45,7 @@ export function generateDates(startStr: string, rule: any, rangeStart: string, r
   const rangeEndDate = Temporal.PlainDate.from(rangeEnd);
   const untilDate = untilStr ? Temporal.PlainDate.from(untilStr) : null;
   let count = 0;
+  let iterations = 0;
 
   function addDate(d: Temporal.PlainDate): boolean {
     if (untilDate && Temporal.PlainDate.compare(d, untilDate) > 0) return false;
@@ -52,15 +61,25 @@ export function generateDates(startStr: string, rule: any, rangeStart: string, r
 
   switch (rule.frequency) {
     case 'daily':
-      while (addDate(cur)) cur = cur.add({ days: interval });
+      while (addDate(cur)) {
+        if (++iterations > MAX_ITERATIONS) break;
+        cur = cur.add({ days: interval });
+      }
       break;
 
     case 'weekly': {
-      const byDay = rule.byDay ? rule.byDay.map((d: any) => DAY_MAP[d.day]) : [startDate.dayOfWeek];
+      // Empty/invalid byDay must not stall the loop (the inner for-loop would
+      // never call addDate). Fall back to the start weekday and drop unknown days.
+      let byDay: number[] = (rule.byDay && rule.byDay.length)
+        ? rule.byDay.map((d: any) => DAY_MAP[d?.day]).filter((n: number) => typeof n === 'number')
+        : [startDate.dayOfWeek];
+      if (byDay.length === 0) byDay = [startDate.dayOfWeek];
       byDay.sort((a: number, b: number) => a - b);
       let weekStart = Temporal.PlainDate.from(cur);
       let done = false;
       while (!done) {
+        // Advance the guard every iteration, even if no occurrence lands in range.
+        if (++iterations > MAX_ITERATIONS) break;
         for (let i = 0; i < byDay.length; i++) {
           const diff = (byDay[i] - weekStart.dayOfWeek + 7) % 7;
           const dd = weekStart.add({ days: diff });
@@ -72,10 +91,24 @@ export function generateDates(startStr: string, rule: any, rangeStart: string, r
     }
 
     case 'monthly': {
-      const dom = rule.byMonthDay ? rule.byMonthDay[0] : startDate.day;
+      const rawDom = rule.byMonthDay ? rule.byMonthDay[0] : startDate.day;
       while (true) {
+        // Guard first: byMonthDay values that never match (e.g. 32) would
+        // otherwise loop forever because addDate is never reached.
+        if (++iterations > MAX_ITERATIONS) break;
+        // Once past the range end (and any `until`) no future month can contribute.
+        if (Temporal.PlainDate.compare(cur, rangeEndDate) > 0) break;
+        if (untilDate && Temporal.PlainDate.compare(cur, untilDate) > 0) break;
         const dim = cur.daysInMonth;
-        if (dom <= dim) {
+        // Resolve the day-of-month: positive is 1..dim; negative counts from the
+        // end (-1 = last day). 0, >dim, and out-of-range negatives produce no
+        // occurrence this month instead of throwing on cur.with({ day }).
+        let dom: number | null = null;
+        if (typeof rawDom === 'number' && Number.isInteger(rawDom)) {
+          if (rawDom >= 1 && rawDom <= dim) dom = rawDom;
+          else if (rawDom < 0 && dim + rawDom + 1 >= 1) dom = dim + rawDom + 1;
+        }
+        if (dom !== null) {
           const md = cur.with({ day: dom });
           if (!addDate(md)) break;
         }
@@ -85,7 +118,10 @@ export function generateDates(startStr: string, rule: any, rangeStart: string, r
     }
 
     case 'yearly':
-      while (addDate(cur)) cur = cur.add({ years: interval });
+      while (addDate(cur)) {
+        if (++iterations > MAX_ITERATIONS) break;
+        cur = cur.add({ years: interval });
+      }
       break;
   }
   return dates;
@@ -107,30 +143,37 @@ export function rebuildExpanded(events: Record<string, CalendarEvent>, rangeStar
       continue;
     }
 
-    const allDates = new Set<string>();
-    const dates = generateDates(ev.start, ev.recurrenceRule!, rangeStart, rangeEnd);
-    for (const d of dates) allDates.add(d);
+    // Expansion parses untrusted date/rule data via Temporal, which can throw on
+    // crafted input. Skip (and log) the offending event rather than letting one
+    // bad event blank the whole calendar.
+    try {
+      const allDates = new Set<string>();
+      const dates = generateDates(ev.start, ev.recurrenceRule!, rangeStart, rangeEnd);
+      for (const d of dates) allDates.add(d);
 
-    if (ev.recurrenceOverrides) {
-      for (const dateKey in ev.recurrenceOverrides) {
-        const overrideDay = dateKey.substring(0, 10);
-        if (overrideDay >= rangeStart && overrideDay <= rangeEnd) allDates.add(dateKey);
+      if (ev.recurrenceOverrides) {
+        for (const dateKey in ev.recurrenceOverrides) {
+          const overrideDay = dateKey.substring(0, 10);
+          if (overrideDay >= rangeStart && overrideDay <= rangeEnd) allDates.add(dateKey);
+        }
       }
+
+      allDates.forEach(dateStr => {
+        const override = ev.recurrenceOverrides && ev.recurrenceOverrides[dateStr];
+        if (override && override.excluded) return;
+        const effective: any = Object.assign({}, ev);
+        if (ev.start!.length <= 10) { effective.start = dateStr.substring(0, 10); }
+        else { effective.start = dateStr; }
+        if (override) {
+          for (const key in override) { if (key !== 'excluded') effective[key] = override[key]; }
+        }
+        delete effective.recurrenceRule;
+        delete effective.recurrenceOverrides;
+        expanded.push({ uid, recurrenceDate: dateStr, ev: effective, isRecurring: true });
+      });
+    } catch (err) {
+      console.warn(`Skipping recurrence expansion for event "${uid}":`, err);
     }
-
-    allDates.forEach(dateStr => {
-      const override = ev.recurrenceOverrides && ev.recurrenceOverrides[dateStr];
-      if (override && override.excluded) return;
-      const effective: any = Object.assign({}, ev);
-      if (ev.start!.length <= 10) { effective.start = dateStr.substring(0, 10); }
-      else { effective.start = dateStr; }
-      if (override) {
-        for (const key in override) { if (key !== 'excluded') effective[key] = override[key]; }
-      }
-      delete effective.recurrenceRule;
-      delete effective.recurrenceOverrides;
-      expanded.push({ uid, recurrenceDate: dateStr, ev: effective, isRecurring: true });
-    });
   }
 
   return expanded;

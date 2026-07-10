@@ -26,13 +26,13 @@ export function initDragDrop(
   saveEvent: (uid: string, data: any, eventId: string) => void,
   saveOverride: (uid: string, recurrenceDate: string, data: any, eventId: string) => void,
   refreshCalendar: () => void
-) {
+): () => void {
   let dragState: DragState | null = null;
   const THRESHOLD = 5;
   const RESIZE_EDGE = 8;
   let didDrag = false;
 
-  calEl.addEventListener('mousemove', (e: MouseEvent) => {
+  const onCalMouseMove = (e: MouseEvent) => {
     if (dragState) return;
     const eventEl = (e.target as HTMLElement).closest('[data-event-id]') as HTMLElement | null;
     if (!eventEl || !eventEl.closest('.sx__time-grid-day')) return;
@@ -43,17 +43,19 @@ export function initDragDrop(
     } else {
       eventEl.classList.remove('resize-cursor');
     }
-  }, true);
+  };
+  calEl.addEventListener('mousemove', onCalMouseMove, true);
 
-  calEl.addEventListener('click', (e: MouseEvent) => {
+  const onCalClick = (e: MouseEvent) => {
     if (didDrag) {
       e.stopImmediatePropagation();
       e.preventDefault();
       didDrag = false;
     }
-  }, true);
+  };
+  calEl.addEventListener('click', onCalClick, true);
 
-  calEl.addEventListener('mousedown', (e: MouseEvent) => {
+  const onCalMouseDown = (e: MouseEvent) => {
     if (e.button !== 0) return;
     const eventEl = (e.target as HTMLElement).closest('[data-event-id]') as HTMLElement | null;
     if (!eventEl) return;
@@ -87,9 +89,10 @@ export function initDragDrop(
       started: false,
       ghost: null,
     };
-  });
+  };
+  calEl.addEventListener('mousedown', onCalMouseDown);
 
-  document.addEventListener('mousemove', (e: MouseEvent) => {
+  const onDocMouseMove = (e: MouseEvent) => {
     if (!dragState) return;
     const dx = e.clientX - dragState.startX;
     const dy = e.clientY - dragState.startY;
@@ -164,9 +167,10 @@ export function initDragDrop(
         dragState.ghost.style.top = (e.clientY - dragState.offsetY) + 'px';
       }
     }
-  });
+  };
+  document.addEventListener('mousemove', onDocMouseMove);
 
-  document.addEventListener('mouseup', (e: MouseEvent) => {
+  const onDocMouseUp = (e: MouseEvent) => {
     if (!dragState) return;
     const state = dragState;
     dragState = null;
@@ -300,5 +304,16 @@ export function initDragDrop(
       }
       refreshCalendar();
     }
-  });
+  };
+  document.addEventListener('mouseup', onDocMouseUp);
+
+  // The calEl listeners die with the element, but the document-level mousemove/
+  // mouseup handlers persist and leak on every mount — remove them all on cleanup.
+  return () => {
+    calEl.removeEventListener('mousemove', onCalMouseMove, true);
+    calEl.removeEventListener('click', onCalClick, true);
+    calEl.removeEventListener('mousedown', onCalMouseDown);
+    document.removeEventListener('mousemove', onDocMouseMove);
+    document.removeEventListener('mouseup', onDocMouseUp);
+  };
 }

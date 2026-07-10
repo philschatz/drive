@@ -136,6 +136,7 @@ export function AllCalendars({ path }: { path?: string }) {
   useEffect(() => {
     let mounted = true;
     const unsubscribes: (() => void)[] = [];
+    let dragCleanup: (() => void) | null = null;
 
     (async () => {
       const allIds = (await fetchDocList()).map(e => e.id);
@@ -253,7 +254,7 @@ export function AllCalendars({ path }: { path?: string }) {
       resubscribeAll(initRange.start, initRange.end);
 
       // Set up drag-drop
-      initDragDrop(
+      dragCleanup = initDragDrop(
         calEl,
         () => eventLookupRef.current,
         () => {
@@ -286,6 +287,7 @@ export function AllCalendars({ path }: { path?: string }) {
 
     return () => {
       mounted = false;
+      dragCleanup?.();
       for (const unsub of unsubscribes) unsub();
       calendarSXRef.current?.destroy();
       calendarSXRef.current = null;

@@ -22,6 +22,14 @@ import { useCalendarEditor } from './useCalendarEditor';
 import { useEventMutations } from './useEventMutations';
 import { usePeerFocusedFields } from './usePeerFocusedFields';
 import { getInitialDateRange, makeSXCallbacks } from './calendar-utils';
+import { HEX_COLOR_RE } from '../../shared/schemas/core';
+
+const DEFAULT_CAL_COLOR = '#039be5';
+
+/** A hostile document can put anything in `color`; only let valid hex reach CSS. */
+function safeCalColor(color: unknown): string {
+  return typeof color === 'string' && HEX_COLOR_RE.test(color) ? color : DEFAULT_CAL_COLOR;
+}
 
 export function Calendar({ docId, rest, readOnly }: { docId?: string; rest?: string; readOnly?: boolean; path?: string }) {
   const eventId = rest?.startsWith('events/') ? rest.slice(7).split('/')[0] : undefined;
@@ -39,6 +47,10 @@ function CalendarInner({ docId, readOnly, initialEventId }: { docId: string; rea
   const [peerStates, setPeerStates] = useState<Record<string, PeerState<PresenceState>>>({});
   const [showValidation, setShowValidation] = useState(false);
   const history = useDocumentHistory(docId);
+  // Route new heads through a ref so the (deps-stable) subscription effect always
+  // calls the current onNewHeads, not the active:false version captured at mount.
+  const onNewHeadsRef = useRef(history.onNewHeads);
+  onNewHeadsRef.current = history.onNewHeads;
   const validationErrors = useDocumentValidation(docId);
   const { access, canEdit: accessCanEdit, loaded: accessLoaded } = useAccess(docId);
   const canEdit = !readOnly && history.editable && accessCanEdit;
@@ -121,7 +133,7 @@ function CalendarInner({ docId, readOnly, initialEventId }: { docId: string; rea
     calendarRef.current = calendar;
     eventsPluginRef.current = eventsPlugin;
 
-    initDragDrop(
+    const dragCleanup = initDragDrop(
       calEl,
       () => eventLookupRef.current,
       () => eventsRef.current,
@@ -156,16 +168,17 @@ function CalendarInner({ docId, readOnly, initialEventId }: { docId: string; rea
       eventsRef.current = result.events || {};
       if (result.timeZone) calTZRef.current = result.timeZone;
       if (result.color && result.color !== calColorRef.current) {
-        calColorRef.current = result.color;
-        setCalColor(result.color);
-        document.documentElement.style.setProperty('--cal-color', result.color);
+        const color = safeCalColor(result.color);
+        calColorRef.current = color;
+        setCalColor(color);
+        document.documentElement.style.setProperty('--cal-color', color);
       }
       if (result.name && !titleFocusedRef.current) {
         setCalName(result.name);
         document.title = result.name + ' - Calendar';
       }
       if (!descFocusedRef.current) setCalDesc(result.description || '');
-      history.onNewHeads(heads);
+      onNewHeadsRef.current(heads);
       refreshCalendar();
       refreshEditorFromEvents(eventsRef.current);
       // Auto-open event from URL on first load
@@ -180,6 +193,7 @@ function CalendarInner({ docId, readOnly, initialEventId }: { docId: string; rea
 
     return () => {
       mounted = false;
+      dragCleanup();
       calendarRef.current?.destroy();
       calendarRef.current = null;
       presenceCleanupRef.current?.();

@@ -153,8 +153,10 @@ export function EventEditor({ uid, event, masterEvent, recurrenceDate, isNew, op
       const newStart = allday ? date : date + 'T' + (time || '09:00') + ':00';
       if (newStart !== recurrenceDate) patch.start = newStart;
       if (duration !== (masterEvent!.duration || 'PT1H')) patch.duration = duration || (allday ? 'P1D' : 'PT1H');
-      if (location) {
-        if (location !== locationText(masterEvent!.location)) patch.location = location;
+      // Patch whenever changed (including to ''), so clearing location sticks —
+      // same behavior as description below.
+      if (location !== locationText(masterEvent!.location)) {
+        patch.location = location;
       }
       if (description !== (masterEvent!.description || '')) {
         patch.description = description;

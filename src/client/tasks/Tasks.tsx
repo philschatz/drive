@@ -67,6 +67,10 @@ export function Tasks({ docId, rest, readOnly }: { docId?: string; rest?: string
   const [showValidation, setShowValidation] = useState(false);
 
   const history = useDocumentHistory(docId!);
+  // Route new heads through a ref so the (docId-only-deps) subscription effect
+  // always calls the current onNewHeads, not the active:false version at mount.
+  const onNewHeadsRef = useRef(history.onNewHeads);
+  onNewHeadsRef.current = history.onNewHeads;
   const validationErrors = useDocumentValidation(docId);
   const { access, canEdit: accessCanEdit, loaded: accessLoaded } = useAccess(docId);
   const canEdit = !readOnly && history.editable && accessCanEdit;
@@ -202,7 +206,7 @@ export function Tasks({ docId, rest, readOnly }: { docId?: string; rest?: string
       }
       if (!descFocusedRef.current) setListDesc(result.description || '');
       // Update history tracking
-      history.onNewHeads(heads);
+      onNewHeadsRef.current(heads);
 
       // Auto-open task from URL on first load
       if (pendingTaskIdRef.current && result.tasks) {
