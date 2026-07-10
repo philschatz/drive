@@ -123,11 +123,17 @@ export function ConditionalFormatPanel({
     for (const seg of segments) {
       const m = seg.match(/^([A-Z]+)(\d+):([A-Z]+)(\d+)$/i);
       if (!m) return null;
-      const colStart = letterToColIndex(m[1].toUpperCase());
-      const rowStart = parseInt(m[2], 10) - 1;
-      const colEnd = letterToColIndex(m[3].toUpperCase());
-      const rowEnd = parseInt(m[4], 10) - 1;
-      if (rowStart < 0 || rowEnd < 0 || colStart < 0 || colEnd < 0) return null;
+      const c0 = letterToColIndex(m[1].toUpperCase());
+      const r0 = parseInt(m[2], 10) - 1;
+      const c1 = letterToColIndex(m[3].toUpperCase());
+      const r1 = parseInt(m[4], 10) - 1;
+      if (r0 < 0 || r1 < 0 || c0 < 0 || c1 < 0) return null;
+      // Normalize order so a reversed range (e.g. "C10:A1") still matches cells —
+      // containment tests require start <= idx <= end.
+      const rowStart = Math.min(r0, r1);
+      const rowEnd = Math.max(r0, r1);
+      const colStart = Math.min(c0, c1);
+      const colEnd = Math.max(c0, c1);
       if (rowStart >= sortedRowIds.length || rowEnd >= sortedRowIds.length) return null;
       if (colStart >= sortedColIds.length || colEnd >= sortedColIds.length) return null;
       ranges[shortId()] = {
@@ -204,16 +210,25 @@ export function ConditionalFormatPanel({
         ms.conditionalFormats[newId] = entry;
       }, [currentSheetId, newId, entry]);
     } else if (editing) {
-      const entry: any = {
-        index: rules![editing].index,
-        ranges,
-        conditionType,
-        ...(storedCondValue !== undefined ? { conditionValue: storedCondValue } : {}),
-        format,
-      };
-      mutate((d: any, sheetId: string, ruleId: string, entry: any) => {
-        d.sheets[sheetId].conditionalFormats[ruleId] = entry;
-      }, [currentSheetId, editing, entry]);
+      // Patch the existing rule's fields in place rather than replacing the whole
+      // object: keeps `index` untouched (so a concurrent reorder isn't clobbered) and
+      // merges format keys individually for better CRDT convergence.
+      mutate((d: any, sheetId: string, ruleId: string, ranges: any, conditionType: string, storedCondValue: string | undefined, format: any) => {
+        const cf = d.sheets[sheetId].conditionalFormats;
+        const rule = cf?.[ruleId];
+        if (!rule) return;
+        rule.ranges = ranges;
+        rule.conditionType = conditionType;
+        if (storedCondValue !== undefined) rule.conditionValue = storedCondValue;
+        else if ('conditionValue' in rule) delete rule.conditionValue;
+        if (!rule.format) rule.format = {};
+        for (const k of Object.keys(rule.format)) {
+          if (!(k in format)) delete rule.format[k];
+        }
+        for (const [k, v] of Object.entries(format)) {
+          rule.format[k] = v;
+        }
+      }, [currentSheetId, editing, ranges, conditionType, storedCondValue, format]);
     }
     setEditing(null);
   };

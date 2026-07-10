@@ -9,7 +9,7 @@ import {
 import type { DataGridDocument, DataGridCell, DataGridCellFormat } from './schema';
 import {
   FONT_FAMILIES, FONT_SIZES, NUMBER_FORMATS, PRESET_COLORS, BORDER_PRESETS,
-} from './FormattingToolbar';
+} from './format-presets';
 
 // ============================================================
 // Shortcut — canonical keyboard shortcut definition
@@ -308,7 +308,9 @@ const clipboardPlugin: GridPlugin = {
         const range = getEffectiveRange(ctx.selectedCell, ctx.selectionAnchor);
         if (!range || !ctx.sheet) return;
         const sh = ctxSheet(ctx.sheet, ctx);
-        const data = buildClipboardData(sh.cells, ctx.computedValues, range, ctx.sortedRowIds, ctx.sortedColIds, ctx.currentSheetId, ctx.formatCache);
+        // Range is VISIBLE-space: index cell keys via visibleRow/ColIds; use the full
+        // sorted lists for R1C1/format resolution so hidden rows/cols aren't copied (H4).
+        const data = buildClipboardData(sh.cells, ctx.computedValues, range, ctx.visibleRowIds, ctx.visibleColIds, ctx.currentSheetId, ctx.formatCache, ctx.sortedRowIds, ctx.sortedColIds);
         if (!data) return;
         ctx.clipboardRef.current = { values: data.values, formats: data.formats, mode: 'copy', range };
         ctx.setClipboardSource(range);
@@ -325,7 +327,9 @@ const clipboardPlugin: GridPlugin = {
         const range = getEffectiveRange(ctx.selectedCell, ctx.selectionAnchor);
         if (!range || !ctx.sheet) return;
         const sh = ctxSheet(ctx.sheet, ctx);
-        const data = buildClipboardData(sh.cells, ctx.computedValues, range, ctx.sortedRowIds, ctx.sortedColIds, ctx.currentSheetId, ctx.formatCache);
+        // Range is VISIBLE-space: index cell keys via visibleRow/ColIds; use the full
+        // sorted lists for R1C1/format resolution so hidden rows/cols aren't cut (H4).
+        const data = buildClipboardData(sh.cells, ctx.computedValues, range, ctx.visibleRowIds, ctx.visibleColIds, ctx.currentSheetId, ctx.formatCache, ctx.sortedRowIds, ctx.sortedColIds);
         if (!data) return;
         ctx.clipboardRef.current = { values: data.values, formats: data.formats, mode: 'cut', range };
         ctx.setClipboardSource(range);
@@ -350,23 +354,35 @@ const clipboardPlugin: GridPlugin = {
           const { sheet: doc } = ctx;
           if (!doc) return;
           const sh = ctxSheet(doc, ctx);
-          const freshRowIds = sortedEntries(sh.rows).map(([id]) => id);
-          const freshColIds = sortedEntries(sh.columns).map(([id]) => id);
+          const rowEntries = sortedEntries(sh.rows);
+          const colEntries = sortedEntries(sh.columns);
+          const fullRowIds = rowEntries.map(([id]) => id);
+          const fullColIds = colEntries.map(([id]) => id);
+          // destCol/destRow (from selectedCell) are VISIBLE indices — write keys in
+          // visible id space; resolve A1/R1C1 refs in full id space (H4).
+          const visRowIds = ctx.visibleRowIds;
+          const visColIds = ctx.visibleColIds;
 
           const neededRows = destRow + values.length;
           const neededCols = destCol + (values[0]?.length || 0);
-          const lastRowIdx = freshRowIds.length > 0 ? sortedEntries(sh.rows).slice(-1)[0][1].index : 0;
-          const lastColIdx = freshColIds.length > 0 ? sortedEntries(sh.columns).slice(-1)[0][1].index : 0;
+          const lastRowIdx = rowEntries.length > 0 ? rowEntries[rowEntries.length - 1][1].index : 0;
+          const lastColIdx = colEntries.length > 0 ? colEntries[colEntries.length - 1][1].index : 0;
           const newRowEntries: Array<[string, { index: number }]> = [];
           const newColEntries: Array<[string, { index: number; name: string }]> = [];
-          for (let i = freshRowIds.length; i < neededRows; i++) {
-            newRowEntries.push([shortId(), { index: lastRowIdx + (i - freshRowIds.length + 1) }]);
+          for (let i = visRowIds.length; i < neededRows; i++) {
+            newRowEntries.push([shortId(), { index: lastRowIdx + (i - visRowIds.length + 1) }]);
           }
-          for (let i = freshColIds.length; i < neededCols; i++) {
-            newColEntries.push([shortId(), { index: lastColIdx + (i - freshColIds.length + 1), name: '' }]);
+          for (let i = visColIds.length; i < neededCols; i++) {
+            newColEntries.push([shortId(), { index: lastColIdx + (i - visColIds.length + 1), name: '' }]);
           }
-          const allRowIds = [...freshRowIds, ...newRowEntries.map(([id]) => id)];
-          const allColIds = [...freshColIds, ...newColEntries.map(([id]) => id)];
+          const newRowIds = newRowEntries.map(([id]) => id);
+          const newColIds = newColEntries.map(([id]) => id);
+          // Visible id space (for cell keys) and full id space (for ref conversion),
+          // both extended with the newly-appended rows/cols.
+          const allRowIds = [...visRowIds, ...newRowIds];
+          const allColIds = [...visColIds, ...newColIds];
+          const refRowIds = [...fullRowIds, ...newRowIds];
+          const refColIds = [...fullColIds, ...newColIds];
 
           const cellWrites: Array<[string, string]> = [];
           for (let dr = 0; dr < values.length; dr++) {
@@ -374,11 +390,13 @@ const clipboardPlugin: GridPlugin = {
               const r = destRow + dr;
               const c = destCol + dc;
               if (r >= allRowIds.length || c >= allColIds.length) continue;
+              const rowId = allRowIds[r];
+              const colId = allColIds[c];
               const val = values[dr][dc];
               const stored = val.startsWith('=')
-                ? a1ToInternal(val, r, c, allRowIds, allColIds)
+                ? a1ToInternal(val, refRowIds.indexOf(rowId), refColIds.indexOf(colId), refRowIds, refColIds)
                 : val;
-              cellWrites.push([`${allRowIds[r]}:${allColIds[c]}`, stored]);
+              cellWrites.push([`${rowId}:${colId}`, stored]);
             }
           }
           const cutDeletes: string[] = [];
@@ -483,38 +501,51 @@ const clipboardPlugin: GridPlugin = {
           const doPaste = (rows: string[][]) => {
 
             const finalRows = rows;
-            // Pre-compute everything outside mutate using ctx.sheet snapshot
-            const extDoc = ctx.sheet;
-            if (!extDoc) return;
-            const extSh = extDoc.sheets[currentSheetId];
-            const extFreshRowIds = sortedEntries(extSh.rows).map(([id]) => id);
-            const extFreshColIds = sortedEntries(extSh.columns).map(([id]) => id);
+            // Pre-compute everything outside mutate using the ctx.sheet snapshot.
+            // ctx.sheet IS the active sheet object (has .rows/.columns/.cells) —
+            // it is NOT the whole document, so do not index `.sheets` here (H5).
+            const extSh = ctx.sheet;
+            if (!extSh) return;
+            const extRowEntries = sortedEntries(extSh.rows);
+            const extColEntries = sortedEntries(extSh.columns);
+            const extFullRowIds = extRowEntries.map(([id]) => id);
+            const extFullColIds = extColEntries.map(([id]) => id);
+            // destCol/destRow are VISIBLE indices — write keys in visible id space;
+            // resolve A1/R1C1 refs in full id space (H4).
+            const extVisRowIds = ctx.visibleRowIds;
+            const extVisColIds = ctx.visibleColIds;
             const extNeededRows = destRow + finalRows.length;
             const maxPasteCols = Math.max(...finalRows.map(r => r.length));
             const extNeededCols = destCol + maxPasteCols;
-            const extLastRowIdx = extFreshRowIds.length > 0 ? sortedEntries(extSh.rows).slice(-1)[0][1].index : 0;
-            const extLastColIdx = extFreshColIds.length > 0 ? sortedEntries(extSh.columns).slice(-1)[0][1].index : 0;
+            const extLastRowIdx = extRowEntries.length > 0 ? extRowEntries[extRowEntries.length - 1][1].index : 0;
+            const extLastColIdx = extColEntries.length > 0 ? extColEntries[extColEntries.length - 1][1].index : 0;
             const extNewRowEntries: Array<[string, { index: number }]> = [];
             const extNewColEntries: Array<[string, { index: number; name: string }]> = [];
-            for (let i = extFreshRowIds.length; i < extNeededRows; i++) {
-              extNewRowEntries.push([shortId(), { index: extLastRowIdx + (i - extFreshRowIds.length + 1) }]);
+            for (let i = extVisRowIds.length; i < extNeededRows; i++) {
+              extNewRowEntries.push([shortId(), { index: extLastRowIdx + (i - extVisRowIds.length + 1) }]);
             }
-            for (let i = extFreshColIds.length; i < extNeededCols; i++) {
-              extNewColEntries.push([shortId(), { index: extLastColIdx + (i - extFreshColIds.length + 1), name: '' }]);
+            for (let i = extVisColIds.length; i < extNeededCols; i++) {
+              extNewColEntries.push([shortId(), { index: extLastColIdx + (i - extVisColIds.length + 1), name: '' }]);
             }
-            const extAllRowIds = [...extFreshRowIds, ...extNewRowEntries.map(([id]) => id)];
-            const extAllColIds = [...extFreshColIds, ...extNewColEntries.map(([id]) => id)];
+            const extNewRowIds = extNewRowEntries.map(([id]) => id);
+            const extNewColIds = extNewColEntries.map(([id]) => id);
+            const extAllRowIds = [...extVisRowIds, ...extNewRowIds];
+            const extAllColIds = [...extVisColIds, ...extNewColIds];
+            const extRefRowIds = [...extFullRowIds, ...extNewRowIds];
+            const extRefColIds = [...extFullColIds, ...extNewColIds];
             const extCellWrites: Array<[string, string]> = [];
             for (let dr = 0; dr < finalRows.length; dr++) {
               for (let dc = 0; dc < finalRows[dr].length; dc++) {
                 const r = destRow + dr;
                 const c = destCol + dc;
                 if (r >= extAllRowIds.length || c >= extAllColIds.length) continue;
+                const rowId = extAllRowIds[r];
+                const colId = extAllColIds[c];
                 const val = finalRows[dr][dc];
                 const stored = val.startsWith('=')
-                  ? a1ToInternal(val, r, c, extAllRowIds, extAllColIds)
+                  ? a1ToInternal(val, extRefRowIds.indexOf(rowId), extRefColIds.indexOf(colId), extRefRowIds, extRefColIds)
                   : val;
-                extCellWrites.push([`${extAllRowIds[r]}:${extAllColIds[c]}`, stored]);
+                extCellWrites.push([`${rowId}:${colId}`, stored]);
               }
             }
             mutate((d, currentSheetId, extNewRowEntries, extNewColEntries, extCellWrites) => {
@@ -581,7 +612,9 @@ const clipboardPlugin: GridPlugin = {
       shortcuts: [{ key: 'Delete' }, { key: 'Backspace' }],
       isEnabled: s => s.hasSelection,
       execute: (_, ctx) => {
-        const { sheet: doc, selectedCell, selectionAnchor, sortedRowIds, sortedColIds, currentSheetId, spillTargets } = ctx;
+        // Selection is in VISIBLE space — resolve cell keys through visibleRow/ColIds
+        // so Delete never clears a hidden row/column's cell (H4).
+        const { sheet: doc, selectedCell, selectionAnchor, visibleRowIds, visibleColIds, currentSheetId, spillTargets } = ctx;
         if (!selectedCell || !doc) return;
         const [col, row] = selectedCell;
         const anchor = selectionAnchor;
@@ -593,21 +626,21 @@ const clipboardPlugin: GridPlugin = {
         } : null;
 
         if (range && (range.minCol !== range.maxCol || range.minRow !== range.maxRow)) {
-          ctx.mutate((d, currentSheetId, range, sortedRowIds, sortedColIds, spillKeys) => {
+          ctx.mutate((d, currentSheetId, range, visRowIds, visColIds, spillKeys) => {
             const cells = d.sheets[currentSheetId].cells;
             for (let r = range.minRow; r <= range.maxRow; r++) {
               for (let c = range.minCol; c <= range.maxCol; c++) {
-                if (r < sortedRowIds.length && c < sortedColIds.length) {
-                  const key = `${sortedRowIds[r]}:${sortedColIds[c]}`;
+                if (r < visRowIds.length && c < visColIds.length) {
+                  const key = `${visRowIds[r]}:${visColIds[c]}`;
                   if (spillKeys.has(`${currentSheetId}:${key}`)) continue;
                   delete cells[key];
                 }
               }
             }
-          }, [currentSheetId, range, sortedRowIds, sortedColIds, spillTargets]);
+          }, [currentSheetId, range, visibleRowIds, visibleColIds, spillTargets]);
         } else {
-          if (col >= sortedColIds.length || row >= sortedRowIds.length) return;
-          const cellKey = `${sortedRowIds[row]}:${sortedColIds[col]}`;
+          if (col >= visibleColIds.length || row >= visibleRowIds.length) return;
+          const cellKey = `${visibleRowIds[row]}:${visibleColIds[col]}`;
           if (spillTargets.has(`${currentSheetId}:${cellKey}`)) return;
           ctx.mutate((d, currentSheetId, cellKey) => {
             if (d.sheets[currentSheetId].cells[cellKey]) delete d.sheets[currentSheetId].cells[cellKey];
@@ -656,9 +689,14 @@ const rowPlugin: GridPlugin = {
         const entries = sortedEntries(sh.rows);
         if (entries.length === 0) return;
         const count = Math.max(indices.length, 1);
-        const minIdx = Math.min(...indices);
-        const hi = entries[minIdx][1].index;
-        const lo = minIdx === 0 ? hi - count : entries[minIdx - 1][1].index;
+        // Resolve the VISIBLE target row to its position in the full sorted list (H4).
+        const minVisIdx = Math.min(...indices);
+        const targetId = ctx.visibleRowIds[minVisIdx];
+        if (!targetId) return;
+        const targetPos = entries.findIndex(([id]) => id === targetId);
+        if (targetPos === -1) return;
+        const hi = entries[targetPos][1].index;
+        const lo = targetPos === 0 ? hi - count : entries[targetPos - 1][1].index;
         const newIds = Array.from({ length: count }, () => shortId());
         ctx.mutate((d, currentSheetId, newIds, lo, hi, count) => {
           const ms = d.sheets[currentSheetId];
@@ -685,9 +723,14 @@ const rowPlugin: GridPlugin = {
         const entries = sortedEntries(sh.rows);
         if (entries.length === 0) return;
         const count = Math.max(indices.length, 1);
-        const maxIdx = Math.max(...indices);
-        const lo = entries[maxIdx][1].index;
-        const hi = maxIdx >= entries.length - 1 ? lo + count : entries[maxIdx + 1][1].index;
+        // Resolve the VISIBLE target row to its position in the full sorted list (H4).
+        const maxVisIdx = Math.max(...indices);
+        const targetId = ctx.visibleRowIds[maxVisIdx];
+        if (!targetId) return;
+        const targetPos = entries.findIndex(([id]) => id === targetId);
+        if (targetPos === -1) return;
+        const lo = entries[targetPos][1].index;
+        const hi = targetPos >= entries.length - 1 ? lo + count : entries[targetPos + 1][1].index;
         const newIds = Array.from({ length: count }, () => shortId());
         ctx.mutate((d, currentSheetId, newIds, lo, hi, count) => {
           const ms = d.sheets[currentSheetId];
@@ -707,14 +750,17 @@ const rowPlugin: GridPlugin = {
         if (!doc) return;
         const sh = ctxSheet(doc, ctx);
         const entries = sortedEntries(sh.rows);
+        // selectedRows are VISIBLE indices — resolve neighbors through visibleRowIds (H4).
         const indices = [...selectedRows].sort((a, b) => a - b);
         if (indices.length === 0 || indices[0] === 0) return;
-        const aboveIdx = indices[0] - 1;
-        const aboveId = entries[aboveIdx][0];
-        const lastIdx = indices[indices.length - 1];
-        const newIndex = lastIdx >= entries.length - 1
-          ? entries[lastIdx][1].index + 1
-          : (entries[lastIdx][1].index + entries[lastIdx + 1][1].index) / 2;
+        const aboveId = ctx.visibleRowIds[indices[0] - 1];
+        if (!aboveId) return;
+        const lastVisId = ctx.visibleRowIds[indices[indices.length - 1]];
+        const lastPos = entries.findIndex(([id]) => id === lastVisId);
+        if (lastPos === -1) return;
+        const newIndex = lastPos >= entries.length - 1
+          ? entries[lastPos][1].index + 1
+          : (entries[lastPos][1].index + entries[lastPos + 1][1].index) / 2;
         ctx.mutate((d, currentSheetId, aboveId, newIndex) => { d.sheets[currentSheetId].rows[aboveId].index = newIndex; }, [currentSheetId, aboveId, newIndex]);
         setSelectedRows(new Set(indices.map(i => i - 1)));
         setContextMenu(null);
@@ -729,14 +775,17 @@ const rowPlugin: GridPlugin = {
         if (!doc) return;
         const sh = ctxSheet(doc, ctx);
         const entries = sortedEntries(sh.rows);
+        // selectedRows are VISIBLE indices — resolve neighbors through visibleRowIds (H4).
         const indices = [...selectedRows].sort((a, b) => a - b);
-        if (indices.length === 0 || indices[indices.length - 1] >= entries.length - 1) return;
-        const belowIdx = indices[indices.length - 1] + 1;
-        const belowId = entries[belowIdx][0];
-        const firstIdx = indices[0];
-        const newIndex = firstIdx === 0
+        if (indices.length === 0 || indices[indices.length - 1] >= ctx.visibleRowIds.length - 1) return;
+        const belowId = ctx.visibleRowIds[indices[indices.length - 1] + 1];
+        if (!belowId) return;
+        const firstVisId = ctx.visibleRowIds[indices[0]];
+        const firstPos = entries.findIndex(([id]) => id === firstVisId);
+        if (firstPos === -1) return;
+        const newIndex = firstPos === 0
           ? entries[0][1].index - 1
-          : (entries[firstIdx - 1][1].index + entries[firstIdx][1].index) / 2;
+          : (entries[firstPos - 1][1].index + entries[firstPos][1].index) / 2;
         ctx.mutate((d, currentSheetId, belowId, newIndex) => { d.sheets[currentSheetId].rows[belowId].index = newIndex; }, [currentSheetId, belowId, newIndex]);
         setSelectedRows(new Set(indices.map(i => i + 1)));
         setContextMenu(null);
@@ -757,7 +806,9 @@ const rowPlugin: GridPlugin = {
         const sh = ctxSheet(doc, ctx);
         const indices = rowIndices(s);
         const rowEntries = sortedEntries(sh.rows);
-        const idsToDelete = indices.filter(i => i < rowEntries.length).map(i => rowEntries[i][0]);
+        // Selection indices are in VISIBLE space — resolve through visibleRowIds
+        // so a hidden row before the target is never deleted (H4).
+        const idsToDelete = indices.map(i => ctx.visibleRowIds[i]).filter(Boolean);
         if (idsToDelete.length === 0) return;
         const deletedSet = new Set(idsToDelete);
         const sortedRowIds = rowEntries.map(([id]) => id);
@@ -849,9 +900,14 @@ const columnPlugin: GridPlugin = {
         const entries = sortedEntries(sh.columns);
         if (entries.length === 0) return;
         const count = Math.max(indices.length, 1);
-        const minIdx = Math.min(...indices);
-        const hi = entries[minIdx][1].index;
-        const lo = minIdx === 0 ? hi - count : entries[minIdx - 1][1].index;
+        // Resolve the VISIBLE target column to its position in the full sorted list (H4).
+        const minVisIdx = Math.min(...indices);
+        const targetId = ctx.visibleColIds[minVisIdx];
+        if (!targetId) return;
+        const targetPos = entries.findIndex(([id]) => id === targetId);
+        if (targetPos === -1) return;
+        const hi = entries[targetPos][1].index;
+        const lo = targetPos === 0 ? hi - count : entries[targetPos - 1][1].index;
         const newIds = Array.from({ length: count }, () => shortId());
         ctx.mutate((d, currentSheetId, newIds, lo, hi, count) => {
           const ms = d.sheets[currentSheetId];
@@ -878,9 +934,14 @@ const columnPlugin: GridPlugin = {
         const entries = sortedEntries(sh.columns);
         if (entries.length === 0) return;
         const count = Math.max(indices.length, 1);
-        const maxIdx = Math.max(...indices);
-        const lo = entries[maxIdx][1].index;
-        const hi = maxIdx >= entries.length - 1 ? lo + count : entries[maxIdx + 1][1].index;
+        // Resolve the VISIBLE target column to its position in the full sorted list (H4).
+        const maxVisIdx = Math.max(...indices);
+        const targetId = ctx.visibleColIds[maxVisIdx];
+        if (!targetId) return;
+        const targetPos = entries.findIndex(([id]) => id === targetId);
+        if (targetPos === -1) return;
+        const lo = entries[targetPos][1].index;
+        const hi = targetPos >= entries.length - 1 ? lo + count : entries[targetPos + 1][1].index;
         const newIds = Array.from({ length: count }, () => shortId());
         ctx.mutate((d, currentSheetId, newIds, lo, hi, count) => {
           const ms = d.sheets[currentSheetId];
@@ -900,14 +961,17 @@ const columnPlugin: GridPlugin = {
         if (!doc) return;
         const sh = ctxSheet(doc, ctx);
         const entries = sortedEntries(sh.columns);
+        // selectedCols are VISIBLE indices — resolve neighbors through visibleColIds (H4).
         const indices = [...selectedCols].sort((a, b) => a - b);
         if (indices.length === 0 || indices[0] === 0) return;
-        const leftIdx = indices[0] - 1;
-        const leftId = entries[leftIdx][0];
-        const lastIdx = indices[indices.length - 1];
-        const newIndex = lastIdx >= entries.length - 1
-          ? entries[lastIdx][1].index + 1
-          : (entries[lastIdx][1].index + entries[lastIdx + 1][1].index) / 2;
+        const leftId = ctx.visibleColIds[indices[0] - 1];
+        if (!leftId) return;
+        const lastVisId = ctx.visibleColIds[indices[indices.length - 1]];
+        const lastPos = entries.findIndex(([id]) => id === lastVisId);
+        if (lastPos === -1) return;
+        const newIndex = lastPos >= entries.length - 1
+          ? entries[lastPos][1].index + 1
+          : (entries[lastPos][1].index + entries[lastPos + 1][1].index) / 2;
         ctx.mutate((d, currentSheetId, leftId, newIndex) => { d.sheets[currentSheetId].columns[leftId].index = newIndex; }, [currentSheetId, leftId, newIndex]);
         setSelectedCols(new Set(indices.map(i => i - 1)));
         setContextMenu(null);
@@ -922,14 +986,17 @@ const columnPlugin: GridPlugin = {
         if (!doc) return;
         const sh = ctxSheet(doc, ctx);
         const entries = sortedEntries(sh.columns);
+        // selectedCols are VISIBLE indices — resolve neighbors through visibleColIds (H4).
         const indices = [...selectedCols].sort((a, b) => a - b);
-        if (indices.length === 0 || indices[indices.length - 1] >= entries.length - 1) return;
-        const rightIdx = indices[indices.length - 1] + 1;
-        const rightId = entries[rightIdx][0];
-        const firstIdx = indices[0];
-        const newIndex = firstIdx === 0
+        if (indices.length === 0 || indices[indices.length - 1] >= ctx.visibleColIds.length - 1) return;
+        const rightId = ctx.visibleColIds[indices[indices.length - 1] + 1];
+        if (!rightId) return;
+        const firstVisId = ctx.visibleColIds[indices[0]];
+        const firstPos = entries.findIndex(([id]) => id === firstVisId);
+        if (firstPos === -1) return;
+        const newIndex = firstPos === 0
           ? entries[0][1].index - 1
-          : (entries[firstIdx - 1][1].index + entries[firstIdx][1].index) / 2;
+          : (entries[firstPos - 1][1].index + entries[firstPos][1].index) / 2;
         ctx.mutate((d, currentSheetId, rightId, newIndex) => { d.sheets[currentSheetId].columns[rightId].index = newIndex; }, [currentSheetId, rightId, newIndex]);
         setSelectedCols(new Set(indices.map(i => i + 1)));
         setContextMenu(null);
@@ -950,7 +1017,9 @@ const columnPlugin: GridPlugin = {
         const sh = ctxSheet(doc, ctx);
         const indices = colIndices(s);
         const colEntries = sortedEntries(sh.columns);
-        const idsToDelete = indices.filter(i => i < colEntries.length).map(i => colEntries[i][0]);
+        // Selection indices are in VISIBLE space — resolve through visibleColIds
+        // so a hidden column before the target is never deleted (H4).
+        const idsToDelete = indices.map(i => ctx.visibleColIds[i]).filter(Boolean);
         if (idsToDelete.length === 0) return;
         const deletedSet = new Set(idsToDelete);
         const sortedRowIds = sortedEntries(sh.rows).map(([id]) => id);
@@ -1103,7 +1172,9 @@ const sheetPlugin: GridPlugin = {
 // ============================================================
 
 function getSelectionRowColIds(ctx: GridCommandContext): { rowIds: string[]; colIds: string[] } {
-  const { selectedCell, selectionAnchor, sortedRowIds, sortedColIds, selectedRows, selectedCols } = ctx;
+  // Selection is in VISIBLE space — resolve through visibleRow/ColIds so formatting
+  // targets the selected visible cells, not misaligned full-list entries (H4).
+  const { selectedCell, selectionAnchor, visibleRowIds, visibleColIds, selectedRows, selectedCols } = ctx;
   if (!selectedCell) return { rowIds: [], colIds: [] };
 
   const range = getEffectiveRange(selectedCell, selectionAnchor) ?? {
@@ -1118,11 +1189,11 @@ function getSelectionRowColIds(ctx: GridCommandContext): { rowIds: string[]; col
 
   const rowIds: string[] = [];
   for (let r = minRow; r <= maxRow; r++) {
-    if (r < sortedRowIds.length) rowIds.push(sortedRowIds[r]);
+    if (r < visibleRowIds.length) rowIds.push(visibleRowIds[r]);
   }
   const colIds: string[] = [];
   for (let c = minCol; c <= maxCol; c++) {
-    if (c < sortedColIds.length) colIds.push(sortedColIds[c]);
+    if (c < visibleColIds.length) colIds.push(visibleColIds[c]);
   }
   return { rowIds, colIds };
 }
@@ -1734,7 +1805,12 @@ export function commitReorder(
   if (!doc) return;
   const sh = ctxSheet(doc, ctx);
 
+  // draggedIndices/dropIndex are VISIBLE indices; operate in visible id space and
+  // bound the new float indices by the nearest VISIBLE neighbors (H4). Hidden
+  // rows/cols interspersed keep their positions and never affect the visible drop.
   const entries = type === 'row' ? sortedEntries(sh.rows) : sortedEntries(sh.columns);
+  const indexById = new Map(entries.map(([id, e]) => [id, e.index]));
+  const visibleIds = type === 'row' ? ctx.visibleRowIds : ctx.visibleColIds;
   const sorted = [...draggedIndices].sort((a, b) => a - b);
 
   // No-op: drop is within the dragged range
@@ -1742,7 +1818,9 @@ export function commitReorder(
     if (dropIndex > sorted[0] && dropIndex <= sorted[sorted.length - 1] + 1) return;
   }
 
-  const remaining = entries.filter((_, i) => !sorted.includes(i));
+  const ids = sorted.map(i => visibleIds[i]).filter(Boolean);
+  if (ids.length === 0) return;
+  const remaining = visibleIds.filter((_, i) => !sorted.includes(i));
   let adjustedDrop = dropIndex;
   for (const di of sorted) {
     if (di < dropIndex) adjustedDrop--;
@@ -1753,19 +1831,18 @@ export function commitReorder(
 
   let prevIndex: number, nextIndex: number;
   if (adjustedDrop === 0) {
-    nextIndex = remaining[0][1].index;
-    prevIndex = nextIndex - sorted.length - 1;
+    nextIndex = indexById.get(remaining[0])!;
+    prevIndex = nextIndex - ids.length - 1;
   } else if (adjustedDrop >= remaining.length) {
-    prevIndex = remaining[remaining.length - 1][1].index;
-    nextIndex = prevIndex + sorted.length + 1;
+    prevIndex = indexById.get(remaining[remaining.length - 1])!;
+    nextIndex = prevIndex + ids.length + 1;
   } else {
-    prevIndex = remaining[adjustedDrop - 1][1].index;
-    nextIndex = remaining[adjustedDrop][1].index;
+    prevIndex = indexById.get(remaining[adjustedDrop - 1])!;
+    nextIndex = indexById.get(remaining[adjustedDrop])!;
   }
 
   const gap = nextIndex - prevIndex;
-  const step = gap / (sorted.length + 1);
-  const ids = sorted.map(i => entries[i][0]);
+  const step = gap / (ids.length + 1);
 
   mutate((d, currentSheetId, type, ids, prevIndex, step) => {
     const ms = d.sheets[currentSheetId];
@@ -1794,8 +1871,13 @@ export function commitAutofill(
   if (!doc) return;
   const sh = ctxSheet(doc, ctx);
 
-  const freshRowIds = sortedEntries(sh.rows).map(([id]) => id);
-  const freshColIds = sortedEntries(sh.columns).map(([id]) => id);
+  // sourceRange/fillRange are VISIBLE-space: read/write cells via visibleRow/ColIds,
+  // but resolve A1/R1C1 refs against the FULL sorted lists (matching displayed labels
+  // and commitCellValue) so hidden rows/cols are never touched (H4).
+  const fullRowIds = sortedEntries(sh.rows).map(([id]) => id);
+  const fullColIds = sortedEntries(sh.columns).map(([id]) => id);
+  const visRowIds = ctx.visibleRowIds;
+  const visColIds = ctx.visibleColIds;
 
   // Build cross-sheet lookup functions for formula conversion
   const sheetNameLookup = sheetsMeta
@@ -1820,24 +1902,28 @@ export function commitAutofill(
     ? (fillRange.minRow > sourceRange.maxRow ? 'forward' : 'backward')
     : (fillRange.minCol > sourceRange.maxCol ? 'forward' : 'backward');
 
-  const strips = getAutofillSourceValues(sh.cells, freshRowIds, freshColIds, sourceRange, axis);
+  const strips = getAutofillSourceValues(sh.cells, visRowIds, visColIds, sourceRange, axis);
   const fillCount = isVertical
     ? (fillRange.maxRow - fillRange.minRow + 1)
     : (fillRange.maxCol - fillRange.minCol + 1);
 
-  // Convert source formulas to R1C1 (position-independent offsets) before cycling
+  // Convert source formulas to R1C1 (position-independent offsets) before cycling.
+  // R1C1 anchors use the source cell's FULL index (via its visible id).
   const r1c1Strips = strips.map((strip, stripIdx) =>
     strip.map((val, srcIdx) => {
       if (!val.startsWith('=')) return val;
-      let srcRow: number, srcCol: number;
+      let srcVisRow: number, srcVisCol: number;
       if (isVertical) {
-        srcRow = sourceRange.minRow + srcIdx;
-        srcCol = sourceRange.minCol + stripIdx;
+        srcVisRow = sourceRange.minRow + srcIdx;
+        srcVisCol = sourceRange.minCol + stripIdx;
       } else {
-        srcRow = sourceRange.minRow + stripIdx;
-        srcCol = sourceRange.minCol + srcIdx;
+        srcVisRow = sourceRange.minRow + stripIdx;
+        srcVisCol = sourceRange.minCol + srcIdx;
       }
-      return internalToR1C1(val, srcRow, srcCol, freshRowIds, freshColIds, sheetNameLookup, lookupSheetRowColIds);
+      const srcRowId = visRowIds[srcVisRow];
+      const srcColId = visColIds[srcVisCol];
+      if (srcRowId === undefined || srcColId === undefined) return val;
+      return internalToR1C1(val, fullRowIds.indexOf(srcRowId), fullColIds.indexOf(srcColId), fullRowIds, fullColIds, sheetNameLookup, lookupSheetRowColIds);
     })
   );
 
@@ -1846,19 +1932,21 @@ export function commitAutofill(
   r1c1Strips.forEach((strip, stripIdx) => {
     const filled = generateAutofillValues(strip, fillCount, direction);
     filled.forEach((val, fillIdx) => {
-      let r: number, c: number;
+      let visR: number, visC: number;
       if (isVertical) {
-        r = fillRange.minRow + fillIdx;
-        c = sourceRange.minCol + stripIdx;
+        visR = fillRange.minRow + fillIdx;
+        visC = sourceRange.minCol + stripIdx;
       } else {
-        r = sourceRange.minRow + stripIdx;
-        c = fillRange.minCol + fillIdx;
+        visR = sourceRange.minRow + stripIdx;
+        visC = fillRange.minCol + fillIdx;
       }
-      if (r >= freshRowIds.length || c >= freshColIds.length) return;
+      if (visR >= visRowIds.length || visC >= visColIds.length) return;
+      const rowId = visRowIds[visR];
+      const colId = visColIds[visC];
       const stored = val.startsWith('=')
-        ? a1ToInternal(val, r, c, freshRowIds, freshColIds, lookupSheetId, lookupSheetRowColIds)
+        ? a1ToInternal(val, fullRowIds.indexOf(rowId), fullColIds.indexOf(colId), fullRowIds, fullColIds, lookupSheetId, lookupSheetRowColIds)
         : val;
-      cellWrites.push([`${freshRowIds[r]}:${freshColIds[c]}`, stored]);
+      cellWrites.push([`${rowId}:${colId}`, stored]);
     });
   });
 

@@ -650,7 +650,7 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
     if (!currentSheetId || !canEditRef.current) return;
     mutate((d, sid, ids) => {
       for (const id of ids) delete d.sheets[sid].rows[id].hidden;
-    }, [mutate, currentSheetId]);
+    }, [currentSheetId, ids]);
   }, [mutate, currentSheetId]);
 
   // -- Sheet management handlers --

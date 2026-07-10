@@ -190,6 +190,10 @@ function rowKey(row: CellValue[]): string {
 
 function uniqueRows(range: SimpleRangeValue, exactlyOnce: boolean): SimpleRangeValue {
   const data = range.data;
+  // Guard against an empty range: `data[0]` is undefined, which would throw below.
+  if (data.length === 0 || (data[0]?.length ?? 0) === 0) {
+    return SimpleRangeValue.onlyValues([['' as CellValue]]);
+  }
   if (exactlyOnce) {
     const counts = new Map<string, number>();
     for (const row of data) {
@@ -214,6 +218,10 @@ function uniqueRows(range: SimpleRangeValue, exactlyOnce: boolean): SimpleRangeV
 
 function uniqueColumns(range: SimpleRangeValue, exactlyOnce: boolean): SimpleRangeValue {
   const data = range.data;
+  // Guard against an empty range: `data[0]` is undefined, which would throw below.
+  if (data.length === 0 || (data[0]?.length ?? 0) === 0) {
+    return SimpleRangeValue.onlyValues([['' as CellValue]]);
+  }
   const colCount = data[0]?.length ?? 0;
   const cols: CellValue[][] = [];
   for (let c = 0; c < colCount; c++) {

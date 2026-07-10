@@ -58,17 +58,30 @@ export function getEffectiveRange(
   return { minRow: selectedCell[1], maxRow: selectedCell[1], minCol: selectedCell[0], maxCol: selectedCell[0] };
 }
 
-/** Build clipboard payload from a sheet's cells. Returns values (R1C1 formulas), formats, TSV text, and HTML. */
+/**
+ * Build clipboard payload from a sheet's cells. Returns values (R1C1 formulas), formats, TSV text, and HTML.
+ *
+ * `gridRowIds`/`gridColIds` index the range in the space the range is expressed in
+ * (VISIBLE space, when the selection can span hidden rows/cols) and are used for
+ * the cell KEY. `refRowIds`/`refColIds` (default: the grid ids) are the FULL sorted
+ * ids used for R1C1 formula conversion and format-cache lookup, so A1/R1C1 labels
+ * and formatCache indices stay consistent with the rest of the grid (H4).
+ */
 export function buildClipboardData(
   cells: Record<string, DataGridCell> | null,
   computedValues: Map<string, string | number> | null,
   range: CellRange,
-  sortedRowIds: string[],
-  sortedColIds: string[],
+  gridRowIds: string[],
+  gridColIds: string[],
   sheetId: string,
   formatCache?: Map<string, DataGridCellFormat>,
+  refRowIds?: string[],
+  refColIds?: string[],
 ): { values: string[][]; formats: (DataGridCellFormat | undefined)[][]; tsv: string; html: string } | null {
   if (!cells) return null;
+
+  const rRows = refRowIds ?? gridRowIds;
+  const rCols = refColIds ?? gridColIds;
 
   const values: string[][] = [];
   const formats: (DataGridCellFormat | undefined)[][] = [];
@@ -81,18 +94,23 @@ export function buildClipboardData(
     const tsvCols: string[] = [];
     const htmlTds: string[] = [];
     for (let c = range.minCol; c <= range.maxCol; c++) {
-      const key = `${sortedRowIds[r]}:${sortedColIds[c]}`;
+      const rowId = gridRowIds[r];
+      const colId = gridColIds[c];
+      const key = `${rowId}:${colId}`;
       const raw = cells[key]?.value || '';
+      // Ref indices in the FULL sorted space (for label-consistent R1C1 + format lookup).
+      const refR = refRowIds ? refRowIds.indexOf(rowId) : r;
+      const refC = refColIds ? refColIds.indexOf(colId) : c;
       const clipVal = raw.startsWith('=')
-        ? internalToR1C1(raw, r, c, sortedRowIds, sortedColIds)
+        ? internalToR1C1(raw, refR, refC, rRows, rCols)
         : raw;
       row.push(clipVal);
 
-      const cellFmt = formatCache?.get(`${r}:${c}`);
+      const cellFmt = formatCache?.get(`${refR}:${refC}`);
       fmtRow.push(cellFmt);
 
       tsvCols.push(clipVal);
-      const display = escHtml(getDisplayValue(computedValues, raw, sheetId, sortedRowIds[r], sortedColIds[c]));
+      const display = escHtml(getDisplayValue(computedValues, raw, sheetId, rowId, colId));
       const inlineStyle = cellFmt ? formatToInlineStyle(cellFmt) : '';
       const formulaAttr = raw.startsWith('=') ? ` data-sheets-formula="${escHtml(clipVal)}"` : '';
       htmlTds.push(`<td${formulaAttr}${inlineStyle ? ` style="${escHtml(inlineStyle)}"` : ''}>${display}</td>`);

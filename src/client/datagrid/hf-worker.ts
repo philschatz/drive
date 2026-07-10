@@ -142,6 +142,14 @@ function extractRefs(formula: string, currentSheetId: string): Map<string, Set<s
     if (!refs.has(sheetId)) refs.set(sheetId, new Set());
   }
 
+  // Also match row-only refs {R{rowId}S{sheetId}} (whole-row cross-sheet refs, e.g.
+  // =SUM(Sheet2!1:1)). Like whole-column refs, they only pin the sheet dependency.
+  const rowOnlyPattern = /\{R[\{[]([^\}\]]+)[\}\]]S\{([^}]+)\}\}/g;
+  while ((m = rowOnlyPattern.exec(formula)) !== null) {
+    const sheetId = m[2];
+    if (!refs.has(sheetId)) refs.set(sheetId, new Set());
+  }
+
   return refs;
 }
 
