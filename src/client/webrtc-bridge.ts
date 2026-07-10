@@ -20,7 +20,7 @@
  */
 
 import type { WebRTCSignal } from '../shared/webrtc-signal';
-import { frameMessage, FrameReassembler } from './webrtc-chunk';
+import { frameMessage, FrameReassembler, FrameOverflowError } from './webrtc-chunk';
 
 /** Worker → bridge commands. */
 export type WorkerToBridgeMsg =
@@ -42,6 +42,13 @@ const DATA_CHANNEL_LABEL = 'drive-sync';
 const NEGOTIATION_TIMEOUT_MS = 6_000;
 /** Give up (stay on the relay) after this many failed negotiation attempts. */
 const MAX_NEGOTIATION_RETRIES = 4;
+/**
+ * Hard cap on simultaneously-allocated RTCPeerConnections (open + negotiating).
+ * Legitimate swarms are far smaller; peers beyond the cap simply stay on the
+ * relay, so an attacker announced by the relay can't force unbounded peer
+ * connections + watchdog timers.
+ */
+const MAX_PEER_CONNECTIONS = 32;
 
 /** Default public STUN servers (no TURN — symmetric-NAT peers stay on the relay). */
 const DEFAULT_ICE_SERVERS: RTCIceServer[] = [
@@ -140,15 +147,30 @@ export function startWebRTCBridge(port: MessagePort): () => void {
         : new Uint8Array(e.data as ArrayBufferLike);
       // Frames arrive chunked (see webrtc-chunk); deliver only once a whole
       // message has been reassembled. The result is a fresh buffer owned solely
-      // by the worker after transfer.
-      const full = entry.reasm.push(frame);
+      // by the worker after transfer. The reassembler enforces hard size/frame
+      // bounds — a peer that exceeds them (e.g. streams never-final frames) is
+      // hostile or broken, so drop its channel; sync falls back to the relay.
+      let full: Uint8Array | null;
+      try {
+        full = entry.reasm.push(frame);
+      } catch (err) {
+        if (err instanceof FrameOverflowError) console.warn('[webrtc] closing channel to', peerId, '—', err.message);
+        else console.warn('[webrtc] closing channel to', peerId, 'after reassembly failure:', err);
+        teardownPeer(peerId);
+        return;
+      }
       if (full) post({ kind: 'data-in', peerId, bytes: full }, [full.buffer]);
     };
   }
 
-  function getOrCreatePeer(peerId: string, initiator: boolean): PeerConn {
+  function getOrCreatePeer(peerId: string, initiator: boolean): PeerConn | null {
     let entry = peers.get(peerId);
     if (entry) return entry;
+    if (peers.size >= MAX_PEER_CONNECTIONS) {
+      // Refuse to allocate beyond the cap — this peer stays on the relay.
+      console.warn(`[webrtc] peer-connection cap (${MAX_PEER_CONNECTIONS}) reached — not negotiating with`, peerId);
+      return null;
+    }
 
     const pc = new RTCPeerConnection({ iceServers });
     entry = { pc, dc: null, open: false, initiator, pendingCandidates: [], remoteDescSet: false, openTimer: null, reasm: new FrameReassembler() };
@@ -200,7 +222,8 @@ export function startWebRTCBridge(port: MessagePort): () => void {
       // initiator retried). Start clean so setRemoteDescription is in a valid state.
       let entry = peers.get(peerId);
       if (entry && (entry.remoteDescSet || entry.open)) { teardownPeer(peerId); entry = undefined; }
-      entry = entry ?? getOrCreatePeer(peerId, false);
+      entry = entry ?? getOrCreatePeer(peerId, false) ?? undefined;
+      if (!entry) return;
       try {
         await entry.pc.setRemoteDescription({ type: 'offer', sdp: signal.sdp });
         entry.remoteDescSet = true;
@@ -216,6 +239,7 @@ export function startWebRTCBridge(port: MessagePort): () => void {
 
     // answer / candidate: drive the existing connection (create lazily if needed).
     const entry = getOrCreatePeer(peerId, false);
+    if (!entry) return;
     try {
       if (signal.kind === 'answer') {
         await entry.pc.setRemoteDescription({ type: 'answer', sdp: signal.sdp });

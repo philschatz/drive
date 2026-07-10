@@ -30,6 +30,15 @@ interface ContactBundle {
   groupEvents?: string[];
 }
 
+/**
+ * Bounds on an inbound bundle's `groupEvents` before any base64 decode or
+ * keyhive ingest work. A legitimate bundle is a handful of membership/CGKA ops
+ * totaling ~25 KB; an attacker-supplied bundle (pasted link, hostile rendezvous
+ * peer) must not force unbounded parsing/CPU.
+ */
+const MAX_BUNDLE_GROUP_EVENTS = 1024;
+const MAX_BUNDLE_GROUP_EVENTS_BYTES = 1024 * 1024; // base64 chars across all events
+
 /** Parse a contact-bundle envelope, or null if the string is not one. */
 function parseContactBundle(cardJson: string): ContactBundle | null {
   try {
@@ -424,7 +433,13 @@ export class KeyhiveOps {
       // a bad payload rather than silently recording a half-usable contact.
       const myGroupId = await this.fx.getUserGroupId();
       if (bundle.groupEvents?.length && bundle.groupId !== myGroupId) {
-        await this.kh.ingestEventsBytes(bundle.groupEvents.map(base64ToBytes));
+        const events = bundle.groupEvents;
+        // Non-string entries count as over-limit — they could never decode.
+        const totalBytes = events.reduce((n, e) => n + (typeof e === 'string' ? e.length : Number.POSITIVE_INFINITY), 0);
+        if (events.length > MAX_BUNDLE_GROUP_EVENTS || totalBytes > MAX_BUNDLE_GROUP_EVENTS_BYTES) {
+          throw new Error(`Contact card group ops too large (${events.length} events, ${totalBytes} bytes)`);
+        }
+        await this.kh.ingestEventsBytes(events.map(base64ToBytes));
       }
       await this.fx.persist();
     }

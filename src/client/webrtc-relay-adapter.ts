@@ -22,6 +22,7 @@
  */
 
 import { Encoder, decode } from 'cbor-x';
+import { MAX_MESSAGE_BYTES } from './webrtc-chunk';
 import { WRTC_SIGNAL, type WebRTCSignalFrame } from '../shared/webrtc-signal';
 import type { BridgeToWorkerMsg, WorkerToBridgeMsg } from './webrtc-bridge';
 import type { Message, NetworkAdapterInterface, PeerId, PeerMetadata } from '@automerge/automerge-repo';
@@ -108,6 +109,11 @@ export function makeWebRTCRelayAdapter(
     }
 
     handleSignal(frame: WebRTCSignalFrame): void {
+      // Only peers the relay actually announced may drive negotiation — a
+      // signal from an unknown senderId must not be able to allocate or tear
+      // down RTCPeerConnections (the relay also enforces that senderId is the
+      // sending socket's joined id, so a live peer can't be impersonated).
+      if (!discovered.has(frame.senderId)) return;
       port?.postMessage({ kind: 'signal-in', peerId: frame.senderId, signal: frame.signal } satisfies WorkerToBridgeMsg);
     }
   }
@@ -142,6 +148,12 @@ export function makeWebRTCRelayAdapter(
         break;
       case 'data-in': {
         const bytes = msg.bytes instanceof Uint8Array ? msg.bytes : new Uint8Array(msg.bytes);
+        // Defense in depth: the bridge's reassembler already caps message size,
+        // but never hand the CBOR decoder more than the transport bound allows.
+        if (bytes.byteLength > MAX_MESSAGE_BYTES) {
+          console.warn('[webrtc] dropping oversized data-channel message:', bytes.byteLength, 'bytes');
+          break;
+        }
         try {
           adapter.emit('message', decode(bytes) as Message);
         } catch (err) {

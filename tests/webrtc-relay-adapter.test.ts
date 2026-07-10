@@ -13,6 +13,7 @@
 import { EventEmitter } from 'events';
 import { Encoder, decode } from 'cbor-x';
 import { makeWebRTCRelayAdapter } from '../src/client/webrtc-relay-adapter';
+import { MAX_MESSAGE_BYTES } from '../src/client/webrtc-chunk';
 import { WRTC_SIGNAL } from '../src/shared/webrtc-signal';
 
 const cbor = new Encoder({ tagUint8Array: false, useRecords: false });
@@ -175,15 +176,54 @@ describe('WebRTCRelayAdapter routing', () => {
     expect(signals).toEqual([{ type: WRTC_SIGNAL, senderId: 'me', targetId: 'peerB', signal }]);
   });
 
-  test('handleSignal forwards an inbound frame to the bridge as signal-in', () => {
-    const { port, adapter } = build();
+  test('handleSignal forwards an inbound frame from a discovered peer to the bridge as signal-in', () => {
+    const { inner, port, adapter } = build();
     adapter.connect('me' as any);
     adapter.attachPort(port as any);
+    inner.emit('peer-candidate', { peerId: 'peerB', peerMetadata: {} });
 
     const signal = { kind: 'answer', sdp: 'v=0...' };
     adapter.handleSignal({ type: WRTC_SIGNAL, senderId: 'peerB', targetId: 'me', signal } as any);
 
     expect(port.posted).toContainEqual({ kind: 'signal-in', peerId: 'peerB', signal });
+  });
+
+  test('handleSignal ignores a frame from an undiscovered senderId', () => {
+    const { port, adapter } = build();
+    adapter.connect('me' as any);
+    adapter.attachPort(port as any);
+
+    // 'stranger' was never announced by the relay — its signaling must not
+    // reach the bridge (it would create/tear down RTCPeerConnections).
+    const signal = { kind: 'offer', sdp: 'v=0...' };
+    adapter.handleSignal({ type: WRTC_SIGNAL, senderId: 'stranger', targetId: 'me', signal } as any);
+
+    expect(port.posted.find((m) => m.kind === 'signal-in')).toBeUndefined();
+  });
+
+  test('handleSignal stops accepting frames from a peer after it disconnects', () => {
+    const { inner, port, adapter } = build();
+    adapter.connect('me' as any);
+    adapter.attachPort(port as any);
+    inner.emit('peer-candidate', { peerId: 'peerB', peerMetadata: {} });
+    inner.emit('peer-disconnected', { peerId: 'peerB' });
+
+    const signal = { kind: 'offer', sdp: 'v=0...' };
+    adapter.handleSignal({ type: WRTC_SIGNAL, senderId: 'peerB', targetId: 'me', signal } as any);
+
+    expect(port.posted.find((m) => m.kind === 'signal-in')).toBeUndefined();
+  });
+
+  test('drops an oversized inbound data-channel message instead of decoding it', () => {
+    const { port, adapter } = build();
+    adapter.connect('me' as any);
+    adapter.attachPort(port as any);
+
+    const received: any[] = [];
+    adapter.on('message', (m) => received.push(m));
+
+    port.deliver({ kind: 'data-in', peerId: 'peerB', bytes: new Uint8Array(MAX_MESSAGE_BYTES + 1) });
+    expect(received).toHaveLength(0);
   });
 
   test('peer-disconnected clears the open channel and tears down the bridge peer', () => {

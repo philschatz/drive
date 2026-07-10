@@ -245,9 +245,13 @@ export class WebSocketRelay {
     } else if (message.type === WRTC_SIGNAL) {
       // WebRTC signaling (SDP offer/answer + ICE candidates). Unicast verbatim
       // to the named peer so two peers can negotiate a direct data channel.
-      // The relay never inspects the `signal` payload.
+      // The relay never inspects the `signal` payload, but it DOES require
+      // senderId to be the sending socket's joined id: signaling drives
+      // RTCPeerConnection setup/teardown on the receiver, so a client must not
+      // be able to speak as another live peer (join squatting is rejected above).
+      if (!myPeerId || message.senderId !== myPeerId) return;
       const targetId = typeof message.targetId === 'string' ? message.targetId : undefined;
-      if (myPeerId) logMessage('←', myPeerId, message);
+      logMessage('←', myPeerId, message);
       if (targetId && this.sockets.has(targetId)) {
         const targetWs = this.sockets.get(targetId)!;
         if (this.safeSend(targetWs, buf, targetId)) logMessage('→', targetId, message);

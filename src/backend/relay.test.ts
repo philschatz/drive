@@ -10,6 +10,7 @@ import { EventEmitter } from 'events';
 import { Encoder, decode } from 'cbor-x';
 import { WebSocketRelay, relayMaxPayloadBytes, createRelayWebSocketServer } from './relay';
 import { RDV_SUB } from '../shared/rendezvous-protocol';
+import { WRTC_SIGNAL } from '../shared/webrtc-signal';
 
 // Same encoder settings as relay.ts / @automerge/automerge-repo's cbor helper
 const encoder = new Encoder({ tagUint8Array: false, useRecords: false });
@@ -193,6 +194,31 @@ describe('C2: connection caps', () => {
     a.emit('close');
     const b = connect(relay);
     expect(b.close).not.toHaveBeenCalled();
+  });
+});
+
+describe('C2: WebRTC signaling senderId must not be spoofable', () => {
+  it('forwards a WRTC_SIGNAL only when senderId matches the joined peer', () => {
+    const relay = new WebSocketRelay();
+    const alice = join(relay, 'alice');
+    const bob = join(relay, 'bob');
+    const mallory = join(relay, 'mallory');
+    bob.send.mockClear();
+
+    // Spoof: mallory claims to be alice. Signaling drives RTCPeerConnection
+    // setup/teardown on the receiver, so this must be dropped.
+    mallory.frame({ type: WRTC_SIGNAL, senderId: 'alice', targetId: 'bob', signal: { kind: 'offer', sdp: 'v=0' } });
+    expect(bob.send).not.toHaveBeenCalled();
+
+    // A socket that never joined has no identity to speak as.
+    const anon = connect(relay);
+    anon.frame({ type: WRTC_SIGNAL, senderId: 'alice', targetId: 'bob', signal: { kind: 'offer', sdp: 'v=0' } });
+    expect(bob.send).not.toHaveBeenCalled();
+
+    // The truthful frame still goes through.
+    alice.frame({ type: WRTC_SIGNAL, senderId: 'alice', targetId: 'bob', signal: { kind: 'offer', sdp: 'v=0' } });
+    expect(bob.send).toHaveBeenCalledTimes(1);
+    expect((decode(bob.send.mock.calls[0][0]) as any).type).toBe(WRTC_SIGNAL);
   });
 });
 

@@ -242,6 +242,30 @@ describe('KeyhiveOps', () => {
       const result = await opsB.receiveContactCard(decompressed);
       expect(result.agentId).toBeDefined();
     });
+
+    it('rejects a bundle whose groupEvents count exceeds the bound', async () => {
+      const { ops: opsA } = await createOps();
+      const { ops: opsB } = await createOps();
+
+      // An attacker-controlled bundle: valid card, but a flood of "group ops".
+      const bundle = JSON.parse(await opsA.getContactCard());
+      bundle.groupEvents = Array.from({ length: 1025 }, () => 'AAAA');
+
+      await expect(opsB.receiveContactCard(JSON.stringify(bundle)))
+        .rejects.toThrow(/group ops too large/i);
+    });
+
+    it('rejects a bundle whose groupEvents total size exceeds the bound', async () => {
+      const { ops: opsA } = await createOps();
+      const { ops: opsB } = await createOps();
+
+      const bundle = JSON.parse(await opsA.getContactCard());
+      const big = 'A'.repeat(64 * 1024);
+      bundle.groupEvents = Array.from({ length: 17 }, () => big); // 17 × 64 KiB > 1 MiB
+
+      await expect(opsB.receiveContactCard(JSON.stringify(bundle)))
+        .rejects.toThrow(/group ops too large/i);
+    });
   });
 
   describe('enableSharing', () => {

@@ -58,6 +58,14 @@ interface RdvSession {
 
 const RDV_RECEIVE_TIMEOUT_MS = 120_000;
 
+/**
+ * Upper bound on an inbound encrypted rendezvous payload. Anyone who learns a
+ * topic id (or a hostile relay) can push bytes at it, so cap the size BEFORE
+ * any decrypt/parse work. Legitimate payloads — contact bundles — run ~25 KB;
+ * 256 KiB leaves generous headroom.
+ */
+export const RDV_MAX_DATA_BYTES = 256 * 1024;
+
 /** See OPEN_DOCS_IN_BACKGROUND in the original worker. */
 const OPEN_DOCS_IN_BACKGROUND = true;
 
@@ -509,6 +517,10 @@ export class DriveEngine {
       session.onPeer?.();
     } else if (msg.type === RDV_MSG && session.onData) {
       const data: Uint8Array = msg.data instanceof Uint8Array ? msg.data : new Uint8Array(msg.data);
+      if (data.byteLength > RDV_MAX_DATA_BYTES) {
+        console.warn(`[engine] dropping oversized rendezvous payload (${data.byteLength} bytes, max ${RDV_MAX_DATA_BYTES})`);
+        return;
+      }
       decryptString(session.key, data)
         .then(pt => session.onData!(pt))
         .catch(err => console.error('[engine] failed to decrypt inbound rendezvous payload:', errMsg(err)));

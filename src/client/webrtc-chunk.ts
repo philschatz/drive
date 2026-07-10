@@ -19,6 +19,28 @@
 /** Max bytes per data-channel message. 16 KiB is safe across every browser's SCTP maxMessageSize. */
 export const MAX_FRAME_BYTES = 16 * 1024;
 
+/**
+ * Hard cap on one reassembled message. The peer at the other end is untrusted
+ * (the channel is negotiated below keyhive, before any document access), so a
+ * stream of never-final frames must not grow memory without bound. 64 MiB
+ * matches the relay's frame cap (`RELAY_MAX_PAYLOAD_BYTES` default) — anything
+ * legitimately syncable over the relay path also fits the direct channel.
+ */
+export const MAX_MESSAGE_BYTES = 64 * 1024 * 1024;
+/** Cap on frames per message, so a flood of tiny frames can't bloat the part
+ *  list: a max-size message in legit 16 KiB frames needs ~4 100 — allow 2×. */
+export const MAX_MESSAGE_FRAMES = 8192;
+
+/** Thrown by {@link FrameReassembler.push} when a sender exceeds the reassembly
+ *  bounds. The reassembler has already reset itself; the bridge reacts by
+ *  closing that peer's data channel (sync falls back to the relay). */
+export class FrameOverflowError extends Error {
+  constructor(detail: string) {
+    super(`WebRTC frame reassembly overflow: ${detail}`);
+    this.name = 'FrameOverflowError';
+  }
+}
+
 const FRAME_MORE = 0x00;
 const FRAME_FINAL = 0x01;
 
@@ -46,11 +68,19 @@ export function frameMessage(bytes: Uint8Array, maxFrameBytes: number = MAX_FRAM
 export class FrameReassembler {
   private parts: Uint8Array[] = [];
   private size = 0;
+  private readonly maxMessageBytes: number;
+  private readonly maxFrames: number;
+
+  constructor(limits?: { maxMessageBytes?: number; maxFrames?: number }) {
+    this.maxMessageBytes = limits?.maxMessageBytes ?? MAX_MESSAGE_BYTES;
+    this.maxFrames = limits?.maxFrames ?? MAX_MESSAGE_FRAMES;
+  }
 
   /**
    * Feed one received frame. Returns the complete message (a fresh buffer) once
    * its final frame arrives, otherwise null. Frames shorter than the 1-byte
-   * header are ignored.
+   * header are ignored. Throws {@link FrameOverflowError} (after resetting) if
+   * the sender exceeds the size/count bounds — the caller should drop the channel.
    */
   push(frame: Uint8Array): Uint8Array | null {
     if (frame.byteLength < 1) return null;
@@ -58,6 +88,12 @@ export class FrameReassembler {
     const payload = frame.subarray(1);
     this.parts.push(payload);
     this.size += payload.byteLength;
+    if (this.size > this.maxMessageBytes || this.parts.length > this.maxFrames) {
+      const detail = `${this.size} bytes in ${this.parts.length} frames (max ${this.maxMessageBytes} bytes / ${this.maxFrames} frames)`;
+      this.parts = [];
+      this.size = 0;
+      throw new FrameOverflowError(detail);
+    }
     if (!final) return null;
 
     const out = new Uint8Array(this.size);
