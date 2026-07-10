@@ -69,4 +69,41 @@ describe('deepAssign', () => {
     deepAssign(target, { a: 5 });
     expect(target).toEqual({ a: 5 });
   });
+
+  // Untrusted-input hardening: ICS/CalDAV and JSON-parsed peer data flows into
+  // deepAssign, and JSON.parse can produce OWN enumerable "__proto__" keys.
+  describe('prototype pollution', () => {
+    afterEach(() => {
+      // Clean up in case a failing implementation actually polluted the prototype.
+      delete (Object.prototype as any).polluted;
+    });
+
+    it('ignores an own __proto__ key from JSON-parsed input', () => {
+      const target: Record<string, any> = { a: 1 };
+      deepAssign(target, JSON.parse('{"__proto__": {"polluted": 1}, "a": 2}'));
+      expect(({} as any).polluted).toBeUndefined();
+      expect((Object.prototype as any).polluted).toBeUndefined();
+      expect(Object.hasOwn(target, '__proto__')).toBe(false);
+      expect(target.a).toBe(2); // sibling keys still merge
+    });
+
+    it('ignores __proto__ nested inside a merged sub-object', () => {
+      const target: Record<string, any> = { nested: { x: 1 } };
+      deepAssign(target, JSON.parse('{"nested": {"__proto__": {"polluted": 1}, "y": 2}}'));
+      expect((Object.prototype as any).polluted).toBeUndefined();
+      expect(target).toEqual({ nested: { x: 1, y: 2 } });
+    });
+
+    it('ignores constructor and prototype keys', () => {
+      const target: Record<string, any> = { a: 1 };
+      deepAssign(target, JSON.parse(
+        '{"constructor": {"prototype": {"polluted": 1}}, "prototype": {"polluted": 1}, "b": 2}',
+      ));
+      expect((Object.prototype as any).polluted).toBeUndefined();
+      expect(({} as any).polluted).toBeUndefined();
+      expect(Object.hasOwn(target, 'constructor')).toBe(false);
+      expect(Object.hasOwn(target, 'prototype')).toBe(false);
+      expect(target).toEqual({ a: 1, b: 2 });
+    });
+  });
 });

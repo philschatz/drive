@@ -1,6 +1,11 @@
 export function deepAssign<T extends Record<string, any>>(target: T, source: Partial<T>): void {
   for (const key in source) {
-    if (!source.hasOwnProperty(key)) continue;
+    if (!Object.hasOwn(source, key)) continue;
+    // Untrusted input (JSON.parse, ICS/CalDAV) can carry an OWN enumerable
+    // "__proto__" key; recursing into target["__proto__"] would write onto
+    // Object.prototype. Skip all prototype-polluting keys.
+    const k: string = key;
+    if (k === '__proto__' || k === 'constructor' || k === 'prototype') continue;
 
     const sourceValue = source[key];
     const targetValue = target[key];
