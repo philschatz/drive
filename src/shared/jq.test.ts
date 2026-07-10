@@ -555,6 +555,91 @@ describe('jq', () => {
     });
   });
 
+  // ---- Untrusted-input hardening (hostile queries must not hang the worker) ----
+  describe('hostile query hardening', () => {
+    it('until(false; .) throws a bounded error instead of hanging', () => {
+      expect(() => run('until(false; . + 1)', 0)).toThrow(JqError);
+      expect(() => run('until(false; . + 1)', 0)).toThrow(/iterations/);
+    });
+
+    it('while(true; .) throws a bounded error when fully consumed', () => {
+      expect(() => run('while(true; . + 1)', 0)).toThrow(JqError);
+      expect(() => run('while(true; .)', 0)).toThrow(/iterations/);
+    });
+
+    it('while under limit() still short-circuits lazily', () => {
+      expect(run('[limit(3; while(true; . + 1))]', 0)).toEqual([[0, 1, 2]]);
+    });
+
+    it('legitimate until still terminates with the right answer', () => {
+      expect(run('until(. >= 1000; . + 1)', 0)).toEqual([1000]);
+    });
+
+    it('scan("") terminates with one empty match per position', () => {
+      expect(run('[scan("")]', 'ab')).toEqual([['', '', '']]);
+    });
+
+    it('scan with a zero-width-capable pattern terminates', () => {
+      expect(run('[scan("a*")]', 'abaa')).toEqual([['a', '', 'aa', '']]);
+    });
+
+    it('scan zero-width advance keeps surrogate pairs intact', () => {
+      expect(run('[scan("")]', '\u{1F600}')).toEqual([['', '']]);
+    });
+
+    it('a runaway generator trips the global step budget', () => {
+      expect(() => run('[range(1e9)]', null)).toThrow(JqError);
+      expect(() => run('[range(1e9)]', null)).toThrow(/step/);
+    });
+
+    it('nested loop bombs shielded by try still trip the global budget', () => {
+      expect(() => run('until(false; try until(false; . + 1) catch 0)', 0)).toThrow(JqError);
+    });
+
+    it('.["__proto__"] yields null, not the prototype object', () => {
+      expect(run('.["__proto__"]', { a: 1 })).toEqual([null]);
+    });
+
+    it('.__proto__ and .constructor yield null', () => {
+      expect(run('.__proto__', { a: 1 })).toEqual([null]);
+      expect(run('.constructor', { a: 1 })).toEqual([null]);
+    });
+
+    it('an own __proto__ key from JSON is still readable', () => {
+      expect(run('.["__proto__"]', JSON.parse('{"__proto__": {"x": 1}}'))).toEqual([{ x: 1 }]);
+    });
+  });
+
+  // ---- Dedup/grouping semantics preserved by the hash-based rewrite ----
+  describe('unique/group_by equivalence semantics', () => {
+    it('unique treats objects with different key order as equal', () => {
+      expect(run('unique', [{ a: 1, b: 2 }, { b: 2, a: 1 }])).toEqual([[{ a: 1, b: 2 }]]);
+    });
+
+    it('unique keeps first-seen order for nested values', () => {
+      expect(run('unique', [[2], [1], [2], [1, 2]])).toEqual([[[2], [1], [1, 2]]]);
+    });
+
+    it('unique does not conflate values of different types', () => {
+      expect(run('unique', [1, '1', true, null, [1], { '1': 1 }])).toEqual([[1, '1', true, null, [1], { '1': 1 }]]);
+    });
+
+    it('unique never merges NaN values (deepEqual semantics)', () => {
+      const result = run('unique', [NaN, NaN]);
+      expect(result[0]).toHaveLength(2);
+    });
+
+    it('group_by sorts groups by key and preserves item order', () => {
+      expect(run('group_by(.k)', [{ k: 2, i: 0 }, { k: 1, i: 1 }, { k: 2, i: 2 }]))
+        .toEqual([[[{ k: 1, i: 1 }], [{ k: 2, i: 0 }, { k: 2, i: 2 }]]]);
+    });
+
+    it('unique_by keeps the first item per key', () => {
+      expect(run('unique_by(.a)', [{ a: { x: 1, y: 2 }, b: 1 }, { a: { y: 2, x: 1 }, b: 2 }]))
+        .toEqual([[{ a: { x: 1, y: 2 }, b: 1 }]]);
+    });
+  });
+
   // ---- HOME_SUMMARY_QUERY ----
   describe('HOME_SUMMARY_QUERY', () => {
     const query = '{ type: .["@type"], name: (.name // ""), eventCount: (if .events then (.events | length) else 0 end), taskCount: (if .tasks then (.tasks | length) else 0 end), cellCount: (if .sheets then [.sheets[].cells // {} | length] | add else 0 end) }';

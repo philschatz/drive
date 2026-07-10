@@ -885,6 +885,34 @@ class JqEmpty {
   static readonly instance = new JqEmpty();
 }
 
+// ---------------------------------------------------------------------------
+// Hostile-input budgets
+//
+// Queries and documents can come from untrusted peers, and queries run inside
+// the shared worker that services every doc/subscription — an unbounded loop
+// there wedges everything. Runaway evaluation must therefore degrade to a
+// thrown JqError (surfaced as a per-subscription error result) instead of
+// hanging.
+// ---------------------------------------------------------------------------
+
+/** Max iterations for the looping builtins until/while/repeat. */
+const LOOP_LIMIT = 10000;
+
+/**
+ * Global per-query step budget. Ticked on every evaluator activation and on
+ * every value produced by unbounded generators (range), so nested loop bombs
+ * (e.g. `until` inside `try` inside `until`) and `[range(1e18)]` are bounded
+ * even though each individual construct stays under LOOP_LIMIT.
+ */
+const EVAL_STEP_LIMIT = 5_000_000;
+let evalSteps = 0;
+
+function tickSteps(): void {
+  if (++evalSteps > EVAL_STEP_LIMIT) {
+    throw new JqError(`Query exceeded the evaluation step limit (${EVAL_STEP_LIMIT})`);
+  }
+}
+
 // A sentinel for label/break
 class JqBreak {
   constructor(public label: string, public value: any) {}
@@ -897,6 +925,7 @@ class JqBreak {
 type Env = { [key: string]: any };
 
 function* evaluate(node: ASTNode, input: any, env: Env): Generator<any> {
+  tickSteps();
   switch (node.type) {
     case 'identity':
       yield input;
@@ -916,7 +945,9 @@ function* evaluate(node: ASTNode, input: any, env: Env): Generator<any> {
         if (node.optional) break;
         throw new JqError(`Cannot index ${typeOf(input)} with string "${node.name}"`);
       }
-      yield input[node.name] ?? null;
+      // Own properties only: `.__proto__` / `.constructor` must yield jq's
+      // null, not objects inherited from Object.prototype.
+      yield Object.hasOwn(input, node.name) ? input[node.name] ?? null : null;
       break;
     }
 
@@ -932,7 +963,8 @@ function* evaluate(node: ASTNode, input: any, env: Env): Generator<any> {
           }
         } else if (typeof idx === 'string') {
           if (typeof input === 'object' && input !== null) {
-            yield input[idx] ?? null;
+            // Own properties only (see the 'field' case above).
+            yield Object.hasOwn(input, idx) ? input[idx] ?? null : null;
           } else {
             yield null;
           }
@@ -1293,6 +1325,27 @@ function deepEqual(a: any, b: any): boolean {
   const kb = Object.keys(b).sort();
   if (ka.length !== kb.length) return false;
   return ka.every((k, i) => k === kb[i] && deepEqual(a[k], b[k]));
+}
+
+/**
+ * Canonical string key for hashing jq values in unique/unique_by/group_by,
+ * replacing O(n²) pairwise deepEqual scans. Two values map to the same key
+ * iff deepEqual(a, b): object keys are sorted, type prefixes keep e.g. 5 and
+ * "5" apart, and NaN (which never deepEquals itself) gets a per-occurrence
+ * unique key.
+ */
+let nanKeyCounter = 0;
+function canonicalKey(v: any): string {
+  if (v === undefined) return 'u';
+  if (v === null) return 'n';
+  switch (typeof v) {
+    case 'number': return Number.isNaN(v) ? `N${nanKeyCounter++}` : `#${v}`;
+    case 'boolean': return v ? 't' : 'f';
+    case 'string': return `s${JSON.stringify(v)}`;
+  }
+  if (Array.isArray(v)) return `[${v.map(canonicalKey).join(',')}]`;
+  const keys = Object.keys(v).sort();
+  return `{${keys.map(k => `${JSON.stringify(k)}:${canonicalKey(v[k])}`).join(',')}}`;
 }
 
 function compare(a: any, b: any): number {
@@ -1660,11 +1713,12 @@ function* evaluateBuiltin(name: string, args: ASTNode[], input: any, env: Env): 
 
     case 'unique': {
       if (!Array.isArray(input)) { yield input; break; }
-      const seen: any[] = [];
+      const seen = new Set<string>();
       const result: any[] = [];
       for (const v of input) {
-        if (!seen.some(s => deepEqual(s, v))) {
-          seen.push(v);
+        const ck = canonicalKey(v);
+        if (!seen.has(ck)) {
+          seen.add(ck);
           result.push(v);
         }
       }
@@ -1674,12 +1728,12 @@ function* evaluateBuiltin(name: string, args: ASTNode[], input: any, env: Env): 
 
     case 'unique_by': {
       if (!Array.isArray(input)) { yield input; break; }
-      const keys: any[] = [];
+      const seen = new Set<string>();
       const result: any[] = [];
       for (const item of input) {
-        const k = first(evaluate(args[0], item, env));
-        if (!keys.some(ek => deepEqual(ek, k))) {
-          keys.push(k);
+        const ck = canonicalKey(first(evaluate(args[0], item, env)));
+        if (!seen.has(ck)) {
+          seen.add(ck);
           result.push(item);
         }
       }
@@ -1689,15 +1743,16 @@ function* evaluateBuiltin(name: string, args: ASTNode[], input: any, env: Env): 
 
     case 'group_by': {
       if (!Array.isArray(input)) { yield input; break; }
-      const groups: { key: any; items: any[] }[] = [];
+      const groups = new Map<string, { key: any; items: any[] }>();
       for (const item of input) {
         const k = first(evaluate(args[0], item, env));
-        const existing = groups.find(g => deepEqual(g.key, k));
+        const ck = canonicalKey(k);
+        const existing = groups.get(ck);
         if (existing) existing.items.push(item);
-        else groups.push({ key: k, items: [item] });
+        else groups.set(ck, { key: k, items: [item] });
       }
-      groups.sort((a, b) => compare(a.key, b.key));
-      yield groups.map(g => g.items);
+      const sorted = [...groups.values()].sort((a, b) => compare(a.key, b.key));
+      yield sorted.map(g => g.items);
       break;
     }
 
@@ -1788,15 +1843,17 @@ function* evaluateBuiltin(name: string, args: ASTNode[], input: any, env: Env): 
     }
 
     case 'range': {
+      // range yields without re-entering evaluate(), so it must tick the
+      // step budget itself or [range(1e18)] would hang the worker.
       if (args.length === 1) {
         const n = first(evaluate(args[0], input, env));
-        for (let i = 0; i < n; i++) yield i;
+        for (let i = 0; i < n; i++) { tickSteps(); yield i; }
       } else if (args.length >= 2) {
         const a = first(evaluate(args[0], input, env));
         const b = first(evaluate(args[1], input, env));
         const step = args.length > 2 ? first(evaluate(args[2], input, env)) : 1;
-        if (step > 0) for (let i = a; i < b; i += step) yield i;
-        else if (step < 0) for (let i = a; i > b; i += step) yield i;
+        if (step > 0) for (let i = a; i < b; i += step) { tickSteps(); yield i; }
+        else if (step < 0) for (let i = a; i > b; i += step) { tickSteps(); yield i; }
       }
       break;
     }
@@ -1906,6 +1963,13 @@ function* evaluateBuiltin(name: string, args: ASTNode[], input: any, env: Env): 
       let m;
       while ((m = re.exec(str)) !== null) {
         yield m.length > 1 ? m.slice(1) : m[0];
+        if (m[0] === '') {
+          // Zero-width match (e.g. scan("") or scan("a*")): exec left
+          // lastIndex unchanged, so force progress — by a whole code point to
+          // avoid splitting surrogate pairs — or the loop never terminates.
+          const cp = str.codePointAt(re.lastIndex);
+          re.lastIndex += cp !== undefined && cp > 0xffff ? 2 : 1;
+        }
       }
       break;
     }
@@ -2019,7 +2083,8 @@ function* evaluateBuiltin(name: string, args: ASTNode[], input: any, env: Env): 
 
     case 'until': {
       let state = input;
-      while (true) {
+      for (let i = 0; ; i++) {
+        if (i >= LOOP_LIMIT) throw new JqError(`until: exceeded ${LOOP_LIMIT} iterations`);
         const cond = first(evaluate(args[0], state, env));
         if (isTruthy(cond)) break;
         state = first(evaluate(args[1], state, env));
@@ -2031,7 +2096,8 @@ function* evaluateBuiltin(name: string, args: ASTNode[], input: any, env: Env): 
     case 'while_': // jq's `while` is a keyword-ish
     case 'while': {
       let state = input;
-      while (true) {
+      for (let i = 0; ; i++) {
+        if (i >= LOOP_LIMIT) throw new JqError(`while: exceeded ${LOOP_LIMIT} iterations`);
         const cond = first(evaluate(args[0], state, env));
         if (!isTruthy(cond)) break;
         yield state;
@@ -2042,7 +2108,7 @@ function* evaluateBuiltin(name: string, args: ASTNode[], input: any, env: Env): 
 
     case 'repeat': {
       let state = input;
-      for (let i = 0; i < 10000; i++) { // safety limit
+      for (let i = 0; i < LOOP_LIMIT; i++) { // safety limit
         yield state;
         state = first(evaluate(args[0], state, env));
       }
@@ -2311,6 +2377,7 @@ export function compile(filter: string): (input: any) => any[] {
   const tokens = tokenize(filter);
   const ast = new Parser(tokens).parse();
   return (input: any) => {
+    evalSteps = 0; // fresh step budget per query invocation
     const results: any[] = [];
     try {
       for (const v of evaluate(ast, input, {})) {
