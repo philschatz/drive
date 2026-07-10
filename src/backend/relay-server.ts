@@ -1,8 +1,17 @@
 import http from 'http';
-import { WebSocketServer } from 'ws';
-import { WebSocketRelay } from './relay';
+import { WebSocketRelay, createRelayWebSocketServer } from './relay';
 
 const PORT = Number.parseInt(process.env.PORT || '3000');
+
+// Last line of defense: the relay serves untrusted internet clients, and a
+// single bad frame or transport error must never take the process down for
+// every connected peer. Log and keep serving.
+process.on('uncaughtException', (err) => {
+  console.error('[relay] uncaughtException:', err);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[relay] unhandledRejection:', reason);
+});
 
 // Plain HTTP server: answers non-WebSocket requests with a liveness response so
 // Heroku's router (which probes the dyno over HTTP) sees a healthy process. All
@@ -12,9 +21,9 @@ const server = http.createServer((_req, res) => {
   res.end('relay ok\n');
 });
 
-const wss = new WebSocketServer({ noServer: true });
+const wss = createRelayWebSocketServer();
 const relay = new WebSocketRelay();
-wss.on('connection', (ws) => relay.handleConnection(ws));
+wss.on('connection', (ws, req) => relay.handleConnection(ws, req));
 
 server.on('upgrade', (req, socket, head) => {
   wss.handleUpgrade(req, socket, head, (ws) => {

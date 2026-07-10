@@ -1,6 +1,5 @@
 import type { Plugin } from 'vite';
-import { WebSocketServer } from 'ws';
-import { WebSocketRelay } from './relay';
+import { WebSocketRelay, createRelayWebSocketServer } from './relay';
 
 /**
  * Vite plugin that attaches the automerge-repo WebSocket relay
@@ -10,9 +9,9 @@ export function relayPlugin(): Plugin {
   return {
     name: 'automerge-relay',
     configureServer(server) {
-      const wss = new WebSocketServer({ noServer: true });
+      const wss = createRelayWebSocketServer();
       const relay = new WebSocketRelay();
-      wss.on('connection', (ws) => relay.handleConnection(ws));
+      wss.on('connection', (ws, req) => relay.handleConnection(ws, req));
 
       server.httpServer!.on('upgrade', (req, socket, head) => {
         // Let Vite handle its own HMR WebSocket upgrades

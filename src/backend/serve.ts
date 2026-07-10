@@ -1,10 +1,19 @@
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
-import { WebSocketServer } from 'ws';
-import { WebSocketRelay } from './relay';
+import { WebSocketRelay, createRelayWebSocketServer } from './relay';
 
 const PORT = Number.parseInt(process.env.PORT || '3000');
+
+// Last line of defense: the relay serves untrusted internet clients, and a
+// single bad frame or transport error must never take the process down for
+// every connected peer. Log and keep serving.
+process.on('uncaughtException', (err) => {
+  console.error('[serve] uncaughtException:', err);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[serve] unhandledRejection:', reason);
+});
 const distDir = path.resolve(__dirname, '../../dist');
 
 if (!fs.existsSync(distDir)) {
@@ -19,9 +28,9 @@ app.get('{*path}', (_req, res) => {
   res.sendFile(path.join(distDir, 'index.html'));
 });
 
-const wss = new WebSocketServer({ noServer: true });
+const wss = createRelayWebSocketServer();
 const relay = new WebSocketRelay();
-wss.on('connection', (ws) => relay.handleConnection(ws));
+wss.on('connection', (ws, req) => relay.handleConnection(ws, req));
 
 const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`Automerge Documents (production): http://0.0.0.0:${PORT}`);

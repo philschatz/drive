@@ -2,11 +2,10 @@ import express, { Request, Response } from 'express';
 import cors from 'cors';
 import fs from 'fs';
 import path from 'path';
-import { WebSocketServer } from 'ws';
 import { Repo } from '@automerge/automerge-repo';
 import { WebSocketServerAdapter } from '@automerge/automerge-repo-network-websocket';
 import { NodeFSStorageAdapter } from '@automerge/automerge-repo-storage-nodefs';
-import { WebSocketRelay } from './relay';
+import { WebSocketRelay, createRelayWebSocketServer } from './relay';
 import { CalDAVHandler } from './caldav-handler';
 import { createDavRoutes } from './routes/dav';
 import { createAdminRoutes } from './routes/admin';
@@ -17,7 +16,7 @@ const PORT = Number.parseInt(process.env.CALDAV_PORT || process.env.PORT || '300
 const dataDir = process.env.AUTOMERGE_DATA_DIR || './.data';
 fs.mkdirSync(dataDir, { recursive: true });
 
-const wss = new WebSocketServer({ noServer: true });
+const wss = createRelayWebSocketServer();
 
 let relay: WebSocketRelay | null = null;
 let caldavKeyhive: CaldavKeyhive | null = null;
@@ -37,8 +36,19 @@ if (process.env.JEST_WORKER_ID) {
   } as any));
 } else {
   relay = new WebSocketRelay();
-  wss.on('connection', (ws) => relay!.handleConnection(ws));
+  wss.on('connection', (ws, req) => relay!.handleConnection(ws, req));
   console.log('[relay] WebSocket relay started');
+
+  // Last line of defense: the relay serves untrusted internet clients, and a
+  // single bad frame or transport error must never take the process down for
+  // every connected peer. Log and keep serving. (Not registered under Jest so
+  // test failures still surface normally.)
+  process.on('uncaughtException', (err) => {
+    console.error('[caldav] uncaughtException:', err);
+  });
+  process.on('unhandledRejection', (reason) => {
+    console.error('[caldav] unhandledRejection:', reason);
+  });
 }
 
 // Body parsers
