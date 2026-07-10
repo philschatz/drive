@@ -117,6 +117,14 @@ if (!process.env.JEST_WORKER_ID) {
       }
     });
 
+    // A listen failure (e.g. EADDRINUSE) is fatal and must exit so the process
+    // manager can react — the uncaughtException backstop would otherwise swallow
+    // it and leave the process idling without a listener.
+    server.on('error', (err) => {
+      console.error('[caldav] server error:', err);
+      process.exit(1);
+    });
+
     server.on('upgrade', (request, socket, head) => {
       wss.handleUpgrade(request, socket, head, (ws) => {
         wss.emit('connection', ws, request);

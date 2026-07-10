@@ -35,6 +35,14 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log(`[relay] WebSocket relay listening on http://0.0.0.0:${PORT}`);
 });
 
+// A listen failure (e.g. EADDRINUSE) is fatal and must exit so the process
+// manager can react — the uncaughtException backstop above would otherwise
+// swallow it and leave the process idling without a listener.
+server.on('error', (err) => {
+  console.error('[relay] server error:', err);
+  process.exit(1);
+});
+
 const shutdown = () => {
   wss.close();
   server.close(() => process.exit(0));

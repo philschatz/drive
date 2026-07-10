@@ -36,6 +36,14 @@ const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`Automerge Documents (production): http://0.0.0.0:${PORT}`);
 });
 
+// A listen failure (e.g. EADDRINUSE) is fatal and must exit so the process
+// manager can react — the uncaughtException backstop above would otherwise
+// swallow it and leave the process idling without a listener.
+server.on('error', (err) => {
+  console.error('[serve] server error:', err);
+  process.exit(1);
+});
+
 server.on('upgrade', (req, socket, head) => {
   wss.handleUpgrade(req, socket, head, (ws) => {
     wss.emit('connection', ws, req);
