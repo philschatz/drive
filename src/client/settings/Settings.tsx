@@ -14,7 +14,7 @@ import {
   ensureUserGroup,
   type IdentityInfo,
 } from '../shared/keyhive-api';
-import { useDevices } from '../shared/use-devices';
+import { useDevices, useDeviceStatuses } from '../shared/use-devices';
 import { setCacheDisabled, clearAllCaches, deleteAllData } from '../worker-api';
 import { idbGet, idbSet, isCacheDisabled, KEYS } from '../idb-storage';
 import { getContactName, setContactName } from '../contact-names';
@@ -34,6 +34,7 @@ export function Settings({ path }: { path?: string }) {
 
   // The device list, its live refresh, and removal are owned by the shared hook.
   const { devices, removeDevice } = useDevices({ onError: setError, onMessage: setMessage });
+  const deviceStatuses = useDeviceStatuses();
 
   const refresh = useCallback(async () => {
     try {
@@ -273,7 +274,7 @@ export function Settings({ path }: { path?: string }) {
       {/* Devices */}
       <section className="mb-6">
         <h2 className="text-lg font-semibold mb-2">Devices</h2>
-        <DeviceList devices={devices} onRemove={removeDevice} />
+        <DeviceList devices={devices} onRemove={removeDevice} statuses={deviceStatuses} />
 
         {/* Link another device — full flow on its own page */}
         <div className="mt-4">

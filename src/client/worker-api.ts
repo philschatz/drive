@@ -340,6 +340,11 @@ export function usePeerList(): string[] {
   return peers;
 }
 
+/** Snapshot of currently-connected peerIds (non-reactive; used by tests). */
+export function getConnectedPeers(): string[] {
+  return workerPeers;
+}
+
 // ── jq filter constants ─────────────────────────────────────────────────────
 
 export const HOME_SUMMARY_QUERY =

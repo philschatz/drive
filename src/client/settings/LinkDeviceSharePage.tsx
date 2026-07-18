@@ -10,7 +10,7 @@ import { useState } from 'preact/hooks';
 import { Button } from '@/components/ui/button';
 import { Alert } from '@/components/ui/alert';
 import { DeviceList } from '@/components/DeviceList';
-import { useDevices } from '../shared/use-devices';
+import { useDevices, useDeviceStatuses } from '../shared/use-devices';
 import { rendezvousCreateDeviceLink } from '../shared/keyhive-api';
 import { RendezvousShare } from './RendezvousShare';
 import { buildLinkDeviceRendezvousUrl } from './LinkDevicePage';
@@ -22,6 +22,7 @@ export function LinkDeviceSharePage({ path }: { path?: string }) {
   const [started, setStarted] = useState(0);
 
   const { devices, removeDevice } = useDevices({ onError: setError, onMessage: setMessage });
+  const deviceStatuses = useDeviceStatuses();
 
   return (
     <div className="max-w-screen-md mx-auto p-4">
@@ -48,7 +49,7 @@ export function LinkDeviceSharePage({ path }: { path?: string }) {
         </Alert>
       )}
 
-      <DeviceList devices={devices} onRemove={removeDevice} />
+      <DeviceList devices={devices} onRemove={removeDevice} statuses={deviceStatuses} />
 
       <div className="mt-4">
         <h2 className="text-lg font-semibold mb-2">Invite Another Device</h2>

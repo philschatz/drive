@@ -116,6 +116,25 @@ test('linking a new device via rendezvous converges both onto one user-group', a
       (devices) => devices.length >= 2,
       { label: 'deviceB sees both devices' },
     );
+
+    // The device list marks a device online when the peer list contains its
+    // peerId (`<agentId>-drive`) — assert that source signal from each side.
+    const idB = await deviceB.call('getIdentity');
+    const idA = await deviceA.call('getIdentity');
+    await waitFor(
+      () => deviceA!.call('getConnectedPeers'),
+      (peers) => peers.includes(`${idB.agentId}-drive`),
+      { label: 'deviceA sees deviceB online' },
+    );
+    await waitFor(
+      () => deviceB!.call('getConnectedPeers'),
+      (peers) => peers.includes(`${idA.agentId}-drive`),
+      { label: 'deviceB sees deviceA online' },
+    );
+
+    // …and the Settings device list renders it: deviceB's row shows "Online".
+    await deviceA.page.evaluate(() => { location.hash = '#/settings'; });
+    await expect(deviceA.page.getByText(/^Online/).first()).toBeVisible({ timeout: 15_000 });
   } finally {
     await deviceA?.close();
     await deviceB?.close();
