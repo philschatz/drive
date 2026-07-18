@@ -2,7 +2,7 @@ import type { IncomingMessage } from 'http';
 import { WebSocket, WebSocketServer } from 'ws';
 import { Encoder, decode } from 'cbor-x';
 import { logMessage, shortId } from './relay-log';
-import { RELAY_PEER_ID } from '../shared/relay-identity';
+import { RELAY_PEER_ID, RELAY_LEAVE } from '../shared/relay-identity';
 import { RDV_SUB, RDV_UNSUB, RDV_MSG, RDV_PEER } from '../shared/rendezvous-protocol';
 import { WRTC_SIGNAL } from '../shared/webrtc-signal';
 
@@ -81,6 +81,14 @@ export class WebSocketRelay {
   /** Open connections, total and per client IP, for the anti-DoS caps below. */
   private connectionCount = 0;
   private connectionsPerIp = new Map<string, number>();
+  /** Liveness per connection for the heartbeat reaper (true = pong seen since last ping). */
+  private heartbeats = new Map<WebSocket, boolean>();
+  private heartbeatTimer: NodeJS.Timeout | null = null;
+  private readonly heartbeatMs: number;
+
+  constructor(opts?: { heartbeatMs?: number }) {
+    this.heartbeatMs = opts?.heartbeatMs ?? envInt('RELAY_HEARTBEAT_MS', 30_000);
+  }
 
   handleConnection(ws: WebSocket, request?: IncomingMessage): void {
     // Optional browser-origin allowlist (RELAY_ALLOWED_ORIGINS, comma-separated).
@@ -112,6 +120,16 @@ export class WebSocketRelay {
     this.connectionCount++;
     if (ip !== undefined) this.connectionsPerIp.set(ip, (this.connectionsPerIp.get(ip) ?? 0) + 1);
 
+    // Heartbeat: a peer that vanishes without a clean close (network drop,
+    // laptop sleep) never fires 'close', so its slot — and its "online"
+    // announcement to other peers — would leak forever. Ping every socket each
+    // heartbeatMs and terminate any whose previous ping went unanswered;
+    // terminate fires the 'close' handler below, which broadcasts the leave.
+    // Browsers answer protocol-level pings automatically.
+    this.heartbeats.set(ws, true);
+    ws.on('pong', () => this.heartbeats.set(ws, true));
+    this.startHeartbeat();
+
     let myPeerId: string | null = null;
 
     ws.on('message', (rawData: Buffer | ArrayBuffer | Buffer[]) => {
@@ -137,6 +155,11 @@ export class WebSocketRelay {
       for (const [rid, set] of this.rendezvous) {
         if (set.delete(ws) && set.size === 0) this.rendezvous.delete(rid);
       }
+      this.heartbeats.delete(ws);
+      if (this.heartbeats.size === 0 && this.heartbeatTimer !== null) {
+        clearInterval(this.heartbeatTimer);
+        this.heartbeatTimer = null;
+      }
       // Only unregister if this socket still owns the id — a rejected duplicate
       // or replaced stale socket closing later must not evict the live one.
       if (myPeerId && this.sockets.get(myPeerId) === ws) {
@@ -144,7 +167,7 @@ export class WebSocketRelay {
         console.log(`[relay] peer left: ${shortId(myPeerId)} (${this.sockets.size} remaining)`);
 
         // Notify remaining peers of the departure
-        const leaveMsg = { type: 'leave', senderId: myPeerId };
+        const leaveMsg = { type: RELAY_LEAVE, senderId: myPeerId };
         const leaveBytes = encoder.encode(leaveMsg);
         for (const [pid, peerWs] of this.sockets) {
           if (this.safeSend(peerWs, leaveBytes, pid)) logMessage('→', pid, leaveMsg);
@@ -155,6 +178,21 @@ export class WebSocketRelay {
     ws.on('error', (err) => {
       console.error(`[relay] WebSocket error${myPeerId ? ` (${shortId(myPeerId)})` : ''}:`, err);
     });
+  }
+
+  /** Started with the first connection; stopped (in the close handler) with the last. */
+  private startHeartbeat(): void {
+    if (this.heartbeatTimer !== null) return;
+    this.heartbeatTimer = setInterval(() => {
+      for (const [ws, alive] of this.heartbeats) {
+        if (ws.readyState !== WebSocket.OPEN) continue; // closing — 'close' cleans up
+        if (!alive) { ws.terminate(); continue; }
+        this.heartbeats.set(ws, false);
+        ws.ping();
+      }
+    }, this.heartbeatMs);
+    // Never hold the process open for the reaper alone.
+    this.heartbeatTimer.unref();
   }
 
   private handleMessage(

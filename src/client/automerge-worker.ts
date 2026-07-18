@@ -14,7 +14,7 @@ import { decode as cborDecode, Encoder } from 'cbor-x';
 import { isRendezvousType } from '../shared/rendezvous-protocol';
 import { isWebRTCSignalType, type WebRTCSignalFrame } from '../shared/webrtc-signal';
 import { makeWebRTCRelayAdapter, type WebRTCRelayAdapter } from './webrtc-relay-adapter';
-import { RELAY_PEER_ID, PRODUCTION_RELAY_URL } from '../shared/relay-identity';
+import { RELAY_PEER_ID, PRODUCTION_RELAY_URL, isRelayLeaveFrame } from '../shared/relay-identity';
 import { errMsg } from './keyhive-ops';
 import { idbKvStore } from './idb-kvstore';
 import { DriveEngine } from '../shared/drive-engine';
@@ -92,6 +92,12 @@ try {
       const decoded = cborDecode(new Uint8Array(bytes));
       if (isRendezvousType(decoded?.type)) { rdvHandler?.(decoded); return; }
       if (isWebRTCSignalType(decoded?.type)) { p2pAdapter?.handleSignal(decoded as WebRTCSignalFrame); return; }
+      // The relay's departure broadcast — the stock adapter has no such message
+      // type, so translate it into the peer-disconnected the repo understands.
+      if (isRelayLeaveFrame(decoded)) {
+        (secureWs as any).emit('peer-disconnected', { peerId: decoded.senderId });
+        return;
+      }
     } catch { /* not an overlay frame — fall through to the repo adapter */ }
     return origReceive(bytes);
   };

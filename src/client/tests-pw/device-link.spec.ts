@@ -135,6 +135,17 @@ test('linking a new device via rendezvous converges both onto one user-group', a
     // …and the Settings device list renders it: deviceB's row shows "Online".
     await deviceA.page.evaluate(() => { location.hash = '#/settings'; });
     await expect(deviceA.page.getByText(/^Online/).first()).toBeVisible({ timeout: 15_000 });
+
+    // Disconnect deviceB entirely: the relay broadcasts a leave, deviceA's
+    // worker translates it into peer-disconnected, and the row flips to Offline.
+    await deviceB.close();
+    deviceB = undefined;
+    await waitFor(
+      () => deviceA!.call('getConnectedPeers'),
+      (peers) => !peers.includes(`${idB.agentId}-drive`),
+      { label: 'deviceA drops the departed deviceB' },
+    );
+    await expect(deviceA.page.getByText('Offline').first()).toBeVisible({ timeout: 15_000 });
   } finally {
     await deviceA?.close();
     await deviceB?.close();

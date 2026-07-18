@@ -163,7 +163,14 @@ export function usePeerTransports(): Record<string, PeerTransport> {
   const [snapshot, setSnapshot] = useState<Record<string, PeerTransport>>(
     () => Object.fromEntries(peerTransports)
   );
-  useEffect(() => onP2pStatus(() => setSnapshot(Object.fromEntries(peerTransports))), []);
+  useEffect(() => {
+    // Peer-list changes prune the transport map (departed peers), so re-snapshot
+    // on those too — not just on p2p-status flips.
+    const refresh = () => setSnapshot(Object.fromEntries(peerTransports));
+    const offP2p = onP2pStatus(refresh);
+    peerListListeners.add(refresh);
+    return () => { offP2p(); peerListListeners.delete(refresh); };
+  }, []);
   return snapshot;
 }
 
@@ -222,12 +229,19 @@ worker.onmessage = (e: MessageEvent<WorkerToMain>) => {
   switch (msg.type) {
     // --- Connectivity ---
     case 'peer-connected':
-    case 'peer-disconnected':
+    case 'peer-disconnected': {
       workerPeerCount = msg.peerCount;
       workerPeers = msg.peers;
+      // Drop transports for departed peers so a rejoining peer starts back at
+      // 'relay' (hollow dot) instead of a stale 'direct'.
+      const alivePeers = new Set(msg.peers);
+      for (const peerId of [...peerTransports.keys()]) {
+        if (!alivePeers.has(peerId)) peerTransports.delete(peerId);
+      }
       for (const fn of connectionListeners) fn(workerPeerCount > 0);
       for (const fn of peerListListeners) fn(workerPeers);
       break;
+    }
     case 'ws-status':
       wsConnected = msg.connected;
       for (const fn of wsStatusListeners) fn(msg.connected);

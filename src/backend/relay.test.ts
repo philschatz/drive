@@ -22,6 +22,7 @@ class FakeSocket extends EventEmitter {
   send = jest.fn();
   close = jest.fn();
   terminate = jest.fn();
+  ping = jest.fn();
 
   /** Emit a CBOR-encoded message frame, exactly as `ws` would deliver it. */
   frame(message: unknown): void {
@@ -234,5 +235,84 @@ describe('C2: maxPayload wiring', () => {
     expect((wss as any).options.maxPayload).toBe(1048576);
     expect((wss as any).options.noServer).toBe(true);
     wss.close();
+  });
+});
+
+describe('peer departure', () => {
+  /** Decoded frames of a given type that `ws` received. */
+  function sentOfType(ws: FakeSocket, type: string): any[] {
+    return ws.send.mock.calls.map(([bytes]) => decode(bytes) as any).filter((m) => m.type === type);
+  }
+
+  it('broadcasts a leave to remaining peers when a socket closes', () => {
+    const relay = new WebSocketRelay();
+    const alice = join(relay, 'alice');
+    const bob = join(relay, 'bob');
+
+    bob.emit('close');
+
+    expect(sentOfType(alice, 'leave')).toEqual([{ type: 'leave', senderId: 'bob' }]);
+    // The departed socket itself gets nothing extra.
+    expect(sentOfType(bob, 'leave')).toEqual([]);
+  });
+
+  it('does not broadcast a leave when a rejected duplicate socket closes', () => {
+    const relay = new WebSocketRelay();
+    const alice = join(relay, 'alice');
+    const bob = join(relay, 'bob');
+    const squatter = join(relay, 'bob'); // rejected — bob's socket still owns the id
+
+    alice.send.mockClear();
+    // The rejected socket closing must NOT make bob appear to leave.
+    squatter.emit('close');
+    expect(sentOfType(alice, 'leave')).toEqual([]);
+
+    // The real bob closing still broadcasts exactly one leave.
+    bob.emit('close');
+    expect(sentOfType(alice, 'leave')).toEqual([{ type: 'leave', senderId: 'bob' }]);
+  });
+});
+
+describe('heartbeat reaper', () => {
+  afterEach(() => jest.useRealTimers());
+
+  it('pings connected sockets and terminates one that stops answering', () => {
+    jest.useFakeTimers();
+    const relay = new WebSocketRelay({ heartbeatMs: 1_000 });
+    const alice = join(relay, 'alice');
+    const bob = join(relay, 'bob');
+
+    // Tick 1: both were alive → both get pinged, nobody terminated.
+    jest.advanceTimersByTime(1_000);
+    expect(alice.ping).toHaveBeenCalledTimes(1);
+    expect(bob.ping).toHaveBeenCalledTimes(1);
+    expect(bob.terminate).not.toHaveBeenCalled();
+
+    // Alice answers; bob has gone dark (no pong).
+    alice.emit('pong');
+
+    // Tick 2: alice is pinged again, bob is reaped.
+    jest.advanceTimersByTime(1_000);
+    expect(alice.ping).toHaveBeenCalledTimes(2);
+    expect(alice.terminate).not.toHaveBeenCalled();
+    expect(bob.terminate).toHaveBeenCalledTimes(1);
+
+    // A real `ws` terminate fires 'close', which broadcasts the leave.
+    bob.emit('close');
+    const leaves = alice.send.mock.calls
+      .map(([bytes]) => decode(bytes) as any)
+      .filter((m) => m.type === 'leave');
+    expect(leaves).toEqual([{ type: 'leave', senderId: 'bob' }]);
+  });
+
+  it('skips sockets that are no longer OPEN instead of pinging them', () => {
+    jest.useFakeTimers();
+    const relay = new WebSocketRelay({ heartbeatMs: 1_000 });
+    const alice = join(relay, 'alice');
+    alice.readyState = 2; // CLOSING
+
+    jest.advanceTimersByTime(2_000);
+    expect(alice.ping).not.toHaveBeenCalled();
+    expect(alice.terminate).not.toHaveBeenCalled();
   });
 });

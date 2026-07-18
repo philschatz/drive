@@ -26,7 +26,7 @@ import { decode as cborDecode, Encoder } from 'cbor-x';
 import { WebSocketClientAdapter } from '@automerge/automerge-repo-network-websocket';
 import { NodeFSStorageAdapter } from '@automerge/automerge-repo-storage-nodefs';
 import { isRendezvousType } from '../shared/rendezvous-protocol';
-import { PRODUCTION_RELAY_URL } from '../shared/relay-identity';
+import { PRODUCTION_RELAY_URL, isRelayLeaveFrame } from '../shared/relay-identity';
 import { parseRendezvousToken } from '../shared/rendezvous-url';
 import { DriveEngine, type WatchUpdate } from '../shared/drive-engine';
 import { relativeTime } from '../shared/relative-time';
@@ -153,6 +153,12 @@ async function startEngine(opts: CliOpts): Promise<{ engine: DriveEngine; kv: No
     try {
       const decoded = cborDecode(new Uint8Array(bytes));
       if (isRendezvousType(decoded?.type)) { rdvHandler?.(decoded); return; }
+      // The relay's departure broadcast — the stock adapter has no such message
+      // type, so translate it into the peer-disconnected the repo understands.
+      if (isRelayLeaveFrame(decoded)) {
+        (wsAdapter as any).emit('peer-disconnected', { peerId: decoded.senderId });
+        return;
+      }
     } catch { /* not an overlay frame — fall through to the repo adapter */ }
     return origReceive(bytes);
   };

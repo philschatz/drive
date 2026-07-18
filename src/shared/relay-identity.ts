@@ -22,3 +22,16 @@ export const RELAY_PEER_ID = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=';
  * CLI's default relay. Override the CLI with --relay / DRIVE_RELAY_URL.
  */
 export const PRODUCTION_RELAY_URL = 'wss://drive-relay-ebe030e3546f.herokuapp.com';
+
+/**
+ * Relay-protocol extension: broadcast by the relay when a peer's socket closes.
+ * The stock automerge-repo websocket protocol has no departure message (its
+ * client adapter only knows `peer`/`error`), so each client's receiveMessage
+ * intercept must translate this frame into a `peer-disconnected` emit —
+ * otherwise departed peers stay in `repo.peers` forever.
+ */
+export const RELAY_LEAVE = 'leave';
+
+export function isRelayLeaveFrame(decoded: any): decoded is { type: 'leave'; senderId: string } {
+  return decoded?.type === RELAY_LEAVE && typeof decoded.senderId === 'string';
+}
