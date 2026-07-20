@@ -89,11 +89,12 @@ export async function openApp(browser: Browser, name = 'ui'): Promise<App> {
   };
 }
 
-/** Hash route fragment each document type lands on after creation. */
+/** Every document type lands on the consolidated `#/d/<docId>` route after creation;
+ * the keys are the Home "New" menu item labels. */
 const URL_FRAGMENT = {
-  Calendar: /#\/calendars\//,
-  'Task list': /#\/tasks\//,
-  Spreadsheet: /#\/datagrids\//,
+  Calendar: /#\/d\//,
+  'Task list': /#\/d\//,
+  Spreadsheet: /#\/d\//,
 } as const;
 
 /**

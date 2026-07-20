@@ -1,13 +1,12 @@
 import type { ValidationError } from '../../shared/schemas';
-import { type DocType, viewPathForType } from './doc-type-helpers';
+import { docUrl, encodeRestPath } from './doc-urls';
 import './validation-panel.css';
 
 interface ValidationPanelProps {
   errors: ValidationError[];
   onClickError?: (error: ValidationError) => void;
-  /** When provided with docType, errors link to the editor at the error's automerge path */
+  /** When provided, errors link to the editor at the error's automerge path */
   docId?: string;
-  docType?: DocType;
   variant?: 'light' | 'dark';
 }
 
@@ -15,7 +14,7 @@ function kindIcon(kind: ValidationError['kind']) {
   return kind === 'dependency' || kind === 'warning' ? '\u26A0\uFE0F' : '\u274C';
 }
 
-export function ValidationPanel({ errors, onClickError, docId, docType, variant = 'light' }: ValidationPanelProps) {
+export function ValidationPanel({ errors, onClickError, docId, variant = 'light' }: ValidationPanelProps) {
   if (errors.length === 0) return null;
 
   const label = `${errors.length} validation ${errors.length === 1 ? 'error' : 'errors'}`;
@@ -50,9 +49,7 @@ export function ValidationPanel({ errors, onClickError, docId, docType, variant 
       </div>
       <ul className="divide-y divide-amber-200 overflow-y-auto" style={{ minHeight: 0 }}>
         {errors.map((err, i) => {
-          const href = docId && docType
-            ? viewPathForType(docType, docId) + '/' + err.path.map(s => encodeURIComponent(String(s))).join('/')
-            : undefined;
+          const href = docId ? docUrl(docId, encodeRestPath(err.path)) : undefined;
           return (
             <li
               key={i}

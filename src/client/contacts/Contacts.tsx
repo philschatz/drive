@@ -7,12 +7,13 @@ import { getDocMembers, getKnownContacts } from '../shared/keyhive-api';
 import { keyhiveReady } from '../shared/automerge';
 import { fetchDocList } from '../worker-api';
 import { getContactName, getAllContactNames, removeContactName } from '../contact-names';
-import { type DocType, viewPathForType, iconForType } from '../shared/doc-type-helpers';
+import { iconForType } from '../doc-plugins';
+import { docUrl } from '../shared/doc-urls';
 
 interface ContactDocInfo {
   docId: string;
   docName: string;
-  docType: DocType;
+  docType: string;
   role: string;
 }
 
@@ -91,7 +92,7 @@ export function Contacts({ path }: { path?: string }) {
           entry.docs.push({
             docId: doc.id,
             docName: doc.name || doc.id.slice(0, 8),
-            docType: (doc.type || 'unknown') as DocType,
+            docType: doc.type || 'unknown',
             role: m.role ?? 'unknown',
           });
         }
@@ -207,7 +208,7 @@ export function Contacts({ path }: { path?: string }) {
                 {visibleDocs.map(d => (
                   <div key={d.docId} className="flex items-center gap-1.5 text-xs text-muted-foreground">
                     <span className="material-symbols-outlined" style={{ fontSize: 14 }}>{iconForType(d.docType)}</span>
-                    <a href={viewPathForType(d.docType, d.docId)} className="hover:underline hover:text-foreground">
+                    <a href={docUrl(d.docId)} className="hover:underline hover:text-foreground">
                       {d.docName}
                     </a>
                     <span className="capitalize">({d.role})</span>

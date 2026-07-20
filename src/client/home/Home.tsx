@@ -14,14 +14,15 @@ import relativeTimePlugin from 'dayjs/plugin/relativeTime';
 
 dayjs.extend(relativeTimePlugin);
 import { a1ToInternal } from '@/datagrid/helpers';
-import { type DocType, viewPathForType, iconForType } from '@/shared/doc-type-helpers';
+import { DOC_PLUGINS, iconForType, docTypeLabel, type DocTypePlugin } from '@/doc-plugins';
+import { docUrl, sourceUrl } from '@/shared/doc-urls';
 import { relativeTime } from '../../shared/relative-time';
 
 declare const __APP_VERSION__: string;
 declare const __BUILD_TIME__: string;
 
 interface DocEntry {
-  type: DocType;
+  type: string;
   documentId: string;
   name: string;
   count: number | null;
@@ -34,8 +35,7 @@ interface DocEntry {
 function applyQueryResult(prev: DocEntry[], docId: string, result: any, lastModified?: number): DocEntry[] {
   return prev.map(e => {
     if (e.documentId !== docId) return e;
-    const type = (result.type === 'Calendar' || result.type === 'TaskList' || result.type === 'DataGrid')
-      ? result.type as DocType : 'unknown';
+    const type = typeof result.type === 'string' ? result.type : 'unknown';
     const count = result.eventCount || result.taskCount || result.cellCount || null;
     const lastUpdated = lastModified ? new Date(lastModified * 1000).toISOString() : e.lastUpdated;
     return { ...e, type, name: result.name || e.name, count, lastUpdated, loading: false };
@@ -69,7 +69,7 @@ export function Home({ path }: { path?: string }) {
           (e) =>
             existing.get(e.id) ?? {
               documentId: e.id,
-              type: (e.type || 'unknown') as DocType,
+              type: e.type || 'unknown',
               name: e.name || e.id.slice(0, 8),
               count: null,
               lastUpdated: null,
@@ -116,45 +116,12 @@ export function Home({ path }: { path?: string }) {
   }, [docIdKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
 
-  const handleCreateCalendar = async () => {
-    const name = prompt('Calendar name:', 'Untitled');
+  const handleCreate = async (plugin: DocTypePlugin) => {
+    const name = prompt(`${plugin.createLabel} name:`, 'Untitled');
     if (name === null) return;
     const resolvedName = name || 'Untitled';
-    const { docId } = await createDoc({ '@type': 'Calendar', name: resolvedName, events: {} }, { type: 'Calendar', name: resolvedName });
-    window.location.hash = viewPathForType('Calendar', docId);
-  };
-
-  const handleCreateTaskList = async () => {
-    const name = prompt('Task list name:', 'Untitled');
-    if (name === null) return;
-    const resolvedName = name || 'Untitled';
-    const { docId } = await createDoc({ '@type': 'TaskList', name: resolvedName, tasks: {} }, { type: 'TaskList', name: resolvedName });
-    window.location.hash = viewPathForType('TaskList', docId);
-  };
-
-  const handleCreateDataGrid = async () => {
-    const name = prompt('Spreadsheet name:', 'Untitled');
-    if (name === null) return;
-    const resolvedName = name || 'Untitled';
-    const sid = () => Math.random().toString(36).slice(2, 10);
-    const sheetId = sid();
-    const rows: Record<string, { index: number }> = {};
-    for (let i = 1; i <= 10; i++) rows[sid()] = { index: i };
-    const { docId } = await createDoc({
-      '@type': 'DataGrid',
-      name: resolvedName,
-      sheets: {
-        [sheetId]: {
-          '@type': 'Sheet',
-          name: 'Sheet 1',
-          index: 1,
-          columns: { [sid()]: { index: 1 }, [sid()]: { index: 2 }, [sid()]: { index: 3 } },
-          rows,
-          cells: {},
-        },
-      },
-    }, { type: 'DataGrid', name: resolvedName });
-    window.location.hash = viewPathForType('DataGrid', docId);
+    const { docId } = await createDoc(plugin.createInitialDoc(resolvedName), { type: plugin.type, name: resolvedName });
+    window.location.hash = docUrl(docId);
   };
 
   const xlsInputRef = useRef<HTMLInputElement>(null);
@@ -642,15 +609,14 @@ export function Home({ path }: { path?: string }) {
       }
 
       setImportStatus(null);
-      window.location.hash = viewPathForType('DataGrid', docId);
+      window.location.hash = docUrl(docId);
     } catch (err: any) {
       setImportStatus(null);
       setError('Failed to import: ' + err.message);
     }
   }, []);
 
-  const docLabel = (entry: DocEntry) =>
-    entry.type === 'Calendar' ? 'calendar' : entry.type === 'TaskList' ? 'task list' : entry.type === 'DataGrid' ? 'spreadsheet' : 'document';
+  const docLabel = (entry: DocEntry) => docTypeLabel(entry.type);
 
   const handleDelete = async (entry: DocEntry) => {
     const label = docLabel(entry);
@@ -671,10 +637,10 @@ export function Home({ path }: { path?: string }) {
       const data = JSON.parse(text);
       if (!data || typeof data !== 'object') throw new Error('Invalid JSON: expected an object');
       const name = data.name || file.name.replace(/\.json$/i, '') || 'Imported';
-      const type = (data['@type'] === 'Calendar' || data['@type'] === 'TaskList' || data['@type'] === 'DataGrid')
-        ? data['@type'] as DocType : 'unknown';
+      const type = typeof data['@type'] === 'string' ? data['@type'] : 'unknown';
       const { docId } = await createDoc(data, { type, name });
-      window.location.hash = viewPathForType(type, docId);
+      // Types with no registered plugin resolve to the source inspector via DocRoute.
+      window.location.hash = docUrl(docId);
     } catch (err: any) {
       setError('Import failed: ' + err.message);
     }
@@ -691,7 +657,7 @@ export function Home({ path }: { path?: string }) {
       const text = await file.text();
       setImportStatus({ label: 'Parsing events...', progress: 30 });
       await new Promise(r => setTimeout(r, 0));
-      const { icsToEvent } = await import('../shared/ics-parser');
+      const { icsToEvent } = await import('../calendar/ics-parser');
       const parsed = icsToEvent(text);
       setImportStatus({ label: 'Saving calendar...', progress: 80 });
       await new Promise(r => setTimeout(r, 0));
@@ -700,7 +666,7 @@ export function Home({ path }: { path?: string }) {
       for (const { uid, event } of parsed) events[uid] = event;
       const { docId } = await createDoc({ '@type': 'Calendar', name: calName, events }, { type: 'Calendar', name: calName });
       setImportStatus(null);
-      window.location.hash = viewPathForType('Calendar', docId);
+      window.location.hash = docUrl(docId);
     } catch (err: any) {
       setImportStatus(null);
       setError('Import failed: ' + err.message);
@@ -805,15 +771,11 @@ export function Home({ path }: { path?: string }) {
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent>
-            <DropdownMenuItem onSelect={handleCreateCalendar}>
-              <span className="material-symbols-outlined">date_range</span> Calendar
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={handleCreateTaskList}>
-              <span className="material-symbols-outlined">checklist</span> Task list
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={handleCreateDataGrid}>
-              <span className="material-symbols-outlined">grid_on</span> Spreadsheet
-            </DropdownMenuItem>
+            {DOC_PLUGINS.map(p => (
+              <DropdownMenuItem key={p.type} onSelect={() => handleCreate(p)}>
+                <span className="material-symbols-outlined">{p.icon}</span> {p.createLabel}
+              </DropdownMenuItem>
+            ))}
             <DropdownMenuSeparator />
             <DropdownMenuItem onSelect={() => icsInputRef.current?.click()}>
               <span className="material-symbols-outlined">date_range</span> Import .ics
@@ -834,7 +796,7 @@ export function Home({ path }: { path?: string }) {
       <div className="flex flex-col">
         {sortedEntries.map(entry => {
           const noEntryAccess = entry.access === null;
-          const viewPath = viewPathForType(entry.type, entry.documentId);
+          const viewPath = docUrl(entry.documentId);
           const icon = iconForType(entry.type);
           return (
             <div
@@ -873,7 +835,7 @@ export function Home({ path }: { path?: string }) {
                 />
               )}
               <a
-                href={`#/source/${entry.documentId}`}
+                href={sourceUrl(entry.documentId)}
                 className="inline-flex items-center justify-center h-8 w-8 rounded-md text-muted-foreground hover:bg-accent hover:text-accent-foreground"
                 title="View Source"
               >

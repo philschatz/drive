@@ -4,6 +4,7 @@ import { getWorkerUserGroupId } from '../worker-api';
 import { peerDisplayName, peerIdentityKey, PeerDot, type PresenceState } from './presence';
 import { AccessControl } from '../components/AccessControl';
 import { useAccess } from './useAccess';
+import { sourceUrl } from './doc-urls';
 
 interface PeerLike {
   peerId: string;
@@ -156,7 +157,7 @@ export function EditorTitleBar<P extends PeerLike>({
 
         {showSourceLink && docId && (
           <a
-            href={`#/source/${docId}${sourcePath?.length ? '/' + sourcePath.map(s => encodeURIComponent(String(s))).join('/') : ''}`}
+            href={sourceUrl(docId, sourcePath)}
             className="inline-flex items-center justify-center h-9 w-9 rounded-md hover:bg-accent hover:text-accent-foreground"
             title="Edit Source"
           >

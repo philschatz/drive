@@ -8,6 +8,8 @@ import { usePresenceLog, PresenceLogTable } from '../shared/PresenceLog';
 import { SourceTree } from './SourceTree';
 import { validateDocument } from '../../shared/schemas';
 import { ValidationPanel } from '../shared/ValidationPanel';
+import { useAccess } from '../shared/useAccess';
+import { sourcePath } from '../shared/doc-urls';
 import { hashHistory } from '../hash-history';
 import { Progress } from '@/components/ui/progress';
 import { Button } from '@/components/ui/button';
@@ -171,7 +173,7 @@ function ClipboardInspector() {
 }
 
 
-export function SourceViewer({ docId, rest }: { docId?: string; rest?: string; path?: string }) {
+export function SourceViewer({ docId, rest, readOnly }: { docId?: string; rest?: string; readOnly?: boolean; path?: string }) {
   const [status, setStatus] = useState('Loading document...');
   const [loadProgress, setLoadProgress] = useState<number | null>(null);
   const [currentDoc, setCurrentDoc] = useState<any>(null);
@@ -286,7 +288,8 @@ export function SourceViewer({ docId, rest }: { docId?: string; rest?: string; p
   }, [docId, version, changeCount]);
 
   const isLatest = atLatest.current;
-  const editable = isLatest;
+  const { canEdit: accessCanEdit } = useAccess(docId);
+  const editable = isLatest && accessCanEdit && !readOnly;
 
   // currentDoc is always the live or pinned doc from subscribeQuery
   const snapshot = currentDoc;
@@ -427,8 +430,7 @@ export function SourceViewer({ docId, rest }: { docId?: string; rest?: string; p
               errors={validationErrors}
               variant="dark"
               onClickError={(err) => {
-                const pathStr = err.path.map((s: string | number) => encodeURIComponent(String(s))).join('/');
-                hashHistory.replace(`/source/${docId}/${pathStr}`);
+                hashHistory.replace(sourcePath(docId!, err.path));
                 setRevealPath(null);
                 requestAnimationFrame(() => setRevealPath(err.path));
               }}

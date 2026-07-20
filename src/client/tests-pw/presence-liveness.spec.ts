@@ -73,7 +73,7 @@ test.describe('presence liveness (heartbeats)', () => {
       // same worker, presence in steady state (no emissions) — the editor must
       // still render alice's dot from the replayed last-known states.
       const dots = bob.page.locator('[data-testid="peer-dot"]');
-      await bob.page.goto(`/#/tasks/${docId}`);
+      await bob.page.goto(`/#/d/${docId}`);
       await expect(dots, "alice's dot renders after in-app navigation").toHaveCount(1, {
         timeout: 30_000,
       });

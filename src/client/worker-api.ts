@@ -24,7 +24,8 @@ export type { ValidationError };
 
 export interface DocEntry {
   id: string;
-  type?: 'Calendar' | 'TaskList' | 'DataGrid' | 'unknown';
+  /** The document's `@type` ('unknown' when absent); see src/client/doc-plugins. */
+  type?: string;
   name?: string;
   /** Keyhive sharing group ID (base64-encoded). Needed to restore after reload. */
   sharingGroupId?: string;

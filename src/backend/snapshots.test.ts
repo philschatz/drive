@@ -1,6 +1,6 @@
 import { icsToEvent } from './parser';
 import { eventToICS, calendarToIcs } from './serializer';
-import type { CalendarEvent } from '../shared/schemas';
+import type { CalendarEvent } from '../client/calendar/schema';
 
 const allDayIcs = `BEGIN:VCALENDAR
 VERSION:2.0

@@ -4,7 +4,8 @@ import { subscribeQuery, updateDoc, deepAssign } from '../worker-api';
 import { peerColor, peerDisplayName, usePresence, PresenceDot, type PeerFieldInfo } from '../shared/presence';
 import { EditorTitleBar } from '../shared/EditorTitleBar';
 import { useDocumentHistory } from '../shared/useDocumentHistory';
-import { useAccess } from '../shared/useAccess';
+import { useCanEdit } from '../shared/useCanEdit';
+import { replaceDocHash, encodeRestPath } from '../shared/doc-urls';
 import { HistorySlider } from '../shared/HistorySlider';
 import type { TaskDocument, Task } from './schema';
 import { TaskEditor } from './TaskEditor';
@@ -70,11 +71,7 @@ export function Tasks({ docId, rest, readOnly }: { docId?: string; rest?: string
   const onNewHeadsRef = useRef(history.onNewHeads);
   onNewHeadsRef.current = history.onNewHeads;
   const validationErrors = useDocumentValidation(docId);
-  const { access, canEdit: accessCanEdit, loaded: accessLoaded } = useAccess(docId);
-  const canEdit = !readOnly && history.editable && accessCanEdit;
-  const noAccess = accessLoaded && access === null;
-  const canEditRef = useRef(canEdit);
-  canEditRef.current = canEdit;
+  const { canEdit, canEditRef, noAccess } = useCanEdit(docId, readOnly, history);
   const { peers, peerList, broadcast } = usePresence(docId);
   const editorStateRef = useRef(editorState);
   editorStateRef.current = editorState;
@@ -154,12 +151,7 @@ export function Tasks({ docId, rest, readOnly }: { docId?: string; rest?: string
   useEffect(() => {
     if (!editorState) setFocusedPath(null);
     broadcast('focusedField', focusPath ?? null);
-    const base = window.location.href.split('#')[0];
-    if (focusPath) {
-      window.history.replaceState(null, '', `${base}#/tasks/${docId}/${focusPath.map(s => encodeURIComponent(String(s))).join('/')}`);
-    } else if (docId) {
-      window.history.replaceState(null, '', `${base}#/tasks/${docId}`);
-    }
+    if (docId) replaceDocHash(docId, focusPath ? encodeRestPath(focusPath) : undefined);
   }, [editorState, focusPath, docId, broadcast]);
 
   const peerFocusedFields = useMemo(() => {
@@ -283,7 +275,7 @@ export function Tasks({ docId, rest, readOnly }: { docId?: string; rest?: string
         }}
         onKeyDown={(e: any) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
       />
-      {showValidation && <ValidationPanel errors={validationErrors} docId={docId} docType="TaskList" />}
+      {showValidation && <ValidationPanel errors={validationErrors} docId={docId} />}
       {canEdit && (
       <div className="flex items-center gap-2 mb-3">
         <Input

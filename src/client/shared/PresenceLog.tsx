@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import type { Presence } from '@automerge/automerge-repo';
+import { sourceUrl } from './doc-urls';
 import './presence-log.css';
 
 export interface PresenceLogEntry {
@@ -127,7 +128,7 @@ export function PresenceLogTable({ entries, onClear, showDocId }: {
               {display.map(e => (
                 <tr key={e.id} className={e.dir === 'sent' ? 'log-sent' : 'log-recv'}>
                   <td className="log-time">{formatLogTime(e.time)}</td>
-                  {showDocId && <td className="log-doc">{e.docId ? <a href={`/source/${e.docId}`} title={e.docId}>{e.docId.slice(0, 8)}</a> : ''}</td>}
+                  {showDocId && <td className="log-doc">{e.docId ? <a href={sourceUrl(e.docId)} title={e.docId}>{e.docId.slice(0, 8)}</a> : ''}</td>}
                   <td className="log-dir">{e.dir === 'sent' ? '\u2191' : '\u2193'}</td>
                   <td>{e.type}</td>
                   <td className="log-peer" title={e.peerId}>{e.peerId === 'self' ? 'self' : e.peerId.slice(0, 8)}</td>

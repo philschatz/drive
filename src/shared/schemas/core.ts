@@ -150,6 +150,20 @@ export type SchemaNode =
   | { type: 'union'; schemas: SchemaNode[]; optional?: boolean }
   | { type: 'array'; items: SchemaNode; optional?: boolean };
 
+/**
+ * The worker-safe half of a document-type plugin: the `@type` it validates plus
+ * its schema and cross-field dependency checks. Runs inside the automerge worker
+ * after every document change (local edits and synced remote edits alike), so
+ * implementations must never import UI code. The client-side `DocTypePlugin`
+ * (src/client/doc-plugins/types.ts) extends this with rendering concerns.
+ */
+export interface DocSchemaPlugin {
+  /** The document `@type` this plugin validates, e.g. 'Calendar'. */
+  type: string;
+  schema: SchemaNode;
+  checkDeps: (doc: any, errors: ValidationError[]) => void;
+}
+
 export function str(opts?: { enum?: readonly string[]; pattern?: RegExp; optional?: boolean }): SchemaNode {
   return { type: 'string', ...opts };
 }

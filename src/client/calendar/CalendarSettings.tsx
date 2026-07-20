@@ -5,6 +5,7 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { updateDoc } from '../worker-api';
+import { docUrl } from '../shared/doc-urls';
 
 interface CalendarSettingsProps {
   opened: boolean;
@@ -71,7 +72,7 @@ export function CalendarSettings({ opened, docId, name, description, color, onCl
             <Button variant="outline" onClick={onClose}>Cancel</Button>
           </div>
           {docId && (
-            <a href={`#/calendars/${docId}`} className="text-xs text-muted-foreground hover:underline">
+            <a href={docUrl(docId)} className="text-xs text-muted-foreground hover:underline">
               Open individual calendar view
             </a>
           )}

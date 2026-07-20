@@ -19,7 +19,8 @@ import type { DataGridCellFormat } from './schema';
 import { SheetTabs } from './SheetTabs';
 import { useUndoRedo } from '../shared/useUndoRedo';
 import { useDocumentHistory } from '../shared/useDocumentHistory';
-import { useAccess } from '../shared/useAccess';
+import { useCanEdit } from '../shared/useCanEdit';
+import { pushDocHash, replaceDocHash, encodeRestPath } from '../shared/doc-urls';
 import { HistorySlider } from '../shared/HistorySlider';
 import { useDocumentValidation } from '../shared/useDocumentValidation';
 import { ValidationPanel } from '../shared/ValidationPanel';
@@ -104,11 +105,7 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
   const validationErrors = useDocumentValidation(docId);
   const { undo, redo, canUndo, canRedo, onHeadsUpdate } = useUndoRedo(docId!);
   const history = useDocumentHistory(docId!);
-  const { access: dgAccess, canEdit: accessCanEdit, loaded: accessLoaded } = useAccess(docId);
-  const canEdit = !readOnly && history.editable && accessCanEdit;
-  const noAccess = accessLoaded && dgAccess === null;
-  const canEditRef = useRef(canEdit);
-  canEditRef.current = canEdit;
+  const { canEdit, canEditRef, noAccess } = useCanEdit(docId, readOnly, history);
   const hfBridgeRef = useRef<HfBridge | null>(null);
   const computedValuesRef = useRef<Map<string, string | number>>(new Map());
   const errorMessagesRef = useRef<Map<string, string>>(new Map());
@@ -684,8 +681,7 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
     setFormulaRefHighlights([]);
     // Push history so back button navigates between sheets
     if (!skipUrlUpdate && docId) {
-      const base = window.location.href.split('#')[0];
-      window.history.pushState(null, '', `${base}#/datagrids/${docId}/sheets/${id}`);
+      pushDocHash(docId, `sheets/${id}`);
     }
   }, [currentSheetId, editingCell, commitEdit, docId]);
 
@@ -1117,15 +1113,14 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
   useEffect(() => {
     if (!docId || !focusPath) return;
     broadcast('focusedField', focusPath.length > 2 ? focusPath : null);
-    const base = window.location.href.split('#')[0];
-    let url = `${base}#/datagrids/${docId}/${focusPath.map(s => encodeURIComponent(String(s))).join('/')}`;
+    let anchorQuery: string | undefined;
     if (selectionAnchor && selectedCell) {
       const [ac, ar] = selectionAnchor;
       if (ar < visibleRowIds.length && ac < visibleColIds.length) {
-        url += `?anchor=${visibleRowIds[ar]}:${visibleColIds[ac]}`;
+        anchorQuery = `?anchor=${visibleRowIds[ar]}:${visibleColIds[ac]}`;
       }
     }
-    window.history.replaceState(null, '', url);
+    replaceDocHash(docId, encodeRestPath(focusPath), anchorQuery);
   }, [focusPath, selectionAnchor, selectedCell, visibleRowIds, visibleColIds, docId, broadcast]);
 
   // Handle sheetId prop changes from back/forward navigation
@@ -1356,7 +1351,7 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
       <HistorySlider history={history} />
       <div className="datagrid-body">
       <div className="datagrid-main" style={noAccess ? { opacity: 0.4, pointerEvents: 'none' as const } : undefined}>
-      {showValidation && <ValidationPanel errors={validationErrors} docId={docId} docType="DataGrid" />}
+      {showValidation && <ValidationPanel errors={validationErrors} docId={docId} />}
 
       {columnDefs.length > 0 && doc2 && (
         <>

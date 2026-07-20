@@ -1,5 +1,5 @@
 import {
-  type ValidationError, type SchemaNode,
+  type ValidationError, type SchemaNode, type DocSchemaPlugin,
   type LocalDateTime, type Duration, type PatchObject,
   type VirtualLocation, type Link,
   str, num, bool, obj, record, validateNode,
@@ -140,3 +140,11 @@ export function validateTask(task: unknown): ValidationError[] {
   validateNode(task, taskSchema, [], errors);
   return errors;
 }
+
+/** Worker-safe plugin core — registered in src/shared/schemas (validation) and
+ * spread into the full task-list plugin (src/client/tasks/plugin.tsx). */
+export const taskListSchemaPlugin: DocSchemaPlugin = {
+  type: 'TaskList',
+  schema: taskDocumentSchema,
+  checkDeps: checkTaskDependencies,
+};

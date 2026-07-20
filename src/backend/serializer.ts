@@ -1,4 +1,4 @@
-import type { CalendarEvent, RecurrenceRule } from '../shared/schemas';
+import type { CalendarEvent, RecurrenceRule } from '../client/calendar/schema';
 
 /**
  * Escape iCalendar special characters

@@ -1,5 +1,5 @@
 import {
-  type ValidationError,
+  type ValidationError, type DocSchemaPlugin,
   str, num, bool, obj, record,
   HEX_COLOR_RE,
 } from '../../shared/schemas/core';
@@ -378,3 +378,11 @@ function validateRangeIds(
   checkAxis('rangeRowStart', 'rangeRowEnd', rows, 'row');
   checkAxis('rangeColStart', 'rangeColEnd', columns, 'column');
 }
+
+/** Worker-safe plugin core — registered in src/shared/schemas (validation) and
+ * spread into the full data-grid plugin (src/client/datagrid/plugin.tsx). */
+export const dataGridSchemaPlugin: DocSchemaPlugin = {
+  type: 'DataGrid',
+  schema: dataGridDocumentSchema,
+  checkDeps: checkDataGridDependencies,
+};
