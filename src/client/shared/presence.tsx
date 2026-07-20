@@ -1,3 +1,4 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { subscribePresence, setPresence, usePeerTransports } from '../worker-api';
 import type { PeerState } from './automerge';
 import { getContactName } from '../contact-names';
@@ -58,6 +59,59 @@ export function initPresence<S extends Record<string, any>>(
   return { broadcast, cleanup };
 }
 
+/**
+ * Subscribe to a document's presence and broadcast our own. This is the common
+ * per-editor wiring: it owns the peer-states map, re-subscribes when `docId`
+ * changes, and no-ops while `docId` is falsy (e.g. the doc isn't loaded yet).
+ * The worker only emits peers whose heartbeats are fresh, so a peer that
+ * silently disappears drops out of `peers` (and every dot derived from it)
+ * within ~15s without any client-side timers.
+ */
+export function usePresence<S extends Record<string, any> = PresenceState>(
+  docId: string | null | undefined,
+  opts?: {
+    /** Initial state to broadcast (default: viewing, no focused field). */
+    getInitialState?: () => S;
+    /** Called with every raw worker emission (e.g. the Source debug log). */
+    onRawUpdate?: (states: Record<string, PeerState<S>>) => void;
+  },
+): {
+  peers: Record<string, PeerState<S>>;
+  /** Peers currently viewing the doc — what the title-bar dot list renders. */
+  peerList: PeerState<S>[];
+  broadcast: (key: keyof S, value: S[keyof S]) => void;
+} {
+  const [peers, setPeers] = useState<Record<string, PeerState<S>>>({});
+  const optsRef = useRef(opts);
+  optsRef.current = opts;
+
+  useEffect(() => {
+    if (!docId) return;
+    let mounted = true;
+    const { cleanup } = initPresence<S>(
+      docId,
+      () => optsRef.current?.getInitialState?.()
+        ?? ({ viewing: true, focusedField: null } as unknown as S),
+      (states) => {
+        optsRef.current?.onRawUpdate?.(states);
+        if (mounted) setPeers(states);
+      },
+    );
+    return () => { mounted = false; cleanup(); setPeers({}); };
+  }, [docId]);
+
+  const broadcast = useCallback((key: keyof S, value: S[keyof S]) => {
+    if (docId) setPresence(docId, { [key]: value } as any);
+  }, [docId]);
+
+  const peerList = useMemo(
+    () => Object.values(peers).filter(p => p.value?.viewing),
+    [peers],
+  );
+
+  return { peers, peerList, broadcast };
+}
+
 
 export interface PeerFieldInfo {
   color: string;
@@ -86,6 +140,7 @@ export function PeerDot({ peerId, userGroupId, direct, label, sizeClass = 'w-2 h
   const base = label ?? peerDisplayName(peerId, userGroupId);
   return (
     <span
+      data-testid="peer-dot"
       className={`${sizeClass} rounded-full inline-block shrink-0`}
       style={{
         boxSizing: 'border-box',

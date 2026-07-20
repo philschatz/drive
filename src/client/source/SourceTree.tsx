@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from 'preact/hooks';
 
 import type { ValidationError } from '../../shared/schemas';
-import { peerDisplayName } from '../shared/presence';
+import { peerDisplayName, PeerDot } from '../shared/presence';
+import { usePeerTransports, type PeerTransport } from '../worker-api';
 
 type Path = (string | number)[];
 
@@ -35,6 +36,8 @@ interface NodeProps {
   onDelete: (path: Path) => void;
   onAdd: (path: Path, key: string, value: any) => void;
   peerFocusedPaths: PeerFocus[];
+  /** Per-peer transport map — one subscription at the tree root, not per node. */
+  transports: Record<string, PeerTransport>;
   onFocusPath: (path: Path | null) => void;
   changedPaths: Set<string>;
   errors: ValidationError[];
@@ -115,7 +118,7 @@ function collectChangedPaths(prev: any, curr: any, path: Path, out: Set<string>)
   }
 }
 
-function SourceNode({ name, value, path, depth, editable, onEdit, onDelete, onAdd, peerFocusedPaths, onFocusPath, changedPaths, errors, revealPath }: NodeProps) {
+function SourceNode({ name, value, path, depth, editable, onEdit, onDelete, onAdd, peerFocusedPaths, transports, onFocusPath, changedPaths, errors, revealPath }: NodeProps) {
   const [collapsed, setCollapsed] = useState(depth >= 2);
   const [editing, setEditing] = useState(false);
   const [adding, setAdding] = useState(false);
@@ -270,7 +273,10 @@ function SourceNode({ name, value, path, depth, editable, onEdit, onDelete, onAd
             <span className="source-bracket">{bracket[0]}</span>
           )}
           {exactFocusPeers.map((p, i) => (
-            <span key={i} className="source-peer-dot" style={{ backgroundColor: p.color }} title={`${peerDisplayName(p.peerId, p.userGroupId)} is editing`} />
+            <PeerDot key={i} peerId={p.peerId} userGroupId={p.userGroupId}
+              direct={transports[p.peerId] === 'direct'}
+              label={`${peerDisplayName(p.peerId, p.userGroupId)} is editing`}
+              sizeClass="w-2 h-2 ml-1.5 align-middle" />
           ))}
           {editable && (
             <span className="source-actions">
@@ -284,12 +290,12 @@ function SourceNode({ name, value, path, depth, editable, onEdit, onDelete, onAd
               ? value.map((item: any, i: number) => (
                   <SourceNode key={i} name={i} value={item} path={[...path, i]} depth={depth + 1}
                     editable={editable} onEdit={onEdit} onDelete={onDelete} onAdd={onAdd}
-                    peerFocusedPaths={peerFocusedPaths} onFocusPath={onFocusPath} changedPaths={changedPaths} errors={errors} revealPath={revealPath} />
+                    peerFocusedPaths={peerFocusedPaths} transports={transports} onFocusPath={onFocusPath} changedPaths={changedPaths} errors={errors} revealPath={revealPath} />
                 ))
               : Object.keys(value).map((key) => (
                   <SourceNode key={key} name={key} value={value[key]} path={[...path, key]} depth={depth + 1}
                     editable={editable} onEdit={onEdit} onDelete={onDelete} onAdd={onAdd}
-                    peerFocusedPaths={peerFocusedPaths} onFocusPath={onFocusPath} changedPaths={changedPaths} errors={errors} revealPath={revealPath} />
+                    peerFocusedPaths={peerFocusedPaths} transports={transports} onFocusPath={onFocusPath} changedPaths={changedPaths} errors={errors} revealPath={revealPath} />
                 ))
             }
             {editable && (
@@ -360,7 +366,10 @@ function SourceNode({ name, value, path, depth, editable, onEdit, onDelete, onAd
           </span>
         )}
         {exactFocusPeers.map((p, i) => (
-          <span key={i} className="source-peer-dot" style={{ backgroundColor: p.color }} title={`${peerDisplayName(p.peerId, p.userGroupId)} is editing`} />
+          <PeerDot key={i} peerId={p.peerId} userGroupId={p.userGroupId}
+            direct={transports[p.peerId] === 'direct'}
+            label={`${peerDisplayName(p.peerId, p.userGroupId)} is editing`}
+            sizeClass="w-2 h-2 ml-1.5 align-middle" />
         ))}
         {editable && !editing && (
           <span className="source-actions">
@@ -376,6 +385,7 @@ function SourceNode({ name, value, path, depth, editable, onEdit, onDelete, onAd
 const EMPTY_SET: Set<string> = new Set();
 
 export function SourceTree({ data, editable = false, onEdit, onDelete, onAdd, peerFocusedPaths, onFocusPath, errors, revealPath }: SourceTreeProps) {
+  const transports = usePeerTransports();
   const noop = () => {};
   const prevDataRef = useRef(data);
   const [changedPaths, setChangedPaths] = useState<Set<string>>(EMPTY_SET);
@@ -406,6 +416,7 @@ export function SourceTree({ data, editable = false, onEdit, onDelete, onAdd, pe
         onDelete={onDelete || noop}
         onAdd={onAdd || noop}
         peerFocusedPaths={peerFocusedPaths || []}
+        transports={transports}
         onFocusPath={onFocusPath || noop}
         changedPaths={changedPaths}
         errors={errors || []}

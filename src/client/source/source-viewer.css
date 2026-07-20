@@ -251,13 +251,3 @@ tr.patch-splice .patch-action { color: #e5c07b; }
   color: #9cdcfe;
 }
 
-/* Peer presence dot */
-.source-peer-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  display: inline-block;
-  flex-shrink: 0;
-  margin-left: 6px;
-  vertical-align: middle;
-}

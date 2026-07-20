@@ -5,7 +5,9 @@ jest.mock('../worker-api', () => ({
   usePeerTransports: jest.fn(() => ({})),
 }));
 
-import { peerIdentityKey, peerDisplayName, peerColor } from './presence';
+import { renderHook, act } from '@testing-library/preact';
+import { peerIdentityKey, peerDisplayName, peerColor, usePresence, type PresenceState } from './presence';
+import { subscribePresence, setPresence } from '../worker-api';
 import { applyContactNamesFromWorker, getContactName } from '../contact-names';
 
 // A peerId is `<base64-device-verifying-key>-<suffix>`; base64 never contains '-',
@@ -58,5 +60,87 @@ describe('presence identity helpers', () => {
     it('returns a color from the palette', () => {
       expect(peerColor(PEER_A, GROUP)).toMatch(/^#[0-9a-f]{6}$/);
     });
+  });
+});
+
+describe('usePresence', () => {
+  const mockSubscribe = subscribePresence as jest.Mock;
+  const mockSetPresence = setPresence as jest.Mock;
+  let lastCallback: ((states: any) => void) | null;
+  let unsubscribe: jest.Mock;
+
+  const peerState = (peerId: string, value: Partial<PresenceState> | undefined) =>
+    ({ peerId, lastActiveAt: 1, lastUpdateAt: 1, value });
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    lastCallback = null;
+    unsubscribe = jest.fn();
+    mockSubscribe.mockImplementation((_docId: string, cb: (states: any) => void) => {
+      lastCallback = cb;
+      return unsubscribe;
+    });
+  });
+
+  it('subscribes once per docId and broadcasts the initial state', () => {
+    renderHook(() => usePresence('doc-1'));
+    expect(mockSubscribe).toHaveBeenCalledTimes(1);
+    expect(mockSubscribe.mock.calls[0][0]).toBe('doc-1');
+    expect(mockSetPresence).toHaveBeenCalledWith('doc-1', { viewing: true, focusedField: null });
+  });
+
+  it('does nothing for a falsy docId', () => {
+    const { result } = renderHook(() => usePresence(undefined));
+    expect(mockSubscribe).not.toHaveBeenCalled();
+    act(() => result.current.broadcast('viewing', false));
+    expect(mockSetPresence).not.toHaveBeenCalled();
+    expect(result.current.peers).toEqual({});
+  });
+
+  it('populates peers from worker emissions and filters peerList on viewing', () => {
+    const { result } = renderHook(() => usePresence('doc-1'));
+    const states = {
+      [PEER_A]: peerState(PEER_A, { viewing: true, focusedField: null }),
+      [PEER_B]: peerState(PEER_B, { viewing: false, focusedField: null }),
+      'CCCC=-drive': peerState('CCCC=-drive', undefined), // heartbeat-first, valueless
+    };
+    act(() => lastCallback!(states));
+    expect(result.current.peers).toEqual(states);
+    expect(result.current.peerList).toEqual([states[PEER_A]]);
+  });
+
+  it('broadcast forwards a single-channel patch to setPresence', () => {
+    const { result } = renderHook(() => usePresence('doc-1'));
+    act(() => result.current.broadcast('focusedField', ['tasks', 't1']));
+    expect(mockSetPresence).toHaveBeenLastCalledWith('doc-1', { focusedField: ['tasks', 't1'] });
+  });
+
+  it('fires onRawUpdate on every emission', () => {
+    const onRawUpdate = jest.fn();
+    renderHook(() => usePresence('doc-1', { onRawUpdate }));
+    const states = { [PEER_A]: peerState(PEER_A, { viewing: true, focusedField: null }) };
+    act(() => lastCallback!(states));
+    act(() => lastCallback!({}));
+    expect(onRawUpdate).toHaveBeenNthCalledWith(1, states);
+    expect(onRawUpdate).toHaveBeenNthCalledWith(2, {});
+  });
+
+  it('unsubscribes on unmount', () => {
+    const { unmount } = renderHook(() => usePresence('doc-1'));
+    unmount();
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it('resubscribes and resets peers when docId changes', () => {
+    const { result, rerender } = renderHook(({ id }: { id: string }) => usePresence(id), {
+      initialProps: { id: 'doc-1' },
+    });
+    act(() => lastCallback!({ [PEER_A]: peerState(PEER_A, { viewing: true, focusedField: null }) }));
+    expect(result.current.peerList).toHaveLength(1);
+
+    rerender({ id: 'doc-2' });
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+    expect(mockSubscribe).toHaveBeenLastCalledWith('doc-2', expect.any(Function));
+    expect(result.current.peers).toEqual({});
   });
 });

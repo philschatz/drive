@@ -72,6 +72,11 @@ export class WorkerClient {
   // one doesn't stop the worker for the others (only the first subscribe / last
   // unsubscribe touches the worker).
   private presenceSubs = new Map<string, Map<number, PresenceCb>>();
+  // Last worker emission per doc. The worker only emits on membership/state
+  // transitions (steady-state heartbeats are silent), so a subscriber that
+  // mounts later — e.g. an editor opened via in-app navigation — would
+  // otherwise see nothing until the next transition. Replayed on subscribe.
+  private lastPresence = new Map<string, Record<string, any>>();
   private validationSubs = new Map<string, Map<number, ValidationCb>>();
 
   // Lifecycle gates.
@@ -212,6 +217,7 @@ export class WorkerClient {
         return true;
       }
       case 'update-presence': {
+        this.lastPresence.set(msg.docId, msg.peers);
         const subs = this.presenceSubs.get(msg.docId);
         if (subs) for (const cb of subs.values()) cb(msg.peers);
         return true;
@@ -353,12 +359,18 @@ export class WorkerClient {
     if (!subs) { subs = new Map(); this.presenceSubs.set(docId, subs); }
     subs.set(subId, onUpdate);
     if (first) this.fire('subscribe-presence', { docId });
+    const cached = this.lastPresence.get(docId);
+    if (cached) {
+      // Deliver asynchronously so the caller finishes wiring up first.
+      queueMicrotask(() => { if (this.presenceSubs.get(docId)?.has(subId)) onUpdate(cached); });
+    }
     return () => {
       const s = this.presenceSubs.get(docId);
       if (!s) return;
       s.delete(subId);
       if (s.size === 0) {
         this.presenceSubs.delete(docId);
+        this.lastPresence.delete(docId); // presence stops; states go stale
         this.fire('unsubscribe-presence', { docId });
       }
     };

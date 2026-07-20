@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'preact/hooks';
 import { subscribeQuery, updateDoc } from '../worker-api';
-import type { PeerState } from '../shared/automerge';
-import { peerColor, initPresence, type PresenceState } from '../shared/presence';
+import { peerColor, usePresence } from '../shared/presence';
 import { EditorTitleBar } from '../shared/EditorTitleBar';
 import { peerDisplayName, type PeerFieldInfo } from '../shared/presence';
 import { useGridCommands, commitReorder, commitAutofill, type GridCommandState, type GridCommandContext } from './commands';
@@ -74,7 +73,6 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
   // Capture initial cell from router prop (resolved after sheet data loads)
   const [initialCellId] = useState(cellId);
   const [gridName, setGridName] = useState('Spreadsheet');
-  const [peerStates, setPeerStates] = useState<Record<string, PeerState<PresenceState>>>({});
   const [, setTick] = useState(0);
   const [selectedCell, setSelectedCell] = useState<[number, number] | null>(null);
   const [selectionAnchor, setSelectionAnchor] = useState<[number, number] | null>(null);
@@ -102,7 +100,7 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
   const docMetaRef = useRef<{ '@type': string; name: string; sheets: Record<string, { name: string; index: number; hidden?: boolean; rows?: string[]; cols?: string[] }> } | null>(null);
   // Full data for the currently active sheet only
   const activeSheetRef = useRef<any>(null);
-  const broadcastRef = useRef<((key: keyof PresenceState, value: any) => void) | null>(null);
+  const { peers, peerList, broadcast } = usePresence(docId);
   const validationErrors = useDocumentValidation(docId);
   const { undo, redo, canUndo, canRedo, onHeadsUpdate } = useUndoRedo(docId!);
   const history = useDocumentHistory(docId!);
@@ -984,7 +982,7 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
   // Peer presence cell map — keyed by "col:row", first peer wins
   const peerCellMap = useMemo(() => {
     const map: Record<string, PeerFieldInfo> = {};
-    for (const peer of Object.values(peerStates)) {
+    for (const peer of Object.values(peers)) {
       const pf = peer.value?.focusedField;
       if (!pf || pf.length < 4 || pf[0] !== 'sheets' || pf[1] !== currentSheetId || pf[2] !== 'cells') continue;
       const cellKey = String(pf[3]);
@@ -1003,7 +1001,7 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
       }
     }
     return map;
-  }, [peerStates, visibleColIds, visibleRowIds, currentSheetId]);
+  }, [peers, visibleColIds, visibleRowIds, currentSheetId]);
 
   // Load document, init presence, and set up HF bridge
   useEffect(() => {
@@ -1069,17 +1067,8 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
       setTick(t => t + 1);
     });
 
-    const { broadcast, cleanup: presenceCleanup } = initPresence<PresenceState>(
-      docId,
-      () => ({ viewing: true, focusedField: null }),
-      (states) => { if (mounted) setPeerStates(states); },
-    );
-    broadcastRef.current = broadcast;
-
     return () => {
       mounted = false;
-      broadcastRef.current = null;
-      presenceCleanup();
       unsubMeta();
       activeSheetUnsubRef.current?.();
       activeSheetUnsubRef.current = null;
@@ -1127,7 +1116,7 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
   // presence only tracks the primary cell since PresenceState.focusedField is a single path.
   useEffect(() => {
     if (!docId || !focusPath) return;
-    broadcastRef.current?.('focusedField', focusPath.length > 2 ? focusPath : null);
+    broadcast('focusedField', focusPath.length > 2 ? focusPath : null);
     const base = window.location.href.split('#')[0];
     let url = `${base}#/datagrids/${docId}/${focusPath.map(s => encodeURIComponent(String(s))).join('/')}`;
     if (selectionAnchor && selectedCell) {
@@ -1137,7 +1126,7 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
       }
     }
     window.history.replaceState(null, '', url);
-  }, [focusPath, selectionAnchor, selectedCell, visibleRowIds, visibleColIds, docId]);
+  }, [focusPath, selectionAnchor, selectedCell, visibleRowIds, visibleColIds, docId, broadcast]);
 
   // Handle sheetId prop changes from back/forward navigation
   useEffect(() => {
@@ -1243,7 +1232,6 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
     return map;
   }, [formulaRefHighlights, editingCell]);
 
-  const peerList = Object.values(peerStates).filter(p => p.value?.viewing);
   const doc2 = activeSheetRef.current;
   const computedValues = computedValuesRef.current;
   const errorMessages = errorMessagesRef.current;

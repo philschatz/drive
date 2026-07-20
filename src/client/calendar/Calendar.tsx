@@ -2,8 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import '@schedule-x/theme-default/dist/index.css';
 import './calendar.css';
 import { subscribeQuery, updateDoc, deepAssign } from '../worker-api';
-import type { PeerState } from '../shared/automerge';
-import { peerDisplayName, initPresence, type PresenceState } from '../shared/presence';
+import { peerDisplayName, usePresence } from '../shared/presence';
 import { EditorTitleBar } from '../shared/EditorTitleBar';
 import { useDocumentHistory } from '../shared/useDocumentHistory';
 import { useAccess } from '../shared/useAccess';
@@ -44,7 +43,6 @@ function CalendarInner({ docId, readOnly, initialEventId }: { docId: string; rea
   const [calName, setCalName] = useState('Calendar');
   const [calDesc, setCalDesc] = useState('');
   const [calColor, setCalColor] = useState('#039be5');
-  const [peerStates, setPeerStates] = useState<Record<string, PeerState<PresenceState>>>({});
   const [showValidation, setShowValidation] = useState(false);
   const history = useDocumentHistory(docId);
   // Route new heads through a ref so the (deps-stable) subscription effect always
@@ -66,8 +64,6 @@ function CalendarInner({ docId, readOnly, initialEventId }: { docId: string; rea
   const calendarRef = useRef<any>(null);
   const calColorRef = useRef('#039be5');
   const calTZRef = useRef(Intl.DateTimeFormat().resolvedOptions().timeZone);
-  const broadcastRef = useRef<((key: keyof PresenceState, value: any) => void) | null>(null);
-  const presenceCleanupRef = useRef<(() => void) | null>(null);
   const titleFocusedRef = useRef(false);
   const descFocusedRef = useRef(false);
   const pendingEventIdRef = useRef(initialEventId);
@@ -75,7 +71,8 @@ function CalendarInner({ docId, readOnly, initialEventId }: { docId: string; rea
   const getEvents = useCallback(() => eventsRef.current, []);
   const { editorState, setEditorState, openEditor, refreshEditorFromEvents } = useCalendarEditor(getEvents);
   const mutations = useEventMutations(setEditorState);
-  const peerFocusedFields = usePeerFocusedFields(peerStates, editorState);
+  const { peers, peerList, broadcast } = usePresence(docId);
+  const peerFocusedFields = usePeerFocusedFields(peers, editorState);
 
   const refreshCalendar = useCallback(() => {
     const range = currentRangeRef.current;
@@ -99,14 +96,14 @@ function CalendarInner({ docId, readOnly, initialEventId }: { docId: string; rea
   // Sync selection → presence broadcast + URL (all derived from focusPath)
   useEffect(() => {
     if (!editorState) setFocusedPath(null);
-    broadcastRef.current?.('focusedField', focusPath ?? null);
+    broadcast('focusedField', focusPath ?? null);
     const base = window.location.href.split('#')[0];
     if (focusPath) {
       window.history.replaceState(null, '', `${base}#/calendars/${docId}/${focusPath.map(s => encodeURIComponent(String(s))).join('/')}`);
     } else {
       window.history.replaceState(null, '', `${base}#/calendars/${docId}`);
     }
-  }, [editorState, focusPath, docId]);
+  }, [editorState, focusPath, docId, broadcast]);
 
   useEffect(() => {
     if (!docId) return;
@@ -155,14 +152,6 @@ function CalendarInner({ docId, readOnly, initialEventId }: { docId: string; rea
       refreshCalendar,
     );
 
-    const { broadcast, cleanup: presenceCleanup } = initPresence<PresenceState>(
-      docId,
-      () => ({ viewing: true, focusedField: null }),
-      (states) => { if (mounted) setPeerStates(states); },
-    );
-    broadcastRef.current = broadcast;
-    presenceCleanupRef.current = presenceCleanup;
-
     const onQueryResult = (result: any, heads: string[]) => {
       if (!mounted || !result) return;
       eventsRef.current = result.events || {};
@@ -196,15 +185,10 @@ function CalendarInner({ docId, readOnly, initialEventId }: { docId: string; rea
       dragCleanup();
       calendarRef.current?.destroy();
       calendarRef.current = null;
-      presenceCleanupRef.current?.();
-      broadcastRef.current = null;
-      presenceCleanupRef.current = null;
       unsubQueryRef.current?.();
       unsubQueryRef.current = null;
     };
   }, [docId, openEditor, refreshCalendar, refreshEditorFromEvents]);
-
-  const peerList = Object.values(peerStates).filter(p => p.value?.viewing);
 
   return (
     <div className="calendar-page">

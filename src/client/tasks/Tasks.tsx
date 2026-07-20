@@ -1,8 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'preact/hooks';
 import './tasks.css';
 import { subscribeQuery, updateDoc, deepAssign } from '../worker-api';
-import type { PeerState } from '../shared/automerge';
-import { peerColor, peerDisplayName, initPresence, type PresenceState, type PeerFieldInfo } from '../shared/presence';
+import { peerColor, peerDisplayName, usePresence, PresenceDot, type PeerFieldInfo } from '../shared/presence';
 import { EditorTitleBar } from '../shared/EditorTitleBar';
 import { useDocumentHistory } from '../shared/useDocumentHistory';
 import { useAccess } from '../shared/useAccess';
@@ -62,7 +61,6 @@ export function Tasks({ docId, rest, readOnly }: { docId?: string; rest?: string
   const [listDesc, setListDesc] = useState('');
   const [tasks, setTasks] = useState<Record<string, Task>>({});
   const [editorState, setEditorState] = useState<EditorState | null>(null);
-  const [peerStates, setPeerStates] = useState<Record<string, PeerState<PresenceState>>>({});
   const [quickAddText, setQuickAddText] = useState('');
   const [showValidation, setShowValidation] = useState(false);
 
@@ -77,8 +75,7 @@ export function Tasks({ docId, rest, readOnly }: { docId?: string; rest?: string
   const noAccess = accessLoaded && access === null;
   const canEditRef = useRef(canEdit);
   canEditRef.current = canEdit;
-  const broadcastRef = useRef<((key: keyof PresenceState, value: any) => void) | null>(null);
-  const presenceCleanupRef = useRef<(() => void) | null>(null);
+  const { peers, peerList, broadcast } = usePresence(docId);
   const editorStateRef = useRef(editorState);
   editorStateRef.current = editorState;
   const titleFocusedRef = useRef(false);
@@ -156,19 +153,19 @@ export function Tasks({ docId, rest, readOnly }: { docId?: string; rest?: string
   // Sync selection → presence broadcast + URL (all derived from focusPath)
   useEffect(() => {
     if (!editorState) setFocusedPath(null);
-    broadcastRef.current?.('focusedField', focusPath ?? null);
+    broadcast('focusedField', focusPath ?? null);
     const base = window.location.href.split('#')[0];
     if (focusPath) {
       window.history.replaceState(null, '', `${base}#/tasks/${docId}/${focusPath.map(s => encodeURIComponent(String(s))).join('/')}`);
     } else if (docId) {
       window.history.replaceState(null, '', `${base}#/tasks/${docId}`);
     }
-  }, [editorState, focusPath, docId]);
+  }, [editorState, focusPath, docId, broadcast]);
 
   const peerFocusedFields = useMemo(() => {
     const result: Record<string, PeerFieldInfo> = {};
     if (!editorState) return result;
-    for (const peer of Object.values(peerStates)) {
+    for (const peer of Object.values(peers)) {
       const pf = peer.value?.focusedField;
       if (!pf || pf.length < 3) continue;
       if (pf[0] !== 'tasks' || pf[1] !== editorState.uid) continue;
@@ -181,20 +178,12 @@ export function Tasks({ docId, rest, readOnly }: { docId?: string; rest?: string
       }
     }
     return result;
-  }, [peerStates, editorState]);
+  }, [peers, editorState]);
 
   useEffect(() => {
     if (!docId) return;
 
     let mounted = true;
-
-    const { broadcast, cleanup: presenceCleanup } = initPresence<PresenceState>(
-      docId,
-      () => ({ viewing: true, focusedField: null }),
-      (states) => { if (mounted) setPeerStates(states); },
-    );
-    broadcastRef.current = broadcast;
-    presenceCleanupRef.current = presenceCleanup;
 
     const unsubscribe = subscribeQuery(docId, TASKS_QUERY, (result, heads) => {
       if (!mounted) return;
@@ -232,17 +221,13 @@ export function Tasks({ docId, rest, readOnly }: { docId?: string; rest?: string
 
     return () => {
       mounted = false;
-      presenceCleanupRef.current?.();
-      broadcastRef.current = null;
-      presenceCleanupRef.current = null;
       unsubscribe();
     };
   }, [docId]);
 
-  const peerList = Object.values(peerStates).filter(p => p.value?.viewing);
   const peerEditingTasks = useMemo(() => {
     const result: Record<string, PeerFieldInfo> = {};
-    for (const peer of Object.values(peerStates)) {
+    for (const peer of Object.values(peers)) {
       const pf = peer.value?.focusedField;
       if (pf && pf[0] === 'tasks' && pf[1]) {
         const userGroupId = peer.value?.userGroupId;
@@ -250,7 +235,7 @@ export function Tasks({ docId, rest, readOnly }: { docId?: string; rest?: string
       }
     }
     return result;
-  }, [peerStates]);
+  }, [peers]);
   const sorted = sortedTasks(tasks);
 
   return (
@@ -342,13 +327,7 @@ export function Tasks({ docId, rest, readOnly }: { docId?: string; rest?: string
               </span>
               {task.due && <Badge variant="secondary">{task.due.substring(0, 10)}</Badge>}
               {task.priority ? <Badge variant="default" className="bg-pink-500">P{task.priority}</Badge> : null}
-              {peerEdit && (
-                <div
-                  className="w-2 h-2 rounded-full shrink-0"
-                  style={{ backgroundColor: peerEdit.color }}
-                  title={`Peer ${peerEdit.peerId.slice(0, 8)} is editing`}
-                />
-              )}
+              <PresenceDot fieldId={uid} peerFocusedFields={peerEditingTasks} />
             </div>
           );
         })}

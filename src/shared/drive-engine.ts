@@ -42,6 +42,7 @@ interface DocEntry {
   presenceDesired?: Record<string, unknown>;
   presenceSend?: () => Promise<boolean>;
   presenceRetry?: any;
+  presenceLiveness?: any;
   validationSubscribed: boolean;
 }
 
@@ -68,6 +69,30 @@ export const RDV_MAX_DATA_BYTES = 256 * 1024;
 
 /** See OPEN_DOCS_IN_BACKGROUND in the original worker. */
 const OPEN_DOCS_IN_BACKGROUND = true;
+
+/** How often each peer's Presence broadcasts a heartbeat when otherwise idle. */
+export const PRESENCE_HEARTBEAT_MS = 5000;
+/** A peer with no presence activity for this long is hidden from clients
+ *  (two missed heartbeats plus network slack). */
+export const PRESENCE_STALE_MS = 12_000;
+/** How often to re-check freshness between events; worst-case detection
+ *  latency is PRESENCE_STALE_MS + this. */
+const PRESENCE_LIVENESS_CHECK_MS = 3000;
+/** How often to re-attempt presence setup while the doc/keyhive isn't ready. */
+const PRESENCE_SETUP_RETRY_MS = 2000;
+
+/** Peers seen within `staleMs` of `now`. Fresh iff now - lastSeen < staleMs. */
+export function freshPresencePeerIds(
+  lastSeen: ReadonlyMap<string, number>,
+  now: number,
+  staleMs: number = PRESENCE_STALE_MS,
+): Set<string> {
+  const fresh = new Set<string>();
+  for (const [peerId, seenAt] of lastSeen) {
+    if (now - seenAt < staleMs) fresh.add(peerId);
+  }
+  return fresh;
+}
 
 export interface WatchUpdate {
   docId: string;
@@ -106,6 +131,13 @@ export class DriveEngine {
   private docRegistry = new Map<string, DocEntry>();
   private subIdToDocId = new Map<number, string>();
   private pendingSubs = new Map<string, Map<number, SubInfo>>();
+
+  // Presence subscriptions still waiting for the doc/keyhive to be ready:
+  // docId → retry timer (null while an attempt is in flight). Present iff a
+  // subscription wants presence that hasn't started yet.
+  private presencePending = new Map<string, any>();
+  // set-presence state that arrived before presence finished starting.
+  private presenceDesiredEarly = new Map<string, Record<string, unknown>>();
 
   // Query caching.
   private jqCache = new LRU<string, (input: any) => any>(64);
@@ -234,8 +266,141 @@ export class DriveEngine {
       if (outOk && inOk) {
         clearInterval(entry.presenceRetry);
         entry.presenceRetry = null;
+        return;
       }
+      // Still failing to decrypt a peer (typical after a reload: the rehydrated
+      // keyhive lacks the epoch secrets for the peer's cyphertext). Two levers,
+      // both needed: force a keyhive sync round so the missing key material can
+      // arrive, and re-announce ourselves — peers respond to a snapshot by
+      // re-flushing freshly-encrypted channels (see the 'snapshot' handler) —
+      // so each retry round has new material to try until decryption succeeds.
+      // broadcastLocalState is TS-private but a plain method at runtime.
+      this.khIntegration?.networkAdapter?.syncKeyhive?.();
+      (entry.presence as any)?.broadcastLocalState?.();
     }, 5000);
+  }
+
+  /** Drop any pending presence-setup retry (and its buffered early state). */
+  private cancelPendingPresence(docId: string): void {
+    const t = this.presencePending.get(docId);
+    if (t) clearTimeout(t);
+    this.presencePending.delete(docId);
+    this.presenceDesiredEarly.delete(docId);
+  }
+
+  /** Stop and forget a doc's running presence (timers, listeners, goodbye). */
+  private teardownPresence(docId: string): void {
+    const entry = this.docRegistry.get(docId);
+    if (!entry?.presence) return;
+    if (entry.presenceRetry) { clearInterval(entry.presenceRetry); entry.presenceRetry = null; }
+    if (entry.presenceLiveness) { clearInterval(entry.presenceLiveness); entry.presenceLiveness = null; }
+    entry.presence.stop();
+    entry.presence = null;
+    entry.presenceDoc = undefined;
+    entry.presenceDesired = undefined;
+    entry.presenceSend = undefined;
+  }
+
+  /**
+   * Create + start the Presence for a doc. Returns false when keyhive isn't
+   * ready for it yet (caller retries); throws when the doc handle can't be
+   * loaded yet; returns true once presence is running.
+   */
+  private async trySetupPresence(docId: string): Promise<boolean> {
+    const handle = await this.getOrLoadHandle(docId);
+    const entry = this.getOrCreateEntry(docId, handle);
+    if (entry.presence) {
+      void entry.presenceSend?.(); // give the new subscriber a current snapshot
+      return true;
+    }
+    const doc = await this.getKhDoc(docId);
+    if (!doc) return false;
+
+    const presence = new this.PresenceClass({ handle });
+    // Library pruning is disabled (peerTtlMs = MAX_SAFE_INTEGER): its heartbeat
+    // handler (markSeen) bumps lastUpdateAt while prune() filters on
+    // lastActiveAt, so it drops idle-but-heartbeating peers. Liveness is
+    // tracked here instead, via lastSeen below.
+    presence.start({
+      initialState: {},
+      heartbeatMs: PRESENCE_HEARTBEAT_MS,
+      peerTtlMs: Number.MAX_SAFE_INTEGER,
+    });
+    entry.presence = presence;
+    entry.presenceDoc = doc;
+    const userGroupId = await this.khOps?.getUserGroupId();
+    entry.presenceDesired = {
+      viewing: true,
+      focusedField: null,
+      ...(userGroupId ? { userGroupId } : {}),
+      // State the main thread set while setup was still retrying.
+      ...(this.presenceDesiredEarly.get(docId) ?? {}),
+    };
+    this.presenceDesiredEarly.delete(docId);
+
+    const lastSeen = new Map<string, number>();
+    let lastEmittedFresh = new Set<string>();
+    const sendPresence = async (): Promise<boolean> => {
+      const raw = presence.getPeerStates().value;
+      const fresh = freshPresencePeerIds(lastSeen, Date.now());
+      const peers: Record<string, any> = {};
+      let allOk = true;
+      for (const [peerId, st] of Object.entries<any>(raw)) {
+        if (!fresh.has(peerId)) continue; // stale — hide and skip decrypt work
+        const value: Record<string, unknown> = {};
+        for (const [ch, enc] of Object.entries<any>(st?.value ?? {})) {
+          try { value[ch] = await this.decryptPresenceValue(doc, enc as Uint8Array); }
+          catch (err) {
+            allOk = false;
+            console.warn(`[engine] presence decrypt failed (peer ${peerId}, channel ${ch}):`, errMsg(err));
+          }
+        }
+        // A fresh peer with no readable state — nothing received yet, or
+        // nothing we could decrypt — needs the retry loop's re-announce.
+        if (Object.keys(value).length === 0) allOk = false;
+        // A heartbeat-first entry has no peerId of its own; the map key fills it in.
+        peers[peerId] = { peerId, ...st, value };
+      }
+      lastEmittedFresh = fresh;
+      this.emit({ type: 'update-presence', docId, peers });
+      if (!allOk) this.schedulePresenceRetry(entry);
+      return allOk;
+    };
+    entry.presenceSend = sendPresence;
+    presence.on('update', (e: any) => { lastSeen.set(e.peerId, Date.now()); void sendPresence(); });
+    presence.on('snapshot', (e: any) => {
+      lastSeen.set(e.peerId, Date.now());
+      // A snapshot is an announce: the sender either just started (its
+      // Presence.start broadcast, possibly after a tab reload) or is stuck
+      // unable to decrypt us and is asking for fresh material (see
+      // schedulePresenceRetry). Respond by re-encrypting and re-sending our
+      // channels: a freshly-started peer needs them because the library only
+      // re-announces to peerIds it has forgotten (and with pruning disabled it
+      // never forgets), and a stuck peer needs fresh cyphertext because each
+      // encrypt creates new keyhive ops whose sync delivers the key material
+      // it is missing. Flushes go out as updates, never snapshots, so two
+      // peers can't ping-pong announces.
+      void this.flushPresenceOut(entry);
+      void sendPresence();
+    });
+    presence.on('goodbye', (e: any) => { lastSeen.delete(e.peerId); void sendPresence(); });
+    presence.on('heartbeat', (e: any) => {
+      const wasFresh = lastEmittedFresh.has(e.peerId);
+      lastSeen.set(e.peerId, Date.now());
+      // Steady-state heartbeats only bump lastSeen; re-emit just for a peer
+      // that was hidden (new, or returning after going stale).
+      if (!wasFresh) void sendPresence();
+    });
+    const setsEqual = (a: Set<string>, b: Set<string>) =>
+      a.size === b.size && [...a].every(x => b.has(x));
+    entry.presenceLiveness = setInterval(() => {
+      if (!setsEqual(freshPresencePeerIds(lastSeen, Date.now()), lastEmittedFresh)) {
+        void sendPresence();
+      }
+    }, PRESENCE_LIVENESS_CHECK_MS);
+    if (typeof entry.presenceLiveness?.unref === 'function') entry.presenceLiveness.unref();
+    if (!(await this.flushPresenceOut(entry))) this.schedulePresenceRetry(entry);
+    return true;
   }
 
   // ── Doc registry ───────────────────────────────────────────────────────────
@@ -1100,63 +1265,33 @@ export class DriveEngine {
     }
 
     if (msg.type === 'subscribe-presence') {
-      try {
-        const handle = await this.getOrLoadHandle(msg.docId);
-        const entry = this.getOrCreateEntry(msg.docId, handle);
-        if (!entry.presence) {
-          const doc = await this.getKhDoc(msg.docId);
-          if (!doc) {
-            console.warn('[engine] presence-subscribe: keyhive doc not ready; skipping');
-          } else {
-            const presence = new this.PresenceClass({ handle });
-            presence.start({ initialState: {}, heartbeatMs: 5000, peerTtlMs: 15000 });
-            entry.presence = presence;
-            entry.presenceDoc = doc;
-            const userGroupId = await this.khOps?.getUserGroupId();
-            entry.presenceDesired = {
-              viewing: true,
-              focusedField: null,
-              ...(userGroupId ? { userGroupId } : {}),
-            };
-            const sendPresence = async (): Promise<boolean> => {
-              const raw = presence.getPeerStates().value;
-              const peers: Record<string, any> = {};
-              let allOk = true;
-              for (const [peerId, st] of Object.entries<any>(raw)) {
-                const value: Record<string, unknown> = {};
-                for (const [ch, enc] of Object.entries<any>(st?.value ?? {})) {
-                  try { value[ch] = await this.decryptPresenceValue(doc, enc as Uint8Array); }
-                  catch { allOk = false; }
-                }
-                peers[peerId] = { ...st, value };
-              }
-              this.emit({ type: 'update-presence', docId: msg.docId, peers });
-              if (!allOk) this.schedulePresenceRetry(entry);
-              return allOk;
-            };
-            entry.presenceSend = sendPresence;
-            presence.on('update', () => { void sendPresence(); });
-            presence.on('goodbye', () => { void sendPresence(); });
-            presence.on('snapshot', () => { void sendPresence(); });
-            if (!(await this.flushPresenceOut(entry))) this.schedulePresenceRetry(entry);
-          }
+      // On a cold worker the doc handle / keyhive doc may not be ready yet
+      // (repo.find can throw before the first sync), so keep retrying until
+      // setup succeeds or the doc is unsubscribed — a one-shot attempt left
+      // presence permanently dead for pages loaded directly on an editor URL.
+      if (this.presencePending.has(msg.docId)) return; // already being established
+      this.presencePending.set(msg.docId, null); // null = attempt in flight
+      const attempt = async () => {
+        let ok = false;
+        try { ok = await this.trySetupPresence(msg.docId); }
+        catch (err: any) { console.warn('[engine] presence-subscribe not ready, retrying:', errMsg(err)); }
+        if (!this.presencePending.has(msg.docId)) {
+          // Unsubscribed while this attempt ran — undo a setup that won the race.
+          if (ok) this.teardownPresence(msg.docId);
+          return;
         }
-      } catch (err: any) {
-        console.warn('[engine] presence-subscribe failed:', errMsg(err));
-      }
+        if (ok) { this.cancelPendingPresence(msg.docId); return; }
+        const t: any = setTimeout(() => { void attempt(); }, PRESENCE_SETUP_RETRY_MS);
+        if (typeof t?.unref === 'function') t.unref();
+        this.presencePending.set(msg.docId, t);
+      };
+      void attempt();
       return;
     }
 
     if (msg.type === 'unsubscribe-presence') {
-      const entry = this.docRegistry.get(msg.docId);
-      if (entry?.presence) {
-        if (entry.presenceRetry) { clearInterval(entry.presenceRetry); entry.presenceRetry = null; }
-        entry.presence.stop();
-        entry.presence = null;
-        entry.presenceDoc = undefined;
-        entry.presenceDesired = undefined;
-        entry.presenceSend = undefined;
-      }
+      this.cancelPendingPresence(msg.docId);
+      this.teardownPresence(msg.docId);
       return;
     }
 
@@ -1165,6 +1300,13 @@ export class DriveEngine {
       if (entry?.presence) {
         entry.presenceDesired = { ...(entry.presenceDesired ?? {}), ...msg.state };
         if (!(await this.flushPresenceOut(entry))) this.schedulePresenceRetry(entry);
+      } else if (this.presencePending.has(msg.docId)) {
+        // Presence is still starting — buffer the state so it broadcasts once
+        // setup succeeds instead of being silently dropped.
+        this.presenceDesiredEarly.set(msg.docId, {
+          ...(this.presenceDesiredEarly.get(msg.docId) ?? {}),
+          ...msg.state,
+        });
       }
       return;
     }
@@ -1175,11 +1317,11 @@ export class DriveEngine {
         const removedEntry = list.find(e => e.id === msg.docId);
         const filtered = list.filter(e => e.id !== msg.docId);
         await this.host.kv.set(KEYS.docIds, filtered);
+        this.cancelPendingPresence(msg.docId);
+        this.teardownPresence(msg.docId);
         const entry = this.docRegistry.get(msg.docId);
         if (entry) {
           for (const subId of entry.subscriptions.keys()) this.subIdToDocId.delete(subId);
-          if (entry.presenceRetry) clearInterval(entry.presenceRetry);
-          if (entry.presence) entry.presence.stop();
           this.docRegistry.delete(msg.docId);
         }
         this.queryResultCache.deletePrefix(docCachePrefix(msg.docId));

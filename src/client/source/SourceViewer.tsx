@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'preact/hooks';
-import type { PeerState } from '../shared/automerge';
 import { openDoc, subscribeQuery, updateDoc, getDocHistory, debugGetVersionPatches, setDocVersion } from '../worker-api';
-import { peerColor, peerDisplayName, initPresence, type PresenceState } from '../shared/presence';
+import { peerColor, peerDisplayName, usePresence } from '../shared/presence';
 import { EditorTitleBar } from '../shared/EditorTitleBar';
 import { HistorySlider } from '../shared/HistorySlider';
 import type { DocumentHistory } from '../shared/useDocumentHistory';
@@ -181,23 +180,31 @@ export function SourceViewer({ docId, rest }: { docId?: string; rest?: string; p
   const [version, setVersion] = useState(0);
   const [versionPatches, setVersionPatches] = useState<any[]>([]);
   const [docName, setDocName] = useState('Document');
-  const [peerStates, setPeerStates] = useState<Record<string, PeerState<PresenceState>>>({});
+  // Presence starts only once the doc handle is loaded — the engine's
+  // subscribe-presence silently gives up if keyhive isn't ready yet.
+  const [docLoaded, setDocLoaded] = useState(false);
   const atLatest = useRef(true);
   const titleFocusedRef = useRef(false);
-  const broadcastRef = useRef<((key: keyof PresenceState, value: any) => void) | null>(null);
-  const presenceCleanupRef = useRef<(() => void) | null>(null);
 
   const { entries: presenceLog, addEntry: addLogEntry, clear: clearLog } = usePresenceLog();
 
+  const { peers, peerList, broadcast } = usePresence(docLoaded ? docId : undefined, {
+    onRawUpdate: (states) => {
+      // Log incoming presence changes
+      for (const [peerId, peer] of Object.entries(states)) {
+        addLogEntry('recv', 'presence', peerId, JSON.stringify(peer.value));
+      }
+    },
+  });
+
   const handleFocusPath = useCallback((path: Path | null) => {
-    if (!broadcastRef.current) return;
     addLogEntry('sent', 'broadcast', 'self', `focusedField: ${JSON.stringify(path)}`);
-    broadcastRef.current('focusedField', path);
-  }, [addLogEntry]);
+    broadcast('focusedField', path);
+  }, [addLogEntry, broadcast]);
 
   const peerFocusedPaths = useMemo(() => {
     const result: Array<{ path: Path; color: string; peerId: string; userGroupId?: string }> = [];
-    for (const peer of Object.values(peerStates)) {
+    for (const peer of Object.values(peers)) {
       const pf = peer.value?.focusedField;
       if (pf && pf.length > 0) {
         const userGroupId = peer.value?.userGroupId;
@@ -205,7 +212,7 @@ export function SourceViewer({ docId, rest }: { docId?: string; rest?: string; p
       }
     }
     return result;
-  }, [peerStates]);
+  }, [peers]);
 
   // Load history metadata from worker
   const loadHistory = useCallback(() => {
@@ -226,6 +233,8 @@ export function SourceViewer({ docId, rest }: { docId?: string; rest?: string; p
     }
 
     let mounted = true;
+    let unsubQuery: (() => void) | null = null;
+    setDocLoaded(false);
 
     (async () => {
       setLoadProgress(0);
@@ -234,9 +243,10 @@ export function SourceViewer({ docId, rest }: { docId?: string; rest?: string; p
       });
       if (!mounted) return;
       setLoadProgress(null);
+      setDocLoaded(true); // gate opens → usePresence subscribes
 
       // Subscribe to the full document via worker-api (routes through correct repo)
-      const unsubQuery = subscribeQuery(docId, '.', (result) => {
+      unsubQuery = subscribeQuery(docId, '.', (result) => {
         if (!mounted) return;
         setCurrentDoc(result);
         if (result.name) {
@@ -246,23 +256,6 @@ export function SourceViewer({ docId, rest }: { docId?: string; rest?: string; p
         setStatus('');
         loadHistory();
       });
-
-      // Presence
-      const { broadcast, cleanup: presenceCleanup } = initPresence<PresenceState>(
-        docId,
-        () => ({ viewing: true, focusedField: null }),
-        (states) => {
-          if (!mounted) return;
-          // Log incoming presence changes
-          for (const [peerId, peer] of Object.entries(states)) {
-            const detail = JSON.stringify(peer.value);
-            addLogEntry('recv', 'presence', peerId, detail);
-          }
-          setPeerStates(states);
-        },
-      );
-      broadcastRef.current = broadcast;
-      presenceCleanupRef.current = () => { unsubQuery(); presenceCleanup(); };
 
       // Initial history load will happen via the subscription callback calling loadHistory()
     })().catch((err) => {
@@ -274,9 +267,7 @@ export function SourceViewer({ docId, rest }: { docId?: string; rest?: string; p
 
     return () => {
       mounted = false;
-      presenceCleanupRef.current?.();
-      broadcastRef.current = null;
-      presenceCleanupRef.current = null;
+      unsubQuery?.();
       // Unpin version when leaving
       if (docId) setDocVersion(docId, null);
     };
@@ -357,8 +348,6 @@ export function SourceViewer({ docId, rest }: { docId?: string; rest?: string; p
       current[fullPath[fullPath.length - 1]] = value;
     }, fullPath, value);
   };
-
-  const peerList = Object.values(peerStates).filter(p => p.value?.viewing);
 
   const handleDownloadJson = useCallback(() => {
     if (!snapshot) return;
