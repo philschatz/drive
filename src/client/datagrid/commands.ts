@@ -139,6 +139,7 @@ export type SlotId =
   | 'insert-menu'
   | 'format-menu'
   | 'view-menu'
+  | 'sheet-menu'
   | 'toolbar'
   | 'cell-ctx'
   | 'row-ctx'
@@ -1172,6 +1173,15 @@ const sheetPlugin: GridPlugin = {
       { kind: 'separator' },
       { kind: 'command', id: 'add-sheet' },
     ],
+    // Menubar "Sheet" menu — same commands as the tab context menu; with no
+    // targetSheetId they act on the current sheet.
+    'sheet-menu': [
+      { kind: 'command', id: 'add-sheet' },
+      { kind: 'separator' },
+      { kind: 'command', id: 'rename-sheet' },
+      { kind: 'command', id: 'hide-sheet' },
+      { kind: 'command', id: 'delete-sheet' },
+    ],
     'sheet-ctx': [
       { kind: 'command', id: 'rename-sheet' },
       { kind: 'separator' },
@@ -1806,6 +1816,7 @@ const SLOT_LISTS: Record<SlotId, SlotEntry[]> = {
   'insert-menu': buildSlotList('insert-menu'),
   'format-menu': buildSlotList('format-menu'),
   'view-menu': buildSlotList('view-menu'),
+  'sheet-menu': buildSlotList('sheet-menu'),
   toolbar: buildSlotList('toolbar'),
   'cell-ctx': buildSlotList('cell-ctx'),
   'row-ctx': buildSlotList('row-ctx'),
@@ -2079,6 +2090,7 @@ export function useGridCommands(
     { menuId: 'insert-menu', triggerLabel: 'Insert', entries: resolveSlot('insert-menu', state, ctx) },
     { menuId: 'format-menu', triggerLabel: 'Format', entries: resolveSlot('format-menu', state, ctx) },
     { menuId: 'view-menu', triggerLabel: 'View', entries: resolveSlot('view-menu', state, ctx) },
+    { menuId: 'sheet-menu', triggerLabel: 'Sheet', entries: resolveSlot('sheet-menu', state, ctx) },
   ];
 
   function dispatchKey(e: KeyboardEvent, isMod: boolean): boolean {

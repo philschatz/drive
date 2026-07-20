@@ -30,7 +30,10 @@ export function CommandMenuBar({ menus }: CommandMenuBarProps) {
       {menus.map(menu => (
         <MenubarMenu key={menu.menuId}>
           <MenubarTrigger>{menu.triggerLabel}</MenubarTrigger>
-          <MenubarContent>
+          {/* Don't return focus to the trigger on close: commands like Rename
+              sheet focus an inline input, and the default focus restoration
+              would blur it immediately (blur commits and hides the input). */}
+          <MenubarContent onCloseAutoFocus={(e: Event) => e.preventDefault()}>
             {menu.entries.map((entry, i) => (
               <MenuEntry key={entry.kind === 'command' ? entry.id : entry.kind === 'submenu' ? entry.id : `sep-${i}`} entry={entry} />
             ))}
@@ -389,11 +392,17 @@ function ToolbarSubmenuEntry({ entry }: { entry: ResolvedEntry & { kind: 'submen
 
 interface CommandContextMenuContentProps {
   entries: ResolvedEntry[];
+  /** Suppress the menu's close-time focus restoration. Needed where a command
+   * focuses an inline input (sheet rename) that the restoration would blur —
+   * blur commits and hides the input. */
+  preventCloseAutoFocus?: boolean;
 }
 
-export function CommandContextMenuContent({ entries }: CommandContextMenuContentProps) {
+export function CommandContextMenuContent({ entries, preventCloseAutoFocus }: CommandContextMenuContentProps) {
   return (
-    <ContextMenuContent>
+    <ContextMenuContent
+      onCloseAutoFocus={preventCloseAutoFocus ? (e: Event) => e.preventDefault() : undefined}
+    >
       {entries.map((entry, i) => {
         if (entry.kind === 'separator') {
           return <ContextMenuSeparator key={`sep-${i}`} />;

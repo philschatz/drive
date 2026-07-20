@@ -1809,7 +1809,7 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
                 renameRef={sheetRenameRef}
               />
             </ContextMenuTrigger>
-            <CommandContextMenuContent entries={commands.sheetCtx} />
+            <CommandContextMenuContent entries={commands.sheetCtx} preventCloseAutoFocus />
           </ContextMenu>
           </div>
         </>
