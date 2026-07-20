@@ -61,7 +61,7 @@ export function CommandSearch({ entries }: CommandSearchProps) {
   };
 
   return (
-    <div className="relative">
+    <div className="relative shrink-0">
       <div className="relative">
         <span className="material-symbols-outlined absolute left-1.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" style={{ fontSize: '0.875rem' }}>search</span>
         <input

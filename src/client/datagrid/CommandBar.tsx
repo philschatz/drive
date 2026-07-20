@@ -116,7 +116,7 @@ interface CommandToolbarProps {
 
 export function CommandToolbar({ entries }: CommandToolbarProps) {
   return (
-    <div className="flex items-center gap-1">
+    <div className="flex items-center gap-1 shrink-0">
       {entries.map((entry, i) => {
         if (entry.kind === 'separator') {
           return <div key={`sep-${i}`} className="w-px h-6 bg-border mx-1" />;

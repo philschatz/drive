@@ -240,11 +240,26 @@ export function SourceViewer({ docId, rest, readOnly }: { docId?: string; rest?:
 
     (async () => {
       setLoadProgress(0);
-      await openDoc(docId, {
-        onProgress: (pct) => { if (mounted) setLoadProgress(pct); },
-      });
+      // Keyhive doc announcement is eventually consistent: a doc shared moments
+      // ago can reject the first find as unavailable. Retry while mounted so the
+      // inspector converges instead of dead-ending on the race (the /#/d route
+      // surfaces DocLoader's manual "Try again" for the same case).
+      for (;;) {
+        try {
+          await openDoc(docId, {
+            onProgress: (pct) => { if (mounted) setLoadProgress(pct); },
+          });
+          break;
+        } catch (err: any) {
+          if (!mounted) return;
+          setStatus(`${err?.message || 'Failed to load document'} — retrying…`);
+          await new Promise((r) => setTimeout(r, 3_000));
+          if (!mounted) return;
+        }
+      }
       if (!mounted) return;
       setLoadProgress(null);
+      setStatus('');
       setDocLoaded(true); // gate opens → usePresence subscribes
 
       // Subscribe to the full document via worker-api (routes through correct repo)

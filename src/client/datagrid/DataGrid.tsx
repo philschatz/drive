@@ -1357,7 +1357,9 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
         <>
           <CommandMenuBar menus={commands.menus} />
 
-          <div className="flex items-center gap-1 mb-1 flex-wrap bg-blue-50 px-2 py-1 rounded">
+          {/* overflow-x-clip (not hidden): too-narrow windows clip the button strip
+              instead of wrapping, while the search dropdown below stays visible. */}
+          <div className="flex items-center gap-1 mb-1 overflow-x-clip bg-blue-50 px-2 py-1 rounded">
             <CommandSearch entries={commands.allSearchable} />
             <CommandToolbar entries={commands.toolbar} />
           </div>
