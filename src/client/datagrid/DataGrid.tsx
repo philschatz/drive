@@ -462,13 +462,13 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
 
   const isMultiSelect = selectionAnchor !== null && selectedCell !== null && (selectionAnchor[0] !== selectedCell[0] || selectionAnchor[1] !== selectedCell[1]);
 
-  // Autofill handle: show at bottom-right of selection when not editing
+  // Autofill handle: show at bottom-right of selection when not editing (and editable)
   const autofillHandleCell = useMemo(() => {
-    if (editingCell) return null;
+    if (editingCell || !canEdit) return null;
     if (selectionRange && isMultiSelect) return [selectionRange.maxCol, selectionRange.maxRow] as [number, number];
     if (selectedCell) return selectedCell;
     return null;
-  }, [editingCell, selectionRange, isMultiSelect, selectedCell]);
+  }, [editingCell, canEdit, selectionRange, isMultiSelect, selectedCell]);
 
   // -- Header selection handlers --
 
@@ -776,7 +776,7 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
 
   // -- Context menu handlers --
 
-  const handleRowContextMenu = useCallback((ri: number, _e: MouseEvent) => {
+  const handleRowContextMenu = useCallback((ri: number, e: MouseEvent) => {
     const indices = selectedRows.has(ri) ? [...selectedRows].sort((a, b) => a - b) : [ri];
     if (!selectedRows.has(ri)) {
       setSelectedRows(new Set([ri]));
@@ -784,10 +784,13 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
       setSelectedCell(null);
       lastClickedRowRef.current = ri;
     }
+    // Read-only: selecting via right-click still works, but no menu opens
+    // (stopPropagation keeps the radix trigger from seeing the event).
+    if (!canEditRef.current) { e.preventDefault(); e.stopPropagation(); return; }
     setContextMenu({ type: 'row', indices });
   }, [selectedRows]);
 
-  const handleColContextMenu = useCallback((ci: number, _e: MouseEvent) => {
+  const handleColContextMenu = useCallback((ci: number, e: MouseEvent) => {
     const indices = selectedCols.has(ci) ? [...selectedCols].sort((a, b) => a - b) : [ci];
     if (!selectedCols.has(ci)) {
       setSelectedCols(new Set([ci]));
@@ -795,6 +798,7 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
       setSelectedCell(null);
       lastClickedColRef.current = ci;
     }
+    if (!canEditRef.current) { e.preventDefault(); e.stopPropagation(); return; }
     setContextMenu({ type: 'col', indices });
   }, [selectedCols]);
 
@@ -838,6 +842,7 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
     else if (e.key === 'ArrowUp') { e.preventDefault(); newRow = Math.max(row - 1, 0); }
     else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey) {
       if (spillTargetsRef.current.has(`${currentSheetId}:${visibleRowIds[row]}:${visibleColIds[col]}`)) return;
+      if (!canEditRef.current) return;
       e.preventDefault();
       setSelectionAnchor(null);
       setEditingCell([col, row]);
@@ -1251,13 +1256,20 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
     return formatCache.get(`${origRow}:${origCol}`);
   }, [selectedCell, formatCache, visibleRowOriginalIndices, visibleColOriginalIndices]);
 
+  const rowMetas = doc2 ? Object.values(doc2.rows ?? {}) : [];
+  const colMetas = doc2 ? Object.values(doc2.columns ?? {}) : [];
   const commandState: GridCommandState = {
+    canEdit,
     canUndo,
     canRedo,
     hasSelection: selectedCell !== null,
     currentRowIndices,
     currentColIndices,
     sheetCount: sheetOrder.length,
+    hasHiddenRows: rowMetas.some((r: any) => r.hidden),
+    hasHiddenCols: colMetas.some((c: any) => c.hidden),
+    hasFrozenRows: rowMetas.some((r: any) => r.frozen),
+    hasFrozenCols: colMetas.some((c: any) => c.frozen),
     contextScope: contextMenu
       ? { type: contextMenu.type, indices: contextMenu.indices }
       : null,
@@ -1371,9 +1383,11 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
             {selectedCell ? (
               <FormulaEditor
                 className="formula-bar-cm"
+                readOnly={!canEdit}
                 value={editingCell ? editValue : formulaBarValue}
                 onInput={setEditValue}
                 onFocus={() => {
+                  if (!canEditRef.current) return;
                   if (!editingCell) {
                     editFromBarRef.current = true;
                     startEditing(selectedCell[0], selectedCell[1]);
@@ -1742,30 +1756,32 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
                 })()}
               </tbody>
             </table>
-            <div className="add-rows-bar">
-              <button
-                className="add-rows-link"
-                onClick={() => addRows()}
-              >Add</button>
-              {' '}
-              <input
-                type="number"
-                className="add-rows-input"
-                value={addRowCount ?? ''}
-                min={1}
-                max={1000}
-                onInput={(e: any) => {
-                  const v = e.currentTarget.value;
-                  setAddRowCount(v === '' ? null : (parseInt(v, 10) || 10));
-                }}
-                onFocus={(e: any) => e.currentTarget.select()}
-                onKeyDown={(e: any) => {
-                  e.stopPropagation();
-                  if (e.key === 'Enter') addRows();
-                }}
-              />
-              {' more rows at the bottom'}
-            </div>
+            {canEdit && (
+              <div className="add-rows-bar">
+                <button
+                  className="add-rows-link"
+                  onClick={() => addRows()}
+                >Add</button>
+                {' '}
+                <input
+                  type="number"
+                  className="add-rows-input"
+                  value={addRowCount ?? ''}
+                  min={1}
+                  max={1000}
+                  onInput={(e: any) => {
+                    const v = e.currentTarget.value;
+                    setAddRowCount(v === '' ? null : (parseInt(v, 10) || 10));
+                  }}
+                  onFocus={(e: any) => e.currentTarget.select()}
+                  onKeyDown={(e: any) => {
+                    e.stopPropagation();
+                    if (e.key === 'Enter') addRows();
+                  }}
+                />
+                {' more rows at the bottom'}
+              </div>
+            )}
           </div>
           </ContextMenuTrigger>
           <CommandContextMenuContent
@@ -1783,6 +1799,7 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
               <SheetTabs
                 sheets={sheetOrder}
                 currentSheetId={currentSheetId ?? ''}
+                readOnly={!canEdit}
                 onSelect={handleSelectSheet}
                 onAdd={handleAddSheet}
                 onRename={handleRenameSheet}

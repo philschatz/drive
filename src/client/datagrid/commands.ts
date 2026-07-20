@@ -47,17 +47,29 @@ export function shortcutDisplay(s: Shortcut): string {
 // ============================================================
 
 export interface GridCommandState {
+  /** False when the grid is read-only (view access / older version): every
+   * command except the READ_ONLY_COMMANDS allowlist resolves disabled. */
+  canEdit: boolean;
   canUndo: boolean;
   canRedo: boolean;
   hasSelection: boolean;
   currentRowIndices: number[];
   currentColIndices: number[];
   sheetCount: number;
+  /** Whether the active sheet currently has hidden/frozen rows/columns —
+   * gates the unhide/unfreeze commands. */
+  hasHiddenRows: boolean;
+  hasHiddenCols: boolean;
+  hasFrozenRows: boolean;
+  hasFrozenCols: boolean;
   /** Non-null only when resolving context-menu slots */
   contextScope: { type: 'row' | 'col' | 'cell'; indices: number[] } | null;
   /** Format of the currently selected cell (for toggle state in toolbar/menus). */
   currentCellFormat?: DataGridCellFormat;
 }
+
+/** Commands that stay enabled on a read-only grid. */
+const READ_ONLY_COMMANDS = new Set(['copy', 'conditional-formatting']);
 
 // ============================================================
 // GridCommandContext — raw materials for command execute bodies
@@ -136,20 +148,20 @@ export type SlotId =
 export type SlotEntry =
   | { kind: 'separator' }
   | {
-      kind: 'command';
-      id: string;
-      label?: string | ((s: GridCommandState) => string);
-      icon?: string;
-      toolbarDividerBefore?: boolean;
-    }
+    kind: 'command';
+    id: string;
+    label?: string | ((s: GridCommandState) => string);
+    icon?: string;
+    toolbarDividerBefore?: boolean;
+  }
   | {
-      kind: 'submenu';
-      id: string;
-      label: string;
-      icon?: string;
-      toolbarDividerBefore?: boolean;
-      resolve(state: GridCommandState, ctx: GridCommandContext): ResolvedEntry & { kind: 'submenu' };
-    };
+    kind: 'submenu';
+    id: string;
+    label: string;
+    icon?: string;
+    toolbarDividerBefore?: boolean;
+    resolve(state: GridCommandState, ctx: GridCommandContext): ResolvedEntry & { kind: 'submenu' };
+  };
 
 export interface GridPlugin {
   id: string;
@@ -164,30 +176,30 @@ export interface GridPlugin {
 export type ResolvedEntry =
   | { kind: 'separator' }
   | {
-      kind: 'command';
-      id: string;
-      label: string;
-      icon?: string;
-      shortcut?: string;
-      isEnabled: boolean;
-      isChecked?: boolean;
-      danger?: boolean;
-      toolbarDividerBefore?: boolean;
-      /** Inline CSS for the menu item (e.g. fontFamily for font previews). */
-      style?: Record<string, string>;
-      execute(): void;
-    }
+    kind: 'command';
+    id: string;
+    label: string;
+    icon?: string;
+    shortcut?: string;
+    isEnabled: boolean;
+    isChecked?: boolean;
+    danger?: boolean;
+    toolbarDividerBefore?: boolean;
+    /** Inline CSS for the menu item (e.g. fontFamily for font previews). */
+    style?: Record<string, string>;
+    execute(): void;
+  }
   | {
-      kind: 'submenu';
-      id: string;
-      label: string;
-      icon?: string;
-      isEnabled: boolean;
-      currentValueLabel?: string;
-      toolbarDividerBefore?: boolean;
-      children: ResolvedEntry[];
-      executeCustom?: (value: string) => void;
-    };
+    kind: 'submenu';
+    id: string;
+    label: string;
+    icon?: string;
+    isEnabled: boolean;
+    currentValueLabel?: string;
+    toolbarDividerBefore?: boolean;
+    children: ResolvedEntry[];
+    executeCustom?: (value: string) => void;
+  };
 
 export interface ResolvedMenu {
   menuId: SlotId;
@@ -854,7 +866,8 @@ const rowPlugin: GridPlugin = {
   ],
   slots: {
     'insert-menu': [
-      { kind: 'submenu', id: 'rows-submenu', label: 'Rows', icon: 'table_rows',
+      {
+        kind: 'submenu', id: 'rows-submenu', label: 'Rows', icon: 'table_rows',
         resolve: (state, ctx) => ({
           kind: 'submenu', id: 'rows-submenu', label: 'Rows', icon: 'table_rows',
           isEnabled: true,
@@ -1065,7 +1078,8 @@ const columnPlugin: GridPlugin = {
   ],
   slots: {
     'insert-menu': [
-      { kind: 'submenu', id: 'cols-submenu', label: 'Columns', icon: 'view_column',
+      {
+        kind: 'submenu', id: 'cols-submenu', label: 'Columns', icon: 'view_column',
         resolve: (state, ctx) => ({
           kind: 'submenu', id: 'cols-submenu', label: 'Columns', icon: 'view_column',
           isEnabled: true,
@@ -1217,7 +1231,7 @@ export function applyFormatToSelection(ctx: GridCommandContext, patch: Partial<D
     for (const [id, f] of Object.entries(formats)) {
       const r = f as any;
       if (r.rangeRowStart === rangeRowStart && r.rangeRowEnd === rangeRowEnd &&
-          r.rangeColStart === rangeColStart && r.rangeColEnd === rangeColEnd) {
+        r.rangeColStart === rangeColStart && r.rangeColEnd === rangeColEnd) {
         existingId = id;
         break;
       }
@@ -1322,9 +1336,11 @@ function buildFontFamilySubmenu(state: GridCommandState, ctx: GridCommandContext
     isEnabled: state.hasSelection,
     currentValueLabel: (state.currentCellFormat?.fontFamily && state.currentCellFormat.fontFamily !== 'Arial') ? state.currentCellFormat.fontFamily : 'Default',
     children: [
-      { kind: 'command', id: 'font-default', label: 'Default', isEnabled: state.hasSelection,
+      {
+        kind: 'command', id: 'font-default', label: 'Default', isEnabled: state.hasSelection,
         isChecked: !state.currentCellFormat?.fontFamily || state.currentCellFormat.fontFamily === 'Arial',
-        execute: () => applyFormatToSelection(ctx, { fontFamily: undefined }) },
+        execute: () => applyFormatToSelection(ctx, { fontFamily: undefined })
+      },
       ...FONT_FAMILIES.map(f => ({
         kind: 'command' as const, id: `font-${f}`, label: f, isEnabled: state.hasSelection,
         isChecked: state.currentCellFormat?.fontFamily === f,
@@ -1345,9 +1361,11 @@ function buildFontSizeSubmenu(state: GridCommandState, ctx: GridCommandContext):
       if (size > 0 && size <= 999) applyFormatToSelection(ctx, { fontSize: size });
     },
     children: [
-      { kind: 'command', id: 'font-size-default', label: 'Default', isEnabled: state.hasSelection,
+      {
+        kind: 'command', id: 'font-size-default', label: 'Default', isEnabled: state.hasSelection,
         isChecked: !state.currentCellFormat?.fontSize,
-        execute: () => applyFormatToSelection(ctx, { fontSize: undefined }) },
+        execute: () => applyFormatToSelection(ctx, { fontSize: undefined })
+      },
       ...FONT_SIZES.map(s => ({
         kind: 'command' as const, id: `font-size-${s}`, label: String(s), isEnabled: state.hasSelection,
         isChecked: state.currentCellFormat?.fontSize === s,
@@ -1363,9 +1381,11 @@ function buildTextColorSubmenu(state: GridCommandState, ctx: GridCommandContext)
     isEnabled: state.hasSelection,
     executeCustom: (color: string) => applyFormatToSelection(ctx, { textColor: color }),
     children: [
-      { kind: 'command', id: 'text-color-reset', label: '__reset__', isEnabled: state.hasSelection,
+      {
+        kind: 'command', id: 'text-color-reset', label: '__reset__', isEnabled: state.hasSelection,
         isChecked: !state.currentCellFormat?.textColor,
-        execute: () => applyFormatToSelection(ctx, { textColor: undefined }) },
+        execute: () => applyFormatToSelection(ctx, { textColor: undefined })
+      },
       ...PRESET_COLORS.map(c => ({
         kind: 'command' as const, id: `text-color-${c}`, label: c, isEnabled: state.hasSelection,
         isChecked: state.currentCellFormat?.textColor === c,
@@ -1381,9 +1401,11 @@ function buildBgColorSubmenu(state: GridCommandState, ctx: GridCommandContext): 
     isEnabled: state.hasSelection,
     executeCustom: (color: string) => applyFormatToSelection(ctx, { bgColor: color }),
     children: [
-      { kind: 'command', id: 'bg-color-reset', label: '__reset__', isEnabled: state.hasSelection,
+      {
+        kind: 'command', id: 'bg-color-reset', label: '__reset__', isEnabled: state.hasSelection,
         isChecked: !state.currentCellFormat?.bgColor,
-        execute: () => applyFormatToSelection(ctx, { bgColor: undefined }) },
+        execute: () => applyFormatToSelection(ctx, { bgColor: undefined })
+      },
       ...PRESET_COLORS.map(c => ({
         kind: 'command' as const, id: `bg-color-${c}`, label: c, isEnabled: state.hasSelection,
         isChecked: state.currentCellFormat?.bgColor === c,
@@ -1538,7 +1560,8 @@ const formattingPlugin: GridPlugin = {
       { kind: 'submenu', id: 'number-format', label: 'Number format', icon: 'tag', resolve: buildNumberFormatSubmenu },
       { kind: 'submenu', id: 'borders', label: 'Borders', icon: 'border_all', resolve: buildBordersSubmenu },
       { kind: 'separator' },
-      { kind: 'submenu', id: 'alignment', label: 'Alignment', icon: 'format_align_left',
+      {
+        kind: 'submenu', id: 'alignment', label: 'Alignment', icon: 'format_align_left',
         resolve: (state, ctx) => ({
           kind: 'submenu', id: 'alignment', label: 'Alignment', icon: 'format_align_left',
           isEnabled: state.hasSelection,
@@ -1618,7 +1641,7 @@ const visibilityPlugin: GridPlugin = {
       id: 'unhide-all-rows',
       defaultLabel: 'Unhide all rows',
       icon: 'visibility',
-      isEnabled: () => true,
+      isEnabled: s => s.hasHiddenRows,
       execute: (_, ctx) => {
         const sh = ctxSheet(ctx.sheet, ctx);
         if (!sh) return;
@@ -1633,7 +1656,7 @@ const visibilityPlugin: GridPlugin = {
       id: 'unhide-all-cols',
       defaultLabel: 'Unhide all columns',
       icon: 'visibility',
-      isEnabled: () => true,
+      isEnabled: s => s.hasHiddenCols,
       execute: (_, ctx) => {
         const sh = ctxSheet(ctx.sheet, ctx);
         if (!sh) return;
@@ -1675,7 +1698,7 @@ const visibilityPlugin: GridPlugin = {
       id: 'unfreeze-rows',
       defaultLabel: 'Unfreeze rows',
       icon: 'push_pin',
-      isEnabled: () => true,
+      isEnabled: s => s.hasFrozenRows,
       execute: (_, ctx) => {
         const sh = ctxSheet(ctx.sheet, ctx);
         if (!sh) return;
@@ -1717,7 +1740,7 @@ const visibilityPlugin: GridPlugin = {
       id: 'unfreeze-cols',
       defaultLabel: 'Unfreeze columns',
       icon: 'push_pin',
-      isEnabled: () => true,
+      isEnabled: s => s.hasFrozenCols,
       execute: (_, ctx) => {
         const sh = ctxSheet(ctx.sheet, ctx);
         if (!sh) return;
@@ -1890,10 +1913,10 @@ export function commitAutofill(
   const lookupSheetId = nameToIdMap.size > 0 ? (name: string) => nameToIdMap.get(name) : undefined;
   const lookupSheetRowColIds = sheetsMeta
     ? (sheetId: string) => {
-        const s = sheetsMeta[sheetId];
-        if (!s?.rows || !s?.cols) return undefined;
-        return { rowIds: s.rows, colIds: s.cols };
-      }
+      const s = sheetsMeta[sheetId];
+      if (!s?.rows || !s?.cols) return undefined;
+      return { rowIds: s.rows, colIds: s.cols };
+    }
     : undefined;
 
   const isVertical = fillRange.minCol === sourceRange.minCol && fillRange.maxCol === sourceRange.maxCol;
@@ -1996,6 +2019,13 @@ function resolveCommands(
   });
 }
 
+/** Recursively mark a resolved entry disabled (keeping allowlisted commands). */
+function disableResolved(e: ResolvedEntry): ResolvedEntry {
+  if (e.kind === 'separator') return e;
+  if (e.kind === 'submenu') return { ...e, isEnabled: false, children: e.children.map(disableResolved) };
+  return READ_ONLY_COMMANDS.has(e.id) ? e : { ...e, isEnabled: false };
+}
+
 function resolveSlot(
   slotId: SlotId,
   state: GridCommandState,
@@ -2003,7 +2033,11 @@ function resolveSlot(
 ): ResolvedEntry[] {
   return SLOT_LISTS[slotId].map((entry): ResolvedEntry => {
     if (entry.kind === 'separator') return { kind: 'separator' };
-    if (entry.kind === 'submenu') return entry.resolve(state, ctx);
+    if (entry.kind === 'submenu') {
+      const sub = entry.resolve(state, ctx);
+      // Submenus are all format/mutation widgets — disabled wholesale when read-only.
+      return state.canEdit ? sub : (disableResolved(sub) as ResolvedEntry & { kind: 'submenu' });
+    }
 
     const cmd = COMMAND_REGISTRY.get(entry.id);
     if (!cmd) throw new Error(`Unknown command id: "${entry.id}"`);
@@ -2011,7 +2045,7 @@ function resolveSlot(
     const rawLabel = entry.label ?? cmd.defaultLabel;
     const label = typeof rawLabel === 'function' ? rawLabel(state) : rawLabel;
     const icon = entry.icon ?? cmd.icon;
-    const isEnabled = cmd.isEnabled(state);
+    const isEnabled = cmd.isEnabled(state) && (state.canEdit || READ_ONLY_COMMANDS.has(cmd.id));
     const isChecked = cmd.toggle ? cmd.toggle.isChecked(state) : undefined;
     const shortcut = cmd.shortcuts?.[0] ? shortcutDisplay(cmd.shortcuts[0]) : undefined;
 
@@ -2051,6 +2085,7 @@ export function useGridCommands(
     for (const cmd of KEY_COMMANDS) {
       // Skip paste — handled by the native paste event listener so we get clipboardData
       if (cmd.id === 'paste') continue;
+      if (!state.canEdit && !READ_ONLY_COMMANDS.has(cmd.id)) continue;
       for (const shortcut of cmd.shortcuts!) {
         if (matchShortcut(e, isMod, shortcut)) {
           e.preventDefault();
@@ -2063,6 +2098,7 @@ export function useGridCommands(
   }
 
   function executePaste(pasteEvent?: ClipboardEvent): void {
+    if (!state.canEdit) return;
     const pasteCmd = COMMAND_REGISTRY.get('paste');
     if (!pasteCmd) return;
     ctx.pasteEvent = pasteEvent;

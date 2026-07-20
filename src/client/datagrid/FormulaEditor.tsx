@@ -382,6 +382,9 @@ interface FormulaEditorProps {
   onHighlightsChange?: (highlights: FormulaHighlight[]) => void;
   functionNames: string[];
   autoFocus?: boolean;
+  /** Display-only: the formula stays visible (with highlighting) but CodeMirror
+   * rejects edits. Used by the formula bar on read-only grids. */
+  readOnly?: boolean;
   className?: string;
 }
 
@@ -396,6 +399,7 @@ export function FormulaEditor({
   onHighlightsChange,
   functionNames,
   autoFocus,
+  readOnly,
   className,
 }: FormulaEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -528,6 +532,7 @@ export function FormulaEditor({
       const state = EditorState.create({
         doc: lastExternalValue.current,
         extensions: [
+          ...(readOnly ? [EditorState.readOnly.of(true), EditorView.editable.of(false)] : []),
           commitKeymap,
           formulaHighlighter,
           autocompletion({ override: [completionSource], activateOnTyping: true, icons: false }),
@@ -563,7 +568,7 @@ export function FormulaEditor({
       viewRef.current = null;
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [functionNames]);
+  }, [functionNames, readOnly]);
 
   // Sync external value changes — skip while focused (editor is authoritative).
   // Always update lastExternalValue so the CM view gets the right doc when it

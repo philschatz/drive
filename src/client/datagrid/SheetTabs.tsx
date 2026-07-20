@@ -10,6 +10,8 @@ export interface SheetTabInfo {
 interface SheetTabsProps {
   sheets: SheetTabInfo[];
   currentSheetId: string;
+  /** Read-only grid: sheet switching stays, but no add/rename/reorder/unhide/context menu. */
+  readOnly?: boolean;
   onSelect: (id: string) => void;
   onAdd: () => void;
   onRename: (id: string, name: string) => void;
@@ -20,7 +22,7 @@ interface SheetTabsProps {
   renameRef?: RefObject<((id: string) => void) | null>;
 }
 
-export function SheetTabs({ sheets, currentSheetId, onSelect, onAdd, onRename, onReorder, onContextMenu, onUnhide, renameRef }: SheetTabsProps) {
+export function SheetTabs({ sheets, currentSheetId, readOnly, onSelect, onAdd, onRename, onReorder, onContextMenu, onUnhide, renameRef }: SheetTabsProps) {
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const [hiddenMenuOpen, setHiddenMenuOpen] = useState(false);
@@ -69,6 +71,7 @@ export function SheetTabs({ sheets, currentSheetId, onSelect, onAdd, onRename, o
   }, [renamingId, renameValue, onRename]);
 
   const handleTabMouseDown = useCallback((id: string, e: MouseEvent) => {
+    if (readOnly) return; // no drag-reorder; plain clicks still select via onClick
     if (e.button !== 0 || renamingId) return;
     const startX = e.clientX;
     let dragging = false;
@@ -111,7 +114,7 @@ export function SheetTabs({ sheets, currentSheetId, onSelect, onAdd, onRename, o
 
     document.addEventListener('mousemove', onMouseMove);
     document.addEventListener('mouseup', onMouseUp);
-  }, [renamingId, visibleSheets, onReorder]);
+  }, [readOnly, renamingId, visibleSheets, onReorder]);
 
   return (
     <div className="sheet-tabs-bar">
@@ -125,12 +128,15 @@ export function SheetTabs({ sheets, currentSheetId, onSelect, onAdd, onRename, o
         </button>
         {hiddenMenuOpen && (
           <div className="sheet-hidden-popup">
-            {sheets.map(sheet => (
+            {(readOnly ? sheets.filter(s => !s.hidden) : sheets).map(sheet => (
               <button
                 key={sheet.id}
                 className={'sheet-hidden-item' + (sheet.hidden ? ' hidden-sheet' : '')}
                 onClick={() => {
-                  if (sheet.hidden) onUnhide(sheet.id);
+                  if (sheet.hidden) {
+                    if (readOnly) return; // unhide is a mutation
+                    onUnhide(sheet.id);
+                  }
                   onSelect(sheet.id);
                   setHiddenMenuOpen(false);
                 }}
@@ -144,9 +150,11 @@ export function SheetTabs({ sheets, currentSheetId, onSelect, onAdd, onRename, o
           </div>
         )}
       </div>
-      <button className="sheet-tab-add" onClick={onAdd} title="Add sheet">
-        <span className="material-symbols-outlined" style={{ fontSize: '20px' }}>add</span>
-      </button>
+      {!readOnly && (
+        <button className="sheet-tab-add" onClick={onAdd} title="Add sheet">
+          <span className="material-symbols-outlined" style={{ fontSize: '20px' }}>add</span>
+        </button>
+      )}
       <div className="sheet-tabs-scroll">
       {visibleSheets.map((sheet, i) => {
         const isActive = sheet.id === currentSheetId;
@@ -160,9 +168,12 @@ export function SheetTabs({ sheets, currentSheetId, onSelect, onAdd, onRename, o
             data-sheet-tab={sheet.id}
             className={'sheet-tab' + (isActive ? ' active' : '') + (showDropLeft ? ' drop-left' : '') + (showDropRight ? ' drop-right' : '')}
             onClick={() => { if (!isRenaming) onSelect(sheet.id); }}
-            onDblClick={() => startRename(sheet.id, sheet.name)}
+            onDblClick={() => { if (!readOnly) startRename(sheet.id, sheet.name); }}
             onMouseDown={(e: any) => handleTabMouseDown(sheet.id, e)}
-            onContextMenu={() => {
+            onContextMenu={(e: any) => {
+              // Read-only: no sheet context menu (stopPropagation keeps the
+              // radix trigger from opening it).
+              if (readOnly) { e.preventDefault(); e.stopPropagation(); return; }
               onContextMenu(sheet.id);
             }}
           >
