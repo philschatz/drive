@@ -62,5 +62,16 @@ test.describe('Counters', () => {
     await titleInput.fill('Daily pushups');
     await page.getByRole('button', { name: 'Save' }).click();
     await expect(page.locator('[data-testid="counter-list"]').getByText('Daily pushups')).toBeVisible();
+
+    // Archive the recurring "Stretch" habit: it leaves the active list and shows
+    // under "Archived"; unarchiving brings it back as pending.
+    const stretchRow = page.locator('[data-testid="counter-list"] div[data-status]', { hasText: 'Stretch' }).first();
+    await stretchRow.getByRole('button', { name: 'Archive' }).click();
+    await expect(page.getByRole('heading', { name: 'Archived' })).toBeVisible();
+    await expect(page.locator('[data-testid="counter-list"] div[data-status]', { hasText: 'Stretch' })).toHaveCount(0);
+    const archivedStretch = page.locator('[data-testid="counter-list"] div', { hasText: 'Stretch' }).last();
+    await archivedStretch.getByRole('button', { name: 'Unarchive' }).click();
+    await expect(page.getByRole('heading', { name: 'Archived' })).toHaveCount(0);
+    await expect(page.locator('[data-testid="counter-list"] div[data-status]', { hasText: 'Stretch' })).toHaveCount(1);
   });
 });

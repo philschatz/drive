@@ -63,11 +63,17 @@ export function CounterEditor({ uid, event, isNew, opened, onSave, onDelete, onC
       if (frequency === 'weekly' && byDay.length > 0) {
         recurrenceRule.byDay = byDay.map(day => ({ '@type': 'NDay', day }));
       }
+      // Preserve an archive bound (recurrenceRule.until) the rebuild would drop,
+      // so editing an archived habit doesn't silently un-archive it.
+      if (event.recurrenceRule?.until) recurrenceRule.until = event.recurrenceRule.until;
     }
     onSave(uid, {
       '@type': 'Event',
       title: title || 'Untitled',
-      // A time window only applies to a repeating counter.
+      // Recurring items get a date anchor so occurrences (and the chart) begin
+      // when the item was created, not retroactively; a new one defaults to
+      // today. A schedule-less tally has no start. Time-of-day is separate.
+      start: recurring ? (event.start || Temporal.Now.plainDateISO().toString()) : undefined,
       startTime: recurring && startTime ? startTime + ':00' : undefined,
       duration: recurring && duration ? duration : undefined,
       recurrenceRule,

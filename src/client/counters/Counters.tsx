@@ -12,8 +12,9 @@ import { DocLoader } from '../shared/useDocument';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
+import { DeleteButton } from '@/components/ui/delete-button';
 import type { CounterEvent } from './schema';
-import { sortedCounters, metMissedByWeek, type CounterEntry, type CounterStatus } from './occurrences';
+import { sortedCounters, metMissedByWeek, isArchived, type CounterEntry, type CounterStatus } from './occurrences';
 import { MetMissedChart } from './Chart';
 import { CounterEditor } from './CounterEditor';
 
@@ -107,6 +108,18 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
     setEditorState(null);
   }, [docId]);
 
+  // Archive a habit by ending its recurrence as of now (its `until`); unarchive
+  // by removing that bound. Only recurring items have a rule to end.
+  const archiveCounter = useCallback((uid: string) => {
+    if (!canEditRef.current || !docId) return;
+    updateDoc(docId, (d, uid, ts) => { const r = d.events[uid]?.recurrenceRule; if (r) r.until = ts; }, uid, nowLocal());
+  }, [docId]);
+
+  const unarchiveCounter = useCallback((uid: string) => {
+    if (!canEditRef.current || !docId) return;
+    updateDoc(docId, (d, uid) => { const r = d.events[uid]?.recurrenceRule; if (r) delete r.until; }, uid);
+  }, [docId]);
+
   const recordClick = useCallback((uid: string) => {
     if (!canEditRef.current || !docId) return;
     setNow(nowLocal());
@@ -130,10 +143,12 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
   const handleQuickAdd = useCallback(() => {
     const title = quickAddText.trim();
     if (!title) return;
-    // Quick-added counters default to a daily habit (no time window).
+    // Quick-added counters default to a daily habit (no time window), anchored
+    // at today so history starts from creation.
     saveCounter(generateUid(), {
       '@type': 'Event',
       title,
+      start: now.substring(0, 10),
       recurrenceRule: { '@type': 'RecurrenceRule', frequency: 'daily' },
     });
     setQuickAddText('');
@@ -189,8 +204,21 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
     return result;
   }, [peers]);
 
-  const sorted = sortedCounters(events, now);
-  const stats = useMemo(() => metMissedByWeek(events, now), [events, now]);
+  // Archived habits (recurrence ended) drop out of the active list, the section
+  // counts, and the chart — shown separately at the bottom, newest first.
+  const [active, archived] = useMemo(() => {
+    const a: Record<string, CounterEvent> = {};
+    const arch: { uid: string; ev: CounterEvent; until: string }[] = [];
+    for (const [uid, ev] of Object.entries(events)) {
+      if (isArchived(ev)) arch.push({ uid, ev, until: ev.recurrenceRule!.until! });
+      else a[uid] = ev;
+    }
+    arch.sort((x, y) => (x.until > y.until ? -1 : 1));
+    return [a, arch] as const;
+  }, [events]);
+
+  const sorted = sortedCounters(active, now);
+  const stats = useMemo(() => metMissedByWeek(active, now), [active, now]);
 
   let lastSection: CounterStatus | null = null;
 
@@ -225,11 +253,10 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
       <div style={noAccess ? { opacity: 0.4, pointerEvents: 'none' } : undefined}>
       {showValidation && <ValidationPanel errors={validationErrors} docId={docId} />}
 
-      <MetMissedChart stats={stats} />
-
       {canEdit && (
         <div className="flex items-center gap-2 mb-3">
           <Input
+            autoFocus
             placeholder="Add a daily counter..."
             value={quickAddText}
             onInput={(e: any) => setQuickAddText(e.currentTarget.value)}
@@ -282,15 +309,51 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
                     <span className="material-symbols-outlined text-base">edit</span>
                   </Button>
                 )}
+                {canEdit && ev.recurrenceRule && (
+                  // Wrapper stops the row's click-to-record from also firing.
+                  <span onClick={(e: any) => e.stopPropagation()}>
+                    <DeleteButton
+                      icon="archive"
+                      tooltip="Archive"
+                      confirmMessage={`Archive "${ev.title || 'Untitled'}" habit?`}
+                      onConfirm={() => archiveCounter(uid)}
+                    />
+                  </span>
+                )}
                 <PresenceDot fieldId={uid} peerFocusedFields={peerEditingEvents} />
               </div>
             </>
           );
         })}
-        {sorted.length === 0 && (
+        {sorted.length === 0 && archived.length === 0 && (
           <p className="text-sm text-muted-foreground py-4">Nothing to count yet. Add something you'd like to do regularly.</p>
         )}
+
+        {archived.length > 0 && (
+          <>
+            <h3 className="text-xs font-semibold uppercase text-muted-foreground mt-3 mb-1">Archived</h3>
+            {archived.map(({ uid, ev, until }) => (
+              <div key={uid} className="flex items-center gap-2 py-2 px-2 border-b border-border rounded-sm" style={{ opacity: 0.6 }}>
+                <span className="material-symbols-outlined text-lg">inventory_2</span>
+                <span className="text-sm flex-1">{ev.title || 'Untitled'}</span>
+                <Badge variant="secondary">archived {until.substring(0, 10)}</Badge>
+                {canEdit && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    aria-label="Unarchive"
+                    onClick={() => unarchiveCounter(uid)}
+                  >
+                    <span className="material-symbols-outlined text-base">unarchive</span>
+                  </Button>
+                )}
+              </div>
+            ))}
+          </>
+        )}
       </div>
+
+      <MetMissedChart stats={stats} />
       </div>
 
       <CounterEditor

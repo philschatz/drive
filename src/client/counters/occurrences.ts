@@ -22,6 +22,12 @@ export interface WeekStat {
 
 const LOOKBACK_DAYS = 400;
 
+/** A habit is archived by ending its recurrence: `recurrenceRule.until` is set
+ * to the moment it was archived, so no future occurrences are generated. */
+export function isArchived(ev: CounterEvent): boolean {
+  return !!ev.recurrenceRule?.until;
+}
+
 /** Normalize a local date or datetime string to a full local datetime. */
 function toDateTime(s: string): string {
   return s.length <= 10 ? s + 'T00:00:00' : s;
@@ -88,9 +94,11 @@ export function metInPeriod(ev: CounterEvent, occStart: string, nextStart?: stri
  *   'tally'    — no schedule at all: a free-running counter, always clickable
  *   'upcoming' — its first occurrence is still in the future
  *   'done'     — the current period has a recorded completion
- *   'pending'  — the current occurrence's window is still open
- *   'overdue'  — the current window has closed with no completion yet, and the
- *                next occurrence hasn't begun
+ *   'pending'  — the current occurrence's window is still open and the previous
+ *                occurrence (if any since the habit's start) was met
+ *   'overdue'  — the current window has closed with no completion yet (and the
+ *                next occurrence hasn't begun), or the current window is open
+ *                but the previous occurrence went unmet
  */
 export function currentStatus(ev: CounterEvent, now: string): { status: CounterStatus; occurrence?: string } {
   if (!ev.recurrenceRule && !ev.start) return { status: 'tally' };
@@ -101,17 +109,22 @@ export function currentStatus(ev: CounterEvent, now: string): { status: CounterS
   const occs = expectedOccurrences(ev, from, to);
   if (occs.length === 0) return { status: 'upcoming' };
 
+  let prev: string | undefined;
   let curr: string | undefined;
   let next: string | undefined;
   for (const o of occs) {
-    if (toDateTime(o) <= now) curr = o;
+    if (toDateTime(o) <= now) { prev = curr; curr = o; }
     else { next = o; break; }
   }
   if (!curr) return { status: 'upcoming', occurrence: occs[0] };
 
   if (metInPeriod(ev, curr, next)) return { status: 'done', occurrence: curr };
-  if (now < windowEnd(ev, curr)) return { status: 'pending', occurrence: curr };
-  return { status: 'overdue', occurrence: curr };
+  if (now >= windowEnd(ev, curr)) return { status: 'overdue', occurrence: curr };
+  // Window still open — but a missed previous occurrence keeps it overdue.
+  // Without a start anchor the expansion is synthetic (anchored at the query
+  // range), so "previous" doesn't imply the habit existed then; skip the check.
+  if (ev.start && prev && !metInPeriod(ev, prev, curr)) return { status: 'overdue', occurrence: curr };
+  return { status: 'pending', occurrence: curr };
 }
 
 /** Overdue first, then pending, upcoming, done, and finally schedule-less

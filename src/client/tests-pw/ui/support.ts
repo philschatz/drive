@@ -64,6 +64,7 @@ export async function openApp(browser: Browser, name = 'ui'): Promise<App> {
   let promptAnswer = 'Untitled';
   page.on('dialog', (dialog) => {
     if (dialog.type() === 'prompt') void dialog.accept(promptAnswer);
+    else if (dialog.type() === 'confirm') void dialog.accept(); // proceed on confirm() (e.g. Archive)
     else void dialog.dismiss();
   });
 

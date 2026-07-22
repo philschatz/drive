@@ -1,6 +1,6 @@
 import 'temporal-polyfill/global';
 import {
-  expectedOccurrences, metInPeriod, windowEnd, currentStatus, sortedCounters, metMissedByWeek,
+  expectedOccurrences, metInPeriod, windowEnd, currentStatus, sortedCounters, metMissedByWeek, isArchived,
 } from './occurrences';
 import type { CounterEvent } from './schema';
 
@@ -63,8 +63,17 @@ describe('metInPeriod / windowEnd', () => {
 });
 
 describe('currentStatus', () => {
-  it('daily with today unmet and its window open → pending', () => {
-    expect(currentStatus(daily(), NOW)).toEqual({ status: 'pending', occurrence: '2026-07-21' });
+  it('daily created a week ago with no completions → overdue (previous occurrence missed)', () => {
+    expect(currentStatus(daily({ start: '2026-07-14' }), NOW)).toEqual({ status: 'overdue', occurrence: '2026-07-21' });
+  });
+
+  it('daily with yesterday met and today unmet (window open) → pending', () => {
+    const ev = daily({ start: '2026-07-14', completions: { '2026-07-20T09:00:00': '' } });
+    expect(currentStatus(ev, NOW)).toEqual({ status: 'pending', occurrence: '2026-07-21' });
+  });
+
+  it('daily created today, unmet, window open → pending', () => {
+    expect(currentStatus(daily({ start: '2026-07-21' }), NOW)).toEqual({ status: 'pending', occurrence: '2026-07-21' });
   });
 
   it('daily with today met → done', () => {
@@ -93,6 +102,19 @@ describe('currentStatus', () => {
 
   it('no rule and no start → free tally', () => {
     expect(currentStatus({ '@type': 'Event', title: 'pushups' }, NOW).status).toBe('tally');
+  });
+});
+
+describe('isArchived', () => {
+  it('is true only when the recurrence has an until bound', () => {
+    expect(isArchived(daily())).toBe(false);
+    expect(isArchived(daily({ recurrenceRule: { '@type': 'RecurrenceRule', frequency: 'daily', until: '2026-07-21T09:00:00' } }))).toBe(true);
+    expect(isArchived({ '@type': 'Event', title: 'tally' })).toBe(false);
+  });
+
+  it('an archived habit generates no occurrences after its until', () => {
+    const ev = daily({ recurrenceRule: { '@type': 'RecurrenceRule', frequency: 'daily', until: '2026-07-19T00:00:00' } });
+    expect(expectedOccurrences(ev, '2026-07-18', '2026-07-25')).toEqual(['2026-07-18', '2026-07-19']);
   });
 });
 
