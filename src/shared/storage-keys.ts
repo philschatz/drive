@@ -50,11 +50,18 @@ export const SETTINGS_PREFIX = 'settings:';
 /** The single source of all app settings: their types and default values. */
 export interface SettingsSchema {
   'cache-disabled': boolean;
+  /**
+   * Full hash path (incl. rest path + query, e.g. `/d/<docId>/sheets/s1?anchor=r1:c2`)
+   * of the last doc the user had open. Read at startup to reopen it when the app
+   * launches on the bare base URL (PWA start_url has no hash).
+   */
+  'last-opened-doc': string | null;
   // future settings get one line here + a default below
 }
 
 export const SETTINGS_DEFAULTS: SettingsSchema = {
   'cache-disabled': false,
+  'last-opened-doc': null,
 };
 
 export type SettingName = keyof SettingsSchema;

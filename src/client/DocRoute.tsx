@@ -5,6 +5,8 @@ import { DocLoader } from './shared/useDocument';
 import { useAccess } from './shared/useAccess';
 import { sourceUrl } from './shared/doc-urls';
 import { buttonVariants } from '@/components/ui/button';
+import { getHashPath, getHashSearch } from './hash-history';
+import { settingSet, settingSetSync } from './idb-storage';
 
 /**
  * The single document route: `#/d/:docId[/:rest*]`. Resolves the document's
@@ -12,6 +14,23 @@ import { buttonVariants } from '@/components/ui/button';
  * registered plugin are handed to the source inspector.
  */
 export function DocRoute({ docId, rest }: { docId?: string; rest?: string; path?: string }) {
+  // Remember the full doc URL (rest path + query included) so a cold launch on
+  // the bare base URL (e.g. the PWA start_url) can reopen where the user left off.
+  useEffect(() => {
+    if (!docId) return;
+    const record = () => {
+      if (!getHashPath().startsWith('/d/')) return;
+      const url = getHashPath() + getHashSearch();
+      settingSetSync('last-opened-doc', url);
+      settingSet('last-opened-doc', url).catch(() => {});
+    };
+    record();
+    // Plugins update rest/query via replaceDocHash/pushDocHash without
+    // re-rendering this route, so track hash changes while mounted.
+    window.addEventListener('hashchange', record);
+    return () => window.removeEventListener('hashchange', record);
+  }, [docId]);
+
   return (
     <DocLoader docId={docId}>
       {docId && <DocViewResolver docId={docId} rest={rest} />}

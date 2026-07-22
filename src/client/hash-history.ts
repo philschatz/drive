@@ -1,10 +1,10 @@
-function getHashPath(): string {
+export function getHashPath(): string {
   const hash = window.location.hash;
   const full = hash.startsWith('#') ? hash.slice(1) || '/' : '/';
   return full.split('?')[0];
 }
 
-function getHashSearch(): string {
+export function getHashSearch(): string {
   const hash = window.location.hash;
   const full = hash.startsWith('#') ? hash.slice(1) : '';
   const q = full.indexOf('?');
