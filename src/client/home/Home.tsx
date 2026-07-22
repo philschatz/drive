@@ -17,6 +17,7 @@ import { a1ToInternal } from '@/datagrid/helpers';
 import { DOC_PLUGINS, iconForType, docTypeLabel, type DocTypePlugin } from '@/doc-plugins';
 import { docUrl, sourceUrl } from '@/shared/doc-urls';
 import { relativeTime } from '../../shared/relative-time';
+import { settingSet, settingSetSync } from '../idb-storage';
 
 declare const __APP_VERSION__: string;
 declare const __BUILD_TIME__: string;
@@ -53,6 +54,14 @@ export function Home({ path }: { path?: string }) {
   const transports = usePeerTransports();
 
   useEffect(() => { document.title = 'Automerge Documents'; }, []);
+
+  // Reaching Home means the user deliberately left any open document, so forget
+  // the "last opened doc" — a later cold PWA launch should land here, not
+  // reopen where they were (see src/client/main.tsx).
+  useEffect(() => {
+    settingSetSync('last-opened-doc', null);
+    settingSet('last-opened-doc', null).catch(() => {});
+  }, []);
 
   // Pull the doc list from the worker (the source of truth). Results flow into `entries`
   // via the onDocListUpdated subscription below.

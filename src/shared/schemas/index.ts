@@ -23,6 +23,7 @@ import { type ValidationError, type DocSchemaPlugin, validateNode } from './core
 import { calendarSchemaPlugin } from '../../client/calendar/schema';
 import { taskListSchemaPlugin } from '../../client/tasks/schema';
 import { dataGridSchemaPlugin } from '../../client/datagrid/schema';
+import { countersSchemaPlugin } from '../../client/counters/schema';
 
 /** Every known document type's validation core. Adding a document type means
  * registering its schema core here and its full plugin in src/client/doc-plugins. */
@@ -30,6 +31,7 @@ export const SCHEMA_PLUGINS: DocSchemaPlugin[] = [
   calendarSchemaPlugin,
   taskListSchemaPlugin,
   dataGridSchemaPlugin,
+  countersSchemaPlugin,
 ];
 
 /**

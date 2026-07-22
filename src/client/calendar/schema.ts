@@ -80,8 +80,30 @@ export interface CalendarDocument {
   events: Record<string, CalendarEvent>;
 }
 
-const commonEventFields: Record<string, SchemaNode> = {
+/** Field nodes shared by every Event-shaped item — Calendar events and
+ * Calendar+Counters items (src/client/counters/schema.ts) both spread these. */
+export const baseEventFields: Record<string, SchemaNode> = {
   title: str({ optional: true }),
+  // `start` is a local date ("YYYY-MM-DD") or local datetime ("YYYY-MM-DDTHH:mm:ss"),
+  // never a UTC/offset timestamp — timezone lives in the separate `timeZone` field.
+  start: str({ pattern: LOCAL_DATE_TIME_RE, optional: true }),
+  duration: str({ pattern: DURATION_RE, optional: true }),
+};
+
+/** Time-parse safety net for the base fields: mirror the Temporal parsing the
+ * renderers do so crafted values that pass the loose regexes surface as
+ * validation errors instead of render crashes. */
+export function checkBaseEventTimeDeps(ev: any, p: (string | number)[], errors: ValidationError[]): void {
+  if (typeof ev.start === 'string' && ev.start && !isParseableLocalDateTime(ev.start)) {
+    errors.push({ path: [...p, 'start'], message: `start "${ev.start}" is not a valid date/time`, kind: 'dependency' });
+  }
+  if (typeof ev.duration === 'string' && ev.duration && !isParseableDuration(ev.duration)) {
+    errors.push({ path: [...p, 'duration'], message: `duration "${ev.duration}" is not a valid ISO 8601 duration`, kind: 'dependency' });
+  }
+}
+
+const commonEventFields: Record<string, SchemaNode> = {
+  ...baseEventFields,
   description: str({ optional: true }),
   location: str({ optional: true }),
   virtualLocations: record(virtualLocationSchema, { optional: true }),
@@ -101,11 +123,7 @@ const commonEventFields: Record<string, SchemaNode> = {
   progress: str({ enum: PROGRESS_VALUES, optional: true }),
   progressUpdated: str({ pattern: UTC_DATE_TIME_RE, optional: true }),
   percentComplete: num({ min: 0, max: 100, integer: true, optional: true }),
-  // `start` is a local date ("YYYY-MM-DD") or local datetime ("YYYY-MM-DDTHH:mm:ss"),
-  // never a UTC/offset timestamp — timezone lives in the separate `timeZone` field.
-  start: str({ pattern: LOCAL_DATE_TIME_RE, optional: true }),
   timeZone: str({ optional: true }),
-  duration: str({ pattern: DURATION_RE, optional: true }),
   attachments: record(linkSchema, { optional: true }),
 };
 
@@ -180,17 +198,9 @@ export function checkCalendarDependencies(doc: any, errors: ValidationError[]): 
       checkRecurrenceOverrideKeys(ev.recurrenceOverrides, [...p, 'recurrenceOverrides'], errors);
     }
 
-    // Time-parse safety net: mirror the Temporal parsing schedule-x does at render
-    // time so crafted values that pass the loose regexes but crash the renderer
-    // surface as validation errors instead.
-    if (typeof ev.start === 'string' && ev.start && !isParseableLocalDateTime(ev.start)) {
-      errors.push({ path: [...p, 'start'], message: `start "${ev.start}" is not a valid date/time`, kind: 'dependency' });
-    }
+    checkBaseEventTimeDeps(ev, p, errors);
     if (typeof ev.recurrenceId === 'string' && ev.recurrenceId && !isParseableLocalDateTime(ev.recurrenceId)) {
       errors.push({ path: [...p, 'recurrenceId'], message: `recurrenceId "${ev.recurrenceId}" is not a valid date/time`, kind: 'dependency' });
-    }
-    if (typeof ev.duration === 'string' && ev.duration && !isParseableDuration(ev.duration)) {
-      errors.push({ path: [...p, 'duration'], message: `duration "${ev.duration}" is not a valid ISO 8601 duration`, kind: 'dependency' });
     }
     if (typeof ev.timeZone === 'string' && ev.timeZone && !isParseableTimeZone(ev.timeZone)) {
       errors.push({ path: [...p, 'timeZone'], message: `timeZone "${ev.timeZone}" is not a valid time zone`, kind: 'dependency' });

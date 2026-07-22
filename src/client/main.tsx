@@ -10,12 +10,20 @@ import { settingGetSync } from './idb-storage';
 // all builds (not just dev) so the suite can run against a production build too.
 import './test-bridge';
 
-// Cold launch on the bare base URL (e.g. PWA start_url, which cannot carry a
-// hash) → reopen the last doc the user had open. Only fires before first render,
-// so navigating to Home afterwards behaves normally.
+// Cold launch from the installed PWA (its start_url carries `?source=pwa`; a
+// hash can't be used there) → reopen the last doc the user had open. A plain
+// visit to the base URL has no marker and stays on Home, so deliberately going
+// Home is never hijacked back into a document. Only fires before first render.
 if (getHashPath() === '/') {
-  const lastDoc = settingGetSync('last-opened-doc');
-  if (lastDoc) hashHistory.replace(lastDoc);
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('source') === 'pwa') {
+    const lastDoc = settingGetSync('last-opened-doc');
+    if (lastDoc) hashHistory.replace(lastDoc);
+    // Drop the marker so it doesn't linger in the address bar or get bookmarked.
+    params.delete('source');
+    const search = params.toString();
+    window.history.replaceState(null, '', window.location.pathname + (search ? '?' + search : '') + window.location.hash);
+  }
 }
 
 render(

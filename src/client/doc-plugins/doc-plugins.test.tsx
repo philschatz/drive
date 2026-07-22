@@ -4,6 +4,7 @@
 jest.mock('../calendar/Calendar', () => ({ Calendar: () => null }));
 jest.mock('../tasks/Tasks', () => ({ Tasks: () => null }));
 jest.mock('../datagrid/DataGrid', () => ({ DataGrid: () => null }));
+jest.mock('../counters/Counters', () => ({ Counters: () => null }));
 
 import { DOC_PLUGINS } from './index';
 import { SCHEMA_PLUGINS } from '../../shared/schemas';

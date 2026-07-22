@@ -80,10 +80,14 @@ export function generateDates(startStr: string, rule: any, rangeStart: string, r
       while (!done) {
         // Advance the guard every iteration, even if no occurrence lands in range.
         if (++iterations > MAX_ITERATIONS) break;
-        for (let i = 0; i < byDay.length; i++) {
-          const diff = (byDay[i] - weekStart.dayOfWeek + 7) % 7;
-          const dd = weekStart.add({ days: diff });
-          if (!addDate(dd)) { done = true; break; }
+        // The 7-day window starts at the start date's weekday, so candidates can
+        // land out of chronological order; sort before adding, otherwise a
+        // beyond-range later day terminates the loop and drops in-range siblings.
+        const candidates = byDay
+          .map((day: number) => weekStart.add({ days: (day - weekStart.dayOfWeek + 7) % 7 }))
+          .sort(Temporal.PlainDate.compare);
+        for (let i = 0; i < candidates.length; i++) {
+          if (!addDate(candidates[i])) { done = true; break; }
         }
         weekStart = weekStart.add({ days: 7 * interval });
       }

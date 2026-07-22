@@ -95,6 +95,7 @@ const URL_FRAGMENT = {
   Calendar: /#\/d\//,
   'Task list': /#\/d\//,
   Spreadsheet: /#\/d\//,
+  'Habit Tracker': /#\/d\//,
 } as const;
 
 /**
@@ -109,7 +110,10 @@ export async function createDocViaUI(
 ): Promise<void> {
   app.setPromptAnswer(name);
   await app.page.getByRole('button', { name: 'New' }).click();
-  await app.page.getByRole('menuitem', { name: type }).click();
+  // The menu-item name is "<icon> <label>"; anchor to the end so "Calendar"
+  // doesn't also match "Calendar+Counters".
+  const label = new RegExp(type.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$');
+  await app.page.getByRole('menuitem', { name: label }).click();
   await expect(app.page).toHaveURL(URL_FRAGMENT[type], { timeout: 15_000 });
 }
 

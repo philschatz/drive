@@ -183,7 +183,10 @@ export default defineConfig(async () => {
         theme_color: '#4A90D9',
         background_color: '#ffffff',
         display: 'standalone',
-        start_url: base,
+        // Marker lets a cold PWA launch (which lands on the hashless base URL)
+        // be told apart from the user deliberately navigating to Home, so only
+        // the former reopens the last document (see src/client/main.tsx).
+        start_url: `${base}?source=pwa`,
         scope: base,
         icons: [
           { src: `${base}pwa-192x192.png`, sizes: '192x192', type: 'image/png' },
