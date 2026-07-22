@@ -12,7 +12,7 @@ import { Button } from '@/components/ui/button';
 import { Alert } from '@/components/ui/alert';
 import { getIdentity, ensureUserGroup, rendezvousCreateShare } from '../shared/keyhive-api';
 import { getContactName } from '../contact-names';
-import { keyhiveReady } from '../shared/automerge';
+import { keyhiveReady, useWsStatus } from '../shared/automerge';
 import { RendezvousShare } from './RendezvousShare';
 import { buildAddFriendRendezvousUrl } from './AddFriendPage';
 
@@ -21,6 +21,7 @@ export function ShareWithFriendPage({ path }: { path?: string }) {
   const [error, setError] = useState('');
   // Bump to (re)mount RendezvousShare; >0 means the share has been started.
   const [started, setStarted] = useState(0);
+  const connected = useWsStatus('');
 
   const load = useCallback(async () => {
     try {
@@ -78,7 +79,13 @@ export function ShareWithFriendPage({ path }: { path?: string }) {
         </p>
       )}
 
-      <Button size="sm" variant="outline" onClick={handleStart}>
+      <Button
+        size="sm"
+        variant="outline"
+        onClick={handleStart}
+        disabled={!connected}
+        title={connected ? undefined : 'Disconnected from the server — reconnect to start the process'}
+      >
         Start the process
       </Button>
 

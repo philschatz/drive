@@ -12,6 +12,7 @@ import { Alert } from '@/components/ui/alert';
 import { DeviceList } from '@/components/DeviceList';
 import { useDevices, useDeviceStatuses } from '../shared/use-devices';
 import { rendezvousCreateDeviceLink } from '../shared/keyhive-api';
+import { useWsStatus } from '../shared/automerge';
 import { RendezvousShare } from './RendezvousShare';
 import { buildLinkDeviceRendezvousUrl } from './LinkDevicePage';
 
@@ -20,6 +21,7 @@ export function LinkDeviceSharePage({ path }: { path?: string }) {
   const [message, setMessage] = useState('');
   // Bump to (re)mount RendezvousShare; >0 means the share has been started.
   const [started, setStarted] = useState(0);
+  const connected = useWsStatus('');
 
   const { devices, removeDevice } = useDevices({ onError: setError, onMessage: setMessage });
   const deviceStatuses = useDeviceStatuses();
@@ -57,7 +59,13 @@ export function LinkDeviceSharePage({ path }: { path?: string }) {
           Invite another device to act as you. Open the link on your new device while
           this page stays open — they connect over the relay to finish linking.
         </p>
-        <Button size="sm" variant="outline" onClick={() => setStarted(n => n + 1)}>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => setStarted(n => n + 1)}
+          disabled={!connected}
+          title={connected ? undefined : 'Disconnected from the server — reconnect to start the process'}
+        >
           Start the process
         </Button>
         {started > 0 && (
