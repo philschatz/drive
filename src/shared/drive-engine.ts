@@ -33,6 +33,7 @@ type ArchivedDocTombstones = Record<string, { grantSigs: string[] }>;
 interface SubInfo {
   filter: string;
   post: (msg: any) => void; // where to send results (host.emit or an hf-port poster)
+  peek?: boolean; // true = this read doesn't count as the user viewing the doc
 }
 
 interface DocEntry {
@@ -82,6 +83,13 @@ export const PRESENCE_STALE_MS = 12_000;
 const PRESENCE_LIVENESS_CHECK_MS = 3000;
 /** How often to re-attempt presence setup while the doc/keyhive isn't ready. */
 const PRESENCE_SETUP_RETRY_MS = 2000;
+
+/** Order-insensitive head-set equality. A missing record never equals. */
+export function headsEqual(a: string[] | undefined, b: string[]): boolean {
+  if (!a || a.length !== b.length) return false;
+  const sa = [...a].sort(), sb = [...b].sort();
+  return sa.every((h, i) => h === sb[i]);
+}
 
 /** Peers seen within `staleMs` of `now`. Fresh iff now - lastSeen < staleMs. */
 export function freshPresencePeerIds(
@@ -149,6 +157,10 @@ export class DriveEngine {
   // Reconcile coalescing.
   private reconcileInFlight = false;
   private reconcilePending = false;
+
+  // "New changes since last viewed" (per-device, worker-owned; see KEYS.lastViewedHeads).
+  private lastViewedHeads: Record<string, string[]> | null = null; // null until init() loads it
+  private unseenChanges: Record<string, boolean> = {};             // last computed state (what we emit)
 
   // Rendezvous.
   private rdvSessions = new Map<string, RdvSession>();
@@ -425,11 +437,19 @@ export class DriveEngine {
       this.docRegistry.set(docId, entry);
       const onChange = () => {
         void this.pushToSubscriptions(docId);
+        // Independent of pushToSubscriptions: that early-returns with no subs
+        // and dedups on jq results, but seen-state must track every head change.
+        this.refreshSeenState(docId);
         if (this.watchedDocs.has(docId)) this.emitWatchUpdate(docId);
       };
       handle.on('change', onChange);
       // Some automerge-repo versions also emit 'doc' for remote changes
       if (typeof handle.on === 'function') handle.on('doc', onChange);
+      // Initial seen-state comparison once loaded — covers docs background-opened
+      // by the home page's peek subscriptions, where no change event may ever fire.
+      Promise.resolve(handle.isReady?.() ? undefined : handle.whenReady?.())
+        .then(() => this.refreshSeenState(docId))
+        .catch(() => { /* unavailable — stays unknown */ });
       // Drain subscriptions that were registered before the doc was opened
       const pending = this.pendingSubs.get(docId);
       if (pending) {
@@ -439,6 +459,67 @@ export class DriveEngine {
       }
     }
     return entry;
+  }
+
+  // ── "New changes since last viewed" ────────────────────────────────────────
+  // A doc is being VIEWED while it has ≥1 live non-peek query subscription (the
+  // editor route's subscriptions; the home page and source inspector pass
+  // peek: true). While viewed, every change re-records last-viewed heads, so
+  // remote edits arriving mid-view count as seen and unsubscribe/tab-close need
+  // no bookkeeping. Missing last-viewed record = never viewed = unseen.
+
+  private hasViewingSub(entry: DocEntry): boolean {
+    for (const sub of entry.subscriptions.values()) if (!sub.peek) return true;
+    return false;
+  }
+
+  private emitUnseen(): void {
+    this.emit({ type: 'unseen-changes-updated', unseen: { ...this.unseenChanges } });
+  }
+
+  private setUnseen(docId: string, value: boolean): void {
+    if (this.unseenChanges[docId] === value) return; // transition-only emission
+    this.unseenChanges[docId] = value;
+    this.emitUnseen();
+  }
+
+  private persistLastViewed(): void {
+    if (this.lastViewedHeads) void this.host.kv.set(KEYS.lastViewedHeads, this.lastViewedHeads);
+  }
+
+  /** Record the doc's current heads as viewed. */
+  private markViewed(docId: string, heads: string[]): void {
+    if (!this.lastViewedHeads || heads.length === 0) return; // never record "empty" as seen
+    if (!headsEqual(this.lastViewedHeads[docId], heads)) {
+      this.lastViewedHeads[docId] = [...heads].sort();
+      this.persistLastViewed();
+    }
+    this.setUnseen(docId, false);
+  }
+
+  /** Recompute a loaded doc's flag; while a viewing sub is live, keep last-viewed current instead. */
+  private refreshSeenState(docId: string): void {
+    if (!this.lastViewedHeads) return; // init not finished
+    const entry = this.docRegistry.get(docId);
+    if (!entry) return;
+    const handle = entry.handle;
+    if (handle.isReady && !handle.isReady()) return; // heads unknown until load
+    const heads: string[] = handle.heads ? handle.heads() : [];
+    if (heads.length === 0) return;
+    if (this.hasViewingSub(entry)) this.markViewed(docId, heads);
+    else this.setUnseen(docId, !headsEqual(this.lastViewedHeads[docId], heads));
+  }
+
+  /** Doc left the home list (archive / revoke) — drop its seen state. */
+  private pruneSeenState(docId: string): void {
+    if (this.lastViewedHeads && docId in this.lastViewedHeads) {
+      delete this.lastViewedHeads[docId];
+      this.persistLastViewed();
+    }
+    if (docId in this.unseenChanges) {
+      delete this.unseenChanges[docId];
+      this.emitUnseen();
+    }
   }
 
   // ── Query caching ──────────────────────────────────────────────────────────
@@ -471,7 +552,7 @@ export class DriveEngine {
   }
 
   /** Subscribe to a jq query, routing results to the given poster. */
-  async subscribeQuery(docId: string, subId: number, filter: string, post: (m: any) => void): Promise<void> {
+  async subscribeQuery(docId: string, subId: number, filter: string, post: (m: any) => void, peek?: boolean): Promise<void> {
     this.subIdToDocId.set(subId, docId);
 
     if (!this.cacheDisabled) {
@@ -490,12 +571,14 @@ export class DriveEngine {
 
     const entry = this.docRegistry.get(docId);
     if (entry) {
-      entry.subscriptions.set(subId, { filter, post });
+      entry.subscriptions.set(subId, { filter, post, peek });
+      // A non-peek sub on an already-loaded doc = the user started viewing it.
+      this.refreshSeenState(docId);
       await this.pushToSubscriptions(docId);
     } else {
       let pending = this.pendingSubs.get(docId);
       if (!pending) { pending = new Map(); this.pendingSubs.set(docId, pending); }
-      pending.set(subId, { filter, post });
+      pending.set(subId, { filter, post, peek });
       if (OPEN_DOCS_IN_BACKGROUND) {
         this.getOrLoadHandle(docId)
           .then(handle => this.getOrCreateEntry(docId, handle))
@@ -641,6 +724,8 @@ export class DriveEngine {
         knownIds.add(amDocId);
         newDocHandles.push(amDocId);
         changed = true;
+        // Newly-shared docs get the new-changes dot immediately (never viewed here).
+        if (!this.lastViewedHeads?.[amDocId]) this.setUnseen(amDocId, true);
       }
 
       for (let i = list.length - 1; i >= 0; i--) {
@@ -651,6 +736,7 @@ export class DriveEngine {
           list.splice(i, 1);
           knownIds.delete(e.id);
           changed = true;
+          this.pruneSeenState(e.id);
           continue;
         }
         if (accessibleAmIds.has(e.id)) continue;
@@ -660,6 +746,7 @@ export class DriveEngine {
           list.splice(i, 1);
           knownIds.delete(e.id);
           changed = true;
+          this.pruneSeenState(e.id);
         }
       }
 
@@ -786,6 +873,15 @@ export class DriveEngine {
       console.warn('[engine] failed to read cache-disabled setting:', errMsg(err));
     }
 
+    // Load the last-viewed heads map early so seen-state works even if keyhive
+    // init fails below.
+    try {
+      this.lastViewedHeads = (await this.host.kv.get<Record<string, string[]>>(KEYS.lastViewedHeads)) ?? {};
+    } catch (err) {
+      console.warn('[engine] failed to read last-viewed heads:', errMsg(err));
+      this.lastViewedHeads = {};
+    }
+
     try {
       const kh = await createKeyhiveRepo({
         storage: this.host.storage,
@@ -838,6 +934,11 @@ export class DriveEngine {
         }
       }
       this.emit({ type: 'doc-list-updated', list: earlyList });
+      // Missing last-viewed record = unseen: computable without loading any doc.
+      // Docs WITH a record stay absent (unknown) until they load and compare —
+      // avoids a dot-flash on every start.
+      for (const e of earlyList) if (!this.lastViewedHeads![e.id]) this.unseenChanges[e.id] = true;
+      this.emitUnseen();
       this.broadcastContactNames(await this.getContactNames());
       this.emit({ type: 'kh-ready' });
     } catch (khErr: any) {
@@ -1177,7 +1278,7 @@ export class DriveEngine {
 
     if (msg.type === 'subscribe-query') {
       try {
-        await this.subscribeQuery(msg.docId, msg.subId, msg.filter, (m) => emit(m));
+        await this.subscribeQuery(msg.docId, msg.subId, msg.filter, (m) => emit(m), msg.peek);
       } catch (err: any) {
         emit({ type: 'query-result', subId: msg.subId, result: null, heads: [], error: errMsg(err) });
       }
@@ -1380,6 +1481,7 @@ export class DriveEngine {
         }
         this.queryResultCache.deletePrefix(docCachePrefix(msg.docId));
         await this.host.kv.delPrefix(docCachePrefix(msg.docId));
+        this.pruneSeenState(msg.docId);
         const removedKhDocId = removedEntry ? this.resolveKhDocId(msg.docId) : null;
         let status: string = 'not-found';
         if (removedKhDocId && this.khOps) {
@@ -1723,6 +1825,7 @@ export class DriveEngine {
         const { compile } = await import('./jq');
         const fn = compile(msg.filter);
         const result = fn(doc);
+        if (!msg.peek) this.markViewed(msg.docId, heads);
         emit({ type: 'result', id: msg.id, result: { result, heads } });
       } catch (err: any) {
         console.error('[engine] query failed for', msg.docId, err);

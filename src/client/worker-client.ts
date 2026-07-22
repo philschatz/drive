@@ -317,13 +317,13 @@ export class WorkerClient {
     });
   }
 
-  queryDoc(docId: string, filter: string): Promise<{ result: any; heads: string[] }> {
+  queryDoc(docId: string, filter: string, opts?: { peek?: boolean }): Promise<{ result: any; heads: string[] }> {
     return this.workerReady.then(() => {
       if (this.workerDead) throw new Error(this.fatalError ?? 'The document engine is not available.');
       const id = ++this.nextId;
       return new Promise<{ result: any; heads: string[] }>((resolve, reject) => {
         this.pending.set(id, { resolve, reject, sent: performance.now(), type: 'query' });
-        const msg = { type: 'query' as const, id, docId, filter };
+        const msg = { type: 'query' as const, id, docId, filter, peek: opts?.peek };
         this.logSend(msg);
         try {
           this.worker.postMessage(msg);
@@ -342,10 +342,11 @@ export class WorkerClient {
     filter: string,
     onResult: QueryResultCb,
     onError?: QueryErrorCb,
+    opts?: { peek?: boolean },
   ): () => void {
     const subId = ++this.nextSubId;
     this.queryCallbacks.set(subId, { onResult, onError });
-    this.fire('subscribe-query', { subId, docId, filter });
+    this.fire('subscribe-query', { subId, docId, filter, peek: opts?.peek });
     return () => {
       this.queryCallbacks.delete(subId);
       this.fire('unsubscribe-query', { subId });

@@ -169,7 +169,8 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
       const pm = pe.data;
       if (pm.type === 'subscribe-query') {
         try {
-          await engine!.subscribeQuery(pm.docId, pm.subId, pm.filter, post);
+          // HyperFormula's cross-doc reads are machine-driven — always peek.
+          await engine!.subscribeQuery(pm.docId, pm.subId, pm.filter, post, true);
         } catch (err: any) {
           post({ type: 'query-result', subId: pm.subId, result: null, heads: [], error: errMsg(err) });
         }

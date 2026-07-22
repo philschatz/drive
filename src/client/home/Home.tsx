@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'preact/hooks';
 import { useConnectionStatus, usePeerList, usePeerTransports } from '../shared/automerge';
-import { createDoc, updateDoc, subscribeQuery, fetchDocList, archiveDoc, onDocListUpdated, HOME_SUMMARY_QUERY } from '../worker-api';
+import { createDoc, updateDoc, subscribeQuery, fetchDocList, archiveDoc, onDocListUpdated, onUnseenChangesUpdated, getUnseenChanges, HOME_SUMMARY_QUERY } from '../worker-api';
 import { getMyAccess, onKeyhiveStateChanged } from '../shared/keyhive-api';
 import { PeerDot } from '../shared/presence';
 import { Button } from '@/components/ui/button';
@@ -60,6 +60,11 @@ export function Home({ path }: { path?: string }) {
     fetchDocList().catch((err) => console.warn('[Home] fetchDocList failed:', err)).finally(() => setListLoading(false));
   }, []);
 
+  // Per-doc "new changes since last viewed" flags, computed and pushed by the
+  // worker (kept separate from `entries` — one writer instead of three).
+  const [unseen, setUnseen] = useState<Record<string, boolean>>(() => getUnseenChanges());
+  useEffect(() => onUnseenChangesUpdated(setUnseen), []);
+
   // Subscribe to worker-pushed doc list updates
   useEffect(() => {
     return onDocListUpdated((list) => {
@@ -90,7 +95,7 @@ export function Home({ path }: { path?: string }) {
       subscribeQuery(docId, HOME_SUMMARY_QUERY, (result, _heads, lastModified) => {
         if (!result) return;
         setEntries(prev => applyQueryResult(prev, docId, result, lastModified));
-      })
+      }, undefined, { peek: true }) // listing docs ≠ viewing them
     );
 
     // Fetch keyhive access for every doc (all docs are encrypted/keyhive-backed).
@@ -815,6 +820,13 @@ export function Home({ path }: { path?: string }) {
               <span className="material-symbols-outlined" style={{ width: '1.2rem', textAlign: 'center', color: '#666' }}>{icon}</span>
               <a href={viewPath} className="text-sm flex-1 hover:underline flex items-center gap-1" style={noEntryAccess ? { textDecoration: 'line-through', opacity: 0.6 } : undefined}>
                 {entry.name || 'Untitled'}
+                {!noEntryAccess && unseen[entry.documentId] && (
+                  <span
+                    data-testid="unseen-dot"
+                    className="w-2 h-2 rounded-full shrink-0 bg-sky-500"
+                    title="New changes since you last viewed this document"
+                  />
+                )}
               </a>
               {entry.loading ? (
                 <Progress className="w-16" value={0} title="Loading..." />

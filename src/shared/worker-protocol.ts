@@ -11,11 +11,15 @@ export type MainToWorker =
   | { type: 'set-cache-disabled'; id: number; disabled: boolean }
   | { type: 'clear-caches'; id: number }
   | { type: 'get-doc-list'; id: number }
-  | { type: 'query'; id: number; docId: string; filter: string }
+  // `peek: true` = "don't count this read as the user viewing the doc" (home
+  // page summary, source inspector/export, background tooling). Default
+  // (absent) = viewing: the doc's last-viewed heads are updated, clearing its
+  // new-changes indicator.
+  | { type: 'query'; id: number; docId: string; filter: string; peek?: boolean }
   // New worker-owned doc API
   | { type: 'create-doc'; id: number; initialJson: any; metadata?: Record<string, any> }
   | { type: 'update-doc'; id: number; docId: string; fnSource: string; args: unknown[] }
-  | { type: 'subscribe-query'; subId: number; docId: string; filter: string }
+  | { type: 'subscribe-query'; subId: number; docId: string; filter: string; peek?: boolean }
   | { type: 'unsubscribe-query'; subId: number }
   | { type: 'set-doc-version'; docId: string; version: number | null }
   | { type: 'get-doc-history'; id: number; docId: string }
@@ -86,6 +90,10 @@ export type WorkerToMain =
   // Doc list / contact names push
   | { type: 'doc-list-updated'; list: Array<{ id: string; type?: string; name?: string; sharingGroupId?: string }> }
   | { type: 'contact-names-updated'; names: Record<string, string> }
+  // Per-doc "has new changes since last viewed" state, pushed as a full map on
+  // every transition. Absent docId = unknown (the doc has a last-viewed record
+  // but hasn't loaded yet) — the UI shows no dot for absent entries.
+  | { type: 'unseen-changes-updated'; unseen: Record<string, boolean> }
   // Keyhive state changed (membership/access may have changed)
   | { type: 'kh-state-changed' }
   // Rendezvous progress (emitted for both the sharer and the receiver so each

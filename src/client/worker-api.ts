@@ -45,6 +45,26 @@ function emitDocList(list: DocEntry[]): void {
   for (const fn of docListListeners) fn(list);
 }
 
+// ── Unseen-changes push (worker-owned; absent docId = unknown, no dot) ───────
+
+let unseenChanges: Record<string, boolean> = {};
+const unseenListeners = new Set<(unseen: Record<string, boolean>) => void>();
+
+/**
+ * Subscribe to per-doc "new changes since last viewed" state. Replays the
+ * current snapshot immediately. Returns a cleanup function.
+ */
+export function onUnseenChangesUpdated(fn: (unseen: Record<string, boolean>) => void): () => void {
+  unseenListeners.add(fn);
+  fn(unseenChanges);
+  return () => { unseenListeners.delete(fn); };
+}
+
+/** Current per-doc "new changes since last viewed" snapshot. */
+export function getUnseenChanges(): Record<string, boolean> {
+  return { ...unseenChanges };
+}
+
 /**
  * Archive a doc: revoke the user's own access if possible, tombstone + purge it
  * locally either way. Resolves with whether access was truly 'revoked' (gone
@@ -263,6 +283,10 @@ worker.onmessage = (e: MessageEvent<WorkerToMain>) => {
       break;
     case 'contact-names-updated':
       applyContactNamesFromWorker(msg.names);
+      break;
+    case 'unseen-changes-updated':
+      unseenChanges = msg.unseen;
+      for (const fn of unseenListeners) fn(unseenChanges);
       break;
 
     // --- Keyhive notifications ---
@@ -492,14 +516,19 @@ export function updateDoc(
  * Subscribe to live jq query results for a document.
  * The callback is called immediately with the current result, then on every change.
  * Returns a cleanup function.
+ *
+ * Pass `{ peek: true }` when the read is NOT the user viewing the document
+ * (home-page summaries, source inspector/export, background tooling) — non-peek
+ * subscriptions mark the doc's last-viewed heads, clearing its new-changes dot.
  */
 export function subscribeQuery(
   docId: string,
   filter: string,
   onResult: (result: any, heads: string[], lastModified?: number) => void,
   onError?: (error: string) => void,
+  opts?: { peek?: boolean },
 ): () => void {
-  return client.subscribeQuery(docId, filter, onResult, onError);
+  return client.subscribeQuery(docId, filter, onResult, onError, opts);
 }
 
 // ── Validation subscriptions ────────────────────────────────────────────────
@@ -517,13 +546,15 @@ export function subscribeValidation(
 }
 
 /**
- * One-shot jq query against the live document.
+ * One-shot jq query against the live document. Counts as the user viewing the
+ * doc (clears its new-changes dot) unless `{ peek: true }` is passed.
  */
 export function queryDoc(
   docId: string,
   filter: string,
+  opts?: { peek?: boolean },
 ): Promise<{ result: any; heads: string[] }> {
-  return client.queryDoc(docId, filter);
+  return client.queryDoc(docId, filter, opts);
 }
 
 // ── History & undo ──────────────────────────────────────────────────────────

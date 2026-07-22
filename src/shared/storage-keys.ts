@@ -27,6 +27,12 @@ export const KEYS = {
   archivedDocIds:     'data:archived-doc-ids',
   contactNames:       'data:contact-names',
   knownContactGroups: 'data:known-contact-groups',
+  /**
+   * Per-device seen state: automerge docId → the doc's heads (sorted) when a
+   * viewing (non-peek) query last saw it. Missing entry = never viewed = the
+   * home page shows the new-changes dot.
+   */
+  lastViewedHeads:    'data:last-viewed-heads',
   userGroupId:        'data:auth:user-group-id',
 } as const;
 

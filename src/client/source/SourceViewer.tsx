@@ -262,7 +262,8 @@ export function SourceViewer({ docId, rest, readOnly }: { docId?: string; rest?:
       setStatus('');
       setDocLoaded(true); // gate opens → usePresence subscribes
 
-      // Subscribe to the full document via worker-api (routes through correct repo)
+      // Subscribe to the full document via worker-api (routes through correct repo).
+      // peek: inspecting/exporting source doesn't count as viewing the doc.
       unsubQuery = subscribeQuery(docId, '.', (result) => {
         if (!mounted) return;
         setCurrentDoc(result);
@@ -272,7 +273,7 @@ export function SourceViewer({ docId, rest, readOnly }: { docId?: string; rest?:
         }
         setStatus('');
         loadHistory();
-      });
+      }, undefined, { peek: true });
 
       // Initial history load will happen via the subscription callback calling loadHistory()
     })().catch((err) => {
