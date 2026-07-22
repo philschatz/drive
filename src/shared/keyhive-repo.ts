@@ -20,7 +20,12 @@ export interface CreateKeyhiveRepoOptions {
   storage: any;
   /** automerge-repo NetworkAdapter (already wrapped for WebRTC in the browser). */
   networkAdapter: any;
-  /** peerId suffix — MUST be 'drive' for the app/CLI so peer identity is consistent. */
+  /** peerId suffix — a FIXED per-service instance id ('drive', 'caldav-server'),
+   * NOT identity (identity is the verifying key; the wire strips the suffix).
+   * Never make it per-tab/per-instance (`drive.<nonce>`): sibling workers of one
+   * device panic keyhive WASM on their first presence encrypt (beekem
+   * new_app_secret_for), and the relay's duplicate-join rejection is what keeps
+   * extra tabs offline under a fixed suffix. */
   peerIdSuffix: string;
   /** Read the persisted personal user-group id (base64), or null if none. */
   getUserGroupId: () => Promise<string | null>;
@@ -58,6 +63,38 @@ export interface KeyhiveRepo {
   runOnKeyhiveQueue: <T>(fn: () => Promise<T>) => Promise<T>;
   /** Slot a pre-generated keyhive doc-id for the next repo.create2() (create-doc flow). */
   setNextDocId: (bytes: Uint8Array) => void;
+}
+
+/**
+ * Shadow `forcePcsUpdate` on a keyhive WASM instance with a no-op.
+ *
+ * The npm bridge's membership nudge calls `this.keyhive.forcePcsUpdate(doc)` after
+ * our agent adds a member. Under the pinned keyhive (alpha.58) that rotation is
+ * invisible outside the WASM: `Document::pcs_update` does NOT emit the op via the
+ * event listener (unlike the update minted inside `try_encrypt_content`), and the
+ * binding resolves `void` (so the bridge's `saveLeafSecret(undefined)` persists an
+ * empty blob instead of the rotated leaf secret — a version skew; newer keyhive
+ * returns the secret). The op itself still syncs (peer delivery is state-derived),
+ * but the un-emitted rotation bypasses the persist-archive-on-event hook below,
+ * leaving its new leaf SECRET in WASM memory only. A worker reload then restores
+ * an instance that can no longer derive its own current epoch: every encrypt
+ * fails "SecretKey not found" and every peer ciphertext "Key not found", forever
+ * — the cross-browser presence outage.
+ *
+ * No-op'ing it is safe AND preserves the nudge's goal: after an add,
+ * `has_pcs_key()` is false, so the very next `tryEncrypt` (the nudge's own
+ * `_lastAddMember` edit, or the next presence flush) mints the rotation via
+ * `try_encrypt_content` — which IS emitted, so it reaches storage, sync, AND the
+ * archive-persist hook.
+ *
+ * Own-property assignment shadows the wasm prototype method, so the bridge's own
+ * reference hits the no-op too (the serializing Proxy below only wraps drive's
+ * handle). Remove this once keyhive emits pcs_update ops — the characterization
+ * test in keyhive-ops.test.ts ("forcePcsUpdate mints a CGKA op WITHOUT emitting
+ * it") starts failing when that day comes.
+ */
+export function neutralizeForcePcsUpdate(kh: any): void {
+  kh.forcePcsUpdate = async () => {};
 }
 
 /**
@@ -105,6 +142,11 @@ export async function createKeyhiveRepo(opts: CreateKeyhiveRepoOptions): Promise
     cachingMode: 'none',
     syncRequestInterval: 2000,
   });
+
+  // The bridge's membership nudge would call this on the instance it holds —
+  // see neutralizeForcePcsUpdate's doc comment for why that must never happen
+  // under the pinned keyhive version.
+  neutralizeForcePcsUpdate(integration.keyhive);
 
   /**
    * Run a keyhive WASM operation on the bridge's shared serialization queue. ALL
@@ -189,6 +231,46 @@ export async function createKeyhiveRepo(opts: CreateKeyhiveRepoOptions): Promise
     getUserGroupId: opts.getUserGroupId,
     setUserGroupId: opts.setUserGroupId,
   });
+
+  // Persist the full keyhive archive (debounced) after every keyhive event.
+  //
+  // Under the pinned keyhive (alpha.58) a locally-minted CGKA update op — e.g.
+  // the leaf rotation minted by the first tryEncrypt after a membership change —
+  // keeps its new leaf SECRET in WASM memory only: the op itself is emitted,
+  // persisted, and synced, but the secret is not (newer keyhive returns it for
+  // the bridge's saveLeafSecret pipeline; alpha.58 returns void). The archive
+  // snapshot is the only place that secret survives, and without this hook it is
+  // only written on explicit KeyhiveOps actions (membership, contacts) — never
+  // after an encrypt-minted rotation. A worker reload in that window restores an
+  // instance that HAS every op but can no longer derive any epoch at-or-after
+  // its own rotation, so every peer ciphertext fails with "Key not found"
+  // forever (the cross-browser presence outage; presence-liveness step 2b).
+  {
+    const emitter = (integration as any).emitter;
+    let timer: any = null;
+    let saving = false;
+    let dirty = false;
+    // With the serializing proxy, saveKeyhiveWithHash's internal toArchive() is
+    // queued by the proxy itself; without it (CalDAV), queue the whole save —
+    // never both (nested queue.run deadlocks).
+    const doSave = opts.serialize
+      ? () => integration.keyhiveStorage.saveKeyhiveWithHash(khForOps)
+      : () => runOnKeyhiveQueue(() => integration.keyhiveStorage.saveKeyhiveWithHash(integration.keyhive));
+    const persistArchive = async () => {
+      if (saving) { dirty = true; return; }
+      saving = true;
+      try { await doSave(); }
+      catch (err) { console.warn('[keyhive-repo] archive persist after keyhive event failed:', err); }
+      finally {
+        saving = false;
+        if (dirty) { dirty = false; void persistArchive(); }
+      }
+    };
+    emitter?.on?.('update', () => {
+      if (timer) return;
+      timer = setTimeout(() => { timer = null; void persistArchive(); }, 1000);
+    });
+  }
 
   return {
     repo, khOps, integration, bridge,

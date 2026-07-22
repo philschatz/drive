@@ -22,7 +22,7 @@ import {
 } from '../shared/keyhive-api';
 import { getContactName, mergeCachedContacts } from '../contact-names';
 import { EditableName } from './EditableName';
-import { AccessIcon } from './AccessIcon';
+import { accessTitle } from './AccessIcon';
 
 interface AccessControlProps {
   /** Automerge document ID. */
@@ -97,10 +97,19 @@ export function AccessControl({ docId, access: accessProp }: AccessControlProps)
     return onKeyhiveStateChanged(() => refresh());
   }, [open, refresh]);
 
-  const handleChangeRole = async (agentId: string, newRole: string) => {
+  const handleChangeRole = async (member: MemberInfo, newRole: string) => {
+    // Self-demotion from admin is hard to undo: without admin you can no longer
+    // manage sharing (or restore your own role). Make it deliberate.
+    if (member.isMe && member.role === 'admin' && newRole !== 'admin') {
+      const ok = confirm(
+        `Reduce your own access from admin to ${newRole}? ` +
+        'You will no longer be able to manage sharing or restore your own access.'
+      );
+      if (!ok) return; // controlled Select snaps back to the current role
+    }
     setLoading(true);
     try {
-      await changeRole(agentId, docId, newRole);
+      await changeRole(member.agentId, docId, newRole);
       await refresh();
     } catch (err: any) {
       setError(err.message);
@@ -145,10 +154,16 @@ export function AccessControl({ docId, access: accessProp }: AccessControlProps)
     <>
       <button
         className="inline-flex items-center justify-center h-9 w-9 rounded-md hover:bg-accent hover:text-accent-foreground"
-        title={accessProp ? `${accessProp} · Share & permissions` : 'Share & permissions'}
+        title={accessProp === undefined
+          ? 'Share & permissions'
+          : accessProp === null
+            ? 'No access · Share & permissions'
+            : `${accessTitle(accessProp)} access · Share & permissions`}
         onClick={() => setOpen(true)}
       >
-        <AccessIcon access={accessProp ?? null} style={{ fontSize: 18 }} title="" />
+        {/* Generic share glyph — the access level shows as a text badge next to
+            the title (EditorTitleBar), not on this button. */}
+        <span className="material-symbols-outlined" style={{ fontSize: 18 }}>share</span>
       </button>
       <Sheet open={open} onOpenChange={setOpen}>
         <SheetContent>
@@ -191,7 +206,7 @@ export function AccessControl({ docId, access: accessProp }: AccessControlProps)
                 />
                 {isAdmin ? (
                   <div className="flex items-center gap-1">
-                    <Select value={member.role ?? 'read'} onValueChange={(val: string) => handleChangeRole(member.agentId, val)}>
+                    <Select value={member.role ?? 'read'} onValueChange={(val: string) => handleChangeRole(member, val)}>
                       <SelectTrigger className="h-7 text-xs w-20">
                         <SelectValue />
                       </SelectTrigger>

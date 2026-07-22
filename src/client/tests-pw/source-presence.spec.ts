@@ -5,20 +5,20 @@ import { waitFor, type Peer } from './support/peer';
 /**
  * Presence in the source viewer, between two REAL peers (separate browser
  * contexts = separate devices). Guards the report "the presence icons of peers
- * do not show up in the source viewer" (which turned out to be the same-device
- * multi-tab limitation — see source-multitab.spec.ts).
+ * do not show up in the source viewer" (originally observed between two tabs of
+ * one device — an unsupported setup: only one tab per device connects).
  *
  * Presence values are re-set on each poll, mirroring presence.spec.ts /
  * presence-liveness.spec.ts: presence setup is async and a freshly-synced peer
  * may miss the first broadcast before its key material arrives.
  */
-// KNOWN ENGINE BUG (fixme = deliberately skipped): bob's worker deterministically
-// crashes with a keyhive/automerge WASM panic (`RuntimeError: unreachable`) while
-// opening the freshly-shared doc: the first find rejects as unavailable (announce
-// is eventually consistent), and the SourceViewer's retry then hits the panic,
-// killing the engine ("reload to reconnect"). Reproduced twice on 2026-07-20.
-// The UI-side retry (SourceViewer) is correct and stays; un-fixme once the WASM
-// panic in the keyhive open/sync path is fixed.
+// KNOWN KEYHIVE BUG (fixme = deliberately skipped): bob's worker crashes with a
+// WASM panic (`unreachable executed`) on his first presence encrypt — beekem's
+// Cgka::new_app_secret_for expects the current root's PcsKey in pcs_key_ops,
+// but that map is only populated on LOCAL update or on decrypt, so any instance
+// that encrypts after ingesting a remote CGKA rekey (a late joiner) panics.
+// Fix belongs in beekem (repair the mapping from the single ops-graph head that
+// has_pcs_key() guarantees). Un-fixme when the keyhive fix lands.
 test.fixme('source viewer shows peer dots for a real remote peer', async ({ browser }) => {
   test.setTimeout(180_000);
   const { alice, bob, docId } = await setupSharedDoc(browser, 'edit');

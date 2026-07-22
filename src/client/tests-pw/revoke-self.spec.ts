@@ -3,10 +3,10 @@ import { waitFor } from './support/peer';
 import { setupSharedDoc } from './support/scenarios';
 
 /**
- * Revoke myself from a doc: bob removes his own access (the "remove-me-from-doc"
+ * Archive a doc I was granted: bob revokes his own access (the "archive-doc"
  * flow). bob's doc disappears and access drops, while alice retains access.
  */
-test('removing myself from a doc drops my access but leaves the owner intact', async ({ browser }) => {
+test('archiving a doc drops my access but leaves the owner intact', async ({ browser }) => {
   const { alice, bob, docId } = await setupSharedDoc(browser, 'edit');
   try {
     // Precondition: bob has the doc.
@@ -17,7 +17,7 @@ test('removing myself from a doc drops my access but leaves the owner intact', a
     );
 
     // bob removes himself (revokes his own user-group from the doc).
-    await bob.call('removeDocId', docId);
+    await bob.call('archiveDoc', docId);
 
     // bob no longer has the doc in his list, and his access is gone.
     await waitFor(

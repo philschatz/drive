@@ -1,5 +1,5 @@
 import { Keyhive } from "@keyhive/keyhive/slim";
-import type { MemberRole, MemberInfo } from './shared/keyhive-types';
+import type { MemberRole, MemberInfo, ArchiveDocResult } from './shared/keyhive-types';
 
 // Re-export these so the worker can use them without duplicating
 export function bytesToBase64(bytes: Uint8Array): string {
@@ -504,7 +504,7 @@ export class KeyhiveOps {
   /**
    * This user's access to a doc via their personal user-group (resolves group
    * membership), or null. This is the home page's ownership lens: we check the
-   * user-group, not the device, so revoking the group can actually "delete" a
+   * user-group, not the device, so revoking the group can actually archive a
    * self-created doc — the creating device's root delegation is permanent.
    */
   async getUserGroupAccess(khDocId: string): Promise<string | null> {
@@ -710,27 +710,72 @@ export class KeyhiveOps {
   }
 
   /**
-   * Remove the current user from a document's ACL — the home page "delete" action.
+   * base64 signatures of the direct delegations granting the user-group access
+   * to a doc. A deliberate (re-)share always mints a fresh delegation (addMember
+   * has no already-member check), so a signature absent from a recorded set marks
+   * a grant issued later — the home page's "un-hide a deleted doc on re-share"
+   * signal. Returns [] when there is no group, no doc, or no direct grant, and on
+   * error (partial CGKA/op state can make member enumeration throw): an empty
+   * baseline disables re-share detection rather than mis-firing it.
+   */
+  async getUserGroupGrantSigs(khDocId: string): Promise<string[]> {
+    try {
+      const groupId = await this.fx.getUserGroupId();
+      if (!groupId) return [];
+      const doc = await this.kh.getDocument(new this.bridge.DocumentId(base64ToBytes(khDocId)));
+      if (!doc) return [];
+      const targetBytes = base64ToBytes(groupId);
+      const caps = await doc.members();
+      const sigs: string[] = [];
+      for (const c of caps) {
+        const idBytes: Uint8Array = c.who.id.toBytes();
+        if (idBytes.length === targetBytes.length && idBytes.every((b: number, i: number) => b === targetBytes[i])) {
+          sigs.push(bytesToBase64(c.proof.signature));
+        }
+      }
+      return sigs;
+    } catch (err) {
+      console.warn('[kh] getUserGroupGrantSigs failed:', err);
+      return [];
+    }
+  }
+
+  /**
+   * Revoke the current user's own access to a document — the keyhive half of
+   * the home page "archive" action.
    * Revokes the personal **user-group** (not the device): the group is never the
    * permanent root-creating device, so this actually drops the doc from every
-   * device's home view. A read/edit membership a contact granted us may not be
-   * self-revokable (no authority over that delegation) — that failure is tolerated.
+   * device's home view. Even a grant issued by a contact is normally revokable —
+   * keyhive's transitive-membership fallback lets a device revoke a delegation to
+   * a group it belongs to — but real-world state can still refuse (partial CGKA
+   * state, WASM rekey traps), so the outcome is reported instead of swallowed:
+   * the caller tombstones the doc either way and keys its message off `status`.
+   * `grantSigs` is the pre-revoke re-share-detection baseline (getUserGroupGrantSigs).
    */
-  async removeMyAccess(khDocId: string): Promise<void> {
+  async revokeMyAccess(khDocId: string): Promise<ArchiveDocResult> {
     const khDocIdObj = new this.bridge.DocumentId(base64ToBytes(khDocId));
     const doc = await this.kh.getDocument(khDocIdObj);
-    if (!doc) return;
+    if (!doc) return { status: 'not-found', grantSigs: [] };
     const groupId = await this.fx.getUserGroupId();
+    const grantSigs = groupId ? await this.getUserGroupGrantSigs(khDocId) : [];
+    let status: ArchiveDocResult['status'] = 'no-authority';
     if (groupId) {
       try {
         const groupAgent = await this.findAgentByIdBytes(doc, groupId);
         await this.kh.revokeMember(groupAgent, true, doc.toMembered());
-      } catch {
-        // The user-group isn't a member, or we lack authority to revoke it.
+        status = 'revoked';
+      } catch (err) {
+        console.warn('[kh] revokeMyAccess: self-revoke failed:', err);
       }
     }
     await this.fx.persist();
     this.fx.syncKeyhive();
+    if (status === 'revoked') {
+      // Re-run the share handshake so the revocation (and rotated keys) reach
+      // connected peers — the user's other devices and the sharer (see revokeMember).
+      this.fx.forceResyncAllPeers();
+    }
+    return { status, grantSigs };
   }
 
   /**

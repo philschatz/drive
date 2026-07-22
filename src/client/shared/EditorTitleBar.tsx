@@ -81,10 +81,6 @@ export function EditorTitleBar<P extends PeerLike>({
         <span className="text-lg font-bold truncate">{title}</span>
       )}
 
-      {access === 'read' && (
-        <span className="text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded shrink-0">Read-only</span>
-      )}
-
       {children}
 
       {/* Right side */}
@@ -125,7 +121,13 @@ export function EditorTitleBar<P extends PeerLike>({
           {connected ? 'Connected' : 'Disconnected'}
         </span>
 
-        {/* Sharing / access button */}
+        {/* Access badge + sharing button — one fixed spot for every access level
+            (next to the title the badge would drift with the flex-1 title input). */}
+        {(access === 'read' || access === 'edit' || access === 'admin') && (
+          <span className="text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded shrink-0">
+            {access === 'read' ? 'Read-only' : access === 'edit' ? 'Editing' : 'Admin'}
+          </span>
+        )}
         {docId && (
           <AccessControl
             docId={docId}

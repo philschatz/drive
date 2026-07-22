@@ -84,24 +84,45 @@ export function usePresence<S extends Record<string, any> = PresenceState>(
   const [peers, setPeers] = useState<Record<string, PeerState<S>>>({});
   const optsRef = useRef(opts);
   optsRef.current = opts;
+  // Latest full local presence state. Presence values are only sent when they
+  // change, so a peer that joins later (another browser opening the doc, a
+  // reloaded tab — always a fresh peerId now) has missed our earlier
+  // broadcasts. Kept here so we can re-announce the whole state to newcomers.
+  const lastStateRef = useRef<Record<string, any> | null>(null);
 
   useEffect(() => {
     if (!docId) return;
     let mounted = true;
+    const initial = (optsRef.current?.getInitialState?.()
+      ?? ({ viewing: true, focusedField: null } as unknown as S)) as Record<string, any>;
+    lastStateRef.current = { ...initial };
+    const known = new Set<string>();
     const { cleanup } = initPresence<S>(
       docId,
-      () => optsRef.current?.getInitialState?.()
-        ?? ({ viewing: true, focusedField: null } as unknown as S),
+      () => initial as S,
       (states) => {
         optsRef.current?.onRawUpdate?.(states);
         if (mounted) setPeers(states);
+        // Re-announce our full state whenever a peerId we haven't seen in this
+        // subscription appears: they definitionally missed our past broadcasts.
+        // One extra setPresence per newcomer batch; no echo loop (we're not new
+        // to them-being-new).
+        let hasNew = false;
+        for (const pid of Object.keys(states)) {
+          if (!known.has(pid)) { known.add(pid); hasNew = true; }
+        }
+        if (hasNew && mounted && lastStateRef.current) {
+          setPresence(docId, lastStateRef.current as any);
+        }
       },
     );
-    return () => { mounted = false; cleanup(); setPeers({}); };
+    return () => { mounted = false; cleanup(); setPeers({}); lastStateRef.current = null; };
   }, [docId]);
 
   const broadcast = useCallback((key: keyof S, value: S[keyof S]) => {
-    if (docId) setPresence(docId, { [key]: value } as any);
+    if (!docId) return;
+    if (lastStateRef.current) lastStateRef.current[key as string] = value;
+    setPresence(docId, { [key]: value } as any);
   }, [docId]);
 
   const peerList = useMemo(

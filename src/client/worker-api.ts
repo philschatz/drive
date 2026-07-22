@@ -13,6 +13,7 @@ import type { RendezvousStatus } from '../shared/rendezvous-protocol';
 export type { RendezvousStatus } from '../shared/rendezvous-protocol';
 import { idbDelPrefix, settingGet, settingSetSync, closeDb, CACHE_PREFIX } from './idb-storage';
 import { setContactNamesDispatch, applyContactNamesFromWorker } from './contact-names';
+import type { ArchiveDocResult } from './shared/keyhive-types';
 import { startWebRTCBridge } from './webrtc-bridge';
 import { WorkerClient } from './worker-client';
 
@@ -44,9 +45,13 @@ function emitDocList(list: DocEntry[]): void {
   for (const fn of docListListeners) fn(list);
 }
 
-/** Remove the current user from a doc (revokes own access + drops it from the list). */
-export function removeDocId(docId: string): void {
-  fire('remove-me-from-doc', { docId });
+/**
+ * Archive a doc: revoke the user's own access if possible, tombstone + purge it
+ * locally either way. Resolves with whether access was truly 'revoked' (gone
+ * from all devices once synced) or the doc was only archived on this device.
+ */
+export function archiveDoc(docId: string): Promise<{ status: ArchiveDocResult['status'] }> {
+  return khRequest('archive-doc', { docId });
 }
 
 // Functions that the worker provides its own copy of. Callers pass the real ref;

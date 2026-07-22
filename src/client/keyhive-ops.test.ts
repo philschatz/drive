@@ -709,6 +709,136 @@ describe('KeyhiveOps', () => {
       const decrypted = await khB.tryDecrypt(docB!, encResult.encrypted_content());
       expect(new Uint8Array(decrypted)).toEqual(plaintext);
     });
+
+    /**
+     * Shared setup for the forcePcsUpdate / reload regression tests below:
+     * A shares a doc with B and both sides fully sync, so a plain
+     * encrypt-after-sync round-trips (the ':596' baseline).
+     */
+    async function setupSyncedPair() {
+      const { ops: opsA, kh: khA } = await createOps();
+      // B is created with an exposed signer so tests can rebuild him from an
+      // archive (Archive.tryToKeyhive needs the original signer).
+      const bSigner = Signer.memorySignerFromBytes(crypto.getRandomValues(new Uint8Array(32)));
+      const khB = await Keyhive.init(bSigner, CiphertextStore.newInMemory(), () => {});
+      const opsB = new KeyhiveOps(khB, bridge, noopSideEffects());
+
+      const { khDocId } = await opsA.enableSharing('doc-1');
+      const invite = await grantPeerAccessViaTempSigner(opsA, khDocId, 'edit');
+      await claimViaArchive(opsA, opsB, invite.inviteKeyBytes, 'doc-1');
+
+      const cardA = await khA.contactCard();
+      const indA_inB = await khB.receiveContactCard(cardA);
+      const bEventsForA: Map<Uint8Array, Uint8Array> = await khB.eventsForAgent(indA_inB.toAgent());
+      const bArr: Uint8Array[] = [];
+      bEventsForA.forEach((v: Uint8Array) => bArr.push(v));
+      await khA.ingestEventsBytes(bArr);
+
+      const cardB = await khB.contactCard();
+      const indB_inA = await khA.receiveContactCard(cardB);
+      const syncAtoB = async (kh: Keyhive = khB) => {
+        const evs: Map<Uint8Array, Uint8Array> = await khA.eventsForAgent(indB_inA.toAgent());
+        const arr: Uint8Array[] = [];
+        evs.forEach((v: Uint8Array) => arr.push(v));
+        await kh.ingestEventsBytes(arr);
+        return arr.length;
+      };
+      await syncAtoB();
+
+      const encrypt = async (text: string) => {
+        const docA = await khA.getDocument(opsA.khDocuments.values().next().value!.doc_id);
+        const ref = new ChangeId(crypto.getRandomValues(new Uint8Array(32)));
+        const result = await khA.tryEncrypt(docA!, ref, [], new TextEncoder().encode(text));
+        return result.encrypted_content();
+      };
+      const decryptOnB = async (encrypted: any, kh: Keyhive = khB) => {
+        const reachable = await kh.reachableDocs();
+        const docB = await kh.getDocument(reachable[0].doc.doc_id);
+        const out = await kh.tryDecrypt(docB!, encrypted);
+        return new TextDecoder().decode(new Uint8Array(out));
+      };
+      return { opsA, khA, opsB, khB, bSigner, syncAtoB, encrypt, decryptOnB };
+    }
+
+    it('forcePcsUpdate mints a CGKA op WITHOUT emitting it (bridge nudge gap)', async () => {
+      // Characterization of the keyhive alpha.58 behavior that makes the npm
+      // bridge's membership nudge dangerous. The nudge calls forcePcsUpdate(doc)
+      // after our agent adds a member. Unlike the CGKA update minted inside
+      // tryEncrypt (emitted via the event listener,
+      // keyhive_core/src/keyhive.rs try_encrypt_content), the pcs_update op is
+      // NOT emitted to the event handler — so it is never persisted to /ops/
+      // storage, never triggers keyhive-repo's persist-archive-on-event hook,
+      // and (the binding also resolves void) its rotated leaf SECRET exists only
+      // in WASM memory. A worker reload after a nudge rotation restores an
+      // instance that cannot derive its own current epoch: every encrypt fails
+      // "SecretKey not found" and every peer decrypt "Key not found", forever.
+      // That is why drive no-ops the method (neutralizeForcePcsUpdate).
+      //
+      // If this test starts FAILING on a keyhive upgrade (the rotation now
+      // emits), the upstream gap is fixed: reconsider removing the no-op shadow.
+      const emitted: any[] = [];
+      const signer = Signer.memorySignerFromBytes(crypto.getRandomValues(new Uint8Array(32)));
+      const kh = await Keyhive.init(signer, CiphertextStore.newInMemory(), (e: any) => { emitted.push(e); });
+      const ops = new KeyhiveOps(kh, bridge, noopSideEffects());
+      const { khDocId } = await ops.enableSharing('doc-1');
+      const doc = ops.khDocuments.get(khDocId)!;
+      // A membership change blanks the CGKA root, so the next encrypt must mint
+      // a rotation — the emitting counterpart to forcePcsUpdate's silent one.
+      await grantPeerAccessViaTempSigner(ops, khDocId, 'edit');
+
+      // Baseline: a tryEncrypt that mints a rotation DOES emit events.
+      const beforeEncrypt = emitted.length;
+      const ref = new ChangeId(crypto.getRandomValues(new Uint8Array(32)));
+      await kh.tryEncrypt(doc, ref, [], new TextEncoder().encode('mint'));
+      expect(emitted.length).toBeGreaterThan(beforeEncrypt);
+
+      // forcePcsUpdate rotates the CGKA (op count grows) yet emits NOTHING.
+      const opsBefore = Number((await kh.stats()).cgkaOperations);
+      const emittedBefore = emitted.length;
+      await kh.forcePcsUpdate(doc);
+      expect(Number((await kh.stats()).cgkaOperations)).toBe(opsBefore + 1);
+      expect(emitted.length).toBe(emittedBefore);
+    });
+
+    it('neutralized forcePcsUpdate keeps cross-peer decryption working (drive fix)', async () => {
+      // Drive's fix: shadow forcePcsUpdate with a no-op on the keyhive instance the
+      // bridge holds, so the membership nudge stops minting orphan rotation ops.
+      // Security outcome is unchanged: after an add, the next tryEncrypt mints the
+      // rotation itself via try_encrypt_content, which IS emitted and synced.
+      const { neutralizeForcePcsUpdate } = await import('../shared/keyhive-repo');
+      const { khA, opsA, syncAtoB, encrypt, decryptOnB } = await setupSyncedPair();
+
+      neutralizeForcePcsUpdate(khA);
+      const docA = await khA.getDocument(opsA.khDocuments.values().next().value!.doc_id);
+      await khA.forcePcsUpdate(docA!); // the nudge's call — now inert
+
+      const enc = await encrypt('after neutralized rotation');
+      await syncAtoB();
+      expect(await decryptOnB(enc)).toBe('after neutralized rotation');
+    });
+
+    it('B reloads from archive → A encrypts fresh → B can decrypt (worker reload)', async () => {
+      // Models presence-liveness step 2b: bob's page reload rebuilds his worker
+      // from persisted keyhive state; alice re-encrypts fresh presence ciphertext
+      // (the engine re-flushes on his new session's snapshot); bob must decrypt.
+      // NOTE: the jest reload uses Archive.tryToKeyhive, which is more complete
+      // than the browser's archive+events+prekey-secrets persistence — a pass here
+      // exonerates the keyhive core, not necessarily the bridge storage layering.
+      const { khB, bSigner, syncAtoB, encrypt, decryptOnB } = await setupSyncedPair();
+
+      const enc1 = await encrypt('before B reload');
+      await syncAtoB();
+      expect(await decryptOnB(enc1)).toBe('before B reload');
+
+      // B "reloads": rebuild keyhive from its own archive with the same signer.
+      const bArchive = await khB.toArchive();
+      const khB2 = await bArchive.tryToKeyhive(CiphertextStore.newInMemory(), bSigner, () => {});
+
+      const enc2 = await encrypt('after B reload');
+      await syncAtoB(khB2);
+      expect(await decryptOnB(enc2, khB2)).toBe('after B reload');
+      expect(await decryptOnB(enc1, khB2)).toBe('before B reload');
+    });
   });
 
   describe('accessForDoc cross-peer (insufficient access bug)', () => {
@@ -1907,12 +2037,12 @@ describe('KeyhiveOps', () => {
       expect(reachableKhIds).toContain(khDocId);
     });
 
-    it('removeMyAccess revokes the user-group so the doc is no longer accessible (but still reachable)', async () => {
+    it('revokeMyAccess revokes the user-group so the doc is no longer accessible (but still reachable)', async () => {
       const { ops } = await createOps();
       const { khDocId } = await ops.enableSharing('doc-1');
       expect(await ops.getUserGroupAccess(khDocId)).toBe('Admin');
 
-      await ops.removeMyAccess(khDocId);
+      await ops.revokeMyAccess(khDocId);
 
       // The home page filters by user-group access, so the doc now drops off the list...
       expect(await ops.getUserGroupAccess(khDocId)).toBeNull();
@@ -1977,6 +2107,113 @@ describe('KeyhiveOps', () => {
       expect(await opsB.getUserGroupAccess(khDocId)).toBe('Admin');
       const { accessibleKhIds } = await opsB.enumerateUserDocs();
       expect(accessibleKhIds).toContain(khDocId);
+    });
+
+    // ── home-page "archive" of a contact-shared doc ─────────────────────────
+    // B's device revokes its own user-group's grant, which was issued by A's
+    // device. B is not the issuer, not a doc admin, and not in the grant's proof
+    // lineage — the revoke goes through keyhive's transitive-membership fallback
+    // (B ∈ B-group with access ≥ the grant). Guards that fallback plus the two
+    // resurrection channels the app exercises: continued sync from A (who never
+    // saw the revocation) and an archive reload.
+
+    // Two-peer harness for the contact-share scenario. B is built from a known
+    // seed so its keyhive can be rebuilt from an archive ("reload").
+    async function createContactShare() {
+      const { ops: opsA, kh: khA } = await createOps();
+      const seedB = crypto.getRandomValues(new Uint8Array(32));
+      const khB = await Keyhive.init(Signer.memorySignerFromBytes(seedB), CiphertextStore.newInMemory(), () => {});
+      const opsB = new KeyhiveOps(khB, bridge, noopSideEffects());
+
+      // Give `to` everything `from` has (archive + identity events), as the
+      // app's contact exchange + periodic keyhive sync would.
+      const syncAll = async (khFrom: any, khTo: any) => {
+        await khTo.ingestArchive(new Archive((await khFrom.toArchive()).toBytes()));
+        const ind = await khTo.receiveContactCard(await khFrom.contactCard());
+        const evts: Map<Uint8Array, Uint8Array> = await khFrom.eventsForAgent(ind.toAgent());
+        const arr: Uint8Array[] = [];
+        evts.forEach((v: Uint8Array) => arr.push(v));
+        await khTo.ingestEventsBytes(arr);
+      };
+
+      const bGroupId = (await opsB.ensureUserGroup({ create: true }))!;
+      expect(bGroupId).toBeTruthy();
+
+      // A learns B's identity + group (contact exchange), then shares a doc to
+      // B's user-group with edit access. Like the real app, the doc carries CGKA
+      // state: A encrypts content before and after the share.
+      await syncAll(khB, khA);
+      const { khDocId } = await opsA.enableSharing('contact-shared-doc');
+      const docOnA = await khA.getDocument(new DocumentId(base64ToBytes(khDocId)));
+      await khA.tryEncrypt(docOnA!, new ChangeId(crypto.getRandomValues(new Uint8Array(32))), [], new TextEncoder().encode('before share'));
+      await opsA.addMember(bGroupId, khDocId, 'edit');
+      await khA.tryEncrypt(docOnA!, new ChangeId(crypto.getRandomValues(new Uint8Array(32))), [], new TextEncoder().encode('after share'));
+
+      // B learns the doc + the grant.
+      await syncAll(khA, khB);
+      expect(await opsB.getUserGroupAccess(khDocId)).toBe('Edit');
+
+      return { opsA, khA, opsB, khB, seedB, bGroupId, khDocId, syncAll };
+    }
+
+    it('revokeMyAccess revokes a contact-shared grant; the revocation survives sync-back and reload', async () => {
+      const { opsA: _opsA, khA, opsB, khB, seedB, bGroupId, khDocId, syncAll } = await createContactShare();
+
+      const res = await opsB.revokeMyAccess(khDocId);
+      expect(res.status).toBe('revoked');
+      // The baseline was captured before the revoke: A's single grant.
+      expect(res.grantSigs).toHaveLength(1);
+
+      expect(await opsB.getUserGroupAccess(khDocId)).toBeNull();
+      const { accessibleKhIds } = await opsB.enumerateUserDocs();
+      expect(accessibleKhIds).not.toContain(khDocId);
+
+      // A never saw the revocation and keeps syncing its state to B — that must
+      // not resurrect B's access (ops are monotonic).
+      await syncAll(khA, khB);
+      expect(await opsB.getUserGroupAccess(khDocId)).toBeNull();
+
+      // Reload: rebuild B's keyhive from its own persisted archive — the
+      // revocation must be durable.
+      const archB = new Archive((await khB.toArchive()).toBytes());
+      const khB2 = await archB.tryToKeyhive(CiphertextStore.newInMemory(), Signer.memorySignerFromBytes(seedB), () => {});
+      const accessAfterReload = await khB2.accessForDoc(
+        new Identifier(base64ToBytes(bGroupId)),
+        new DocumentId(base64ToBytes(khDocId)),
+      );
+      expect(accessAfterReload == null).toBe(true);
+    });
+
+    it('revokeMyAccess reports no-authority + the grant baseline when the revoke fails; a re-share mints a new signature', async () => {
+      const { opsA, khA, opsB, khB, bGroupId, khDocId, syncAll } = await createContactShare();
+
+      const baseline = await opsB.getUserGroupGrantSigs(khDocId);
+      expect(baseline).toHaveLength(1);
+
+      // Simulate the real-world failure modes (partial CGKA state, WASM rekey
+      // trap) by making the revoke throw. Own-property assignment shadows the
+      // wasm prototype method (same trick as neutralizeForcePcsUpdate).
+      (khB as any).revokeMember = async () => { throw new Error('NoProof (simulated)'); };
+      const res = await opsB.revokeMyAccess(khDocId);
+      expect(res.status).toBe('no-authority');
+      expect(res.grantSigs).toEqual(baseline);
+      // Access survives — this is exactly the case the archive tombstone hides.
+      expect(await opsB.getUserGroupAccess(khDocId)).toBe('Edit');
+
+      // Re-adding the SAME grant is a keyhive no-op (identical op, deduped) —
+      // no new signature, so it must NOT read as a re-share.
+      await opsA.addMember(bGroupId, khDocId, 'edit');
+      await syncAll(khA, khB);
+      expect(await opsB.getUserGroupGrantSigs(khDocId)).toEqual(baseline);
+
+      // A deliberate re-share reaches B as a fresh delegation (the app's only
+      // paths — change the member's role, or revoke + re-add — both mint one).
+      // Its NEW signature is the un-archive trigger reconcileHomeDocs keys off.
+      await opsA.changeRole(bGroupId, khDocId, 'admin');
+      await syncAll(khA, khB);
+      const after = await opsB.getUserGroupGrantSigs(khDocId);
+      expect(after.length).toBeGreaterThan(0);
+      expect(after.some(s => !baseline.includes(s))).toBe(true);
     });
   });
 });

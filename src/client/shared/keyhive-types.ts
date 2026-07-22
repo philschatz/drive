@@ -32,3 +32,16 @@ export interface GroupMemberInfo extends MemberInfoBase {
 }
 
 export type MemberInfo = IndividualMemberInfo | GroupMemberInfo;
+
+/** Outcome of the home-page "archive" action (KeyhiveOps.revokeMyAccess). */
+export type ArchiveDocResult = {
+  /**
+   * 'revoked' — the user-group's access was dropped (the doc leaves every
+   * device's home list once the revocation syncs). 'no-authority' — the revoke
+   * failed (kept only local: the caller archives/tombstones the doc instead).
+   * 'not-found' — keyhive doesn't know the doc.
+   */
+  status: 'revoked' | 'no-authority' | 'not-found';
+  /** Pre-revoke direct-grant signatures for the user-group (re-share detection baseline). */
+  grantSigs: string[];
+};

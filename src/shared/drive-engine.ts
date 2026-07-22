@@ -27,6 +27,8 @@ import type { EngineHost } from './engine-host';
 import type { MainToWorker, WorkerToMain } from './worker-protocol';
 
 type StoredDocEntry = { id: string; type?: string; name?: string; sharingGroupId?: string;[k: string]: any };
+/** KEYS.archivedDocIds value: archived automerge docId → re-share-detection baseline. */
+type ArchivedDocTombstones = Record<string, { grantSigs: string[] }>;
 
 interface SubInfo {
   filter: string;
@@ -245,7 +247,12 @@ export class DriveEngine {
   }
   private async encryptPresenceValueOrNull(doc: any, value: unknown): Promise<Uint8Array | null> {
     try { return await this.encryptPresenceValue(doc, value); }
-    catch { return null; }
+    catch (err) {
+      // Swallowing this silently hid a wedged CGKA ("SecretKey not found" after
+      // a reload lost an in-memory leaf secret) for a long time — keep it loud.
+      console.warn('[engine] presence encrypt failed:', errMsg(err));
+      return null;
+    }
   }
   private async flushPresenceOut(entry: DocEntry): Promise<boolean> {
     if (!entry.presence || !entry.presenceDoc || !entry.presenceDesired) return true;
@@ -606,14 +613,29 @@ export class DriveEngine {
     try {
       const { accessibleKhIds, reachableKhIds } = await this.khOps.enumerateUserDocs();
       const list = (await this.host.kv.get<StoredDocEntry[]>(KEYS.docIds)) ?? [];
+      const tombstones = (await this.host.kv.get<ArchivedDocTombstones>(KEYS.archivedDocIds)) ?? {};
       const knownIds = new Set(list.map(e => e.id));
       const accessibleAmIds = new Set(accessibleKhIds.map(k => this.amDocIdFromBytes!(base64ToBytes(k))));
       const reachableSet = new Set(reachableKhIds);
       let changed = false;
+      let tombstonesChanged = false;
       const newDocHandles: string[] = [];
 
       for (const amDocId of accessibleAmIds) {
         if (knownIds.has(amDocId)) continue;
+        const tomb = tombstones[amDocId];
+        if (tomb) {
+          // Archived here while the user-group kept access (self-revoke wasn't
+          // possible). Un-archive ONLY on a deliberate re-share: a direct grant
+          // whose signature isn't in the archive-time baseline. An empty
+          // baseline (signatures couldn't be captured) never auto-un-archives.
+          const sigs = await this.khOps.getUserGroupGrantSigs(this.resolveKhDocId(amDocId));
+          const reshared = tomb.grantSigs.length > 0 && sigs.some(s => !tomb.grantSigs.includes(s));
+          if (!reshared) continue;
+          console.log(`[engine] reconcileHomeDocs: re-shared archived doc ${amDocId}, un-archiving`);
+          delete tombstones[amDocId];
+          tombstonesChanged = true;
+        }
         console.log(`[engine] reconcileHomeDocs: adding accessible doc ${amDocId}`);
         list.unshift({ id: amDocId });
         knownIds.add(amDocId);
@@ -623,6 +645,14 @@ export class DriveEngine {
 
       for (let i = list.length - 1; i >= 0; i--) {
         const e = list[i];
+        if (tombstones[e.id]) {
+          // Archived, but still listed — a reconcile raced the archive handler.
+          console.log(`[engine] reconcileHomeDocs: removing archived doc ${e.id}`);
+          list.splice(i, 1);
+          knownIds.delete(e.id);
+          changed = true;
+          continue;
+        }
         if (accessibleAmIds.has(e.id)) continue;
         const khDocId = this.resolveKhDocId(e.id);
         if (reachableSet.has(khDocId)) {
@@ -632,6 +662,17 @@ export class DriveEngine {
           changed = true;
         }
       }
+
+      // A tombstone whose doc the user-group can no longer access is done: the
+      // revoke landed (or access was withdrawn), so the derived list alone keeps
+      // it out and a future grant should surface the doc again normally.
+      for (const amDocId of Object.keys(tombstones)) {
+        if (!accessibleAmIds.has(amDocId)) {
+          delete tombstones[amDocId];
+          tombstonesChanged = true;
+        }
+      }
+      if (tombstonesChanged) await this.host.kv.set(KEYS.archivedDocIds, tombstones);
 
       if (changed) {
         await this.host.kv.set(KEYS.docIds, list);
@@ -749,6 +790,12 @@ export class DriveEngine {
       const kh = await createKeyhiveRepo({
         storage: this.host.storage,
         networkAdapter: this.host.network.networkAdapter,
+        // Fixed suffix ⇒ all tabs of a device share one peerId, and the relay's
+        // duplicate-join rejection means only ONE tab is connected at a time.
+        // Per-tab suffixes (`drive.<nonce>`) are NOT allowed: a sibling tab's
+        // first presence encrypt on a shared doc hits a keyhive WASM panic
+        // (beekem new_app_secret_for pcs_key_ops lookup — "unreachable
+        // executed") that kills its worker. See keyhive-cgka-presence-panic.
         peerIdSuffix: 'drive',
         serialize: true,
         withShareConfig: true,
@@ -1311,8 +1358,15 @@ export class DriveEngine {
       return;
     }
 
-    if (msg.type === 'remove-me-from-doc') {
+    if (msg.type === 'archive-doc') {
       try {
+        // Tombstone FIRST (empty baseline), so a reconcile racing this handler
+        // (any keyhive ingest triggers one) can't re-add the doc between the
+        // list write and the revoke below. The baseline is upgraded to the real
+        // grant signatures once revokeMyAccess reports them.
+        const tombstones = (await this.host.kv.get<ArchivedDocTombstones>(KEYS.archivedDocIds)) ?? {};
+        tombstones[msg.docId] = { grantSigs: [] };
+        await this.host.kv.set(KEYS.archivedDocIds, tombstones);
         const list = (await this.host.kv.get<StoredDocEntry[]>(KEYS.docIds)) ?? [];
         const removedEntry = list.find(e => e.id === msg.docId);
         const filtered = list.filter(e => e.id !== msg.docId);
@@ -1327,14 +1381,31 @@ export class DriveEngine {
         this.queryResultCache.deletePrefix(docCachePrefix(msg.docId));
         await this.host.kv.delPrefix(docCachePrefix(msg.docId));
         const removedKhDocId = removedEntry ? this.resolveKhDocId(msg.docId) : null;
+        let status: string = 'not-found';
         if (removedKhDocId && this.khOps) {
-          try { await this.khOps.removeMyAccess(removedKhDocId); }
-          catch (err: any) { console.warn('[engine] removeMyAccess failed on delete:', errMsg(err)); }
+          try {
+            const res = await this.khOps.revokeMyAccess(removedKhDocId);
+            status = res.status;
+            if (res.grantSigs.length) {
+              const t = (await this.host.kv.get<ArchivedDocTombstones>(KEYS.archivedDocIds)) ?? {};
+              t[msg.docId] = { grantSigs: res.grantSigs };
+              await this.host.kv.set(KEYS.archivedDocIds, t);
+            }
+          } catch (err: any) {
+            console.warn('[engine] revokeMyAccess failed on archive:', errMsg(err));
+            status = 'no-authority';
+          }
           this.khOps.khDocuments.delete(removedKhDocId);
         }
+        // Drop the doc's local automerge data (local-only: peers keep theirs).
+        try { this.repo?.delete(msg.docId as any); } catch (err: any) {
+          console.warn('[engine] repo.delete failed on archive:', errMsg(err));
+        }
         this.emit({ type: 'doc-list-updated', list: filtered });
+        emit({ type: 'result', id: msg.id, result: { status } });
       } catch (err: any) {
-        console.warn('[engine] remove-me-from-doc failed:', errMsg(err));
+        console.warn('[engine] archive-doc failed:', errMsg(err));
+        emit({ type: 'result', id: msg.id, error: errMsg(err) });
       }
       return;
     }

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'preact/hooks';
 import { useConnectionStatus, usePeerList, usePeerTransports } from '../shared/automerge';
-import { createDoc, updateDoc, subscribeQuery, fetchDocList, removeDocId, onDocListUpdated, HOME_SUMMARY_QUERY } from '../worker-api';
+import { createDoc, updateDoc, subscribeQuery, fetchDocList, archiveDoc, onDocListUpdated, HOME_SUMMARY_QUERY } from '../worker-api';
 import { getMyAccess, onKeyhiveStateChanged } from '../shared/keyhive-api';
 import { PeerDot } from '../shared/presence';
 import { Button } from '@/components/ui/button';
@@ -618,12 +618,21 @@ export function Home({ path }: { path?: string }) {
 
   const docLabel = (entry: DocEntry) => docTypeLabel(entry.type);
 
-  const handleDelete = async (entry: DocEntry) => {
+  const handleArchive = async (entry: DocEntry) => {
     const label = docLabel(entry);
-    removeDocId(entry.documentId);
-    setMessage(`${label.charAt(0).toUpperCase() + label.slice(1)} deleted`);
+    const capLabel = label.charAt(0).toUpperCase() + label.slice(1);
     setError('');
+    // Optimistic removal — the worker's tombstone guarantees it sticks even
+    // when the access revoke fails (e.g. a grant a contact issued).
     setEntries(prev => prev.filter(e => e.documentId !== entry.documentId));
+    try {
+      const { status } = await archiveDoc(entry.documentId);
+      setMessage(status === 'revoked'
+        ? `${capLabel} archived`
+        : `${capLabel} archived on this device — your access couldn't be fully revoked, so it may still appear on your other devices`);
+    } catch (err: any) {
+      setError(`Failed to archive ${label}: ${err?.message ?? err}`);
+    }
   };
 
   const jsonInputRef = useRef<HTMLInputElement>(null);
@@ -830,8 +839,10 @@ export function Home({ path }: { path?: string }) {
                 <DeleteButton
                   className="h-8 w-8"
                   iconSize={18}
-                  confirmMessage={`Delete "${entry.name || 'Untitled'}" ${docLabel(entry)}?`}
-                  onConfirm={() => handleDelete(entry)}
+                  icon="archive"
+                  tooltip="Archive"
+                  confirmMessage={`Archive "${entry.name || 'Untitled'}" ${docLabel(entry)}?`}
+                  onConfirm={() => handleArchive(entry)}
                 />
               )}
               <a

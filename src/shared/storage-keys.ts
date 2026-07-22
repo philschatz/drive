@@ -17,6 +17,14 @@
 /** Source-of-truth keys for non-cache, non-settings persisted data. */
 export const KEYS = {
   docIds:             'data:my-doc-ids',
+  /**
+   * Docs the user archived from the home page while their user-group still had
+   * access (the self-revoke wasn't possible). Map of automerge docId →
+   * { grantSigs }: the direct-grant signatures at archive time, so a later
+   * grant with an unseen signature (a deliberate re-share) un-archives the doc.
+   * reconcileHomeDocs skips these in its add-back pass.
+   */
+  archivedDocIds:     'data:archived-doc-ids',
   contactNames:       'data:contact-names',
   knownContactGroups: 'data:known-contact-groups',
   userGroupId:        'data:auth:user-group-id',

@@ -27,7 +27,9 @@ export type MainToWorker =
   | { type: 'set-presence'; docId: string; state: any }
   // Doc list mutations (IDB-backed). Adding a doc is folded into 'create-doc';
   // every other doc enters the list via reconcileHomeDocs (keyhive-access driven).
-  | { type: 'remove-me-from-doc'; docId: string }
+  // The home page's "archive" action: `id` correlates the result so the UI can
+  // report whether access was truly revoked or only archived on this device.
+  | { type: 'archive-doc'; id: number; docId: string }
   // Contact name mutations (IDB-backed). `id` correlates the result so the main
   // thread can await persistence and surface failures instead of losing them.
   | { type: 'set-contact-name'; id: number; agentId: string; name: string }

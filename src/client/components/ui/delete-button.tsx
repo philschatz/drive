@@ -12,6 +12,8 @@ export interface DeleteButtonProps {
   className?: string;
   /** material-symbols icon font size. Default 16. */
   iconSize?: number;
+  /** material-symbols icon name. Default "delete" (trash can). */
+  icon?: string;
 }
 
 /**
@@ -26,6 +28,7 @@ export function DeleteButton({
   disabled,
   className,
   iconSize = 16,
+  icon = "delete",
 }: DeleteButtonProps) {
   const handleClick = () => {
     if (!confirm(confirmMessage)) return;
@@ -44,7 +47,7 @@ export function DeleteButton({
       disabled={disabled}
       onClick={handleClick}
     >
-      <span className="material-symbols-outlined" style={{ fontSize: iconSize }}>delete</span>
+      <span className="material-symbols-outlined" style={{ fontSize: iconSize }}>{icon}</span>
     </button>
   );
 }

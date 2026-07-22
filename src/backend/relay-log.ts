@@ -1,7 +1,14 @@
 import { decode } from 'cbor-x';
 
+/** Truncate the base64 key but keep any `-suffix` intact — the suffix is the
+ * per-service part of a peerId ('drive', 'caldav-server'), so it's what tells
+ * two services of the same device apart in collision/routing logs. */
 export function shortId(id: string): string {
-  return id.length > 8 ? id.slice(0, 6) + '…' : id;
+  const dash = id.indexOf('-');
+  if (dash === -1) return id.length > 8 ? id.slice(0, 6) + '…' : id;
+  const key = id.slice(0, dash);
+  const suffix = id.slice(dash); // includes the '-'
+  return (key.length > 8 ? key.slice(0, 6) + '…' : key) + suffix;
 }
 
 // Render bytes as printable ASCII, replacing non-printable/high bytes with '.'
