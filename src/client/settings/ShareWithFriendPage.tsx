@@ -21,7 +21,7 @@ export function ShareWithFriendPage({ path }: { path?: string }) {
   const [error, setError] = useState('');
   // Bump to (re)mount RendezvousShare; >0 means the share has been started.
   const [started, setStarted] = useState(0);
-  const connected = useWsStatus('');
+  const connected = useWsStatus();
 
   const load = useCallback(async () => {
     try {

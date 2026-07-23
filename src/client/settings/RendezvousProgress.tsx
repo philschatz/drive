@@ -75,7 +75,7 @@ function StepRow({ state, label }: { state: StepState; label: string }) {
 export function RendezvousProgress({
   phase, rendezvousId, waitingLabel, transferLabel, transferDetail, doneLabel, errorMessage,
 }: RendezvousProgressProps) {
-  const connected = useWsStatus('');
+  const connected = useWsStatus();
 
   const idRow = rendezvousId ? (
     <p className="text-[10px] text-muted-foreground pt-1">

@@ -1604,17 +1604,45 @@ export class DriveEngine {
         const myCard = await this.khOps.getContactCard();
         const plaintext = JSON.stringify({ card: myCard, displayName: msg.displayName, userGroupId: myUserGroupId ?? undefined });
         const { rendezvousId, key } = generateRendezvous();
+        // Bidirectional: after sending our bundle we STAY subscribed to ingest the
+        // receiver's reply (their card + display name) so both peers end up knowing
+        // each other from a single scan. The receiver's own UI names us; we have no
+        // UI here, so the worker records their name from the reply payload.
         this.rdvSessions.set(rendezvousId, {
           key,
           onPeer: () => {
             this.rdvEvent(rendezvousId, 'peer-joined');
             this.rdvSendPayload(rendezvousId, key, plaintext)
-              .then(() => {
-                this.rdvSend({ type: RDV_UNSUB, rendezvousId });
-                this.rdvSessions.delete(rendezvousId);
-                this.rdvEvent(rendezvousId, 'sent');
-              })
               .catch((err) => this.rdvEvent(rendezvousId, 'error', errMsg(err)));
+          },
+          onData: (pt) => {
+            void (async () => {
+              try {
+                this.rdvEvent(rendezvousId, 'receiving');
+                let cardJson = pt;
+                let displayName: string | undefined;
+                let replyGroupId: string | undefined;
+                try {
+                  const parsed = JSON.parse(pt);
+                  if (parsed && typeof parsed === 'object' && typeof parsed.card === 'string') {
+                    cardJson = parsed.card; displayName = parsed.displayName; replyGroupId = parsed.userGroupId;
+                  }
+                } catch { /* raw card string */ }
+                const result = await this.khOps!.receiveContactCard(cardJson);
+                const resolvedGroupId = replyGroupId ?? result.groupId ?? null;
+                if (!result.isOwnCard && resolvedGroupId) {
+                  await this.addKnownContactGroup(resolvedGroupId);
+                  await this.putContactName(resolvedGroupId, displayName);
+                }
+                this.rdvSessions.delete(rendezvousId);
+                this.rdvSend({ type: RDV_UNSUB, rendezvousId });
+                this.rdvEvent(rendezvousId, 'received');
+              } catch (err: any) {
+                this.rdvSessions.delete(rendezvousId);
+                this.rdvSend({ type: RDV_UNSUB, rendezvousId });
+                this.rdvEvent(rendezvousId, 'error', errMsg(err));
+              }
+            })();
           },
         });
         this.rdvSend({ type: RDV_SUB, rendezvousId });

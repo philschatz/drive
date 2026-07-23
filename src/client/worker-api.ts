@@ -358,7 +358,7 @@ export function useConnectionStatus(): boolean {
  * Returns WebSocket connection status for a specific document's repo.
  * Unlike useConnectionStatus (which tracks peers), this tracks the raw WS open/close state.
  */
-export function useWsStatus(_docId: string): boolean {
+export function useWsStatus(): boolean {
   const [connected, setConnected] = useState(() => wsConnected);
 
   useEffect(() => {

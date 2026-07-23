@@ -21,7 +21,7 @@ export function LinkDeviceSharePage({ path }: { path?: string }) {
   const [message, setMessage] = useState('');
   // Bump to (re)mount RendezvousShare; >0 means the share has been started.
   const [started, setStarted] = useState(0);
-  const connected = useWsStatus('');
+  const connected = useWsStatus();
 
   const { devices, removeDevice } = useDevices({ onError: setError, onMessage: setMessage });
   const deviceStatuses = useDeviceStatuses();

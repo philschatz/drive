@@ -12,14 +12,13 @@ import { waitFor, type Peer } from './support/peer';
  * presence-liveness.spec.ts: presence setup is async and a freshly-synced peer
  * may miss the first broadcast before its key material arrives.
  */
-// KNOWN KEYHIVE BUG (fixme = deliberately skipped): bob's worker crashes with a
-// WASM panic (`unreachable executed`) on his first presence encrypt — beekem's
-// Cgka::new_app_secret_for expects the current root's PcsKey in pcs_key_ops,
-// but that map is only populated on LOCAL update or on decrypt, so any instance
-// that encrypts after ingesting a remote CGKA rekey (a late joiner) panics.
-// Fix belongs in beekem (repair the mapping from the single ops-graph head that
-// has_pcs_key() guarantees). Un-fixme when the keyhive fix lands.
-test.fixme('source viewer shows peer dots for a real remote peer', async ({ browser }) => {
+// Previously fixme'd for a keyhive WASM panic (`unreachable executed`) on a late
+// joiner's first presence encrypt: beekem's Cgka::new_app_secret_for expected the
+// current root's PcsKey in pcs_key_ops, but that map was only populated on LOCAL
+// update or on decrypt, so encrypting after ingesting a remote CGKA rekey panicked.
+// Fixed in beekem (new_app_secret_for now repairs the mapping from the single
+// ops-graph head that has_pcs_key() guarantees).
+test('source viewer shows peer dots for a real remote peer', async ({ browser }) => {
   test.setTimeout(180_000);
   const { alice, bob, docId } = await setupSharedDoc(browser, 'edit');
 

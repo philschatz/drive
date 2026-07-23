@@ -264,7 +264,7 @@ export function setCell(cells: Record<string, DataGridCell>, key: string, stored
 }
 
 /** Get the active sheet from the context. */
-function ctxSheet(_doc: any, ctx: GridCommandContext) {
+function ctxSheet(ctx: GridCommandContext) {
   return ctx.sheet;
 }
 
@@ -320,7 +320,7 @@ const clipboardPlugin: GridPlugin = {
       execute: (_, ctx) => {
         const range = getEffectiveRange(ctx.selectedCell, ctx.selectionAnchor);
         if (!range || !ctx.sheet) return;
-        const sh = ctxSheet(ctx.sheet, ctx);
+        const sh = ctxSheet(ctx);
         // Range is VISIBLE-space: index cell keys via visibleRow/ColIds; use the full
         // sorted lists for R1C1/format resolution so hidden rows/cols aren't copied (H4).
         const data = buildClipboardData(sh.cells, ctx.computedValues, range, ctx.visibleRowIds, ctx.visibleColIds, ctx.currentSheetId, ctx.formatCache, ctx.sortedRowIds, ctx.sortedColIds);
@@ -339,7 +339,7 @@ const clipboardPlugin: GridPlugin = {
       execute: (_, ctx) => {
         const range = getEffectiveRange(ctx.selectedCell, ctx.selectionAnchor);
         if (!range || !ctx.sheet) return;
-        const sh = ctxSheet(ctx.sheet, ctx);
+        const sh = ctxSheet(ctx);
         // Range is VISIBLE-space: index cell keys via visibleRow/ColIds; use the full
         // sorted lists for R1C1/format resolution so hidden rows/cols aren't cut (H4).
         const data = buildClipboardData(sh.cells, ctx.computedValues, range, ctx.visibleRowIds, ctx.visibleColIds, ctx.currentSheetId, ctx.formatCache, ctx.sortedRowIds, ctx.sortedColIds);
@@ -366,7 +366,7 @@ const clipboardPlugin: GridPlugin = {
           const { values, formats: clipFormats, mode, range: srcRange } = clipboardRef.current;
           const { sheet: doc } = ctx;
           if (!doc) return;
-          const sh = ctxSheet(doc, ctx);
+          const sh = ctxSheet(ctx);
           const rowEntries = sortedEntries(sh.rows);
           const colEntries = sortedEntries(sh.columns);
           const fullRowIds = rowEntries.map(([id]) => id);
@@ -697,7 +697,7 @@ const rowPlugin: GridPlugin = {
       execute: (s, ctx) => {
         const { sheet: doc, setContextMenu, currentSheetId } = ctx;
         if (!doc) return;
-        const sh = ctxSheet(doc, ctx);
+        const sh = ctxSheet(ctx);
         const indices = rowIndices(s);
         const entries = sortedEntries(sh.rows);
         if (entries.length === 0) return;
@@ -731,7 +731,7 @@ const rowPlugin: GridPlugin = {
       execute: (s, ctx) => {
         const { sheet: doc, setContextMenu, currentSheetId } = ctx;
         if (!doc) return;
-        const sh = ctxSheet(doc, ctx);
+        const sh = ctxSheet(ctx);
         const indices = rowIndices(s);
         const entries = sortedEntries(sh.rows);
         if (entries.length === 0) return;
@@ -761,7 +761,7 @@ const rowPlugin: GridPlugin = {
       execute: (_, ctx) => {
         const { sheet: doc, selectedRows, setSelectedRows, setContextMenu, currentSheetId } = ctx;
         if (!doc) return;
-        const sh = ctxSheet(doc, ctx);
+        const sh = ctxSheet(ctx);
         const entries = sortedEntries(sh.rows);
         // selectedRows are VISIBLE indices — resolve neighbors through visibleRowIds (H4).
         const indices = [...selectedRows].sort((a, b) => a - b);
@@ -786,7 +786,7 @@ const rowPlugin: GridPlugin = {
       execute: (_, ctx) => {
         const { sheet: doc, selectedRows, setSelectedRows, setContextMenu, currentSheetId } = ctx;
         if (!doc) return;
-        const sh = ctxSheet(doc, ctx);
+        const sh = ctxSheet(ctx);
         const entries = sortedEntries(sh.rows);
         // selectedRows are VISIBLE indices — resolve neighbors through visibleRowIds (H4).
         const indices = [...selectedRows].sort((a, b) => a - b);
@@ -816,7 +816,7 @@ const rowPlugin: GridPlugin = {
       execute: (s, ctx) => {
         const { sheet: doc, setSelectedRows, setContextMenu, currentSheetId } = ctx;
         if (!doc) return;
-        const sh = ctxSheet(doc, ctx);
+        const sh = ctxSheet(ctx);
         const indices = rowIndices(s);
         const rowEntries = sortedEntries(sh.rows);
         // Selection indices are in VISIBLE space — resolve through visibleRowIds
@@ -852,7 +852,7 @@ const rowPlugin: GridPlugin = {
         const indices = rowIndices(s);
         const ids = indices.map(i => ctx.visibleRowIds[i]).filter(Boolean);
         if (ids.length === 0) return;
-        const sh = ctxSheet(ctx.sheet, ctx);
+        const sh = ctxSheet(ctx);
         const currentHeight = sh?.rows[ids[0]]?.height || 28;
         const input = window.prompt('Row height (px):', String(currentHeight));
         if (input === null) return;
@@ -909,7 +909,7 @@ const columnPlugin: GridPlugin = {
       execute: (s, ctx) => {
         const { sheet: doc, setContextMenu, currentSheetId } = ctx;
         if (!doc) return;
-        const sh = ctxSheet(doc, ctx);
+        const sh = ctxSheet(ctx);
         const indices = colIndices(s);
         const entries = sortedEntries(sh.columns);
         if (entries.length === 0) return;
@@ -943,7 +943,7 @@ const columnPlugin: GridPlugin = {
       execute: (s, ctx) => {
         const { sheet: doc, setContextMenu, currentSheetId } = ctx;
         if (!doc) return;
-        const sh = ctxSheet(doc, ctx);
+        const sh = ctxSheet(ctx);
         const indices = colIndices(s);
         const entries = sortedEntries(sh.columns);
         if (entries.length === 0) return;
@@ -973,7 +973,7 @@ const columnPlugin: GridPlugin = {
       execute: (_, ctx) => {
         const { sheet: doc, selectedCols, setSelectedCols, setContextMenu, currentSheetId } = ctx;
         if (!doc) return;
-        const sh = ctxSheet(doc, ctx);
+        const sh = ctxSheet(ctx);
         const entries = sortedEntries(sh.columns);
         // selectedCols are VISIBLE indices — resolve neighbors through visibleColIds (H4).
         const indices = [...selectedCols].sort((a, b) => a - b);
@@ -998,7 +998,7 @@ const columnPlugin: GridPlugin = {
       execute: (_, ctx) => {
         const { sheet: doc, selectedCols, setSelectedCols, setContextMenu, currentSheetId } = ctx;
         if (!doc) return;
-        const sh = ctxSheet(doc, ctx);
+        const sh = ctxSheet(ctx);
         const entries = sortedEntries(sh.columns);
         // selectedCols are VISIBLE indices — resolve neighbors through visibleColIds (H4).
         const indices = [...selectedCols].sort((a, b) => a - b);
@@ -1028,7 +1028,7 @@ const columnPlugin: GridPlugin = {
       execute: (s, ctx) => {
         const { sheet: doc, setSelectedCols, setContextMenu, currentSheetId } = ctx;
         if (!doc) return;
-        const sh = ctxSheet(doc, ctx);
+        const sh = ctxSheet(ctx);
         const indices = colIndices(s);
         const colEntries = sortedEntries(sh.columns);
         // Selection indices are in VISIBLE space — resolve through visibleColIds
@@ -1064,7 +1064,7 @@ const columnPlugin: GridPlugin = {
         const indices = colIndices(s);
         const ids = indices.map(i => ctx.visibleColIds[i]).filter(Boolean);
         if (ids.length === 0) return;
-        const sh = ctxSheet(ctx.sheet, ctx);
+        const sh = ctxSheet(ctx);
         const currentWidth = sh?.columns[ids[0]]?.width || 100;
         const input = window.prompt('Column width (px):', String(currentWidth));
         if (input === null) return;
@@ -1653,7 +1653,7 @@ const visibilityPlugin: GridPlugin = {
       icon: 'visibility',
       isEnabled: s => s.hasHiddenRows,
       execute: (_, ctx) => {
-        const sh = ctxSheet(ctx.sheet, ctx);
+        const sh = ctxSheet(ctx);
         if (!sh) return;
         const ids = Object.entries(sh.rows).filter(([, r]: [string, any]) => r.hidden).map(([id]) => id);
         if (ids.length === 0) return;
@@ -1668,7 +1668,7 @@ const visibilityPlugin: GridPlugin = {
       icon: 'visibility',
       isEnabled: s => s.hasHiddenCols,
       execute: (_, ctx) => {
-        const sh = ctxSheet(ctx.sheet, ctx);
+        const sh = ctxSheet(ctx);
         if (!sh) return;
         const ids = Object.entries(sh.columns).filter(([, c]: [string, any]) => c.hidden).map(([id]) => id);
         if (ids.length === 0) return;
@@ -1683,7 +1683,7 @@ const visibilityPlugin: GridPlugin = {
       icon: 'push_pin',
       isEnabled: s => rowIndices(s).length > 0,
       execute: (s, ctx) => {
-        const sh = ctxSheet(ctx.sheet, ctx);
+        const sh = ctxSheet(ctx);
         if (!sh) return;
         const indices = rowIndices(s);
         const maxVisIdx = Math.max(...indices);
@@ -1710,7 +1710,7 @@ const visibilityPlugin: GridPlugin = {
       icon: 'push_pin',
       isEnabled: s => s.hasFrozenRows,
       execute: (_, ctx) => {
-        const sh = ctxSheet(ctx.sheet, ctx);
+        const sh = ctxSheet(ctx);
         if (!sh) return;
         const ids = Object.entries(sh.rows).filter(([, r]: [string, any]) => r.frozen).map(([id]) => id);
         if (ids.length === 0) return;
@@ -1725,7 +1725,7 @@ const visibilityPlugin: GridPlugin = {
       icon: 'push_pin',
       isEnabled: s => colIndices(s).length > 0,
       execute: (s, ctx) => {
-        const sh = ctxSheet(ctx.sheet, ctx);
+        const sh = ctxSheet(ctx);
         if (!sh) return;
         const indices = colIndices(s);
         const maxVisIdx = Math.max(...indices);
@@ -1752,7 +1752,7 @@ const visibilityPlugin: GridPlugin = {
       icon: 'push_pin',
       isEnabled: s => s.hasFrozenCols,
       execute: (_, ctx) => {
-        const sh = ctxSheet(ctx.sheet, ctx);
+        const sh = ctxSheet(ctx);
         if (!sh) return;
         const ids = Object.entries(sh.columns).filter(([, c]: [string, any]) => c.frozen).map(([id]) => id);
         if (ids.length === 0) return;
@@ -1837,7 +1837,7 @@ export function commitReorder(
 ): void {
   const { sheet: doc, mutate, setSelectedRows, setSelectedCols, currentSheetId } = ctx;
   if (!doc) return;
-  const sh = ctxSheet(doc, ctx);
+  const sh = ctxSheet(ctx);
 
   // draggedIndices/dropIndex are VISIBLE indices; operate in visible id space and
   // bound the new float indices by the nearest VISIBLE neighbors (H4). Hidden
@@ -1903,7 +1903,7 @@ export function commitAutofill(
 ): void {
   const { sheet: doc, mutate, setSelectionAnchor, setSelectedCell, currentSheetId, sheetsMeta } = ctx;
   if (!doc) return;
-  const sh = ctxSheet(doc, ctx);
+  const sh = ctxSheet(ctx);
 
   // sourceRange/fillRange are VISIBLE-space: read/write cells via visibleRow/ColIds,
   // but resolve A1/R1C1 refs against the FULL sorted lists (matching displayed labels

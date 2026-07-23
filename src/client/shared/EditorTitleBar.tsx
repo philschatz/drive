@@ -50,7 +50,7 @@ export function EditorTitleBar<P extends PeerLike>({
   validationCount?: number;
   children?: ComponentChildren;
 }) {
-  const connected = useWsStatus(docId!);
+  const connected = useWsStatus();
   const transports = usePeerTransports();
   const { access } = useAccess(docId);
 

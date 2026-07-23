@@ -13,12 +13,10 @@ import { waitFor } from './support/peer';
  * presence-liveness.spec.ts — the open-a-fresh-doc unavailable/WASM path is a
  * separate known engine issue (see source-presence.spec.ts).
  */
-// KNOWN KEYHIVE BUG (fixme = deliberately skipped): the late joiner's first
-// presence encrypt hits the beekem pcs_key_ops panic (`unreachable executed`,
-// see source-presence.spec.ts) and kills his worker. The usePresence newcomer
-// re-flush this spec also covers is app-side and stays. Un-fixme when the
-// keyhive fix lands.
-test.fixme('editors opened at different times see each other without re-broadcast loops', async ({ browser }) => {
+// Previously fixme'd for the beekem pcs_key_ops panic (`unreachable executed`,
+// see source-presence.spec.ts) on the late joiner's first presence encrypt, now
+// fixed in beekem. The usePresence newcomer re-flush this spec covers is app-side.
+test('editors opened at different times see each other without re-broadcast loops', async ({ browser }) => {
   test.setTimeout(180_000);
   const { alice, bob, docId } = await setupSharedDoc(browser, 'edit');
   try {
