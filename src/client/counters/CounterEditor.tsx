@@ -36,7 +36,9 @@ export function CounterEditor({ uid, event, isNew, opened, onSave, onDelete, onC
   const [title, setTitle] = useState(event.title || '');
   const [startTime, setStartTime] = useState(event.startTime ? event.startTime.substring(0, 5) : '');
   const [duration, setDuration] = useState(event.duration || '');
-  const [frequency, setFrequency] = useState(event.recurrenceRule?.frequency || 'none');
+  // A brand-new habit defaults to daily recurrence (so new users start with a
+  // repeating habit); an existing schedule-less tally keeps 'none'.
+  const [frequency, setFrequency] = useState(event.recurrenceRule?.frequency || (isNew ? 'daily' : 'none'));
   const [interval, setInterval] = useState(event.recurrenceRule?.interval || 1);
   const [byDay, setByDay] = useState<NDay['day'][]>((event.recurrenceRule?.byDay || []).map(d => d.day));
 
@@ -48,7 +50,7 @@ export function CounterEditor({ uid, event, isNew, opened, onSave, onDelete, onC
     setTitle(event.title || '');
     setStartTime(event.startTime ? event.startTime.substring(0, 5) : '');
     setDuration(event.duration || '');
-    setFrequency(event.recurrenceRule?.frequency || 'none');
+    setFrequency(event.recurrenceRule?.frequency || (isNew ? 'daily' : 'none'));
     setInterval(event.recurrenceRule?.interval || 1);
     setByDay((event.recurrenceRule?.byDay || []).map(d => d.day));
   }, [event]);

@@ -47,7 +47,7 @@ test.describe('Counters', () => {
     await expect(page.getByRole('heading', { name: 'Done' })).toBeVisible();
     await expect(row.getByText('1×')).toBeVisible();
 
-    // "No repeat" (the default) makes a schedule-less tally where every click counts.
+    // "No repeat" makes a schedule-less tally where every click counts.
     await pickRepeat('No repeat');
     await input.fill('Pushups');
     await page.getByRole('button', { name: 'Add', exact: true }).click();

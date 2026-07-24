@@ -67,9 +67,11 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
   const [events, setEvents] = useState<Record<string, CounterEvent>>({});
   const [editorState, setEditorState] = useState<EditorState | null>(null);
   const [quickAddText, setQuickAddText] = useState('');
-  // Repeat cadence for the quick-add row. 'none' = a schedule-less tally,
-  // 'other' = open the full editor (pre-filled) on Add/Enter. Sticky across adds.
-  const [quickAddFreq, setQuickAddFreq] = useState<'none' | 'daily' | 'weekly' | 'monthly' | 'other'>('none');
+  // Repeat cadence for the quick-add row. Defaults to 'daily' so a new user's
+  // first habit recurs and they immediately see the occurrence tracking in
+  // action. 'none' = a schedule-less tally, 'other' = open the full editor
+  // (pre-filled) on Add/Enter. Sticky across adds.
+  const [quickAddFreq, setQuickAddFreq] = useState<'none' | 'daily' | 'weekly' | 'monthly' | 'other'>('daily');
   // Set when the editor was opened from the quick-add "Other" flow so that
   // saving returns focus to the quick-add input (to add another item).
   const refocusAfterSaveRef = useRef(false);
