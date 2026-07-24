@@ -737,6 +737,14 @@ export function Home({ path }: { path?: string }) {
     });
   }, [entries]);
 
+  // The aggregate view is only useful with 2+ calendars to overlay. Count the
+  // doc types it renders (see CALENDARISH_TYPES in AllCalendars), excluding
+  // revoked docs.
+  const calendarCount = useMemo(
+    () => entries.filter(e => e.access !== null && (e.type === 'Calendar' || e.type === 'Calendar+Counters')).length,
+    [entries],
+  );
+
   return (
     <div>
       <div className="flex items-center gap-2 mb-4">
@@ -767,11 +775,13 @@ export function Home({ path }: { path?: string }) {
       )}
 
       <div className="flex items-center gap-2 mb-2 flex-wrap">
-        <a href="#/calendars/">
-          <Button variant="outline">
-            <span className="material-symbols-outlined">date_range</span> All calendars
-          </Button>
-        </a>
+        {calendarCount > 1 && (
+          <a href="#/calendars/">
+            <Button variant="outline">
+              <span className="material-symbols-outlined">date_range</span> All calendars
+            </Button>
+          </a>
+        )}
         <a href="#/contacts">
           <Button variant="outline">
             <span className="material-symbols-outlined">contacts</span> Contacts

@@ -28,6 +28,12 @@ interface LoadedCalendar {
 
 const defaultTZ = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
+/** Doc @types the aggregate view renders. Both keep an `events` map of
+ *  `@type: 'Event'` items schedule-x can lay out; counter events without a
+ *  concrete `start` (recurring/time-of-day only) are skipped per-event by the
+ *  schedule-x mapper rather than blanking the view. */
+const CALENDARISH_TYPES = new Set(['Calendar', 'Calendar+Counters']);
+
 export function AllCalendars({ path }: { path?: string }) {
   const [calendars, setCalendars] = useState<LoadedCalendar[]>([]);
   const [status, setStatus] = useState('Loading calendars...');
@@ -153,7 +159,7 @@ export function AllCalendars({ path }: { path?: string }) {
           const timeout = new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), 3000));
           await Promise.race([openDoc(id), timeout]);
           const { result: doc } = await queryDoc(id, initQuery);
-          if (!doc || doc['@type'] !== 'Calendar') return;
+          if (!doc || !CALENDARISH_TYPES.has(doc['@type'])) return;
           if (!mounted) return;
           loaded.push({
             docId: id,

@@ -77,6 +77,12 @@ describe('calendarQuery', () => {
     },
   };
 
+  it('preserves the @type discriminator so AllCalendars can filter by it', async () => {
+    const query = calendarQuery('2026-02-01', '2026-04-30');
+    const result = await one(query, doc);
+    expect(result['@type']).toBe('Calendar');
+  });
+
   it('includes events within the date range', async () => {
     const query = calendarQuery('2026-02-01', '2026-04-30');
     const result = await one(query, doc);

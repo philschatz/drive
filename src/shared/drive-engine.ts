@@ -1956,9 +1956,11 @@ export class DriveEngine {
           emit({ type: 'result', id: msg.id, error: 'Document not ready' });
           return;
         }
-        const { compile } = await import('./jq');
-        const fn = compile(msg.filter);
-        const result = fn(doc);
+        // Use runQuery (same path as subscribeQuery) so a one-shot query returns
+        // the FIRST jq output, not the raw output-stream array. compile()(doc)
+        // yields an array; forwarding it unwrapped made queryDoc hand callers
+        // `[{...}]` instead of `{...}` — see AllCalendars' `doc['@type']` filter.
+        const result = await this.runQuery(msg.filter, doc);
         if (!msg.peek) this.markViewed(msg.docId, heads);
         emit({ type: 'result', id: msg.id, result: { result, heads } });
       } catch (err: any) {

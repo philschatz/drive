@@ -31,7 +31,7 @@ export function calendarQuery(rangeStart: string, rangeEnd: string): string {
     '.value.recurrenceRule == null and .value.start[:10] >= "' + rangeStart +
     '" and .value.start[:10] <= "' + rangeEnd + '"';
   return (
-    '{ events: (.events // {} | to_entries | map(select((' + recurring + ') or (' + nonRecurring +
+    '{ "@type": .["@type"], events: (.events // {} | to_entries | map(select((' + recurring + ') or (' + nonRecurring +
     '))) | from_entries), name: (.name // "Calendar"), description: (.description // ""), color: (.color // "#039be5"), timeZone: .timeZone }'
   );
 }
