@@ -34,6 +34,21 @@ describe('DataGrid document validation', () => {
     expect(validateDocument(validGrid)).toEqual([]);
   });
 
+  it('rejects a malformed column / row id key (not a base-36 shortId)', () => {
+    const badCol = grid({ columns: { 'C1': { index: 1 } }, rows: { r1: { index: 1 } }, cells: {} });
+    expect(hasPath(validateDocument(badCol), ['sheets', 's1', 'columns', 'C1'])).toBe(true);
+    const badRow = grid({ columns: { c1: { index: 1 } }, rows: { 'r-1': { index: 1 } }, cells: {} });
+    expect(hasPath(validateDocument(badRow), ['sheets', 's1', 'rows', 'r-1'])).toBe(true);
+  });
+
+  it('rejects a malformed sheet id key', () => {
+    const doc = {
+      '@type': 'DataGrid', name: 'x',
+      sheets: { 'bad sheet': { '@type': 'Sheet', name: 'S', index: 1, columns: {}, rows: {}, cells: {} } },
+    };
+    expect(hasPath(validateDocument(doc), ['sheets', 'bad sheet'])).toBe(true);
+  });
+
   it('accepts a datagrid with cells', () => {
     const doc = grid({
       columns: { c1: { index: 1 }, c2: { index: 2 } },

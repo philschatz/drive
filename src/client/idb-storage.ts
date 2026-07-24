@@ -19,7 +19,7 @@ const STORE_NAME = 'keyval';
 // `./idb-storage` importers are unaffected — the key names stay a single source
 // of truth.
 import {
-  KEYS, CACHE_PREFIX, queryCacheKey, validationCacheKey, docCachePrefix,
+  KEYS, LEGACY_IDB_KEYS, CACHE_PREFIX, queryCacheKey, validationCacheKey, docCachePrefix,
   hashStr, SETTINGS_PREFIX, SETTINGS_DEFAULTS,
 } from '../shared/storage-keys';
 import type { SettingsSchema, SettingName } from '../shared/storage-keys';
@@ -32,8 +32,11 @@ export type { QueryCacheEntry } from '../shared/storage-keys';
 // migration keys are dropped outright.
 const V2_RENAMES: Record<string, string> = {
   'automerge-doc-ids':    KEYS.docIds,
-  'contact-names':        KEYS.contactNames,
-  'known-contact-groups': KEYS.knownContactGroups,
+  // contact-names / known-contact-groups now live in the DriveSettings doc, but the
+  // v1→v2 rename still lands them on their `data:*` names so the engine's one-time
+  // doc-migration (which reads LEGACY_IDB_KEYS) can pick them up on the next launch.
+  'contact-names':        LEGACY_IDB_KEYS.contactNames,
+  'known-contact-groups': LEGACY_IDB_KEYS.knownContactGroups,
   'user-group-id':        KEYS.userGroupId,
 };
 const V2_DELETE_KEYS = ['linked-devices', 'pending-group-adds'];

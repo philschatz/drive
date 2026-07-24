@@ -4,6 +4,14 @@ import {
   HEX_COLOR_RE,
 } from '../../shared/schemas/core';
 
+/**
+ * Sheet / column / row ids are all minted by `shortId()`
+ * (`Math.random().toString(36).slice(2, 10)`), i.e. up to 8 base-36 chars. The
+ * lenient bound tolerates the odd short draw. Cell keys (`rowId:colId`) are
+ * validated more thoroughly — including that both halves exist — in checkDeps.
+ */
+export const DATAGRID_ID_RE = /^[0-9a-z]{1,12}$/;
+
 export interface DataGridColumn {
   index: number;
   name: string;
@@ -166,8 +174,8 @@ const dataGridSheetSchema = obj({
   name: str(),
   index: num(),
   hidden: bool({ optional: true }),
-  columns: record(dataGridColumnSchema),
-  rows: record(dataGridRowSchema),
+  columns: record(dataGridColumnSchema, { keyPattern: DATAGRID_ID_RE }),
+  rows: record(dataGridRowSchema, { keyPattern: DATAGRID_ID_RE }),
   cells: record(dataGridCellSchema),
   formats: record(formatRangeSchema, { optional: true }),
   conditionalFormats: record(conditionalFormatRuleSchema, { optional: true }),
@@ -177,7 +185,7 @@ export const dataGridDocumentSchema = obj({
   '@type': str({ enum: ['DataGrid'] }),
   name: str(),
   description: str({ optional: true }),
-  sheets: record(dataGridSheetSchema),
+  sheets: record(dataGridSheetSchema, { keyPattern: DATAGRID_ID_RE }),
 });
 
 function checkSheetDependencies(

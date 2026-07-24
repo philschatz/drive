@@ -17,7 +17,9 @@ import {
 import { useDevices, useDeviceStatuses } from '../shared/use-devices';
 import { setDebugEnabled, clearAllCaches, deleteAllData } from '../worker-api';
 import { idbGet, idbSet, isDebugEnabled, KEYS } from '../idb-storage';
-import { getContactName, setContactName } from '../contact-names';
+import { getContactName, setContactName, getAllContactNames } from '../contact-names';
+import { getAllDeviceNames, setDeviceName } from '../device-names';
+import { sourceUrl } from '../shared/doc-urls';
 export function Settings({ path }: { path?: string }) {
   const [identity, setIdentity] = useState<IdentityInfo | null>(null);
   const [displayName, setDisplayName] = useState('');
@@ -31,6 +33,8 @@ export function Settings({ path }: { path?: string }) {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const [debugEnabled] = useState(isDebugEnabled());
+  // Automerge docId of the synced DriveSettings doc (device-local pointer), if any.
+  const [settingsDocId, setSettingsDocId] = useState<string | null>(null);
 
   // The device list, its live refresh, and removal are owned by the shared hook.
   const { devices, removeDevice, changeDeviceRole } = useDevices({ onError: setError, onMessage: setMessage });
@@ -44,6 +48,7 @@ export function Settings({ path }: { path?: string }) {
       const name = (id.userGroupId && getContactName(id.userGroupId)) || '';
       setDisplayName(name);
       setSavedName(name);
+      setSettingsDocId(await idbGet<string>(KEYS.driveSettingsDocId));
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -99,11 +104,11 @@ export function Settings({ path }: { path?: string }) {
 
   const handleExport = async () => {
     try {
-      const [docList, contactNames, deviceNames] = await Promise.all([
-        idbGet<unknown[]>(KEYS.docIds).then(v => v ?? []),
-        idbGet<Record<string, string>>(KEYS.contactNames).then(v => v ?? {}),
-        idbGet<Record<string, string>>(KEYS.deviceNames).then(v => v ?? {}),
-      ]);
+      // Contact/device names now live in the synced DriveSettings doc; read them
+      // from the worker-hydrated caches. docList stays a device-local hint.
+      const docList = await idbGet<unknown[]>(KEYS.docIds).then(v => v ?? []);
+      const contactNames = getAllContactNames();
+      const deviceNames = getAllDeviceNames();
       const payload = { version: 1, exportedAt: new Date().toISOString(), docList, contactNames, deviceNames };
       const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
@@ -134,12 +139,14 @@ export function Settings({ path }: { path?: string }) {
           throw new Error('Invalid backup: contactNames must be an object.');
         // Legacy backups may carry an `invites` field — it's no longer used, so ignore it.
         // `deviceNames` was added later; older backups omit it, so default to {}.
-        const deviceNames = (payload.deviceNames && typeof payload.deviceNames === 'object' && !Array.isArray(payload.deviceNames))
+        const deviceNames: Record<string, string> = (payload.deviceNames && typeof payload.deviceNames === 'object' && !Array.isArray(payload.deviceNames))
           ? payload.deviceNames : {};
+        await idbSet(KEYS.docIds, payload.docList);
+        // Contact/device names live in the synced DriveSettings doc now — restore
+        // them through the worker so they land in (and re-sync from) that document.
         await Promise.all([
-          idbSet(KEYS.docIds, payload.docList),
-          idbSet(KEYS.contactNames, payload.contactNames),
-          idbSet(KEYS.deviceNames, deviceNames),
+          ...Object.entries(payload.contactNames as Record<string, string>).map(([id, name]) => setContactName(id, name)),
+          ...Object.entries(deviceNames).map(([id, name]) => setDeviceName(id, name)),
         ]);
         window.location.reload();
       } catch (err: any) {
@@ -242,6 +249,18 @@ export function Settings({ path }: { path?: string }) {
                 {identity.deviceId.slice(0, 16)}...
               </code>
             </div>
+            {settingsDocId && (
+              <div className="flex items-center gap-2">
+                <span className="text-muted-foreground">Settings document:</span>
+                <a
+                  href={sourceUrl(settingsDocId)}
+                  className="text-xs font-mono text-primary underline underline-offset-2"
+                  title="View / edit the synced settings document (contacts, device names, seen state)"
+                >
+                  {settingsDocId.slice(0, 16)}…
+                </a>
+              </div>
+            )}
           </div>
         ) : (
           <p className="text-sm text-muted-foreground">Keyhive not available.</p>

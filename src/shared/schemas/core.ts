@@ -146,7 +146,7 @@ export type SchemaNode =
   | { type: 'number'; min?: number; max?: number; integer?: boolean; optional?: boolean }
   | { type: 'boolean'; literal?: boolean; optional?: boolean }
   | { type: 'object'; properties?: Record<string, SchemaNode>; optional?: boolean }
-  | { type: 'record'; valueSchema: SchemaNode; optional?: boolean }
+  | { type: 'record'; valueSchema: SchemaNode; keyPattern?: RegExp; optional?: boolean }
   | { type: 'union'; schemas: SchemaNode[]; optional?: boolean }
   | { type: 'array'; items: SchemaNode; optional?: boolean };
 
@@ -176,7 +176,7 @@ export function bool(opts?: { literal?: boolean; optional?: boolean }): SchemaNo
 export function obj(properties: Record<string, SchemaNode>, opts?: { optional?: boolean }): SchemaNode {
   return { type: 'object', properties, ...opts };
 }
-export function record(valueSchema: SchemaNode, opts?: { optional?: boolean }): SchemaNode {
+export function record(valueSchema: SchemaNode, opts?: { optional?: boolean; keyPattern?: RegExp }): SchemaNode {
   return { type: 'record', valueSchema, ...opts };
 }
 export function union(schemas: SchemaNode[], opts?: { optional?: boolean }): SchemaNode {
@@ -259,6 +259,9 @@ export function validateNode(value: unknown, schema: SchemaNode, path: (string |
         return;
       }
       for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+        if (schema.keyPattern && !schema.keyPattern.test(key)) {
+          errors.push({ path: [...path, key], message: `Invalid key "${key}" (does not match expected id format)` });
+        }
         validateNode(child, schema.valueSchema, [...path, key], errors);
       }
       break;
