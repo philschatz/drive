@@ -88,6 +88,26 @@ export interface DeviceStatus {
 }
 
 /**
+ * Collapse several devices' statuses into a single status for the user/group
+ * that owns them, favouring the most-connected: any device on a direct (P2P)
+ * channel wins, else any device online via the relay, else offline. Used to
+ * summarise a user-group (all a contact's devices) as one presence dot.
+ */
+export function mostConnectedStatus(
+  statuses: Record<string, DeviceStatus>,
+  deviceIds: string[],
+): DeviceStatus {
+  let best: DeviceStatus = { online: false };
+  for (const id of deviceIds) {
+    const s = statuses[id];
+    if (!s?.online) continue;
+    if (s.transport === 'direct') return { online: true, transport: 'direct' };
+    best = { online: true, transport: 'relay' };
+  }
+  return best;
+}
+
+/**
  * Live per-device connectivity, keyed by base64 agentId. A device is online iff
  * the relay's peer list contains a peerId whose prefix is that agentId (a peerId
  * is `<base64 agentId>-drive`; base64 never contains '-', so the split is exact).

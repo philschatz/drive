@@ -1,4 +1,6 @@
 import { useState, useRef, useEffect } from 'preact/hooks';
+import { StatusDot } from '../shared/presence';
+import type { DeviceStatus } from '../shared/use-devices';
 
 /**
  * Inline text-input editor shared by EditableDeviceName and EditableUserName.
@@ -14,8 +16,11 @@ import { useState, useRef, useEffect } from 'preact/hooks';
  * this component first mounts — so we both replay once on mount and subscribe.
  * The `editingRef` guard suppresses a cache→draft sync while the user is
  * actively editing, so a late push can't overwrite what they're typing.
+ *
+ * When `status` is passed, a leading presence dot (filled = direct/P2P, hollow
+ * ring = via relay, gray = offline) is shown before the field.
  */
-export function EditableName({ agentId, get, set, subscribe, placeholder, title, suffix }: {
+export function EditableName({ agentId, get, set, subscribe, placeholder, title, suffix, status }: {
   agentId: string;
   get: (agentId: string) => string | undefined;
   set: (agentId: string, name: string) => Promise<void>;
@@ -23,6 +28,8 @@ export function EditableName({ agentId, get, set, subscribe, placeholder, title,
   placeholder: string;
   title?: string;
   suffix?: any;
+  /** Live connectivity for this name's device/user; omit to hide the dot. */
+  status?: DeviceStatus;
 }) {
   const [draft, setDraft] = useState(() => get(agentId) || '');
   const draftRef = useRef(draft);
@@ -48,6 +55,9 @@ export function EditableName({ agentId, get, set, subscribe, placeholder, title,
 
   return (
     <span className="flex items-center flex-1 gap-1">
+      {status && (
+        <StatusDot online={status.online} direct={status.transport === 'direct'} label={draft || placeholder} />
+      )}
       <input
         className="text-sm flex-1 bg-transparent outline-none px-0 min-w-0"
         value={draft}

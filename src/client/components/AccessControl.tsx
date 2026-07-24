@@ -23,6 +23,7 @@ import {
 import { getContactName, mergeCachedContacts } from '../contact-names';
 import { EditableUserName } from './EditableUserName';
 import { accessTitle } from './AccessIcon';
+import { useDeviceStatuses, mostConnectedStatus } from '../shared/use-devices';
 
 interface AccessControlProps {
   /** Automerge document ID. */
@@ -41,6 +42,7 @@ export function AccessControl({ docId, access: accessProp }: AccessControlProps)
   const [inviteRole, setInviteRole] = useState<string>('read');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const deviceStatuses = useDeviceStatuses();
 
   const isAdmin = myAccess?.toLowerCase() === 'admin';
 
@@ -197,15 +199,15 @@ export function AccessControl({ docId, access: accessProp }: AccessControlProps)
             )}
             {orderedMembers.map(member => (
               <div key={member.agentId} className="flex items-center gap-2 py-1.5 border-b border-border">
-                <span
-                  className="material-symbols-outlined text-muted-foreground"
-                  style={{ fontSize: 16 }}
-                  title={member.type === 'group' ? 'User (all their devices)' : 'Single device'}
-                >
-                  {member.type === 'group' ? 'group' : 'smartphone'}
-                </span>
+                {/* Presence dot replaces the old group/single-device icon: for a
+                    group it summarises all the user's devices (most-connected
+                    wins); an individual member's agentId is itself the device. */}
                 <EditableUserName
                   agentId={member.agentId}
+                  status={mostConnectedStatus(
+                    deviceStatuses,
+                    member.type === 'group' ? member.deviceIds : [member.agentId],
+                  )}
                   suffix={member.isMe ? <span className="text-xs text-muted-foreground ml-1">(you)</span> : undefined}
                 />
                 {isAdmin ? (

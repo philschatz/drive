@@ -13,28 +13,9 @@
 import { DeleteButton } from '@/components/ui/delete-button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { EditableDeviceName } from '@/components/EditableDeviceName';
+import { StatusDot } from '@/shared/presence';
 import type { DeviceInfo } from '@/shared/keyhive-api';
 import type { DeviceStatus } from '@/shared/use-devices';
-
-/**
- * Online/offline indicator. Follows the PeerDot convention (presence.tsx): a
- * FILLED dot means a direct WebRTC channel is open, a HOLLOW ring means the
- * device is reachable only via the relay — so a relayed connection is never
- * mistaken for P2P. Gray means offline.
- */
-function DeviceStatusDot({ status }: { status?: DeviceStatus }) {
-  const online = status?.online ?? false;
-  const direct = status?.transport === 'direct';
-  const cls = !online ? 'bg-muted-foreground/30'
-    : direct ? 'bg-green-500'
-    : 'border-2 border-green-500';
-  return (
-    <span
-      className={`w-2 h-2 rounded-full inline-block shrink-0 box-border ${cls}`}
-      title={online ? `Online — ${direct ? 'direct (P2P)' : 'via relay'}` : 'Offline'}
-    />
-  );
-}
 
 export function DeviceList({ devices, onRemove, onChangeRole, statuses }: {
   devices: DeviceInfo[];
@@ -81,7 +62,10 @@ export function DeviceList({ devices, onRemove, onChangeRole, statuses }: {
               <EditableDeviceName agentId={dev.agentId} isMe={dev.isMe} />
               {statuses && !dev.isMe && (
                 <span className="flex items-center gap-1">
-                  <DeviceStatusDot status={statuses[dev.agentId]} />
+                  <StatusDot
+                    online={statuses[dev.agentId]?.online ?? false}
+                    direct={statuses[dev.agentId]?.transport === 'direct'}
+                  />
                   <span className="text-xs text-muted-foreground">
                     {statuses[dev.agentId]?.online ? 'Online' : 'Offline'}
                   </span>

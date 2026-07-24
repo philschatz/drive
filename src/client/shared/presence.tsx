@@ -173,6 +173,34 @@ export function PeerDot({ peerId, userGroupId, direct, label, sizeClass = 'w-2 h
   );
 }
 
+/**
+ * Online/offline status dot, following the PeerDot convention: a FILLED green
+ * dot means a direct WebRTC (P2P) channel is open, a HOLLOW green ring means the
+ * peer is reachable only via the relay, and a muted gray dot means offline — so a
+ * relayed connection is never mistaken for P2P. The transport is named in the
+ * tooltip. Unlike PeerDot this is a plain green/gray indicator (not per-peer
+ * colored) since it answers "is this device/user reachable, and how".
+ */
+export function StatusDot({ online, direct, label, sizeClass = 'w-2 h-2' }: {
+  online: boolean;
+  /** True only when a direct (P2P) channel is open; ignored when offline. */
+  direct?: boolean;
+  /** Optional prefix for the tooltip (e.g. a device/user name). */
+  label?: string;
+  sizeClass?: string;
+}) {
+  const cls = !online ? 'bg-muted-foreground/30'
+    : direct ? 'bg-green-500'
+    : 'border-2 border-green-500';
+  const state = online ? `Online — ${direct ? 'direct (P2P)' : 'via relay'}` : 'Offline';
+  return (
+    <span
+      className={`${sizeClass} rounded-full inline-block shrink-0 box-border ${cls}`}
+      title={label ? `${label} — ${state}` : state}
+    />
+  );
+}
+
 export function PresenceDot({ fieldId, peerFocusedFields }: {
   fieldId: string;
   peerFocusedFields?: Record<string, PeerFieldInfo>;

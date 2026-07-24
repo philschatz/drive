@@ -9,6 +9,7 @@ import { fetchDocList } from '../worker-api';
 import { getContactName, getAllContactNames, removeContactName } from '../contact-names';
 import { iconForType } from '../doc-plugins';
 import { docUrl } from '../shared/doc-urls';
+import { useDeviceStatuses, mostConnectedStatus } from '../shared/use-devices';
 
 interface ContactDocInfo {
   docId: string;
@@ -30,6 +31,7 @@ export function Contacts({ path }: { path?: string }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const deviceStatuses = useDeviceStatuses();
 
   const toggleExpanded = (agentId: string) => {
     setExpanded(prev => {
@@ -182,14 +184,13 @@ export function Contacts({ path }: { path?: string }) {
           return (
             <div key={contact.agentId} className="py-2 border-b border-border">
               <div className="flex items-center gap-2">
-                <span
-                  className="material-symbols-outlined text-muted-foreground"
-                  style={{ fontSize: 16 }}
-                  title={contact.isGroup ? 'User (all their devices)' : 'Single device'}
-                >
-                  {contact.isGroup ? 'group' : 'smartphone'}
-                </span>
-                <EditableUserName agentId={contact.agentId} />
+                {/* Presence dot (replaces the old group icon): most-connected of
+                    all this contact's devices. Devices are only known for contacts
+                    on a shared doc; otherwise deviceIds is empty → shows offline. */}
+                <EditableUserName
+                  agentId={contact.agentId}
+                  status={mostConnectedStatus(deviceStatuses, contact.deviceIds)}
+                />
                 <span
                   className="inline-flex items-center gap-0.5 text-xs text-muted-foreground"
                   title={`Devices:\n${contact.deviceIds
