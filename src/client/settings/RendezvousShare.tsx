@@ -14,12 +14,16 @@
 import { useState, useEffect } from 'preact/hooks';
 import { rendezvousCancel, onRendezvousEvent } from '../shared/keyhive-api';
 import type { RendezvousStatus } from '../worker-api';
+import { formatBytes } from '../../shared/format-bytes';
 import { QRCodeDisplay } from '@/components/ui/qr-code';
 import { RendezvousProgress } from './RendezvousProgress';
 
 interface RendezvousShareProps {
-  /** Stage the share in the worker and return the rendezvous id+key. */
-  create: () => Promise<{ rendezvousId: string; key: string }>;
+  /**
+   * Stage the share in the worker and return the rendezvous id+key, plus the
+   * approximate size (bytes) of the payload we'll send once the peer joins.
+   */
+  create: () => Promise<{ rendezvousId: string; key: string; payloadBytes?: number }>;
   /** Build the QR/link URL from the id+key. */
   buildUrl: (rendezvousId: string, key: string) => string;
   waitingLabel: string;
@@ -36,6 +40,7 @@ export function RendezvousShare({
   const [error, setError] = useState('');
   const [phase, setPhase] = useState<RendezvousStatus | null>(null);
   const [transferDetail, setTransferDetail] = useState<string>();
+  const [payloadBytes, setPayloadBytes] = useState<number>();
 
   useEffect(() => {
     let rid = '';
@@ -49,11 +54,12 @@ export function RendezvousShare({
       }
     });
     create()
-      .then(({ rendezvousId, key }) => {
+      .then(({ rendezvousId, key, payloadBytes }) => {
         if (cancelled) { rendezvousCancel(rendezvousId); return; }
         rid = rendezvousId;
         setRendezvousId(rendezvousId);
         setUrl(buildUrl(rendezvousId, key));
+        setPayloadBytes(payloadBytes);
       })
       .catch((err: any) => setError(err?.message ?? 'Could not create a share link.'));
     return () => {
@@ -84,6 +90,11 @@ export function RendezvousShare({
         readOnly
         onClick={(e: any) => e.currentTarget.select()}
       />
+      {payloadBytes !== undefined && (
+        <p className="text-xs text-muted-foreground text-center">
+          Sending ~{formatBytes(payloadBytes)} to the other device.
+        </p>
+      )}
       <RendezvousProgress
         phase={phase}
         rendezvousId={rendezvousId}

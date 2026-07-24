@@ -50,6 +50,7 @@ export type MainToWorker =
   | { type: 'kh-change-role'; id: number; agentId: string; docId: string; newRole: string }
   | { type: 'kh-list-devices'; id: number }
   | { type: 'kh-remove-device'; id: number; agentId: string }
+  | { type: 'kh-change-device-role'; id: number; agentId: string; newRole: string }
   | { type: 'kh-ensure-user-group'; id: number; create?: boolean; adoptGroupId?: string; waitForSync?: boolean }
   | { type: 'kh-link-device'; id: number; deviceAgentId: string; peerGroupId?: string | null }
   | { type: 'kh-get-link-payload'; id: number }

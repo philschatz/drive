@@ -100,7 +100,7 @@ export class WebSocketRelay {
     const origin = request?.headers.origin;
     if (allowedOrigins.length > 0 && origin && !allowedOrigins.includes(origin)) {
       console.error(`[relay] refusing connection: origin ${origin} not allowed`);
-      ws.on('error', () => {}); // a refused socket must not crash on transport errors
+      ws.on('error', () => { }); // a refused socket must not crash on transport errors
       ws.close(1008, 'origin not allowed');
       return;
     }
@@ -113,7 +113,7 @@ export class WebSocketRelay {
     const maxPerIp = envInt('RELAY_MAX_CONNECTIONS_PER_IP', 64);
     if (this.connectionCount >= maxConnections || (ip !== undefined && (this.connectionsPerIp.get(ip) ?? 0) >= maxPerIp)) {
       console.error(`[relay] refusing connection${ip ? ` from ${ip}` : ''}: too many connections (${this.connectionCount} open)`);
-      ws.on('error', () => {});
+      ws.on('error', () => { });
       ws.close(1013, 'relay at capacity'); // 1013 = Try Again Later
       return;
     }
@@ -359,7 +359,7 @@ export class WebSocketRelay {
         this.safeSend(ws, peerMsg, rid);
       }
       set.add(ws);
-      relayInfo(`[relay] rendezvous ${shortId(rid)}: ${set.size} listening`);
+      console.log(`[relay] rendezvous ${shortId(rid)}: ${set.size} listening`);
     } else if (message.type === RDV_UNSUB) {
       const set = this.rendezvous.get(rid);
       if (set && set.delete(ws) && set.size === 0) this.rendezvous.delete(rid);

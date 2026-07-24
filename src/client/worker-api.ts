@@ -616,7 +616,7 @@ export function setPresence(docId: string, state: Partial<PresenceState>): void 
 
 export interface DeviceInfo {
   agentId: string;
-  role: string;
+  role: MemberRole;
   isMe?: boolean;
 }
 
@@ -628,7 +628,7 @@ export interface IdentityInfo {
   devices?: DeviceInfo[];
 }
 
-import type { MemberInfo } from './shared/keyhive-types';
+import type { MemberInfo, MemberRole } from './shared/keyhive-types';
 export type { MemberRole, IndividualMemberInfo, GroupMemberInfo, MemberInfo } from './shared/keyhive-types';
 
 /** A contact card plus the sender's user-group id, for QR/URL linking & sharing. */
@@ -685,7 +685,7 @@ export function getLinkPayload(): Promise<LinkPayload> {
  * encrypted under `key` — automatically once the receiver opens the link; listen
  * via onRendezvousEvent for the 'sent' confirmation.
  */
-export function rendezvousCreateShare(displayName?: string): Promise<{ rendezvousId: string; key: string }> {
+export function rendezvousCreateShare(displayName?: string): Promise<{ rendezvousId: string; key: string; payloadBytes: number }> {
   return khRequest('kh-rdv-create-share', { displayName });
 }
 
@@ -703,7 +703,7 @@ export function rendezvousReceive(
  * get the tiny {id,key} for the QR. The new device's `rendezvousJoinDeviceLink`
  * completes the handshake; listen via onRendezvousEvent for status 'linked'.
  */
-export function rendezvousCreateDeviceLink(): Promise<{ rendezvousId: string; key: string }> {
+export function rendezvousCreateDeviceLink(): Promise<{ rendezvousId: string; key: string; payloadBytes: number }> {
   return khRequest('kh-rdv-link-create');
 }
 
@@ -735,6 +735,11 @@ export function listDevices(): Promise<DeviceInfo[]> {
 /** Remove a linked device by agent ID. */
 export function removeDevice(agentId: string): Promise<void> {
   return khRequest('kh-remove-device', { agentId });
+}
+
+/** Change a device's access level within the user-group (revoke + re-add). */
+export function changeDeviceRole(agentId: string, newRole: string): Promise<void> {
+  return khRequest('kh-change-device-role', { agentId, newRole });
 }
 
 /** Add a member to a document with a specific role. */

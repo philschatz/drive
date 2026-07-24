@@ -23,7 +23,7 @@ export function LinkDeviceSharePage({ path }: { path?: string }) {
   const [started, setStarted] = useState(0);
   const connected = useWsStatus();
 
-  const { devices, removeDevice } = useDevices({ onError: setError, onMessage: setMessage });
+  const { devices, removeDevice, changeDeviceRole } = useDevices({ onError: setError, onMessage: setMessage });
   const deviceStatuses = useDeviceStatuses();
 
   return (
@@ -51,7 +51,7 @@ export function LinkDeviceSharePage({ path }: { path?: string }) {
         </Alert>
       )}
 
-      <DeviceList devices={devices} onRemove={removeDevice} statuses={deviceStatuses} />
+      <DeviceList devices={devices} onRemove={removeDevice} onChangeRole={changeDeviceRole} statuses={deviceStatuses} />
 
       <div className="mt-4">
         <h2 className="text-lg font-semibold mb-2">Invite Another Device</h2>

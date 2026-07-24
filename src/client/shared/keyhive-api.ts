@@ -15,6 +15,7 @@ export {
   onRendezvousEvent,
   listDevices,
   removeDevice,
+  changeDeviceRole,
   ensureUserGroup,
   linkDevice,
   getLinkPayload,

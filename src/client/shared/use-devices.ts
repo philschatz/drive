@@ -12,6 +12,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'preact/hooks'
 import {
   listDevices,
   removeDevice as apiRemoveDevice,
+  changeDeviceRole as apiChangeDeviceRole,
   onKeyhiveStateChanged,
   onRendezvousEvent,
   type DeviceInfo,
@@ -55,7 +56,17 @@ export function useDevices(opts?: {
     }
   }, [refresh]);
 
-  return { devices, refresh, removeDevice };
+  const changeDeviceRole = useCallback(async (agentId: string, newRole: string) => {
+    try {
+      await apiChangeDeviceRole(agentId, newRole);
+      cb.current?.onMessage?.('Device access updated.');
+      await refresh();
+    } catch (err: any) {
+      cb.current?.onError?.('Failed to change device access: ' + err.message);
+    }
+  }, [refresh]);
+
+  return { devices, refresh, removeDevice, changeDeviceRole };
 }
 
 export interface DeviceStatus {

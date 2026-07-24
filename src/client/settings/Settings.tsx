@@ -33,7 +33,7 @@ export function Settings({ path }: { path?: string }) {
   const [debugEnabled] = useState(isDebugEnabled());
 
   // The device list, its live refresh, and removal are owned by the shared hook.
-  const { devices, removeDevice } = useDevices({ onError: setError, onMessage: setMessage });
+  const { devices, removeDevice, changeDeviceRole } = useDevices({ onError: setError, onMessage: setMessage });
   const deviceStatuses = useDeviceStatuses();
 
   const refresh = useCallback(async () => {
@@ -274,7 +274,7 @@ export function Settings({ path }: { path?: string }) {
       {/* Devices */}
       <section className="mb-6">
         <h2 className="text-lg font-semibold mb-2">Devices</h2>
-        <DeviceList devices={devices} onRemove={removeDevice} statuses={deviceStatuses} />
+        <DeviceList devices={devices} onRemove={removeDevice} onChangeRole={changeDeviceRole} statuses={deviceStatuses} />
 
         {/* Link another device — full flow on its own page */}
         <div className="mt-4">

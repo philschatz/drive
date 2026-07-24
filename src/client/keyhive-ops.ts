@@ -321,6 +321,33 @@ export class KeyhiveOps {
   }
 
   /**
+   * Change a device's access level within the personal user-group: revoke + re-add
+   * with a new Access, the same idiom as the doc-level changeRole but targeting
+   * group.toMembered(). Admin-only. forceResyncAllPeers so the affected device
+   * learns its new access. NOTE: the founding device's root delegation is permanent
+   * in keyhive, so demoting the device that created the group (including the current
+   * device when it is the founder) does not actually reduce its access.
+   */
+  async changeDeviceRole(deviceAgentIdB64: string, newRole: string): Promise<void> {
+    const group = await this.getUserGroup();
+    if (!group) throw new Error('User group not available');
+    const targetBytes = base64ToBytes(deviceAgentIdB64);
+    const members = await group.members();
+    const found = members.find((m: any) => bytesEqual(m.who.id.toBytes(), targetBytes));
+    if (!found) throw new Error('Device not found in group');
+    const access = this.bridge.Access.tryFromString(newRole);
+    if (!access) throw new Error(`Invalid role: ${newRole}`);
+    await this.kh.revokeMember(found.who, true, group.toMembered());
+    const id = new this.bridge.Identifier(targetBytes);
+    const agent = await this.kh.getAgent(id);
+    if (!agent) throw new Error('Device agent not found');
+    await this.kh.addMember(agent, group.toMembered(), access, []);
+    await this.fx.persist();
+    this.fx.syncKeyhive();
+    this.fx.forceResyncAllPeers();
+  }
+
+  /**
    * Link another device into the same user-group, given the peer's device agentId and
    * (optionally) the group id carried over the trusted QR channel.
    * Converges both devices onto one group, then adds the peer if we are the group admin
@@ -360,23 +387,30 @@ export class KeyhiveOps {
     return { userGroupId: myGroupId, linked };
   }
 
-  /** List the devices in the personal user-group; [self] if there is no group yet. */
-  async listGroupDevices(): Promise<{ agentId: string; role: string; isMe: boolean }[]> {
+  /**
+   * List the devices in the personal user-group; [self] if there is no group yet.
+   * Roles are normalized to a MemberRole (read/edit/admin) so the UI can drive a
+   * controlled role Select and derive admin-ness (see DeviceList). The current
+   * device reports its real role when it appears as a member; when it doesn't (it
+   * can read as the Active self-agent rather than an Individual member) it founded/
+   * administers the group, so we surface it as admin.
+   */
+  async listGroupDevices(): Promise<{ agentId: string; role: MemberRole; isMe: boolean }[]> {
     const me = await this.kh.individual;
     const myAgentId = bytesToBase64(me.id.toBytes());
     const group = await this.getUserGroup();
     if (!group) {
-      return [{ agentId: myAgentId, role: 'owner', isMe: true }];
+      return [{ agentId: myAgentId, role: 'admin', isMe: true }];
     }
     const members = await group.members();
     const devices = members
       .filter((m: any) => m.who.isIndividual())
       .map((m: any) => {
         const agentId = bytesToBase64(m.who.id.toBytes());
-        return { agentId, role: agentId === myAgentId ? 'owner' : m.can.toString(), isMe: agentId === myAgentId };
+        return { agentId, role: toMemberRole(m.can.toString()), isMe: agentId === myAgentId };
       });
     if (!devices.some((d: { agentId: string }) => d.agentId === myAgentId)) {
-      devices.unshift({ agentId: myAgentId, role: 'owner', isMe: true });
+      devices.unshift({ agentId: myAgentId, role: 'admin', isMe: true });
     }
     return devices;
   }

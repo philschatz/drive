@@ -1847,6 +1847,47 @@ describe('KeyhiveOps', () => {
       expect(devices2.filter((d) => d.agentId === bAgentId)).toHaveLength(1);
     });
 
+    it('listGroupDevices reports normalized MemberRole (read/edit/admin), never a raw Access string', async () => {
+      const { ops: a } = await createOps();
+      const { ops: b } = await createOps();
+      await a.ensureUserGroup({ create: true });
+      const bAgentId = await learnAgent(a, b);
+      await a.addDeviceToGroup(bAgentId); // added as admin
+
+      const devices = await a.listGroupDevices();
+      const me = (await a.getIdentity()).agentId;
+      for (const d of devices) {
+        expect(['read', 'edit', 'admin']).toContain(d.role); // normalized, lowercase — no 'owner'/'Admin'
+      }
+      expect(devices.find((d) => d.agentId === me)?.role).toBe('admin'); // self is admin, not synthetic 'owner'
+      expect(devices.find((d) => d.agentId === bAgentId)?.role).toBe('admin'); // device added as admin
+    });
+
+    it('changeDeviceRole demotes a device in the user-group (revoke + re-add) and resyncs peers', async () => {
+      const { ops: a, fx } = await createOps();
+      const { ops: b } = await createOps();
+      await a.ensureUserGroup({ create: true });
+      const bAgentId = await learnAgent(a, b);
+      await a.addDeviceToGroup(bAgentId); // admin by default
+      expect((await a.listGroupDevices()).find((d) => d.agentId === bAgentId)?.role).toBe('admin');
+
+      const resyncsBefore = fx.calls.forceResyncAllPeers.length;
+      await a.changeDeviceRole(bAgentId, 'read');
+
+      const devices = await a.listGroupDevices();
+      expect(devices.find((d) => d.agentId === bAgentId)?.role).toBe('read');
+      // Same propagation contract as doc-level changeRole so the demoted device learns its new access.
+      expect(fx.calls.forceResyncAllPeers.length).toBeGreaterThan(resyncsBefore);
+    });
+
+    it('changeDeviceRole rejects an unknown device', async () => {
+      const { ops: a } = await createOps();
+      const { ops: b } = await createOps();
+      await a.ensureUserGroup({ create: true });
+      const bAgentId = await learnAgent(a, b); // known but not in the group
+      await expect(a.changeDeviceRole(bAgentId, 'read')).rejects.toThrow(/not found in group/);
+    });
+
     it('listGroupDevices returns just self when there is no group', async () => {
       const { ops } = await createOps();
       const devices = await ops.listGroupDevices();

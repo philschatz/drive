@@ -14,6 +14,7 @@ import { validateDocument } from './schemas';
 import { KeyhiveOps, bytesToBase64, base64ToBytes, errMsg } from '../client/keyhive-ops';
 import { LRU } from '../client/lru-cache';
 import { generateRendezvous, encryptString, decryptString } from '../client/rendezvous-crypto';
+import { formatBytes } from './format-bytes';
 import {
   RDV_SUB, RDV_UNSUB, RDV_MSG, RDV_PEER,
   type RendezvousStatus,
@@ -801,13 +802,9 @@ export class DriveEngine {
   private rdvEvent(rendezvousId: string, status: RendezvousStatus, message?: string): void {
     this.emit({ type: 'kh-rdv-event', rendezvousId, status, ...(message !== undefined ? { message } : {}) });
   }
-  private formatBytes(n: number): string {
-    if (n < 1000) return `${n} B`;
-    return `${(n / 1000).toFixed(1)} KB`;
-  }
   private async rdvSendPayload(rendezvousId: string, key: string, plaintext: string): Promise<void> {
     const framed = await encryptString(key, plaintext);
-    this.rdvEvent(rendezvousId, 'sending', this.formatBytes(framed.length));
+    this.rdvEvent(rendezvousId, 'sending', formatBytes(framed.length));
     this.rdvSend({ type: RDV_MSG, rendezvousId, data: framed });
   }
   /** Handle an inbound rendezvous frame (host routes rdv frames here). */
@@ -1631,6 +1628,10 @@ export class DriveEngine {
         const myUserGroupId = await this.khOps.ensureUserGroup({ create: true });
         const myCard = await this.khOps.getContactCard();
         const plaintext = JSON.stringify({ card: myCard, displayName: msg.displayName, userGroupId: myUserGroupId ?? undefined });
+        // Approximate size of what we'll send once the peer joins (plaintext bytes;
+        // the on-wire framed size adds only ~28 bytes of IV+GCM tag). Surfaced to the
+        // sender's QR page so they can see how much is being transferred up front.
+        const payloadBytes = new TextEncoder().encode(plaintext).length;
         const { rendezvousId, key } = generateRendezvous();
         // Bidirectional: after sending our bundle we STAY subscribed to ingest the
         // receiver's reply (their card + display name) so both peers end up knowing
@@ -1675,7 +1676,7 @@ export class DriveEngine {
         });
         this.rdvSend({ type: RDV_SUB, rendezvousId });
         this.rdvEvent(rendezvousId, 'waiting');
-        emit({ type: 'result', id: msg.id, result: { rendezvousId, key } });
+        emit({ type: 'result', id: msg.id, result: { rendezvousId, key, payloadBytes } });
       } catch (err: any) {
         emit({ type: 'result', id: msg.id, error: errMsg(err) });
       }
@@ -1743,6 +1744,8 @@ export class DriveEngine {
         const myUserGroupId = await this.khOps.ensureUserGroup({ create: true });
         const myCard = await this.khOps.getContactCard();
         const myPayload = JSON.stringify({ card: myCard, userGroupId: myUserGroupId });
+        // See kh-rdv-create-share: approximate payload size for the sender's QR page.
+        const payloadBytes = new TextEncoder().encode(myPayload).length;
         const { rendezvousId, key } = generateRendezvous();
         this.rdvSessions.set(rendezvousId, {
           key,
@@ -1769,7 +1772,7 @@ export class DriveEngine {
         });
         this.rdvSend({ type: RDV_SUB, rendezvousId });
         this.rdvEvent(rendezvousId, 'waiting');
-        emit({ type: 'result', id: msg.id, result: { rendezvousId, key } });
+        emit({ type: 'result', id: msg.id, result: { rendezvousId, key, payloadBytes } });
       } catch (err: any) {
         emit({ type: 'result', id: msg.id, error: errMsg(err) });
       }
@@ -1804,6 +1807,15 @@ export class DriveEngine {
       try {
         if (!this.khOps) throw new Error('Keyhive not available');
         await this.khOps.removeDeviceFromGroup(msg.agentId);
+        emit({ type: 'result', id: msg.id, result: undefined });
+      } catch (err: any) { emit({ type: 'result', id: msg.id, error: errMsg(err) }); }
+      return;
+    }
+
+    if (msg.type === 'kh-change-device-role') {
+      try {
+        if (!this.khOps) throw new Error('Keyhive not available');
+        await this.khOps.changeDeviceRole(msg.agentId, msg.newRole);
         emit({ type: 'result', id: msg.id, result: undefined });
       } catch (err: any) { emit({ type: 'result', id: msg.id, error: errMsg(err) }); }
       return;
