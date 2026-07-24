@@ -3,6 +3,7 @@ import { Button, buttonVariants } from '@/components/ui/button';
 import { Alert } from '@/components/ui/alert';
 import { DeleteButton } from '@/components/ui/delete-button';
 import { EditableUserName } from '@/components/EditableUserName';
+import { ScanQrButton } from '@/components/ScanQrButton';
 import { getDocMembers, getKnownContacts, getIdentity } from '../shared/keyhive-api';
 import { keyhiveReady } from '../shared/automerge';
 import { fetchDocList } from '../worker-api';
@@ -158,7 +159,8 @@ export function Contacts({ path }: { path?: string }) {
         <Button variant="outline" size="sm" onClick={refresh} disabled={loading} title="Refresh">
           <span className="material-symbols-outlined" style={{ fontSize: 16 }}>refresh</span>
         </Button>
-        <a href="#/add-friend" className={`${buttonVariants({ variant: 'outline', size: 'sm' })} ml-auto`}>
+        <ScanQrButton className="ml-auto" onError={setError} />
+        <a href="#/add-friend" className={buttonVariants({ variant: 'outline', size: 'sm' })}>
           <span className="material-symbols-outlined mr-1" style={{ fontSize: 16 }}>person_add</span>
           Add Friend
         </a>

@@ -6,7 +6,7 @@ import { useState, useEffect, useCallback } from 'preact/hooks';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Alert } from '@/components/ui/alert';
 import { DeviceList } from '@/components/DeviceList';
-import { QrScanner } from '@/components/QrScanner';
+import { ScanQrButton } from '@/components/ScanQrButton';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import {
@@ -18,6 +18,7 @@ import { useDevices, useDeviceStatuses } from '../shared/use-devices';
 import { setDebugEnabled, clearAllCaches, deleteAllData } from '../worker-api';
 import { idbGet, idbSet, isDebugEnabled, KEYS } from '../idb-storage';
 import { getContactName, setContactName } from '../contact-names';
+import { navigateToUrlOrHash } from '../shared/navigate-url';
 export function Settings({ path }: { path?: string }) {
   const [identity, setIdentity] = useState<IdentityInfo | null>(null);
   const [displayName, setDisplayName] = useState('');
@@ -26,7 +27,6 @@ export function Settings({ path }: { path?: string }) {
   const [savedName, setSavedName] = useState('');
   const [savingName, setSavingName] = useState(false);
   const [linkUrl, setLinkUrl] = useState('');
-  const [scanning, setScanning] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
@@ -149,35 +149,9 @@ export function Settings({ path }: { path?: string }) {
     input.click();
   };
 
-  // Navigate to a link the user pasted or scanned. Accepts a full URL (we take its
-  // hash fragment), a hash-only string (`#/...`), or a bare rendezvous code
-  // (`r.<id>.<key>`, which we route to the add-friend page). Returns an error
-  // message on failure, or null on success.
-  const navigateToUrlOrHash = (raw: string): string | null => {
-    const value = raw.trim();
-    if (!value) return 'Empty link.';
-    const hashIdx = value.indexOf('#');
-    if (hashIdx !== -1) {
-      window.location.hash = value.slice(hashIdx + 1);
-      return null;
-    }
-    // No hash: a bare rendezvous code joins the add-friend flow.
-    if (value.startsWith('r.')) {
-      window.location.hash = `/add-friend/${value}`;
-      return null;
-    }
-    return 'Not a recognized link.';
-  };
-
   const handleNavigateUrl = () => {
     const err = navigateToUrlOrHash(linkUrl);
     if (err) setError(`Invalid URL — ${err.toLowerCase()}`);
-  };
-
-  const handleScanResult = (text: string) => {
-    setScanning(false);
-    const err = navigateToUrlOrHash(text);
-    if (err) setError(`Scanned code is not a recognized link — ${err.toLowerCase()}`);
   };
 
   return (
@@ -190,10 +164,7 @@ export function Settings({ path }: { path?: string }) {
           <span className="material-symbols-outlined">arrow_back</span>
         </a>
         <h1 className="text-2xl font-bold">Settings</h1>
-        <Button variant="outline" size="sm" className="ml-auto" onClick={() => setScanning(true)}>
-          <span className="material-symbols-outlined mr-1" style={{ fontSize: 16 }}>qr_code_scanner</span>
-          Scan QR Code
-        </Button>
+        <ScanQrButton className="ml-auto" onError={setError} />
       </div>
 
       {message && (
@@ -353,10 +324,6 @@ export function Settings({ path }: { path?: string }) {
           Delete All Data
         </Button>
       </section>
-
-      {scanning && (
-        <QrScanner onResult={handleScanResult} onClose={() => setScanning(false)} />
-      )}
     </div>
   );
 }
