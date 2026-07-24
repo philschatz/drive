@@ -1,16 +1,6 @@
 import { useRef, useEffect } from 'preact/hooks';
 import type { DocumentHistory } from './useDocumentHistory';
 
-function formatTime(ts: number): string {
-  if (!ts) return '';
-  const d = new Date(ts * 1000);
-  const now = new Date();
-  const sameDay = d.toDateString() === now.toDateString();
-  if (sameDay) return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  return d.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' +
-    d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-}
-
 export function HistorySlider({ history }: { history: DocumentHistory }) {
   const sliderRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
@@ -32,22 +22,14 @@ export function HistorySlider({ history }: { history: DocumentHistory }) {
           onInput={(e: any) => history.onSliderChange(parseInt(e.target.value))}
         />
       )}
-      {/* Fixed-width right group: every dynamic control lives here so the slider's
-          width never changes as the version, date, badge, or buttons change. */}
+      {/* Fixed-width right group: the version number plus a reserved undo slot,
+          so the slider's width never changes as the version or buttons change. */}
       <div className="flex items-center justify-end gap-2 shrink-0 ml-auto">
-        <span className="text-muted-foreground whitespace-nowrap tabular-nums text-right min-w-[3.5rem]">
-          {history.version + 1} / {history.changeCount}
+        <span className="text-muted-foreground whitespace-nowrap tabular-nums text-right min-w-[4.5rem]">
+          Version {history.version + 1}
         </span>
-        <span className="text-muted-foreground whitespace-nowrap tabular-nums text-right min-w-[6.5rem]">
-          {history.time ? formatTime(history.time) : ''}
-        </span>
-        {history.editable ? (
-          <span className="text-[0.7rem] px-1.5 py-0.5 rounded bg-green-100 text-green-800 font-medium min-w-[3.25rem] text-center">Editing</span>
-        ) : (
-          <span className="text-[0.7rem] px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 font-medium min-w-[3.25rem] text-center">View</span>
-        )}
         {/* The undo button lives in a fixed-width slot that is always reserved, so the
-            badge and date columns don't move between the editable and view-only states. */}
+            version number doesn't move between the editable and view-only states. */}
         <div className="flex items-center justify-end w-6 shrink-0">
           {!history.editable && (
             <button
