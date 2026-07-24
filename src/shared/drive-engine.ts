@@ -995,7 +995,9 @@ export class DriveEngine {
   /** Read a doc's `@type`/name and last-change time (opening it if needed). */
   async getDocMeta(docId: string): Promise<WatchUpdate> {
     const handle = await this.getOrLoadHandle(docId);
-    if (handle.whenReady) { try { await handle.whenReady(); } catch { /* keep going */ } }
+    // Resolve on 'unavailable' too, so a doc no connected peer has (e.g. every
+    // read in the CLI's local-only mode) reports empty instead of hanging.
+    if (handle.whenReady) { try { await handle.whenReady(['ready', 'unavailable']); } catch { /* keep going */ } }
     const doc = handle.doc();
     const heads: string[] = handle.heads ? handle.heads() : [];
     let lastModified: number | undefined;
@@ -1021,7 +1023,7 @@ export class DriveEngine {
    */
   async getDocJson(docId: string, version?: number): Promise<any> {
     const handle = await this.getOrLoadHandle(docId);
-    if (handle.whenReady) { try { await handle.whenReady(); } catch { /* keep going */ } }
+    if (handle.whenReady) { try { await handle.whenReady(['ready', 'unavailable']); } catch { /* keep going */ } }
     const doc = handle.doc();
     if (!doc || version === undefined) return doc ?? null;
     const history = this.Automerge.getHistory(doc);
@@ -1041,7 +1043,7 @@ export class DriveEngine {
     docId: string, fromVersion?: number, toVersion?: number,
   ): Promise<{ from: number; to: number; patches: any[] }> {
     const handle = await this.getOrLoadHandle(docId);
-    if (handle.whenReady) { try { await handle.whenReady(); } catch { /* keep going */ } }
+    if (handle.whenReady) { try { await handle.whenReady(['ready', 'unavailable']); } catch { /* keep going */ } }
     const doc = handle.doc();
     if (!doc) throw new Error('document not ready');
     const history = this.Automerge.getHistory(doc);

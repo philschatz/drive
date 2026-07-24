@@ -40,11 +40,15 @@ export interface OverlayFrame {
  * WebRTC-signaling frames (browser only) are handled entirely inside the host.
  */
 export interface EngineNetwork {
-  /** The automerge-repo NetworkAdapter handed to createKeyhiveRepo/new Repo. */
-  networkAdapter: any;
-  /** Send a rendezvous control/data frame over the raw relay socket. */
+  /**
+   * The automerge-repo NetworkAdapter handed to createKeyhiveRepo/new Repo.
+   * Optional: in local-only mode (e.g. the CLI's read commands) there is no
+   * relay socket, so this is absent and the repo is built with no network.
+   */
+  networkAdapter?: any;
+  /** Send a rendezvous control/data frame over the raw relay socket (no-op when local-only). */
   sendOverlayFrame(frame: OverlayFrame): void;
-  /** Register the engine's inbound-rendezvous-frame handler (host calls it per frame). */
+  /** Register the engine's inbound-rendezvous-frame handler (no-op when local-only). */
   onRendezvousFrame(handler: (frame: any) => void): void;
 }
 

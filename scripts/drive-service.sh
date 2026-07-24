@@ -22,10 +22,12 @@ Commands:
   status     Show service status (exit code reflects active state)
   logs       Follow the service journal
 
-The service runs \`npm run cli -- sync\` in $REPO_ROOT and only runs while
-you are logged in. Override CLI tunables (DRIVE_RELAY_URL, DRIVE_SYNC_SECONDS,
-DRIVE_KEEP_OPEN, DRIVE_RECENT_DAYS, AUTOMERGE_DATA_DIR) by adding
-Environment= lines to the unit and re-running install... or just edit the unit.
+The service runs \`npm run cli -- sync --forever\` in $REPO_ROOT and only runs
+while you are logged in. \`sync\` now requires a run mode: --forever (used here)
+or --duration <seconds>. Override CLI tunables (DRIVE_RELAY_URL, DRIVE_SYNC_SECONDS,
+DRIVE_KEEP_OPEN, DRIVE_RECENT_DAYS, AUTOMERGE_DATA_DIR, and the mode selectors
+DRIVE_SYNC_FOREVER / DRIVE_SYNC_DURATION) by adding Environment= lines to the
+unit and re-running install... or just edit the unit.
 EOF
   exit 1
 }
@@ -49,7 +51,7 @@ Description=Drive CLI continuous sync (headless peer)
 [Service]
 WorkingDirectory=$REPO_ROOT
 Environment=PATH=$(dirname "$npm_bin"):/run/wrappers/bin:/usr/bin:/bin
-ExecStart=$npm_bin run cli -- sync
+ExecStart=$npm_bin run cli -- sync --forever
 Restart=on-failure
 RestartSec=10
 

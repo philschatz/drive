@@ -216,7 +216,9 @@ export async function createKeyhiveRepo(opts: CreateKeyhiveRepoOptions): Promise
   };
 
   const repoConfig: any = {
-    network: [integration.networkAdapter],
+    // Local-only callers (e.g. the CLI's read commands) pass no networkAdapter;
+    // build the repo with an empty network so nothing ever dials the relay.
+    network: opts.networkAdapter ? [integration.networkAdapter] : [],
     storage: opts.storage,
     peerId: integration.peerId,
     idFactory: async () => {
@@ -246,7 +248,7 @@ export async function createKeyhiveRepo(opts: CreateKeyhiveRepoOptions): Promise
   const khForOps = opts.serialize ? serializeKeyhive(integration.keyhive) : integration.keyhive;
   const khOps = new KeyhiveOps(khForOps, bridge, {
     persist: () => integration.keyhiveStorage.saveKeyhiveWithHash(khForOps),
-    syncKeyhive: () => integration.networkAdapter.syncKeyhive(),
+    syncKeyhive: () => integration.networkAdapter?.syncKeyhive?.(),
     // The official bridge derives the keyhive DocumentId from the automerge doc id
     // directly, so there is no explicit doc registration step.
     registerDoc: () => { },
