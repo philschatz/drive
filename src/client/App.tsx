@@ -10,14 +10,12 @@ import { LinkDeviceSharePage } from './settings/LinkDeviceSharePage';
 import { AddFriendPage } from './settings/AddFriendPage';
 import { ShareWithFriendPage } from './settings/ShareWithFriendPage';
 import { hashHistory } from './hash-history';
-import { UpdateBanner } from './components/UpdateBanner';
-import { WorkerErrorBanner } from './components/WorkerErrorBanner';
+import { Notifications } from './components/Notifications';
 import { Toaster } from './components/ui/toast';
 export function App() {
   return (
     <>
-    <WorkerErrorBanner />
-    <UpdateBanner />
+    <Notifications />
     <Toaster />
     <Router history={hashHistory}>
       <Home path="/" />
