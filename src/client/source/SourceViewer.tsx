@@ -351,6 +351,7 @@ export function SourceViewer({ docId, rest, readOnly }: { docId?: string; rest?:
 
   const handleDelete = (path: Path) => {
     if (!docId || !editable || path.length === 0) return;
+    if (!confirm(`Delete "${path[path.length - 1]}"?`)) return;
     updateDoc(docId, (doc: any, path: any) => {
       let current = doc;
       for (let i = 0; i < path.length - 1; i++) current = current[path[i]];
@@ -441,7 +442,7 @@ export function SourceViewer({ docId, rest, readOnly }: { docId?: string; rest?:
       <div className="viewer-body">
         {(currentDoc || changeCount > 0) && (
           <>
-            <HistorySlider history={historyAdapter} dismissable={false} />
+            <HistorySlider history={historyAdapter} />
             <ValidationPanel
               errors={validationErrors}
               variant="dark"

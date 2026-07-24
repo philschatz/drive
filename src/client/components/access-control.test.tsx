@@ -46,6 +46,13 @@ jest.mock('./EditableUserName', () => ({
   EditableUserName: ({ value }: any) => <span>{value}</span>,
 }));
 
+// use-devices pulls in worker-api (import.meta / new Worker), which the jsdom
+// jest env can't load. These tests don't exercise presence, so stub it out.
+jest.mock('../shared/use-devices', () => ({
+  useDeviceStatuses: () => ({}),
+  mostConnectedStatus: () => ({ online: false }),
+}));
+
 import { AccessControl } from './AccessControl';
 
 beforeEach(() => {

@@ -78,7 +78,7 @@ export function EditorTitleBar<P extends PeerLike>({
           onKeyDown={(e: any) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
         />
       ) : (
-        <span className="text-lg font-bold truncate">{title}</span>
+        <span className="text-lg font-bold truncate flex-1 min-w-0">{title}</span>
       )}
 
       {children}

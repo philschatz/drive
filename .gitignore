@@ -37,6 +37,9 @@ npm-debug.log*
 # Playwright
 test-results/
 playwright-report/
+# Throwaway verification/probe specs — still end in .spec.ts so Playwright's
+# default testMatch discovers and runs them, but never get auto-committed.
+*.probe.spec.ts
 
 # Temporary files
 *.tmp
