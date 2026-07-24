@@ -578,7 +578,7 @@ export function subscribeQuery(
   filter: string,
   onResult: (result: any, heads: string[], lastModified?: number) => void,
   onError?: (error: string) => void,
-  opts?: { peek?: boolean },
+  opts?: { peek?: boolean; meta?: boolean },
 ): () => void {
   return client.subscribeQuery(docId, filter, onResult, onError, opts);
 }

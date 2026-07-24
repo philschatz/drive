@@ -104,7 +104,7 @@ export function Home({ path }: { path?: string }) {
       subscribeQuery(docId, HOME_SUMMARY_QUERY, (result, _heads, lastModified) => {
         if (!result) return;
         setEntries(prev => applyQueryResult(prev, docId, result, lastModified));
-      }, undefined, { peek: true }) // listing docs ≠ viewing them
+      }, undefined, { peek: true, meta: true }) // listing docs ≠ viewing them; meta = keep lastUpdated live
     );
 
     // Fetch keyhive access for every doc (all docs are encrypted/keyhive-backed).

@@ -362,11 +362,11 @@ export class WorkerClient {
     filter: string,
     onResult: QueryResultCb,
     onError?: QueryErrorCb,
-    opts?: { peek?: boolean },
+    opts?: { peek?: boolean; meta?: boolean },
   ): () => void {
     const subId = ++this.nextSubId;
     this.queryCallbacks.set(subId, { onResult, onError });
-    this.fire('subscribe-query', { subId, docId, filter, peek: opts?.peek });
+    this.fire('subscribe-query', { subId, docId, filter, peek: opts?.peek, meta: opts?.meta });
     return () => {
       this.queryCallbacks.delete(subId);
       this.fire('unsubscribe-query', { subId });

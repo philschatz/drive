@@ -20,7 +20,7 @@ export type MainToWorker =
   // New worker-owned doc API
   | { type: 'create-doc'; id: number; initialJson: any; metadata?: Record<string, any> }
   | { type: 'update-doc'; id: number; docId: string; fnSource: string; args: unknown[] }
-  | { type: 'subscribe-query'; subId: number; docId: string; filter: string; peek?: boolean }
+  | { type: 'subscribe-query'; subId: number; docId: string; filter: string; peek?: boolean; meta?: boolean }
   | { type: 'unsubscribe-query'; subId: number }
   | { type: 'set-doc-version'; docId: string; version: number | null }
   | { type: 'get-doc-history'; id: number; docId: string }

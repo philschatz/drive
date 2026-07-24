@@ -36,6 +36,10 @@ interface SubInfo {
   filter: string;
   post: (msg: any) => void; // where to send results (host.emit or an hf-port poster)
   peek?: boolean; // true = this read doesn't count as the user viewing the doc
+  // true = also deliver a result carrying fresh heads/lastModified when the doc
+  // changes but this jq projection does not (Home's relative-time). Off for the
+  // editor, HyperFormula bridge, and source-viewer subs.
+  meta?: boolean;
 }
 
 interface DocEntry {
@@ -494,10 +498,17 @@ export class DriveEngine {
       handle.on('change', onChange);
       // Some automerge-repo versions also emit 'doc' for remote changes
       if (typeof handle.on === 'function') handle.on('doc', onChange);
-      // Initial seen-state comparison once loaded — covers docs background-opened
-      // by the home page's peek subscriptions, where no change event may ever fire.
-      Promise.resolve(handle.isReady?.() ? undefined : handle.whenReady?.())
-        .then(() => this.refreshSeenState(docId))
+      // Initial seen-state + summary delivery once loaded — covers docs
+      // background-opened by the home page's peek subscriptions, where the drain's
+      // push below early-returns on a not-yet-ready handle and no change event may
+      // ever fire. Only push when we actually had to wait (readyNow false), so a
+      // handle that was ready at drain time isn't posted twice.
+      const readyNow = handle.isReady?.();
+      Promise.resolve(readyNow ? undefined : handle.whenReady?.())
+        .then(() => {
+          this.refreshSeenState(docId);
+          if (!readyNow) void this.pushToSubscriptions(docId);
+        })
         .catch(() => { /* unavailable — stays unknown */ });
       // Drain subscriptions that were registered before the doc was opened
       const pending = this.pendingSubs.get(docId);
@@ -592,7 +603,14 @@ export class DriveEngine {
     const cacheKey = queryCacheKey(docId, filter);
     const json = JSON.stringify(result);
     const cached = this.queryResultCache.get(cacheKey);
-    if (cached && cached.json === json) return { result, heads, lastModified, changed: false };
+    if (cached && cached.json === json) {
+      // Projection unchanged, but heads/lastModified may have advanced. Refresh the
+      // cached entry (memory-only — no IDB write on every no-op change) so a later
+      // cache replay, and meta subscriptions, carry the current timestamp.
+      cached.heads = heads;
+      cached.lastModified = lastModified;
+      return { result, heads, lastModified, changed: false };
+    }
 
     const entry: QueryCacheEntry = { result, json, lastModified, heads };
     this.queryResultCache.set(cacheKey, entry);
@@ -601,7 +619,7 @@ export class DriveEngine {
   }
 
   /** Subscribe to a jq query, routing results to the given poster. */
-  async subscribeQuery(docId: string, subId: number, filter: string, post: (m: any) => void, peek?: boolean): Promise<void> {
+  async subscribeQuery(docId: string, subId: number, filter: string, post: (m: any) => void, peek?: boolean, meta?: boolean): Promise<void> {
     this.subIdToDocId.set(subId, docId);
 
     if (!this.debugEnabled) {
@@ -620,14 +638,14 @@ export class DriveEngine {
 
     const entry = this.docRegistry.get(docId);
     if (entry) {
-      entry.subscriptions.set(subId, { filter, post, peek });
+      entry.subscriptions.set(subId, { filter, post, peek, meta });
       // A non-peek sub on an already-loaded doc = the user started viewing it.
       this.refreshSeenState(docId);
       await this.pushToSubscriptions(docId);
     } else {
       let pending = this.pendingSubs.get(docId);
       if (!pending) { pending = new Map(); this.pendingSubs.set(docId, pending); }
-      pending.set(subId, { filter, post, peek });
+      pending.set(subId, { filter, post, peek, meta });
       if (OPEN_DOCS_IN_BACKGROUND) {
         this.getOrLoadHandle(docId)
           .then(handle => this.getOrCreateEntry(docId, handle))
@@ -682,7 +700,9 @@ export class DriveEngine {
       activeHashes.add(hashStr(sub.filter));
       try {
         const { result, changed } = await this.runCachedQuery(docId, sub.filter, activeDoc, heads, lastModified);
-        if (!changed) continue;
+        // meta subs still get the post so their heads/lastModified stay fresh even
+        // when the jq projection is byte-identical (Home's relative-time).
+        if (!changed && !sub.meta) continue;
         sub.post({ type: 'query-result', subId, result, heads, lastModified });
       } catch (err: any) {
         sub.post({ type: 'query-result', subId, result: null, heads, error: errMsg(err) });
@@ -1345,7 +1365,7 @@ export class DriveEngine {
 
     if (msg.type === 'subscribe-query') {
       try {
-        await this.subscribeQuery(msg.docId, msg.subId, msg.filter, (m) => emit(m), msg.peek);
+        await this.subscribeQuery(msg.docId, msg.subId, msg.filter, (m) => emit(m), msg.peek, msg.meta);
       } catch (err: any) {
         emit({ type: 'query-result', subId: msg.subId, result: null, heads: [], error: errMsg(err) });
       }
