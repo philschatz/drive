@@ -12,8 +12,7 @@ import { waitFor } from './support/peer';
  * correctly serialized, i.e. no "unreachable executed" trap).
  */
 test.describe('presence (encrypted ephemeral)', () => {
-  // Disabled: times out.
-  test.fixme("a peer's focused field syncs to another peer (decrypted)", async ({ browser }) => {
+  test("a peer's focused field syncs to another peer (decrypted)", async ({ browser }) => {
     const { alice, bob, docId } = await setupSharedDoc(browser, 'edit');
     const FOCUS = ['tasks', 'demo-task', 'title'];
     const key = JSON.stringify(FOCUS);
@@ -24,7 +23,7 @@ test.describe('presence (encrypted ephemeral)', () => {
       for (const p of [alice, bob]) {
         await waitFor(
           () => p.call('queryDoc', docId, '.name').then((r) => r.result).catch(() => null),
-          (r) => Array.isArray(r) && r.includes('Shared list'),
+          (r) => r === 'Shared list',
           { label: `${p.name} loads doc`, timeout: 45_000 }
         );
       }

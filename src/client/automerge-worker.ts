@@ -150,7 +150,13 @@ try {
     network,
     emit: (event) => { (self as any).postMessage(event); },
   };
-  engine = new DriveEngine(host);
+  // Optional build-time override (test builds set VITE_SYNC_INTERVAL_MS to shrink
+  // the cross-peer sync floor the E2E specs pay); invalid/unset ⇒ prod default.
+  const rawSyncInterval = (import.meta as any)?.env?.VITE_SYNC_INTERVAL_MS;
+  const syncRequestInterval = Number.isFinite(Number(rawSyncInterval)) && Number(rawSyncInterval) > 0
+    ? Number(rawSyncInterval)
+    : undefined;
+  engine = new DriveEngine(host, { syncRequestInterval });
   console.log('[worker] host + engine ready');
 } catch (err: any) {
   console.error('[worker] Failed to initialize:', err);

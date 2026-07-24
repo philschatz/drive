@@ -25,8 +25,7 @@ async function latchDirectPeers(peer: Peer): Promise<void> {
 const directSeen = (peer: Peer) =>
   peer.page.evaluate(() => [...((window as any).__directSeen ?? [])] as string[]);
 
-// Disabled: times out.
-test.fixme('peers upgrade to a direct WebRTC channel and keep syncing', async ({ browser }) => {
+test('peers upgrade to a direct WebRTC channel and keep syncing', async ({ browser }) => {
   const { alice, bob, docId } = await setupSharedDoc(browser, 'edit');
   try {
     await latchDirectPeers(alice);
@@ -51,7 +50,7 @@ test.fixme('peers upgrade to a direct WebRTC channel and keep syncing', async ({
     );
     await waitFor(
       () => bob.call('queryDoc', docId, '.name').then((r) => r.result).catch(() => null),
-      (result) => Array.isArray(result) && result.includes('Edited over WebRTC'),
+      (result) => result === 'Edited over WebRTC',
       { label: 'bob receives the post-upgrade edit' }
     );
   } finally {

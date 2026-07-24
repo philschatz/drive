@@ -97,6 +97,10 @@ jobs:
         env:
           VITE_BASE_PATH: /drive/
 
+      # Slides are a deploy-only artifact (not needed by the app server or the
+      # Playwright webServer), so they live here rather than in `npm run build`.
+      - run: npm run slides
+
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist

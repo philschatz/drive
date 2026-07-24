@@ -62,7 +62,10 @@ export default defineConfig({
   // through. `reuseExistingServer` lets a developer pre-run
   // `PORT=4445 npm start` (after a build) to skip the rebuild while iterating.
   webServer: {
-    command: `npm run build && PORT=${PORT} npm start`,
+    // VITE_SYNC_INTERVAL_MS shrinks keyhive's cross-peer sync round from the 2000ms
+    // production default so the two-peer specs converge in a fraction of the time
+    // (build-time only — the deploy build never sets it, keeping the prod default).
+    command: `VITE_SYNC_INTERVAL_MS=250 npm run build && PORT=${PORT} npm start`,
     url: baseURL,
     reuseExistingServer: !process.env.CI,
     timeout: 300_000,

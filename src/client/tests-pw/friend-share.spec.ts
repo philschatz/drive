@@ -7,8 +7,7 @@ import { setupSharedDoc } from './support/scenarios';
  * should asynchronously gain access, see the doc in its home list, and be able
  * to read the document content.
  */
-// Disabled: times out.
-test.fixme('sharing a doc with a friend grants them access and syncs content', async ({ browser }) => {
+test('sharing a doc with a friend grants them access and syncs content', async ({ browser }) => {
   const { alice, bob, docId } = await setupSharedDoc(browser, 'edit');
   try {
     // The two peers are genuinely distinct identities.
@@ -27,10 +26,10 @@ test.fixme('sharing a doc with a friend grants them access and syncs content', a
     );
 
     // bob can read the synced document content (automerge data arrives shortly
-    // after access is granted; queryDoc returns jq output as an array).
+    // after access is granted; queryDoc returns the first jq output — a scalar).
     await waitFor(
       () => bob.call('queryDoc', docId, '.name').then((r) => r.result).catch(() => null),
-      (result) => Array.isArray(result) && result.includes('Shared list'),
+      (result) => result === 'Shared list',
       { label: 'bob reads shared content' }
     );
 

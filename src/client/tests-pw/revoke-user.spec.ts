@@ -11,8 +11,7 @@ import { setupSharedDoc } from './support/scenarios';
  *   1. the revocation is applied — alice's member list no longer lists bob, and
  *   2. bob is cut off — a later edit by alice reaches alice but never bob.
  */
-// Disabled: times out.
-test.fixme('revoking a member applies at the authority and cuts the member off from future edits', async ({ browser }) => {
+test('revoking a member applies at the authority and cuts the member off from future edits', async ({ browser }) => {
   const { alice, bob, bobGroup, docId } = await setupSharedDoc(browser, 'edit');
   try {
     // Precondition: bob is a member and has the synced content.
@@ -23,7 +22,7 @@ test.fixme('revoking a member applies at the authority and cuts the member off f
     );
     await waitFor(
       () => bob.call('queryDoc', docId, '.name').then((r) => r.result).catch(() => null),
-      (result) => Array.isArray(result) && result.includes('Shared list'),
+      (result) => result === 'Shared list',
       { label: 'bob has synced content before revoke' }
     );
 
@@ -45,7 +44,7 @@ test.fixme('revoking a member applies at the authority and cuts the member off f
     // alice sees her own edit.
     await waitFor(
       () => alice.call('queryDoc', docId, '.name').then((r) => r.result),
-      (result) => Array.isArray(result) && result.includes('After revoke'),
+      (result) => result === 'After revoke',
       { label: 'alice sees her post-revoke edit' }
     );
 
@@ -55,7 +54,7 @@ test.fixme('revoking a member applies at the authority and cuts the member off f
     const bobName = await bob.call('queryDoc', docId, '.name')
       .then((r) => r.result)
       .catch(() => null);
-    expect(Array.isArray(bobName) ? bobName : []).not.toContain('After revoke');
+    expect(bobName).not.toBe('After revoke');
   } finally {
     await alice.close();
     await bob.close();

@@ -200,8 +200,14 @@ export class DriveEngine {
   private pinnedDocs = new Set<string>();
   private watchOnUpdate: ((u: WatchUpdate) => void) | null = null;
 
-  constructor(host: EngineHost) {
+  // How often (ms) keyhive requests a sync round; undefined ⇒ keyhive-repo's
+  // 2000ms default. Only the browser worker sets this (from a build-time env, to
+  // speed up the E2E convergence floor); the CLI/CalDAV leave it at the default.
+  private syncRequestInterval?: number;
+
+  constructor(host: EngineHost, opts?: { syncRequestInterval?: number }) {
     this.host = host;
+    this.syncRequestInterval = opts?.syncRequestInterval;
   }
 
   // ── small accessors ────────────────────────────────────────────────────────
@@ -968,6 +974,9 @@ export class DriveEngine {
         // worker's error handler can name the call that trapped when the worker dies
         // on a WASM `unreachable` panic. See reportWorkerError in automerge-worker.ts.
         onKeyhiveCall: this.debugEnabled ? (method) => { this.lastKeyhiveCall = method; } : undefined,
+        // Test builds only (see automerge-worker.ts); unset in prod →
+        // keyhive-repo's 2000ms default.
+        syncRequestInterval: this.syncRequestInterval,
         getUserGroupId: async () => (await this.host.kv.get<string>(KEYS.userGroupId)) ?? null,
         setUserGroupId: async (groupId) => { await this.host.kv.set(KEYS.userGroupId, groupId); },
         onBeforeShareConfigChanged: () => {

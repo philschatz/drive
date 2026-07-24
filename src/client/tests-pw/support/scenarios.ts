@@ -55,7 +55,10 @@ export async function setupSharedDoc(
       }
     },
     (ok) => ok === true,
-    { label: 'alice shares with bob group', timeout: 60_000, interval: 3_000 }
+    // Poll briskly: each attempt triggers a keyhive sync round, and with the
+    // test build's short syncRequestInterval the group ops arrive in well under a
+    // second — the old 3s interval just added dead time between rounds.
+    { label: 'alice shares with bob group', timeout: 60_000, interval: 500 }
   );
 
   // Wait for the membership op + key material to reach bob.

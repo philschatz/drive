@@ -16,15 +16,14 @@ import { waitFor } from './support/peer';
 // Previously fixme'd for the beekem pcs_key_ops panic (`unreachable executed`,
 // see source-presence.spec.ts) on the late joiner's first presence encrypt, now
 // fixed in beekem. The usePresence newcomer re-flush this spec covers is app-side.
-// Disabled: times out.
-test.fixme('editors opened at different times see each other without re-broadcast loops', async ({ browser }) => {
+test('editors opened at different times see each other without re-broadcast loops', async ({ browser }) => {
   test.setTimeout(180_000);
   const { alice, bob, docId } = await setupSharedDoc(browser, 'edit');
   try {
     for (const p of [alice, bob]) {
       await waitFor(
         () => p.call('queryDoc', docId, '.name').then((r) => r.result).catch(() => null),
-        (r) => Array.isArray(r) && r.includes('Shared list'),
+        (r) => r === 'Shared list',
         { label: `${p.name} loads doc`, timeout: 45_000 }
       );
     }

@@ -290,8 +290,7 @@ test('a newly linked device loads a friend-shared document', async ({ browser })
  * library. The original's user-group administers its docs; once the new device
  * adopts that group, reconcileHomeDocs must surface those docs in its home list.
  */
-// Disabled: times out.
-test.fixme('a newly linked device loads the original device\'s documents', async ({ browser }) => {
+test('a newly linked device loads the original device\'s documents', async ({ browser }) => {
   let deviceA: Peer | undefined;
   let deviceB: Peer | undefined;
   try {
@@ -338,7 +337,7 @@ test.fixme('a newly linked device loads the original device\'s documents', async
     // …and its content must actually sync (not just be listed-but-unavailable).
     await waitFor(
       () => deviceB!.call('queryDoc', docId, '.name').then((r) => r.result).catch(() => null),
-      (result) => Array.isArray(result) && result.includes('My list'),
+      (result) => result === 'My list',
       { label: 'deviceB reads the synced doc content', timeout: 45_000 },
     );
 

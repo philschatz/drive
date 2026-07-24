@@ -7,7 +7,7 @@
     "start": "ts-node -r tsconfig-paths/register src/backend/serve.ts",
     "start:relay": "ts-node --transpile-only -r tsconfig-paths/register src/backend/relay-server.ts",
     "dev": "vite dev --port 3000",
-    "build": "vite build && npm run slides",
+    "build": "vite build",
     "serve:prod": "NODE_ENV=production PORT=4000 ts-node -r tsconfig-paths/register src/backend/serve.ts",
     "start:caldav": "ts-node -r tsconfig-paths/register src/backend/caldav-server.ts",
     "cli": "ts-node -r tsconfig-paths/register src/backend/cli.ts",

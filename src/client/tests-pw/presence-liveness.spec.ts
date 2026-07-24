@@ -22,8 +22,7 @@ import { waitFor } from './support/peer';
  *     what used to linger forever.
  */
 test.describe('presence liveness (heartbeats)', () => {
-  // Disabled: times out.
-  test.fixme('idle peers stay visible; a silently-dropped peer disappears', async ({ browser }) => {
+  test('idle peers stay visible; a silently-dropped peer disappears', async ({ browser }) => {
     test.setTimeout(120_000);
     const { alice, bob, docId } = await setupSharedDoc(browser, 'edit');
     try {
@@ -38,7 +37,7 @@ test.describe('presence liveness (heartbeats)', () => {
       for (const p of [alice, bob]) {
         await waitFor(
           () => p.call('queryDoc', docId, '.name').then((r) => r.result).catch(() => null),
-          (r) => Array.isArray(r) && r.includes('Shared list'),
+          (r) => r === 'Shared list',
           { label: `${p.name} loads doc`, timeout: 45_000 }
         );
       }

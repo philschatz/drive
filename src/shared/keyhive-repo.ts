@@ -53,6 +53,13 @@ export interface CreateKeyhiveRepoOptions {
    * live while a call is in flight. Undefined = no tracing, zero overhead.
    */
   onKeyhiveCall?: (method: string | null) => void;
+  /**
+   * How often (ms) keyhive requests a sync round. Defaults to 2000 (production).
+   * Lower it only under test (e.g. via VITE_SYNC_INTERVAL_MS) to collapse the
+   * multi-second cross-peer convergence floor the two-peer E2E specs pay — more
+   * frequent sync = more traffic, so keep the 2000 default in production.
+   */
+  syncRequestInterval?: number;
 }
 
 export interface KeyhiveRepo {
@@ -168,7 +175,7 @@ export async function createKeyhiveRepo(opts: CreateKeyhiveRepoOptions): Promise
     periodicallyRequestSync: true,
     automaticArchiveIngestion: true,
     cachingMode: 'none',
-    syncRequestInterval: 2000,
+    syncRequestInterval: opts.syncRequestInterval ?? 2000,
   });
 
   // The bridge's membership nudge would call this on the instance it holds —
