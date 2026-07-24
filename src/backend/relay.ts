@@ -1,7 +1,7 @@
 import type { IncomingMessage } from 'http';
 import { WebSocket, WebSocketServer } from 'ws';
 import { Encoder, decode } from 'cbor-x';
-import { logMessage, shortId } from './relay-log';
+import { logMessage, relayInfo, shortId } from './relay-log';
 import { RELAY_PEER_ID, RELAY_LEAVE } from '../shared/relay-identity';
 import { RDV_SUB, RDV_UNSUB, RDV_MSG, RDV_PEER } from '../shared/rendezvous-protocol';
 import { WRTC_SIGNAL } from '../shared/webrtc-signal';
@@ -164,7 +164,7 @@ export class WebSocketRelay {
       // or replaced stale socket closing later must not evict the live one.
       if (myPeerId && this.sockets.get(myPeerId) === ws) {
         this.sockets.delete(myPeerId);
-        console.log(`[relay] peer left: ${shortId(myPeerId)} (${this.sockets.size} remaining)`);
+        relayInfo(`[relay] peer left: ${shortId(myPeerId)} (${this.sockets.size} remaining)`);
 
         // Notify remaining peers of the departure
         const leaveMsg = { type: RELAY_LEAVE, senderId: myPeerId };
@@ -236,7 +236,7 @@ export class WebSocketRelay {
       myPeerId = senderId;
       this.sockets.set(myPeerId, ws);
 
-      console.log(`[relay] ${this.sockets.size} peers connected`);
+      relayInfo(`[relay] ${this.sockets.size} peers connected`);
 
       const version = (message.supportedProtocolVersions as string[])?.[0] ?? '1';
 
@@ -359,7 +359,7 @@ export class WebSocketRelay {
         this.safeSend(ws, peerMsg, rid);
       }
       set.add(ws);
-      console.log(`[relay] rendezvous ${shortId(rid)}: ${set.size} listening`);
+      relayInfo(`[relay] rendezvous ${shortId(rid)}: ${set.size} listening`);
     } else if (message.type === RDV_UNSUB) {
       const set = this.rendezvous.get(rid);
       if (set && set.delete(ws) && set.size === 0) this.rendezvous.delete(rid);

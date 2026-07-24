@@ -8,7 +8,7 @@ import type { RendezvousStatus } from './rendezvous-protocol';
 
 export type MainToWorker =
   | { type: 'init' }
-  | { type: 'set-cache-disabled'; id: number; disabled: boolean }
+  | { type: 'set-debug-mode'; id: number; enabled: boolean }
   | { type: 'set-presence-timing'; id: number; staleMs?: number; heartbeatMs?: number; livenessCheckMs?: number }
   | { type: 'clear-caches'; id: number }
   | { type: 'get-doc-list'; id: number }
@@ -75,6 +75,10 @@ export type WorkerToMain =
   | { type: 'kh-error'; message: string }
   | { type: 'error'; message: string }
   | { type: 'data-warning'; message: string }
+  // Debug mode only: the name of a keyhive (Rust/WASM) call, emitted just before
+  // it runs. The main thread rings the last few so the crash banner can name the
+  // call that trapped when the worker dies on a WASM `unreachable` panic.
+  | { type: 'kh-trace'; method: string }
   | { type: 'peer-connected'; peerCount: number; peers: string[] }
   | { type: 'peer-disconnected'; peerCount: number; peers: string[] }
   | { type: 'ws-status'; connected: boolean }

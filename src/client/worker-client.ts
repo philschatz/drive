@@ -91,6 +91,10 @@ export class WorkerClient {
   private workerDead = false;
   private fatalError: string | null = null;
   private errorListeners = new Set<(message: string) => void>();
+  // Debug mode only: the most-recent keyhive (Rust/WASM) call name, sent by the
+  // worker's error handler ('kh-trace') just before it reports a crash. Appended to
+  // the crash/data-warning banner so the trapping call is named even in production.
+  private lastKeyhiveCall: string | null = null;
 
   constructor(worker: WorkerLike, opts: WorkerClientOptions = {}) {
     this.worker = worker;
@@ -128,6 +132,11 @@ export class WorkerClient {
     for (const fn of this.errorListeners) fn(message);
   }
 
+  /** Append the last keyhive call (debug mode) to a banner message, if known. */
+  private withKeyhiveContext(message: string): string {
+    return this.lastKeyhiveCall ? `${message} (last keyhive call: ${this.lastKeyhiveCall})` : message;
+  }
+
   /**
    * The worker crashed / became unreadable (onerror / onmessageerror). Reject
    * everything in flight so no promise hangs forever, settle the ready gates
@@ -138,6 +147,10 @@ export class WorkerClient {
   fail(message: string): void {
     if (this.workerDead) return;
     this.workerDead = true;
+    // Debug mode: name the keyhive call leading up to the crash. A WASM
+    // `unreachable` trap kills the worker with no indication of which Rust call
+    // panicked; the last-traced call points straight at it.
+    message = this.withKeyhiveContext(message);
     this.fatalError = message;
 
     for (const p of this.pending.values()) {
@@ -183,11 +196,18 @@ export class WorkerClient {
         this.rejectKeyhiveReady(new Error(msg.message));
         this.notifyError(msg.message);
         return true;
-      case 'data-warning':
+      case 'data-warning': {
         // Non-fatal: the worker is up but local data has a problem. Banner only.
-        console.warn('Worker data warning:', msg.message);
-        this.fatalError = msg.message;
-        this.notifyError(msg.message);
+        const m = this.withKeyhiveContext(msg.message);
+        console.warn('Worker data warning:', m);
+        this.fatalError = m;
+        this.notifyError(m);
+        return true;
+      }
+      case 'kh-trace':
+        // Debug mode only: the most-recent keyhive call, sent by the worker's error
+        // handler just before it reports a crash. Recorded for the banner append.
+        this.lastKeyhiveCall = msg.method;
         return true;
 
       case 'result': {

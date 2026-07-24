@@ -1,5 +1,16 @@
 import { decode } from 'cbor-x';
 
+// Relay logging is a per-message firehose. Tests set RELAY_QUIET=1 to silence
+// the informational output (peer join/leave + every routed message) while
+// keeping console.error for genuine failures. Default (unset) preserves the
+// full dev/prod logging.
+const RELAY_QUIET = process.env.RELAY_QUIET === '1';
+
+/** Informational relay log — suppressed when RELAY_QUIET=1 (e.g. under tests). */
+export function relayInfo(...args: unknown[]): void {
+  if (!RELAY_QUIET) console.log(...args);
+}
+
 /** Truncate the base64 key but keep any `-suffix` intact — the suffix is the
  * per-service part of a peerId ('drive', 'caldav-server'), so it's what tells
  * two services of the same device apart in collision/routing logs. */
@@ -189,6 +200,7 @@ function describeMessageData(type: string, data: unknown): string {
 }
 
 export function logMessage(dir: '←' | '→', peerId: string, message: any) {
+  if (RELAY_QUIET) return;
   const type = message.type ?? message;
   const parts = [`[relay] ${dir} ${shortId(peerId)} ${type}`];
 

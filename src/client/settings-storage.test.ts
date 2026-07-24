@@ -1,7 +1,7 @@
 /**
  * Tests for the typed settings registry in idb-storage.ts:
  *   - settingGet/settingSet: IndexedDB-backed source of truth, with defaults.
- *   - settingGetSync/settingSetSync/isCacheDisabled: synchronous localStorage mirror.
+ *   - settingGetSync/settingSetSync/isDebugEnabled: synchronous localStorage mirror.
  */
 
 import 'fake-indexeddb/auto';
@@ -23,7 +23,7 @@ import {
   settingSet,
   settingGetSync,
   settingSetSync,
-  isCacheDisabled,
+  isDebugEnabled,
   _resetConnectionForTest,
 } from './idb-storage';
 
@@ -34,41 +34,41 @@ beforeEach(() => {
 
 describe('settings — IndexedDB source of truth', () => {
   it('returns the default when unset', async () => {
-    await expect(settingGet('cache-disabled')).resolves.toBe(false);
+    await expect(settingGet('debug-enable')).resolves.toBe(false);
   });
 
   it('round-trips a value through IndexedDB', async () => {
-    await settingSet('cache-disabled', true);
-    await expect(settingGet('cache-disabled')).resolves.toBe(true);
-    await settingSet('cache-disabled', false);
-    await expect(settingGet('cache-disabled')).resolves.toBe(false);
+    await settingSet('debug-enable', true);
+    await expect(settingGet('debug-enable')).resolves.toBe(true);
+    await settingSet('debug-enable', false);
+    await expect(settingGet('debug-enable')).resolves.toBe(false);
   });
 
   it('keeps a stored `false` rather than falling back to the default', async () => {
-    await settingSet('cache-disabled', false);
+    await settingSet('debug-enable', false);
     // ?? must not treat the stored `false` as missing.
-    await expect(settingGet('cache-disabled')).resolves.toBe(false);
+    await expect(settingGet('debug-enable')).resolves.toBe(false);
   });
 });
 
 describe('settings — synchronous localStorage mirror', () => {
   it('defaults to false / cache enabled when unset', () => {
-    expect(settingGetSync('cache-disabled')).toBe(false);
-    expect(isCacheDisabled()).toBe(false);
+    expect(settingGetSync('debug-enable')).toBe(false);
+    expect(isDebugEnabled()).toBe(false);
   });
 
-  it('round-trips through the mirror and reflects in isCacheDisabled', () => {
-    settingSetSync('cache-disabled', true);
-    expect(settingGetSync('cache-disabled')).toBe(true);
-    expect(isCacheDisabled()).toBe(true);
-    expect(store['settings:cache-disabled']).toBe('true');
+  it('round-trips through the mirror and reflects in isDebugEnabled', () => {
+    settingSetSync('debug-enable', true);
+    expect(settingGetSync('debug-enable')).toBe(true);
+    expect(isDebugEnabled()).toBe(true);
+    expect(store['settings:debug-enable']).toBe('true');
 
-    settingSetSync('cache-disabled', false);
-    expect(isCacheDisabled()).toBe(false);
+    settingSetSync('debug-enable', false);
+    expect(isDebugEnabled()).toBe(false);
   });
 
   it('falls back to the default on a corrupt mirror value', () => {
-    store['settings:cache-disabled'] = 'not-json';
-    expect(settingGetSync('cache-disabled')).toBe(false);
+    store['settings:debug-enable'] = 'not-json';
+    expect(settingGetSync('debug-enable')).toBe(false);
   });
 });

@@ -49,7 +49,8 @@ export const SETTINGS_PREFIX = 'settings:';
 
 /** The single source of all app settings: their types and default values. */
 export interface SettingsSchema {
-  'cache-disabled': boolean;
+  /** Debug mode: bypasses all caches AND traces keyhive/WASM calls (console + crash banner). */
+  'debug-enable': boolean;
   /**
    * Full hash path (incl. rest path + query, e.g. `/d/<docId>/sheets/s1?anchor=r1:c2`)
    * of the last doc the user had open. Read at startup to reopen it when the app
@@ -60,7 +61,7 @@ export interface SettingsSchema {
 }
 
 export const SETTINGS_DEFAULTS: SettingsSchema = {
-  'cache-disabled': false,
+  'debug-enable': false,
   'last-opened-doc': null,
 };
 

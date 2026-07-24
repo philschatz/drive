@@ -191,5 +191,5 @@ export function settingSetSync<K extends SettingName>(name: K, value: SettingsSc
   localStorage.setItem(SETTINGS_PREFIX + name, JSON.stringify(value));
 }
 
-/** Synchronous reader for the worker-cache toggle (e.g. the Settings UI). */
-export function isCacheDisabled(): boolean { return settingGetSync('cache-disabled'); }
+/** Synchronous reader for the debug-mode toggle (e.g. the Settings UI). */
+export function isDebugEnabled(): boolean { return settingGetSync('debug-enable'); }

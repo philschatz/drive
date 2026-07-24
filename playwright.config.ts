@@ -62,5 +62,8 @@ export default defineConfig({
     url: baseURL,
     reuseExistingServer: !process.env.CI,
     timeout: 300_000,
+    // Silence the relay's per-message logging firehose during tests (errors and
+    // warnings still print). See RELAY_QUIET in src/backend/relay-log.ts.
+    env: { RELAY_QUIET: '1' },
   },
 });

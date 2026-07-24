@@ -93,8 +93,8 @@ it('deletes legacy cache (qc:*) and removed device-linking keys', async () => {
 });
 
 it('leaves settings:* keys untouched', async () => {
-  await seedV1({ 'settings:cache-disabled': true, 'user-group-id': 'x' });
-  expect(await idbGet('settings:cache-disabled')).toBe(true);
+  await seedV1({ 'settings:debug-enable': true, 'user-group-id': 'x' });
+  expect(await idbGet('settings:debug-enable')).toBe(true);
 });
 
 it('opens cleanly on a fresh database with nothing to migrate', async () => {

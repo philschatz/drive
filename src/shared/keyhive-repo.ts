@@ -45,6 +45,14 @@ export interface CreateKeyhiveRepoOptions {
   withShareConfig?: boolean;
   /** Called before the bridge fires a share-config change (worker reconciles the home list). */
   onBeforeShareConfigChanged?: () => void;
+  /**
+   * Debug hook: invoked with the method name just before every keyhive WASM call
+   * runs, then with `null` once it succeeds. Only wired when debug mode is on. Used
+   * to trace which Rust call trapped when the worker dies on a WASM `unreachable`
+   * panic (see the crash banner in worker-client.ts) — the non-null value is only
+   * live while a call is in flight. Undefined = no tracing, zero overhead.
+   */
+  onKeyhiveCall?: (method: string | null) => void;
 }
 
 export interface KeyhiveRepo {
@@ -102,13 +110,33 @@ export function neutralizeForcePcsUpdate(kh: any): void {
  * keyhive WASM is not reentrant: if one keyhive method is suspended at an await and
  * another runs, it traps. Synchronous getters/properties pass through untouched.
  */
-function makeSerializeKeyhive(runOnKeyhiveQueue: <T>(fn: () => Promise<T>) => Promise<T>) {
+function makeSerializeKeyhive(
+  runOnKeyhiveQueue: <T>(fn: () => Promise<T>) => Promise<T>,
+  onCall?: (method: string | null) => void,
+) {
   return (realKh: any): any =>
     new Proxy(realKh, {
       get(target, prop) {
         const val = (target as any)[prop];
         if (typeof val !== 'function') return val;
-        return (...args: any[]) => runOnKeyhiveQueue(() => Promise.resolve(val.apply(target, args)));
+        if (!onCall) {
+          return (...args: any[]) => runOnKeyhiveQueue(() => Promise.resolve(val.apply(target, args)));
+        }
+        // Debug mode: log the call name BEFORE running it. A WASM `unreachable`
+        // trap kills the worker before any post-call code runs, so this pre-call
+        // trace is what survives to name the culprit (console + crash banner).
+        // Clear it (onCall(null)) once the call succeeds so only an in-flight call
+        // is ever attributed to a later crash.
+        const method = String(prop);
+        return (...args: any[]) =>
+          runOnKeyhiveQueue(() => {
+            console.log('[keyhive] →', method);
+            onCall(method);
+            return Promise.resolve(val.apply(target, args)).then(
+              (result: unknown) => { onCall(null); return result; },
+              (err: unknown) => { console.warn('[keyhive] ✗', method, err); throw err; },
+            );
+          });
       },
     });
 }
@@ -158,7 +186,7 @@ export async function createKeyhiveRepo(opts: CreateKeyhiveRepoOptions): Promise
     const queue = (integration as any)?.networkAdapter?.keyhiveQueue;
     return queue ? queue.run(fn) : fn();
   };
-  const serializeKeyhive = makeSerializeKeyhive(runOnKeyhiveQueue);
+  const serializeKeyhive = makeSerializeKeyhive(runOnKeyhiveQueue, opts.onKeyhiveCall);
 
   // Slot for pre-generated keyhive doc IDs. enableSharing creates the keyhive doc
   // first, sets nextDocIdBytes, then create2() consumes it so the automerge doc ID

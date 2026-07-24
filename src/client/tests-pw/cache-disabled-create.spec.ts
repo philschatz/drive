@@ -11,8 +11,8 @@ test('cache disabled: created doc survives reload', async ({ browser }) => {
   peer.page.on('console', (m) => logs.push(`[${m.type()}] ${m.text()}`));
 
   try {
-    // Enable "disable cache" (this persists the flag + reloads the page).
-    await peer.page.evaluate(() => (window as any).__drive.setCacheDisabled(true)).catch(() => {});
+    // Enable debug mode (disables cache; this persists the flag + reloads the page).
+    await peer.page.evaluate(() => (window as any).__drive.setDebugEnabled(true)).catch(() => {});
     await peer.page.waitForFunction(() => !!(window as any).__drive, undefined, { timeout: 60_000 });
     await peer.page.evaluate(() =>
       Promise.all([(window as any).__drive.workerReady, (window as any).__drive.keyhiveReady])

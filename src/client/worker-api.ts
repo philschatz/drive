@@ -107,9 +107,9 @@ const initMsg = {
 console.log('[main] → send', initMsg.type, initMsg);
 worker.postMessage(initMsg);
 
-// Best-effort: heal the synchronous localStorage mirror of the cache-disabled setting from
+// Best-effort: heal the synchronous localStorage mirror of the debug-enable setting from
 // its IDB source of truth, in case localStorage was cleared but IDB still holds the flag.
-settingGet('cache-disabled').then(v => settingSetSync('cache-disabled', v)).catch(() => { });
+settingGet('debug-enable').then(v => settingSetSync('debug-enable', v)).catch(() => { });
 
 // ── Ready promises + fatal-error surface (owned by the WorkerClient) ─────────
 
@@ -397,13 +397,14 @@ export const HOME_SUMMARY_QUERY =
 // ── Cache controls ───────────────────────────────────────────────────────────
 
 /**
- * Enable/disable the worker's performance caches (jq/query-result/validation). Persists
- * the flag (IDB source of truth + the synchronous localStorage mirror), tells the worker
- * (which clears its caches when disabling), then reloads so the worker re-reads the flag.
+ * Enable/disable debug mode: bypasses the worker's performance caches
+ * (jq/query-result/validation) AND traces keyhive/WASM calls (console + crash banner).
+ * Persists the flag (IDB source of truth + the synchronous localStorage mirror), tells
+ * the worker (which clears its caches when enabling), then reloads so the worker re-reads it.
  */
-export async function setCacheDisabled(disabled: boolean): Promise<void> {
-  settingSetSync('cache-disabled', disabled); // sync mirror, read on next load
-  await request('set-cache-disabled', { disabled }); // worker persists IDB + clears if disabling
+export async function setDebugEnabled(enabled: boolean): Promise<void> {
+  settingSetSync('debug-enable', enabled); // sync mirror, read on next load
+  await request('set-debug-mode', { enabled }); // worker persists IDB + clears caches if enabling
   window.location.reload();
 }
 

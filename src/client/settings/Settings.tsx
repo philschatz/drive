@@ -15,8 +15,8 @@ import {
   type IdentityInfo,
 } from '../shared/keyhive-api';
 import { useDevices, useDeviceStatuses } from '../shared/use-devices';
-import { setCacheDisabled, clearAllCaches, deleteAllData } from '../worker-api';
-import { idbGet, idbSet, isCacheDisabled, KEYS } from '../idb-storage';
+import { setDebugEnabled, clearAllCaches, deleteAllData } from '../worker-api';
+import { idbGet, idbSet, isDebugEnabled, KEYS } from '../idb-storage';
 import { getContactName, setContactName } from '../contact-names';
 export function Settings({ path }: { path?: string }) {
   const [identity, setIdentity] = useState<IdentityInfo | null>(null);
@@ -30,7 +30,7 @@ export function Settings({ path }: { path?: string }) {
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
-  const [cacheDisabled] = useState(isCacheDisabled());
+  const [debugEnabled] = useState(isDebugEnabled());
 
   // The device list, its live refresh, and removal are owned by the shared hook.
   const { devices, removeDevice } = useDevices({ onError: setError, onMessage: setMessage });
@@ -72,11 +72,11 @@ export function Settings({ path }: { path?: string }) {
     }
   };
 
-  const handleToggleCacheDisabled = async (v: boolean) => {
+  const handleToggleDebug = async (v: boolean) => {
     try {
-      await setCacheDisabled(v); // persists, tells worker, then reloads the page
+      await setDebugEnabled(v); // persists, tells worker, then reloads the page
     } catch (err: any) {
-      setError('Failed to update cache setting: ' + err.message);
+      setError('Failed to update debug setting: ' + err.message);
     }
   };
 
@@ -317,20 +317,21 @@ export function Settings({ path }: { path?: string }) {
         </div>
       </section>
 
-      {/* Cache */}
+      {/* Debugging */}
       <section className="mb-6">
-        <h2 className="text-lg font-semibold mb-2">Cache</h2>
+        <h2 className="text-lg font-semibold mb-2">Debugging</h2>
         <p className="text-xs text-muted-foreground mb-2">
-          The app caches query results and derived data for faster loading. Disabling bypasses
-          all caches (always reading live data); the page reloads when you change this.
+          Enabling debug mode bypasses all caches (always reading live data) and logs every
+          keyhive/WASM call to the console — and names the last calls on the crash banner if the
+          document engine traps. The page reloads when you change this.
         </p>
         <div className="flex items-center gap-2 mb-3">
           <Switch
-            id="disable-cache"
-            checked={cacheDisabled}
-            onCheckedChange={handleToggleCacheDisabled}
+            id="debug-mode"
+            checked={debugEnabled}
+            onCheckedChange={handleToggleDebug}
           />
-          <Label htmlFor="disable-cache" className="cursor-pointer">Disable cache</Label>
+          <Label htmlFor="debug-mode" className="cursor-pointer">Enable debugging (and disable cache)</Label>
         </div>
         <Button size="sm" variant="destructive" onClick={handleClearCaches}>Clear Caches</Button>
       </section>

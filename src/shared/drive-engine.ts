@@ -156,7 +156,13 @@ export class DriveEngine {
   // Query caching.
   private jqCache = new LRU<string, (input: any) => any>(64);
   private queryResultCache = new LRU<string, QueryCacheEntry>(256);
-  private cacheDisabled = false;
+  private debugEnabled = false;
+  /**
+   * Debug mode only: the name of the most-recent keyhive (Rust/WASM) call, set
+   * just before it runs. The worker's error handler reads this to name the call
+   * that trapped when a WASM `unreachable` panic kills the worker.
+   */
+  lastKeyhiveCall: string | null = null;
 
   // Reconcile coalescing.
   private reconcileInFlight = false;
@@ -528,12 +534,12 @@ export class DriveEngine {
 
   // ── Query caching ──────────────────────────────────────────────────────────
   private async runQuery(filter: string, doc: any): Promise<any> {
-    let fn = this.cacheDisabled ? undefined : this.jqCache.get(filter);
+    let fn = this.debugEnabled ? undefined : this.jqCache.get(filter);
     if (!fn) {
       const { compile } = await import('./jq');
       const compiled = compile(filter);
       fn = (input: any) => { const r = compiled(input); return r.length > 0 ? r[0] : null; };
-      if (!this.cacheDisabled) this.jqCache.set(filter, fn);
+      if (!this.debugEnabled) this.jqCache.set(filter, fn);
     }
     return fn(doc);
   }
@@ -542,7 +548,7 @@ export class DriveEngine {
     docId: string, filter: string, doc: any, heads: string[], lastModified?: number,
   ): Promise<{ result: any; heads: string[]; lastModified?: number; changed: boolean }> {
     const result = await this.runQuery(filter, doc);
-    if (this.cacheDisabled) return { result, heads, lastModified, changed: true };
+    if (this.debugEnabled) return { result, heads, lastModified, changed: true };
 
     const cacheKey = queryCacheKey(docId, filter);
     const json = JSON.stringify(result);
@@ -559,7 +565,7 @@ export class DriveEngine {
   async subscribeQuery(docId: string, subId: number, filter: string, post: (m: any) => void, peek?: boolean): Promise<void> {
     this.subIdToDocId.set(subId, docId);
 
-    if (!this.cacheDisabled) {
+    if (!this.debugEnabled) {
       const cacheKey = queryCacheKey(docId, filter);
       const memoryCached = this.queryResultCache.get(cacheKey);
       if (memoryCached) {
@@ -660,7 +666,7 @@ export class DriveEngine {
     const allErrors = validateDocument(doc);
     const errors = allErrors.slice(0, 100);
 
-    if (!this.cacheDisabled) {
+    if (!this.debugEnabled) {
       const json = JSON.stringify(errors);
       const cacheKey = validationCacheKey(docId);
       const cached = this.queryResultCache.get(cacheKey);
@@ -870,11 +876,12 @@ export class DriveEngine {
 
   // ── Init ─────────────────────────────────────────────────────────────────
   async init(): Promise<void> {
-    // Hydrate the cache-disabled flag from its persisted setting.
+    // Hydrate the debug-enable flag from its persisted setting. When on it also
+    // disables the caches (bypass checks below) and traces keyhive calls.
     try {
-      this.cacheDisabled = (await this.host.kv.settingGet('cache-disabled')) === true;
+      this.debugEnabled = (await this.host.kv.settingGet('debug-enable')) === true;
     } catch (err) {
-      console.warn('[engine] failed to read cache-disabled setting:', errMsg(err));
+      console.warn('[engine] failed to read debug-enable setting:', errMsg(err));
     }
 
     // Load the last-viewed heads map early so seen-state works even if keyhive
@@ -899,6 +906,10 @@ export class DriveEngine {
         peerIdSuffix: 'drive',
         serialize: true,
         withShareConfig: true,
+        // Debug mode only: record the most-recent keyhive (Rust/WASM) call so the
+        // worker's error handler can name the call that trapped when the worker dies
+        // on a WASM `unreachable` panic. See reportWorkerError in automerge-worker.ts.
+        onKeyhiveCall: this.debugEnabled ? (method) => { this.lastKeyhiveCall = method; } : undefined,
         getUserGroupId: async () => (await this.host.kv.get<string>(KEYS.userGroupId)) ?? null,
         setUserGroupId: async (groupId) => { await this.host.kv.set(KEYS.userGroupId, groupId); },
         onBeforeShareConfigChanged: () => {
@@ -1164,11 +1175,11 @@ export class DriveEngine {
       return;
     }
 
-    if (msg.type === 'set-cache-disabled') {
+    if (msg.type === 'set-debug-mode') {
       try {
-        this.cacheDisabled = msg.disabled;
-        await this.host.kv.settingSet('cache-disabled', msg.disabled);
-        if (msg.disabled) {
+        this.debugEnabled = msg.enabled;
+        await this.host.kv.settingSet('debug-enable', msg.enabled);
+        if (msg.enabled) {
           this.queryResultCache.clear();
           this.jqCache.clear();
           await this.host.kv.delPrefix(CACHE_PREFIX);

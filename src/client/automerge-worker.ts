@@ -36,6 +36,14 @@ function reportWorkerError(prefix: string, detail: unknown) {
   const message = (detail as any)?.message || String(detail ?? 'Unknown worker error');
   console.error(`[worker] ${prefix}:`, detail);
   try {
+    // Debug mode: name the most-recent keyhive (Rust/WASM) call so the main thread
+    // can attach it to the crash banner. A WASM `unreachable` trap gives no hint of
+    // which call panicked; this points straight at it. Sent before the warning so
+    // the main thread has it recorded when either banner path fires.
+    const lastKeyhiveCall = engine?.lastKeyhiveCall ?? null;
+    if (lastKeyhiveCall) {
+      (self as any).postMessage({ type: 'kh-trace', method: lastKeyhiveCall } satisfies WorkerToMain);
+    }
     (self as any).postMessage({ type: 'data-warning', message } satisfies WorkerToMain);
   } catch { /* postMessage can fail if detail isn't structured-cloneable; message string is */ }
 }
