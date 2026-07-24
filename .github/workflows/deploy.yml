@@ -48,8 +48,23 @@ jobs:
 
       - run: npm ci
 
-      - name: Install Playwright browser
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        id: playwright-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+
+      # On a cache miss, download the browser and its OS-level libraries.
+      - name: Install Playwright browser (with deps)
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
         run: npx playwright install --with-deps chromium
+
+      # On a cache hit the browser binary is restored, but the apt system
+      # libraries live outside the cache — install just those.
+      - name: Install Playwright system deps
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: npx playwright install-deps chromium
 
       - name: Playwright E2E tests
         run: npm run test:pw

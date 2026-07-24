@@ -197,14 +197,12 @@ export default defineConfig(async () => {
       workbox: {
         globPatterns: ['**/*.{js,css,html,svg,png,woff,woff2,wasm}'],
         maximumFileSizeToCacheInBytes: 5 * 1024 * 1024, // 5 MB — WASM + worker bundle
-        navigateFallback: 'index.html',
-        navigateFallbackDenylist: [
-          /^\/api\//,
-          /^\/health/,
-          /^\/dav\//,
-          /^\/automerge\//,
-          /^\/docs\//,
-        ],
+        // All drive routes are hash-based (App.tsx mounts <Router history={hashHistory}>),
+        // so the SW only ever sees the base path (/ → index.html, precached + served via
+        // workbox's directoryIndex). Explicitly disable the navigation fallback — vite-plugin-pwa
+        // defaults navigateFallback to 'index.html', and an SPA path fallback would only mask
+        // genuine 404s for missing assets under the base.
+        navigateFallback: null,
       },
       devOptions: {
         enabled: false,
