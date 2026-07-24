@@ -79,6 +79,19 @@ export function onDeviceNamesUpdated(fn: () => void): () => void {
   return () => { deviceNamesListeners.delete(fn); };
 }
 
+// ── Contact-name push (cache lives in contact-names.ts; this just notifies UI) ─
+const contactNamesListeners = new Set<() => void>();
+
+/**
+ * Subscribe to contact-name changes (e.g. a contact's name learned via QR
+ * rendezvous). The cache in contact-names.ts is already updated when this fires;
+ * the callback is just a re-render nudge. Returns a cleanup function.
+ */
+export function onContactNamesUpdated(fn: () => void): () => void {
+  contactNamesListeners.add(fn);
+  return () => { contactNamesListeners.delete(fn); };
+}
+
 /**
  * Archive a doc: revoke the user's own access if possible, tombstone + purge it
  * locally either way. Resolves with whether access was truly 'revoked' (gone
@@ -302,6 +315,7 @@ worker.onmessage = (e: MessageEvent<WorkerToMain>) => {
       break;
     case 'contact-names-updated':
       applyContactNamesFromWorker(msg.names);
+      for (const fn of contactNamesListeners) fn();
       break;
     case 'device-names-updated':
       applyDeviceNamesFromWorker(msg.names);
