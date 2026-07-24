@@ -11,7 +11,7 @@ test.describe('Counters', () => {
   test.beforeAll(async ({ browser }) => {
     app = await openApp(browser, 'counters');
     await createDocViaUI(app, 'Habit Tracker', 'Test Counters');
-    await expect(app.page.locator('[placeholder="Add a daily counter..."]')).toBeVisible({ timeout: 10_000 });
+    await expect(app.page.locator('[placeholder="Add a todo/counter..."]')).toBeVisible({ timeout: 10_000 });
   });
 
   test.afterAll(async () => {
@@ -21,14 +21,20 @@ test.describe('Counters', () => {
 
   test('counter list: add, click to record, sections, chart', async () => {
     const page = app.page;
-    const input = page.locator('[placeholder="Add a daily counter..."]');
+    const input = page.locator('[placeholder="Add a todo/counter..."]');
+    // Pick a repeat option in the quick-add dropdown (the first combobox on the page).
+    const pickRepeat = async (name: string) => {
+      await page.getByRole('combobox').first().click();
+      await page.getByRole('option', { name, exact: true }).click();
+    };
 
     // The met/missed chart renders even when empty.
     await expect(page.locator('svg[aria-label="Met vs missed occurrences per week"]')).toBeVisible();
 
-    // Quick-add creates a daily counter that is expected today -> "To do".
+    // Quick-add with "Daily" selected creates a habit expected today -> "To do".
     await input.fill('Stretch');
     await expect(input).toHaveValue('Stretch');
+    await pickRepeat('Daily');
     await page.getByRole('button', { name: 'Add', exact: true }).click();
     const row = page.locator('[data-testid="counter-list"] div', { hasText: 'Stretch' }).first();
     await expect(row).toBeVisible();
@@ -41,20 +47,28 @@ test.describe('Counters', () => {
     await expect(page.getByRole('heading', { name: 'Done' })).toBeVisible();
     await expect(row.getByText('1×')).toBeVisible();
 
-    // A counter without a schedule lands in "No schedule" and every click counts.
-    await page.getByRole('button', { name: 'New…' }).click();
-    await expect(page.getByText('New Counter')).toBeVisible();
-    const titleInput = page.locator('label', { hasText: 'Title' }).locator('xpath=..').locator('input');
-    await titleInput.fill('Pushups');
-    await page.getByRole('combobox').first().click();
-    await page.getByRole('option', { name: 'No repeat' }).click();
-    await page.getByRole('button', { name: 'Save' }).click();
+    // "No repeat" (the default) makes a schedule-less tally where every click counts.
+    await pickRepeat('No repeat');
+    await input.fill('Pushups');
+    await page.getByRole('button', { name: 'Add', exact: true }).click();
     const tally = page.locator('[data-testid="counter-list"] div', { hasText: 'Pushups' }).first();
     await expect(tally).toHaveAttribute('data-status', 'tally');
     await expect(page.getByRole('heading', { name: 'No schedule' })).toBeVisible();
     await tally.click();
     await tally.click();
     await expect(tally.getByText('2×')).toBeVisible();
+
+    // "Other…" opens the editor pre-filled; saving creates the item and returns
+    // focus to the quick-add input so another can be added immediately.
+    const titleInput = page.locator('label', { hasText: 'Title' }).locator('xpath=..').locator('input');
+    await pickRepeat('Other…');
+    await input.fill('Meditate');
+    await page.getByRole('button', { name: 'Add', exact: true }).click();
+    await expect(page.getByText('New Counter')).toBeVisible();
+    await expect(titleInput).toHaveValue('Meditate');
+    await page.getByRole('button', { name: 'Save' }).click();
+    await expect(page.locator('[data-testid="counter-list"]').getByText('Meditate')).toBeVisible();
+    await expect(input).toBeFocused();
 
     // Edit via the pencil: retitle and save.
     await tally.getByRole('button', { name: 'Edit counter' }).click();

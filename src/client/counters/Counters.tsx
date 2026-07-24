@@ -12,6 +12,7 @@ import { DocLoader } from '../shared/useDocument';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
 import { DeleteButton } from '@/components/ui/delete-button';
 import type { CounterEvent } from './schema';
 import { sortedCounters, metMissedByWeek, isArchived, type CounterEntry, type CounterStatus } from './occurrences';
@@ -66,6 +67,12 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
   const [events, setEvents] = useState<Record<string, CounterEvent>>({});
   const [editorState, setEditorState] = useState<EditorState | null>(null);
   const [quickAddText, setQuickAddText] = useState('');
+  // Repeat cadence for the quick-add row. 'none' = a schedule-less tally,
+  // 'other' = open the full editor (pre-filled) on Add/Enter. Sticky across adds.
+  const [quickAddFreq, setQuickAddFreq] = useState<'none' | 'daily' | 'weekly' | 'monthly' | 'other'>('none');
+  // Set when the editor was opened from the quick-add "Other" flow so that
+  // saving returns focus to the quick-add input (to add another item).
+  const refocusAfterSaveRef = useRef(false);
   const [showValidation, setShowValidation] = useState(false);
   // Re-derive "today" when the clock is read; a minute tick keeps statuses fresh
   // across midnight without re-rendering on every click.
@@ -100,6 +107,12 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
       d.events[uid] = clean;
     }, uid, data);
     setEditorState(null);
+    // Quick-add "Other" flow: after saving, put focus back on the quick-add
+    // input so the user can immediately type another item.
+    if (refocusAfterSaveRef.current) {
+      refocusAfterSaveRef.current = false;
+      setTimeout(() => document.getElementById('counter-quick-add')?.focus(), 0);
+    }
   }, [docId]);
 
   const deleteCounter = useCallback((uid: string) => {
@@ -140,19 +153,35 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
     setEditorState({ uid: uid!, event: event!, isNew });
   }, []);
 
+  // Open the editor for a brand-new item with its title pre-filled (the
+  // quick-add "Other" flow). Flags refocus so saving returns to the input.
+  const openEditorForNew = useCallback((title: string) => {
+    refocusAfterSaveRef.current = true;
+    setEditorState({ uid: generateUid(), event: { '@type': 'Event', title }, isNew: true });
+  }, []);
+
   const handleQuickAdd = useCallback(() => {
     const title = quickAddText.trim();
     if (!title) return;
-    // Quick-added counters default to a daily habit (no time window), anchored
-    // at today so history starts from creation.
+    if (quickAddFreq === 'other') {
+      openEditorForNew(title);
+      setQuickAddText('');
+      return;
+    }
+    // 'none' = a schedule-less tally (no start, no rule). daily/weekly/monthly
+    // create a bare recurrence anchored at today so history starts from creation;
+    // the user can refine interval/weekdays later via the editor.
+    const recurrenceRule = quickAddFreq === 'none'
+      ? undefined
+      : { '@type': 'RecurrenceRule' as const, frequency: quickAddFreq };
     saveCounter(generateUid(), {
       '@type': 'Event',
       title,
-      start: now.substring(0, 10),
-      recurrenceRule: { '@type': 'RecurrenceRule', frequency: 'daily' },
+      start: recurrenceRule ? now.substring(0, 10) : undefined,
+      recurrenceRule,
     });
     setQuickAddText('');
-  }, [quickAddText, saveCounter, now]);
+  }, [quickAddText, quickAddFreq, openEditorForNew, saveCounter, now]);
 
   // Presence + URL reflect the counter open in the editor.
   const focusPath: (string | number)[] | undefined = editorState ? ['events', editorState.uid] : undefined;
@@ -256,15 +285,25 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
       {canEdit && (
         <div className="flex items-center gap-2 mb-3">
           <Input
+            id="counter-quick-add"
             autoFocus
-            placeholder="Add a daily counter..."
+            placeholder="Add a todo/counter..."
             value={quickAddText}
             onInput={(e: any) => setQuickAddText(e.currentTarget.value)}
             onKeyDown={(e: any) => { if (e.key === 'Enter') handleQuickAdd(); }}
             className="flex-1"
           />
+          <Select value={quickAddFreq} onValueChange={(v: string) => setQuickAddFreq((v || 'none') as any)}>
+            <SelectTrigger className="w-36" aria-label="Repeat"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="none">No repeat</SelectItem>
+              <SelectItem value="daily">Daily</SelectItem>
+              <SelectItem value="weekly">Weekly</SelectItem>
+              <SelectItem value="monthly">Monthly</SelectItem>
+              <SelectItem value="other">Other…</SelectItem>
+            </SelectContent>
+          </Select>
           <Button onClick={handleQuickAdd}>Add</Button>
-          <Button variant="outline" onClick={() => openEditor(null, null)}>New…</Button>
         </div>
       )}
 
