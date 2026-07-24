@@ -9,6 +9,7 @@ import { LinkDevicePage } from './settings/LinkDevicePage';
 import { LinkDeviceSharePage } from './settings/LinkDeviceSharePage';
 import { AddFriendPage } from './settings/AddFriendPage';
 import { ShareWithFriendPage } from './settings/ShareWithFriendPage';
+import { ConnectionDebug } from './debug/ConnectionDebug';
 import { hashHistory } from './hash-history';
 import { Notifications } from './components/Notifications';
 import { Toaster } from './components/ui/toast';
@@ -20,6 +21,7 @@ export function App() {
     <Router history={hashHistory}>
       <Home path="/" />
       <Settings path="/settings" />
+      <ConnectionDebug path="/connection" />
       <Contacts path="/contacts" />
       <ShareWithFriendPage path="/add-friend" />
       <LinkDeviceSharePage path="/link-device" />

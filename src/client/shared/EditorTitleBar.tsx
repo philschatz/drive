@@ -1,5 +1,6 @@
 import type { ComponentChildren } from 'preact';
-import { useWsStatus, usePeerTransports, getWorkerPeerId } from './automerge';
+import { usePeerTransports, getWorkerPeerId } from './automerge';
+import { ConnectionStatus } from './ConnectionStatus';
 import { getWorkerUserGroupId } from '../worker-api';
 import { peerDisplayName, peerIdentityKey, PeerDot, type PresenceState } from './presence';
 import { AccessControl } from '../components/AccessControl';
@@ -50,7 +51,6 @@ export function EditorTitleBar<P extends PeerLike>({
   validationCount?: number;
   children?: ComponentChildren;
 }) {
-  const connected = useWsStatus();
   const transports = usePeerTransports();
   const { access } = useAccess(docId);
 
@@ -114,12 +114,7 @@ export function EditorTitleBar<P extends PeerLike>({
           })()}
         </div>
 
-        <span
-          className="text-xs text-muted-foreground whitespace-nowrap"
-          title={connected ? `Me: ${getWorkerPeerId()}` : 'Disconnected from server'}
-        >
-          {connected ? 'Connected' : 'Disconnected'}
-        </span>
+        <ConnectionStatus />
 
         {/* Access badge + sharing button — one fixed spot for every access level
             (next to the title the badge would drift with the flex-1 title input). */}

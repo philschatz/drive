@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'preact/hooks';
-import { useConnectionStatus, usePeerList, usePeerTransports } from '../shared/automerge';
+import { usePeerList, usePeerTransports } from '../shared/automerge';
+import { ConnectionStatus } from '../shared/ConnectionStatus';
 import { createDoc, updateDoc, subscribeQuery, fetchDocList, archiveDoc, onDocListUpdated, onUnseenChangesUpdated, getUnseenChanges, HOME_SUMMARY_QUERY } from '../worker-api';
 import { getMyAccess, onKeyhiveStateChanged } from '../shared/keyhive-api';
 import { PeerDot } from '../shared/presence';
@@ -49,7 +50,6 @@ export function Home({ path }: { path?: string }) {
   const [error, setError] = useState('');
   const [importStatus, setImportStatus] = useState<{ label: string; progress: number } | null>(null);
   const [listLoading, setListLoading] = useState(true);
-  const connected = useConnectionStatus();
   const repoPeers = usePeerList();
   const transports = usePeerTransports();
 
@@ -741,12 +741,7 @@ export function Home({ path }: { path?: string }) {
     <div>
       <div className="flex items-center gap-2 mb-4">
         <h1 className="text-2xl font-bold">Automerge Documents</h1>
-        <div
-          className="w-2 h-2 rounded-full shrink-0"
-          style={{ backgroundColor: connected ? '#4caf50' : '#f44336' }}
-          title={connected ? 'Connected to server' : 'Disconnected from server'}
-        />
-        <span className="text-xs text-muted-foreground">{connected ? 'Connected' : 'Disconnected'}</span>
+        <ConnectionStatus showDot />
         {repoPeers.map(peerId => (
           <PeerDot key={peerId} peerId={peerId} direct={transports[peerId] === 'direct'} />
         ))}
