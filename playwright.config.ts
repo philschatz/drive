@@ -1,4 +1,5 @@
 import { defineConfig, devices } from '@playwright/test';
+import { existsSync } from 'fs';
 
 /**
  * Playwright config for two-peer async communication tests.
@@ -10,13 +11,16 @@ import { defineConfig, devices } from '@playwright/test';
  * src/client/test-bridge.ts, which is included in production builds).
  *
  * On NixOS the browsers Playwright downloads won't run, so we point at the
- * system Chromium. Override with CHROMIUM_BIN if it lives elsewhere.
+ * system Chromium. Override with CHROMIUM_BIN if it lives elsewhere. When
+ * neither exists (e.g. CI, where `npx playwright install chromium` provides the
+ * bundled browser), leave executablePath undefined so Playwright uses its own.
  */
 const chromiumPath =
   process.env.CHROMIUM_BIN || '/run/current-system/sw/bin/chromium';
+const executablePath = existsSync(chromiumPath) ? chromiumPath : undefined;
 
-// Run against the built app served by the production server (like Cypress),
-// on a non-3000 port so it never collides with a running `npm run dev`.
+// Run against the built app served by the production server, on a non-3000 port
+// so it never collides with a running `npm run dev`.
 const PORT = Number(process.env.PW_PORT) || 4445;
 const baseURL = `http://localhost:${PORT}`;
 
@@ -33,9 +37,9 @@ export default defineConfig({
     baseURL,
     trace: 'retain-on-failure',
     launchOptions: {
-      executablePath: chromiumPath,
+      executablePath,
       // The combined automerge + keyhive WASM modules exceed the default
-      // renderer heap (~4 GB). Mirror cypress.config.ts.
+      // renderer heap (~4 GB).
       args: [
         '--js-flags=--max-old-space-size=8192',
         '--no-sandbox',
@@ -55,7 +59,7 @@ export default defineConfig({
   ],
   // Build the frontend, then serve the built app (dist/) via the production
   // server — which also attaches the in-memory WebSocket relay the peers sync
-  // through. Mirrors `test:cy`. `reuseExistingServer` lets a developer pre-run
+  // through. `reuseExistingServer` lets a developer pre-run
   // `PORT=4445 npm start` (after a build) to skip the rebuild while iterating.
   webServer: {
     command: `npm run build && PORT=${PORT} npm start`,
