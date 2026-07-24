@@ -3,7 +3,7 @@ import '@schedule-x/theme-default/dist/index.css';
 import './calendar.css';
 import type { PeerState } from '../shared/automerge';
 import { openDoc, subscribeQuery, updateDoc, queryDoc, deepAssign, fetchDocList } from '../worker-api';
-import { initPresence, type PresenceState } from '../shared/presence';
+import { initPresence, colorForKey, type PresenceState } from '../shared/presence';
 import { EditorTitleBar } from '../shared/EditorTitleBar';
 import type { CalendarEvent } from './schema';
 import { mapMultiCalToSXEvents, createMultiCalSXCalendar } from './schedule-x';
@@ -164,7 +164,7 @@ export function AllCalendars({ path }: { path?: string }) {
           loaded.push({
             docId: id,
             name: doc.name || 'Untitled',
-            color: doc.color || '#039be5',
+            color: doc.color || colorForKey(id),
             description: doc.description || '',
             timeZone: doc.timeZone || defaultTZ,
             events: doc.events || {},
@@ -246,7 +246,7 @@ export function AllCalendars({ path }: { path?: string }) {
         if (!result || !mounted) return;
         cal.events = result.events || {};
         cal.name = result.name || 'Untitled';
-        cal.color = result.color || '#039be5';
+        cal.color = result.color || colorForKey(cal.docId);
         cal.description = result.description || '';
 
         setCalendars(prev => prev.map(c =>

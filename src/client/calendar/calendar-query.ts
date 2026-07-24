@@ -32,6 +32,6 @@ export function calendarQuery(rangeStart: string, rangeEnd: string): string {
     '" and .value.start[:10] <= "' + rangeEnd + '"';
   return (
     '{ "@type": .["@type"], events: (.events // {} | to_entries | map(select((' + recurring + ') or (' + nonRecurring +
-    '))) | from_entries), name: (.name // "Calendar"), description: (.description // ""), color: (.color // "#039be5"), timeZone: .timeZone }'
+    '))) | from_entries), name: (.name // "Calendar"), description: (.description // ""), color: .color, timeZone: .timeZone }'
   );
 }

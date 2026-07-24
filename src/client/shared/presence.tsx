@@ -35,11 +35,16 @@ export function peerDisplayName(peerId: string, userGroupId?: string | null): st
   return getContactName(key) || `${key.slice(0, 8)}…`;
 }
 
-export function peerColor(peerId: string, userGroupId?: string | null): string {
-  const key = peerIdentityKey(peerId, userGroupId);
+/** Deterministic palette color for an arbitrary stable key (peer identity,
+ *  calendar docId, …) — same palette the peer dots use. */
+export function colorForKey(key: string): string {
   let hash = 0;
   for (let i = 0; i < key.length; i++) hash = (hash * 31 + key.charCodeAt(i)) | 0;
   return PEER_COLORS[Math.abs(hash) % PEER_COLORS.length];
+}
+
+export function peerColor(peerId: string, userGroupId?: string | null): string {
+  return colorForKey(peerIdentityKey(peerId, userGroupId));
 }
 
 export function initPresence<S extends Record<string, any>>(

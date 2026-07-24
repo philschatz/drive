@@ -113,12 +113,15 @@ describe('calendarQuery', () => {
     expect(result.timeZone).toBe('America/New_York');
   });
 
-  it('returns defaults for missing metadata', async () => {
+  it('returns defaults for missing metadata (raw null color — the view picks one)', async () => {
     const query = calendarQuery('2026-01-01', '2026-12-31');
     const result = await one(query, { events: {} });
     expect(result.name).toBe('Calendar');
     expect(result.description).toBe('');
-    expect(result.color).toBe('#039be5');
+    // calendarQuery no longer bakes in a color default; a missing color comes
+    // back as null so the consuming view can choose one (e.g. AllCalendars picks
+    // a palette color per docId).
+    expect(result.color).toBeNull();
     expect(result.events).toEqual({});
   });
 
