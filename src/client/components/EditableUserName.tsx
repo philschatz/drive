@@ -1,7 +1,7 @@
 import { useState, useRef } from 'preact/hooks';
 import { getContactName, setContactName } from '../contact-names';
 
-export function EditableName({ agentId, suffix }: { agentId: string; suffix?: any }) {
+export function EditableUserName({ agentId, suffix }: { agentId: string; suffix?: any }) {
   const saved = getContactName(agentId);
   const [draft, setDraft] = useState(saved || '');
   // Sync draft when the cache populates after mount (e.g. worker push arrives late)
@@ -11,7 +11,7 @@ export function EditableName({ agentId, suffix }: { agentId: string; suffix?: an
 
   const save = () => {
     setContactName(agentId, draftRef.current).catch(err =>
-      console.error('[EditableName] Failed to save contact name:', err)
+      console.error('[EditableUserName] Failed to save contact name:', err)
     );
   };
 

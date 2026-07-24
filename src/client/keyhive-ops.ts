@@ -337,11 +337,13 @@ export class KeyhiveOps {
     if (!found) throw new Error('Device not found in group');
     const access = this.bridge.Access.tryFromString(newRole);
     if (!access) throw new Error(`Invalid role: ${newRole}`);
+    // Reuse the resolved member handle for both revoke and re-add, exactly like the
+    // doc-level changeRole. A fresh kh.getAgent(Identifier) lookup throws "Identifier
+    // not found" for devices whose Individual isn't globally retrievable (the current
+    // device, rendezvous-linked devices) — and it would run only after revokeMember
+    // already applied, leaving the change half-done.
     await this.kh.revokeMember(found.who, true, group.toMembered());
-    const id = new this.bridge.Identifier(targetBytes);
-    const agent = await this.kh.getAgent(id);
-    if (!agent) throw new Error('Device agent not found');
-    await this.kh.addMember(agent, group.toMembered(), access, []);
+    await this.kh.addMember(found.who, group.toMembered(), access, []);
     await this.fx.persist();
     this.fx.syncKeyhive();
     this.fx.forceResyncAllPeers();

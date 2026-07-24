@@ -28,6 +28,7 @@ import {
   clearAllCaches,
 } from '../worker-api';
 import { PeerDot, peerDisplayName } from '../shared/presence';
+import { EditableDeviceName } from '@/components/EditableDeviceName';
 import { PRODUCTION_RELAY_URL } from '../../shared/relay-identity';
 import { isDebugEnabled } from '../idb-storage';
 
@@ -51,6 +52,11 @@ export function ConnectionDebug({ path }: { path?: string }) {
 
   useEffect(() => { document.title = 'Connection Debugging'; }, []);
   useEffect(() => onWorkerError(setWorkerError), []);
+
+  // This device's peerId is "<base64 agentId>-drive"; the prefix is the agentId
+  // its device name is keyed by (base64 never contains '-', so the split is exact).
+  const myPeerId = getWorkerPeerId();
+  const myAgentId = myPeerId ? myPeerId.split('-')[0] : '';
 
   const handleToggleDebug = (checked: boolean) => {
     setDebugEnabled(checked);
@@ -93,17 +99,25 @@ export function ConnectionDebug({ path }: { path?: string }) {
           <dd className="font-mono break-all">{relayUrl()}</dd>
         </dl>
         <p className="text-xs text-muted-foreground mt-2">
-          This tracks the WebSocket to the relay. When it is open, your changes sync even if
-          no other device is currently online.
+          Edits are always saved on this device and sync to your other devices and contacts
+          once one is online. The relay only routes changes between devices — it never stores them.
         </p>
       </section>
 
       {/* This device */}
       <section className="mb-6">
         <h2 className="text-lg font-semibold mb-2">This device</h2>
-        <dl className="text-sm grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+        <dl className="text-sm grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 items-center">
+          <dt className="text-muted-foreground">Name</dt>
+          <dd>
+            {/* peerId is "<base64 agentId>-drive"; base64 has no '-', so the
+                prefix is the device agentId this name is keyed by. */}
+            {myAgentId
+              ? <EditableDeviceName agentId={myAgentId} isMe />
+              : <span className="text-muted-foreground">(not ready)</span>}
+          </dd>
           <dt className="text-muted-foreground">Peer ID</dt>
-          <dd className="font-mono break-all">{getWorkerPeerId() || '(not ready)'}</dd>
+          <dd className="font-mono break-all">{myPeerId || '(not ready)'}</dd>
           <dt className="text-muted-foreground">User group</dt>
           <dd className="font-mono break-all">{getWorkerUserGroupId() || '(none)'}</dd>
         </dl>
@@ -115,8 +129,7 @@ export function ConnectionDebug({ path }: { path?: string }) {
           Peer devices connected: {peers.length}
         </h2>
         <p className="text-xs text-muted-foreground mb-2">
-          Other devices/contacts currently reachable. The relay server itself is not counted
-          here. {peerConnected ? 'At least one peer is online.' : 'No peers online right now.'}
+          Other devices/contacts currently reachable. {peerConnected ? 'At least one peer is online.' : 'No peers online right now.'}
         </p>
         {peers.length === 0 ? (
           <p className="text-sm text-muted-foreground">No peers.</p>
@@ -125,11 +138,14 @@ export function ConnectionDebug({ path }: { path?: string }) {
             {peers.map((peerId) => (
               <li key={peerId} className="flex items-center gap-2 text-sm">
                 <PeerDot peerId={peerId} direct={transports[peerId] === 'direct'} />
-                <span>{peerDisplayName(peerId)}</span>
-                <span className="text-xs text-muted-foreground">
-                  ({transports[peerId] === 'direct' ? 'direct (P2P)' : 'via relay'})
+                {/* peerId is "<base64 agentId>-drive"; the prefix is the device
+                    agentId. The device name is editable here too (a name for a
+                    peer we didn't learn at link time is a local label). */}
+                <EditableDeviceName agentId={peerId.split('-')[0]} />
+                <span className="text-xs text-muted-foreground shrink-0">
+                  {transports[peerId] === 'direct' ? 'direct (P2P)' : 'via relay'}
                 </span>
-                <span className="font-mono text-[10px] text-muted-foreground break-all ml-auto">
+                <span className="font-mono text-[10px] text-muted-foreground break-all shrink-0 max-w-[35%] truncate">
                   {peerId}
                 </span>
               </li>

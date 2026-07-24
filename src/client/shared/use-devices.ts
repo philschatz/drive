@@ -17,7 +17,9 @@ import {
   onRendezvousEvent,
   type DeviceInfo,
 } from './keyhive-api';
-import { usePeerList, usePeerTransports, type PeerTransport } from '../worker-api';
+import { usePeerList, usePeerTransports, onDeviceNamesUpdated, type PeerTransport } from '../worker-api';
+import { getDeviceName } from '../device-names';
+import { generateDefaultDeviceName } from '../lib/device-name';
 
 export function useDevices(opts?: {
   onError?: (msg: string) => void;
@@ -31,7 +33,15 @@ export function useDevices(opts?: {
 
   const refresh = useCallback(async () => {
     try {
-      setDevices(await listDevices());
+      const list = await listDevices();
+      // Enrich each row with its friendly name from the device-names cache. A
+      // remote device only has a name if we learned it at link time (no default
+      // — we can't sniff another device's browser); our own row falls back to a
+      // generated default so it always reads as "💻 Chrome" until renamed.
+      setDevices(list.map(d => ({
+        ...d,
+        name: getDeviceName(d.agentId) || (d.isMe ? generateDefaultDeviceName() : undefined),
+      })));
     } catch (err: any) {
       cb.current?.onError?.(err.message);
     }
@@ -39,11 +49,13 @@ export function useDevices(opts?: {
 
   useEffect(() => { refresh(); }, [refresh]);
 
-  // Refresh when a link completes or membership syncs over the relay.
+  // Refresh when a link completes, membership syncs over the relay, or a device
+  // name arrives (the peer's name is pushed just after linkDevice on both sides).
   useEffect(() => {
     const offRdv = onRendezvousEvent((e) => { if (e.status === 'linked') refresh(); });
     const offState = onKeyhiveStateChanged(() => refresh());
-    return () => { offRdv(); offState(); };
+    const offNames = onDeviceNamesUpdated(() => refresh());
+    return () => { offRdv(); offState(); offNames(); };
   }, [refresh]);
 
   const removeDevice = useCallback(async (agentId: string) => {

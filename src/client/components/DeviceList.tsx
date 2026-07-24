@@ -12,6 +12,7 @@
 
 import { DeleteButton } from '@/components/ui/delete-button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { EditableDeviceName } from '@/components/EditableDeviceName';
 import type { DeviceInfo } from '@/shared/keyhive-api';
 import type { DeviceStatus } from '@/shared/use-devices';
 
@@ -74,9 +75,10 @@ export function DeviceList({ devices, onRemove, onChangeRole, statuses }: {
               <span className="material-symbols-outlined text-muted-foreground" style={{ fontSize: 16 }}>
                 {dev.isMe ? 'smartphone' : 'devices'}
               </span>
-              <span className="text-sm flex-1 truncate font-mono" title={dev.agentId}>
-                {dev.agentId.slice(0, 16)}...
-              </span>
+              {/* Every device is inline-editable. Your own row defaults its
+                  placeholder to the generated name (📱/💻 + browser); a remote
+                  device's name (shared at link time) can be relabelled locally. */}
+              <EditableDeviceName agentId={dev.agentId} isMe={dev.isMe} />
               {statuses && !dev.isMe && (
                 <span className="flex items-center gap-1">
                   <DeviceStatusDot status={statuses[dev.agentId]} />

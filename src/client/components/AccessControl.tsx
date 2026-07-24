@@ -21,7 +21,7 @@ import {
   type MemberInfo,
 } from '../shared/keyhive-api';
 import { getContactName, mergeCachedContacts } from '../contact-names';
-import { EditableName } from './EditableName';
+import { EditableUserName } from './EditableUserName';
 import { accessTitle } from './AccessIcon';
 
 interface AccessControlProps {
@@ -150,6 +150,10 @@ export function AccessControl({ docId, access: accessProp }: AccessControlProps)
     }
   };
 
+  // Always list yourself first, regardless of role (sort is stable, so the
+  // remaining members keep the order getDocMembers returned them in).
+  const orderedMembers = [...members].sort((a, b) => (a.isMe ? 0 : 1) - (b.isMe ? 0 : 1));
+
   return (
     <>
       <button
@@ -191,7 +195,7 @@ export function AccessControl({ docId, access: accessProp }: AccessControlProps)
             {members.length === 0 && (
               <p className="text-xs text-muted-foreground">No members found.</p>
             )}
-            {members.map(member => (
+            {orderedMembers.map(member => (
               <div key={member.agentId} className="flex items-center gap-2 py-1.5 border-b border-border">
                 <span
                   className="material-symbols-outlined text-muted-foreground"
@@ -200,7 +204,7 @@ export function AccessControl({ docId, access: accessProp }: AccessControlProps)
                 >
                   {member.type === 'group' ? 'group' : 'smartphone'}
                 </span>
-                <EditableName
+                <EditableUserName
                   agentId={member.agentId}
                   suffix={member.isMe ? <span className="text-xs text-muted-foreground ml-1">(you)</span> : undefined}
                 />

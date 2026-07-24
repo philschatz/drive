@@ -42,8 +42,8 @@ jest.mock('@/components/ui/select', () => ({
   SelectValue: () => null,
 }));
 
-jest.mock('./EditableName', () => ({
-  EditableName: ({ value }: any) => <span>{value}</span>,
+jest.mock('./EditableUserName', () => ({
+  EditableUserName: ({ value }: any) => <span>{value}</span>,
 }));
 
 import { AccessControl } from './AccessControl';

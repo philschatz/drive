@@ -39,6 +39,10 @@ export type MainToWorker =
   // thread can await persistence and surface failures instead of losing them.
   | { type: 'set-contact-name'; id: number; agentId: string; name: string }
   | { type: 'remove-contact-name'; id: number; agentId: string }
+  // Device name mutations (IDB-backed, keyed by device agentId). Same shape as
+  // the contact-name messages; `id` correlates the awaited persistence result.
+  | { type: 'set-device-name'; id: number; agentId: string; name: string }
+  | { type: 'remove-device-name'; id: number; agentId: string }
   // Keyhive operations
   | { type: 'kh-get-identity'; id: number }
   | { type: 'kh-get-contact-card'; id: number }
@@ -58,8 +62,8 @@ export type MainToWorker =
   // Encrypted relay rendezvous (large-payload contact exchange via QR id+key)
   | { type: 'kh-rdv-create-share'; id: number; displayName?: string }
   | { type: 'kh-rdv-receive'; id: number; rendezvousId: string; key: string; displayName?: string }
-  | { type: 'kh-rdv-link-create'; id: number }
-  | { type: 'kh-rdv-link-join'; id: number; rendezvousId: string; key: string }
+  | { type: 'kh-rdv-link-create'; id: number; deviceName?: string }
+  | { type: 'kh-rdv-link-join'; id: number; rendezvousId: string; key: string; deviceName?: string }
   | { type: 'kh-rdv-cancel'; rendezvousId: string }
   | { type: 'open-doc'; id: number; docId: string }
   | { type: 'subscribe-validation'; docId: string }
@@ -96,6 +100,7 @@ export type WorkerToMain =
   // Doc list / contact names push
   | { type: 'doc-list-updated'; list: Array<{ id: string; type?: string; name?: string; sharingGroupId?: string }> }
   | { type: 'contact-names-updated'; names: Record<string, string> }
+  | { type: 'device-names-updated'; names: Record<string, string> }
   // Per-doc "has new changes since last viewed" state, pushed as a full map on
   // every transition. Absent docId = unknown (the doc has a last-viewed record
   // but hasn't loaded yet) — the UI shows no dot for absent entries.

@@ -99,11 +99,12 @@ export function Settings({ path }: { path?: string }) {
 
   const handleExport = async () => {
     try {
-      const [docList, contactNames] = await Promise.all([
+      const [docList, contactNames, deviceNames] = await Promise.all([
         idbGet<unknown[]>(KEYS.docIds).then(v => v ?? []),
         idbGet<Record<string, string>>(KEYS.contactNames).then(v => v ?? {}),
+        idbGet<Record<string, string>>(KEYS.deviceNames).then(v => v ?? {}),
       ]);
-      const payload = { version: 1, exportedAt: new Date().toISOString(), docList, contactNames };
+      const payload = { version: 1, exportedAt: new Date().toISOString(), docList, contactNames, deviceNames };
       const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -132,9 +133,13 @@ export function Settings({ path }: { path?: string }) {
         if (typeof payload.contactNames !== 'object' || Array.isArray(payload.contactNames))
           throw new Error('Invalid backup: contactNames must be an object.');
         // Legacy backups may carry an `invites` field — it's no longer used, so ignore it.
+        // `deviceNames` was added later; older backups omit it, so default to {}.
+        const deviceNames = (payload.deviceNames && typeof payload.deviceNames === 'object' && !Array.isArray(payload.deviceNames))
+          ? payload.deviceNames : {};
         await Promise.all([
           idbSet(KEYS.docIds, payload.docList),
           idbSet(KEYS.contactNames, payload.contactNames),
+          idbSet(KEYS.deviceNames, deviceNames),
         ]);
         window.location.reload();
       } catch (err: any) {

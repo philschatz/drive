@@ -11,7 +11,8 @@ import { Button } from '@/components/ui/button';
 import { Alert } from '@/components/ui/alert';
 import { DeviceList } from '@/components/DeviceList';
 import { useDevices, useDeviceStatuses } from '../shared/use-devices';
-import { rendezvousCreateDeviceLink } from '../shared/keyhive-api';
+import { rendezvousCreateDeviceLink, getIdentity } from '../shared/keyhive-api';
+import { resolveDeviceName } from '../device-names';
 import { useWsStatus } from '../shared/automerge';
 import { RendezvousShare } from './RendezvousShare';
 import { buildLinkDeviceRendezvousUrl } from './LinkDevicePage';
@@ -72,7 +73,11 @@ export function LinkDeviceSharePage({ path }: { path?: string }) {
           <div className="mt-2">
             <RendezvousShare
               key={started}
-              create={rendezvousCreateDeviceLink}
+              create={async () => {
+                // Share this device's name so the new device can label us.
+                const { agentId } = await getIdentity();
+                return rendezvousCreateDeviceLink(resolveDeviceName(agentId));
+              }}
               buildUrl={buildLinkDeviceRendezvousUrl}
               waitingLabel="Waiting for your new device to open the link…"
               transferLabel="Exchanging keys with your new device…"

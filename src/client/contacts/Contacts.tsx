@@ -2,8 +2,8 @@ import { useState, useEffect, useCallback } from 'preact/hooks';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Alert } from '@/components/ui/alert';
 import { DeleteButton } from '@/components/ui/delete-button';
-import { EditableName } from '@/components/EditableName';
-import { getDocMembers, getKnownContacts } from '../shared/keyhive-api';
+import { EditableUserName } from '@/components/EditableUserName';
+import { getDocMembers, getKnownContacts, getIdentity } from '../shared/keyhive-api';
 import { keyhiveReady } from '../shared/automerge';
 import { fetchDocList } from '../worker-api';
 import { getContactName, getAllContactNames, removeContactName } from '../contact-names';
@@ -46,6 +46,10 @@ export function Contacts({ path }: { path?: string }) {
     try {
       // Ensure worker has pushed contact names before we read the cache
       await keyhiveReady;
+      // Our own name is stored in the contact-names cache keyed by our own
+      // user-group id (that's how "Your Name" is saved), so we must exclude it
+      // below — otherwise we'd list ourselves as a contact.
+      const { userGroupId: myGroupId } = await getIdentity();
       const docs = await fetchDocList();
       // getKnownContacts is the source of truth for *who* is a contact — it surfaces
       // received friends even before any doc is shared (mirrors the Share panel). The
@@ -102,6 +106,7 @@ export function Contacts({ path }: { path?: string }) {
       // keyed by user-group id, so every stored contact is a group.
       const allNames = getAllContactNames();
       for (const groupId of Object.keys(allNames)) {
+        if (groupId === myGroupId) continue; // never list ourselves
         if (!map.has(groupId)) {
           map.set(groupId, { agentId: groupId, isGroup: true, docs: [], deviceIds: [] });
         }
@@ -184,7 +189,7 @@ export function Contacts({ path }: { path?: string }) {
                 >
                   {contact.isGroup ? 'group' : 'smartphone'}
                 </span>
-                <EditableName agentId={contact.agentId} />
+                <EditableUserName agentId={contact.agentId} />
                 <span
                   className="inline-flex items-center gap-0.5 text-xs text-muted-foreground"
                   title={`Devices:\n${contact.deviceIds

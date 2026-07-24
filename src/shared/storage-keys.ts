@@ -26,6 +26,13 @@ export const KEYS = {
    */
   archivedDocIds:     'data:archived-doc-ids',
   contactNames:       'data:contact-names',
+  /**
+   * Friendly per-device names, keyed by device agentId (parallel to contactNames,
+   * which is keyed by user-group id). Holds this device's own name plus peer
+   * device names learned during the device-link rendezvous. A blank/absent entry
+   * falls back to a generated default (see src/client/lib/device-name.ts).
+   */
+  deviceNames:        'data:device-names',
   knownContactGroups: 'data:known-contact-groups',
   /**
    * Per-device seen state: automerge docId → the doc's heads (sorted) when a

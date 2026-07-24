@@ -14,7 +14,8 @@
 import { useState, useCallback, useEffect } from 'preact/hooks';
 import { Button } from '@/components/ui/button';
 import { QRCodeDisplay } from '@/components/ui/qr-code';
-import { receiveContactCard, linkDevice, getLinkPayload, rendezvousJoinDeviceLink, onRendezvousEvent } from '../shared/keyhive-api';
+import { receiveContactCard, linkDevice, getLinkPayload, rendezvousJoinDeviceLink, onRendezvousEvent, getIdentity } from '../shared/keyhive-api';
+import { resolveDeviceName } from '../device-names';
 import type { RendezvousStatus } from '../worker-api';
 import { RendezvousProgress } from './RendezvousProgress';
 import { parseRendezvousToken, buildRendezvousUrl } from '../../shared/rendezvous-url';
@@ -110,7 +111,9 @@ export function LinkDevicePage({ cardData }: LinkDevicePageProps) {
         // Preferred path: bidirectional handshake over the encrypted relay
         // rendezvous (the original device's card is too large for a QR).
         setStatus('Linking with your other device… (keep both open)');
-        await rendezvousJoinDeviceLink(rdv.rendezvousId, rdv.key);
+        // Share this device's name so the original device can label us.
+        const { agentId } = await getIdentity();
+        await rendezvousJoinDeviceLink(rdv.rendezvousId, rdv.key, resolveDeviceName(agentId));
         setStatus('');
         setDone(true);
         return;

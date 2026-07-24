@@ -13,6 +13,7 @@ import type { RendezvousStatus } from '../shared/rendezvous-protocol';
 export type { RendezvousStatus } from '../shared/rendezvous-protocol';
 import { idbDelPrefix, settingGet, settingSetSync, closeDb, CACHE_PREFIX } from './idb-storage';
 import { setContactNamesDispatch, applyContactNamesFromWorker } from './contact-names';
+import { setDeviceNamesDispatch, applyDeviceNamesFromWorker } from './device-names';
 import type { ArchiveDocResult } from './shared/keyhive-types';
 import { startWebRTCBridge } from './webrtc-bridge';
 import { WorkerClient } from './worker-client';
@@ -65,6 +66,19 @@ export function getUnseenChanges(): Record<string, boolean> {
   return { ...unseenChanges };
 }
 
+// ── Device-name push (cache lives in device-names.ts; this just notifies UI) ──
+const deviceNamesListeners = new Set<() => void>();
+
+/**
+ * Subscribe to device-name changes (e.g. a peer's name learned during a device
+ * link). The cache in device-names.ts is already updated when this fires; the
+ * callback is just a re-render nudge. Returns a cleanup function.
+ */
+export function onDeviceNamesUpdated(fn: () => void): () => void {
+  deviceNamesListeners.add(fn);
+  return () => { deviceNamesListeners.delete(fn); };
+}
+
 /**
  * Archive a doc: revoke the user's own access if possible, tombstone + purge it
  * locally either way. Resolves with whether access was truly 'revoked' (gone
@@ -98,6 +112,11 @@ const client = new WorkerClient(worker, { log: logSend });
 setContactNamesDispatch((type, agentId, name) =>
   // Route through request() so the caller can await persistence and a failed write
   // rejects (rather than being a silent fire-and-forget that drops the data).
+  request<void>(type, { agentId, ...(name !== undefined ? { name } : {}) })
+);
+
+// Same pattern for device names (keyed by device agentId).
+setDeviceNamesDispatch((type, agentId, name) =>
   request<void>(type, { agentId, ...(name !== undefined ? { name } : {}) })
 );
 
@@ -283,6 +302,10 @@ worker.onmessage = (e: MessageEvent<WorkerToMain>) => {
       break;
     case 'contact-names-updated':
       applyContactNamesFromWorker(msg.names);
+      break;
+    case 'device-names-updated':
+      applyDeviceNamesFromWorker(msg.names);
+      for (const fn of deviceNamesListeners) fn();
       break;
     case 'unseen-changes-updated':
       unseenChanges = msg.unseen;
@@ -618,6 +641,11 @@ export interface DeviceInfo {
   agentId: string;
   role: MemberRole;
   isMe?: boolean;
+  /**
+   * Friendly device name. Main-thread-enriched (see use-devices.ts) from the
+   * device-names cache — the worker's listGroupDevices does not populate it.
+   */
+  name?: string;
 }
 
 export interface IdentityInfo {
@@ -703,13 +731,13 @@ export function rendezvousReceive(
  * get the tiny {id,key} for the QR. The new device's `rendezvousJoinDeviceLink`
  * completes the handshake; listen via onRendezvousEvent for status 'linked'.
  */
-export function rendezvousCreateDeviceLink(): Promise<{ rendezvousId: string; key: string; payloadBytes: number }> {
-  return khRequest('kh-rdv-link-create');
+export function rendezvousCreateDeviceLink(deviceName?: string): Promise<{ rendezvousId: string; key: string; payloadBytes: number }> {
+  return khRequest('kh-rdv-link-create', { deviceName });
 }
 
 /** Device-link joiner (new device): adopt the original device's group over the rendezvous. */
-export function rendezvousJoinDeviceLink(rendezvousId: string, key: string): Promise<{ ok: boolean }> {
-  return khRequest('kh-rdv-link-join', { rendezvousId, key });
+export function rendezvousJoinDeviceLink(rendezvousId: string, key: string, deviceName?: string): Promise<{ ok: boolean }> {
+  return khRequest('kh-rdv-link-join', { rendezvousId, key, deviceName });
 }
 
 /** Abandon a rendezvous (e.g. the sharer navigates away). Fire-and-forget. */

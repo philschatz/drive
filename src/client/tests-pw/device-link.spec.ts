@@ -66,6 +66,95 @@ test('linking a new device converges both devices onto one user-group', async ({
 });
 
 /**
+ * Device names are exchanged both ways during the link rendezvous: each device
+ * passes its own name in, and afterwards each device's device-name store holds
+ * the OTHER device's name keyed by that device's agentId.
+ */
+test('linking a new device exchanges device names both ways', async ({ browser }) => {
+  let deviceA: Peer | undefined;
+  let deviceB: Peer | undefined;
+  try {
+    [deviceA, deviceB] = await Promise.all([newPeer(browser, 'deviceA'), newPeer(browser, 'deviceB')]);
+
+    const idA = await deviceA.call('getIdentity');
+    const idB = await deviceB.call('getIdentity');
+
+    const NAME_A = '💻 Laptop A';
+    const NAME_B = '📱 Phone B';
+
+    // A (original) creates the rendezvous, passing its own device name.
+    const { rendezvousId, key } = await deviceA.call('rendezvousCreateDeviceLink', NAME_A);
+    const linkedPromise = deviceA.page.evaluate(
+      (rid) => new Promise<string>((resolve) => {
+        const off = (window as any).__drive.onRendezvousEvent((e: any) => {
+          if (e.rendezvousId === rid && (e.status === 'linked' || e.status === 'error')) {
+            off(); resolve(e.status);
+          }
+        });
+      }),
+      rendezvousId,
+    );
+
+    // B (new) joins, passing its own device name.
+    await deviceB.call('rendezvousJoinDeviceLink', rendezvousId, key, NAME_B);
+    expect(await linkedPromise).toBe('linked');
+
+    // A learned B's name (keyed by B's agentId) …
+    await waitFor(
+      () => deviceA!.call('getAllDeviceNames'),
+      (names) => names[idB.agentId] === NAME_B,
+      { label: 'deviceA learns deviceB name' },
+    );
+    // … and B learned A's name (keyed by A's agentId).
+    await waitFor(
+      () => deviceB!.call('getAllDeviceNames'),
+      (names) => names[idA.agentId] === NAME_A,
+      { label: 'deviceB learns deviceA name' },
+    );
+
+    // And the Settings device list renders the learned name in an editable field
+    // (deviceA sees "Phone B" as an input value — every device row is editable).
+    await deviceA.page.evaluate(() => { location.hash = '#/settings'; });
+    await expect
+      .poll(
+        () => deviceA!.page.getByRole('textbox').evaluateAll(
+          (els) => els.map((e) => (e as HTMLInputElement).value),
+        ),
+        { timeout: 15_000 },
+      )
+      .toContain(NAME_B);
+
+    // A remote device row is editable: relabelling deviceB from deviceA's Settings
+    // persists locally (the reported gap — other devices used to be read-only).
+    const RENAMED_B = "Bob's phone";
+    const bInput = deviceA.page.getByTitle(idB.agentId);
+    await bInput.fill(RENAMED_B);
+    await bInput.blur();
+    await waitFor(
+      () => deviceA!.call('getAllDeviceNames'),
+      (names) => names[idB.agentId] === RENAMED_B,
+      { label: 'deviceA relabels deviceB locally' },
+    );
+
+    // Device names must survive a reload: the worker seeds the main-thread cache
+    // from IndexedDB on startup (else the field would fall back to a placeholder).
+    await deviceA.page.goto('/');
+    await deviceA.page.waitForFunction(() => !!(window as any).__drive, undefined, { timeout: 60_000 });
+    await deviceA.page.evaluate(() =>
+      Promise.all([(window as any).__drive.workerReady, (window as any).__drive.keyhiveReady]),
+    );
+    await waitFor(
+      () => deviceA!.call('getAllDeviceNames'),
+      (names) => names[idB.agentId] === RENAMED_B,
+      { label: 'deviceA device name persists across reload' },
+    );
+  } finally {
+    await deviceA?.close();
+    await deviceB?.close();
+  }
+});
+
+/**
  * Same convergence, but via the encrypted relay rendezvous (a single tiny QR, no
  * card embedded in the URL) — what the "Invite Another Device" UI now uses.
  */

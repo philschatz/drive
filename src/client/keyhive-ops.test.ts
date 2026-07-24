@@ -1880,6 +1880,25 @@ describe('KeyhiveOps', () => {
       expect(fx.calls.forceResyncAllPeers.length).toBeGreaterThan(resyncsBefore);
     });
 
+    it('changeDeviceRole round-trips a device (demote then re-promote) via the member handle', async () => {
+      // Regression: the re-add half must NOT call kh.getAgent(Identifier) — that
+      // throws "Identifier not found" for devices whose Individual isn't globally
+      // retrievable (the current/active device, rendezvous-linked devices), and it
+      // ran only after revokeMember already applied, so the change looked like it
+      // worked yet surfaced an error. Reusing the group member handle for both
+      // revoke and re-add fixes it; exercise re-add to BOTH read and admin here.
+      const { ops: a } = await createOps();
+      const { ops: b } = await createOps();
+      await a.ensureUserGroup({ create: true });
+      const bAgentId = await learnAgent(a, b);
+      await a.addDeviceToGroup(bAgentId);
+
+      await a.changeDeviceRole(bAgentId, 'read');
+      expect((await a.listGroupDevices()).find((d) => d.agentId === bAgentId)?.role).toBe('read');
+      await a.changeDeviceRole(bAgentId, 'admin');
+      expect((await a.listGroupDevices()).find((d) => d.agentId === bAgentId)?.role).toBe('admin');
+    });
+
     it('changeDeviceRole rejects an unknown device', async () => {
       const { ops: a } = await createOps();
       const { ops: b } = await createOps();

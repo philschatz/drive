@@ -24,6 +24,7 @@ import {
   type QueryCacheEntry,
 } from './storage-keys';
 import { createKeyhiveRepo } from './keyhive-repo';
+import { RELAY_PEER_ID } from './relay-identity';
 import type { EngineHost } from './engine-host';
 import type { MainToWorker, WorkerToMain } from './worker-protocol';
 
@@ -94,6 +95,19 @@ export function headsEqual(a: string[] | undefined, b: string[]): boolean {
   if (!a || a.length !== b.length) return false;
   const sa = [...a].sort(), sb = [...b].sort();
   return sa.every((h, i) => h === sb[i]);
+}
+
+/**
+ * Peers to surface as connected devices/contacts in the UI (counts + dots).
+ *
+ * The stateless relay completes the automerge-repo handshake with a real peerId
+ * (RELAY_PEER_ID, whose all-zero bytes decode to a valid keyhive Identifier — see
+ * relay-identity.ts), so keyhive's network adapter registers it as a peer-candidate
+ * and it lands in `repo.peers` like any device. It is a message router, not a
+ * device or contact, so it must be excluded from user-facing peer counts and dots.
+ */
+export function visiblePeerIds(repoPeers: readonly string[]): string[] {
+  return repoPeers.filter((p) => p !== RELAY_PEER_ID);
 }
 
 /** Peers seen within `staleMs` of `now`. Fresh iff now - lastSeen < staleMs. */
@@ -236,6 +250,30 @@ export class DriveEngine {
     // reappear (by short id) on the next getKnownContacts.
     await this.removeKnownContactGroup(agentId);
     this.broadcastContactNames(names);
+  }
+
+  // ── Device-name store (keyed by device agentId; twin of the contact store) ──
+  private async getDeviceNames(): Promise<Record<string, string>> {
+    return (await this.host.kv.get<Record<string, string>>(KEYS.deviceNames)) ?? {};
+  }
+  private broadcastDeviceNames(names: Record<string, string>): void {
+    this.emit({ type: 'device-names-updated', names });
+  }
+  private async putDeviceName(agentId: string, name: string | undefined): Promise<void> {
+    const trimmed = name?.trim();
+    if (!trimmed) return;
+    const names = await this.getDeviceNames();
+    if (names[agentId] === trimmed) return;
+    names[agentId] = trimmed;
+    await this.host.kv.set(KEYS.deviceNames, names);
+    this.broadcastDeviceNames(names);
+  }
+  private async deleteDeviceName(agentId: string): Promise<void> {
+    const names = await this.getDeviceNames();
+    if (!(agentId in names)) return;
+    delete names[agentId];
+    await this.host.kv.set(KEYS.deviceNames, names);
+    this.broadcastDeviceNames(names);
   }
 
   // ── keyhive doc-id helpers ─────────────────────────────────────────────────
@@ -790,7 +828,7 @@ export class DriveEngine {
   }
 
   private postStatus(): void {
-    const peers = this.repo ? this.repo.peers : [];
+    const peers = visiblePeerIds(this.repo ? this.repo.peers : []);
     const peerCount = peers.length;
     this.emit({ type: peerCount > 0 ? 'peer-connected' : 'peer-disconnected', peerCount, peers });
   }
@@ -828,7 +866,7 @@ export class DriveEngine {
   }
 
   /** Device-link joiner (the new device). Adopts the original device's user-group. */
-  async rendezvousLinkJoin(rendezvousId: string, key: string): Promise<{ ok: true }> {
+  async rendezvousLinkJoin(rendezvousId: string, key: string, deviceName?: string): Promise<{ ok: true }> {
     if (!this.khOps) throw new Error('Keyhive not available');
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -842,13 +880,16 @@ export class DriveEngine {
           (async () => {
             try {
               this.rdvEvent(rendezvousId, 'receiving');
-              const { card: peerCard, userGroupId: peerGroupId } = JSON.parse(pt);
+              const { card: peerCard, userGroupId: peerGroupId, deviceName: peerDeviceName } = JSON.parse(pt);
               const result = await this.khOps!.receiveContactCard(peerCard);
               if (result.isOwnCard) throw new Error("This is your own device's link. Open it on a different device.");
               await this.khOps!.linkDevice(result.agentId, peerGroupId ?? null);
+              // Record the original device's name against its agentId (both sides
+              // exchange names so each ends up knowing the other from one scan).
+              await this.putDeviceName(result.agentId, peerDeviceName);
               const myUserGroupId = await this.khOps!.ensureUserGroup({ create: true });
               const myCard = await this.khOps!.getContactCard();
-              await this.rdvSendPayload(rendezvousId, key, JSON.stringify({ card: myCard, userGroupId: myUserGroupId }));
+              await this.rdvSendPayload(rendezvousId, key, JSON.stringify({ card: myCard, userGroupId: myUserGroupId, deviceName }));
               clearTimeout(timer);
               this.rdvSessions.delete(rendezvousId);
               this.rdvSend({ type: RDV_UNSUB, rendezvousId });
@@ -952,6 +993,7 @@ export class DriveEngine {
       for (const e of earlyList) if (!this.lastViewedHeads![e.id]) this.unseenChanges[e.id] = true;
       this.emitUnseen();
       this.broadcastContactNames(await this.getContactNames());
+      this.broadcastDeviceNames(await this.getDeviceNames());
       this.emit({ type: 'kh-ready' });
     } catch (khErr: any) {
       console.error('[engine] keyhive init failed:', khErr);
@@ -1559,6 +1601,28 @@ export class DriveEngine {
       return;
     }
 
+    if (msg.type === 'set-device-name') {
+      try {
+        await this.putDeviceName(msg.agentId, msg.name);
+        emit({ type: 'result', id: msg.id });
+      } catch (err: any) {
+        console.error('[engine] set-device-name failed:', errMsg(err));
+        emit({ type: 'result', id: msg.id, error: errMsg(err) });
+      }
+      return;
+    }
+
+    if (msg.type === 'remove-device-name') {
+      try {
+        await this.deleteDeviceName(msg.agentId);
+        emit({ type: 'result', id: msg.id });
+      } catch (err: any) {
+        console.error('[engine] remove-device-name failed:', errMsg(err));
+        emit({ type: 'result', id: msg.id, error: errMsg(err) });
+      }
+      return;
+    }
+
     if (msg.type === 'kh-get-identity') {
       try {
         if (!this.khOps) throw new Error('Keyhive not available');
@@ -1743,7 +1807,7 @@ export class DriveEngine {
         if (!this.khOps) throw new Error('Keyhive not available');
         const myUserGroupId = await this.khOps.ensureUserGroup({ create: true });
         const myCard = await this.khOps.getContactCard();
-        const myPayload = JSON.stringify({ card: myCard, userGroupId: myUserGroupId });
+        const myPayload = JSON.stringify({ card: myCard, userGroupId: myUserGroupId, deviceName: msg.deviceName });
         // See kh-rdv-create-share: approximate payload size for the sender's QR page.
         const payloadBytes = new TextEncoder().encode(myPayload).length;
         const { rendezvousId, key } = generateRendezvous();
@@ -1758,9 +1822,11 @@ export class DriveEngine {
             (async () => {
               try {
                 this.rdvEvent(rendezvousId, 'receiving');
-                const { card: peerCard, userGroupId: peerGroupId } = JSON.parse(pt);
+                const { card: peerCard, userGroupId: peerGroupId, deviceName: peerDeviceName } = JSON.parse(pt);
                 const result = await this.khOps!.receiveContactCard(peerCard);
                 await this.khOps!.linkDevice(result.agentId, peerGroupId ?? null);
+                // Record the new device's name against its agentId.
+                await this.putDeviceName(result.agentId, peerDeviceName);
                 this.rdvSessions.delete(rendezvousId);
                 this.rdvSend({ type: RDV_UNSUB, rendezvousId });
                 this.rdvEvent(rendezvousId, 'linked');
@@ -1781,7 +1847,7 @@ export class DriveEngine {
 
     if (msg.type === 'kh-rdv-link-join') {
       try {
-        const result = await this.rendezvousLinkJoin(msg.rendezvousId, msg.key);
+        const result = await this.rendezvousLinkJoin(msg.rendezvousId, msg.key, msg.deviceName);
         emit({ type: 'result', id: msg.id, result });
       } catch (err: any) {
         emit({ type: 'result', id: msg.id, error: errMsg(err) });
