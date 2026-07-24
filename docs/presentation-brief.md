@@ -3,34 +3,24 @@ marp: true
 theme: default
 paginate: true
 title: Drive — Architecture Insights (Brief)
+style: |
+  section.tight { font-size: 22px; }
+  section.tight h2 { font-size: 30px; margin-bottom: 0.35em; }
+  section.tight li { margin: 0.2em 0; }
 ---
 
 # Drive
 
 ## Local-first, E2E-encrypted collaborative documents
 
+<!-- _class: tight -->
+
 - Automerge CRDTs for conflict-free editing and sync
 - Keyhive for access control and end-to-end encryption
 - Preact PWA: Calendar, TaskList, DataGrid editors
 - A relay server that only routes opaque encrypted bytes
 
-<!--
-Table of contents:
- 1. What it is
- 2. Main thread = UI, worker = source of truth
- 3. Users, devices & sharing
- 4. How keyhive is used
- 5. Automerge document shape
- 6. Validation runs on every change
- 7. DataGrid: a grid built for concurrent editing
- 8. DataGrid: formulas & conditional formatting
- 9. What flows through the relay
-10. Presence
-11. PWA: install it, use it offline
-12. Gotchas: leaving & revoking
-13. Gotchas: multi-tab & changes to keyhive
-14. Takeaways
--->
+![homepage](homepage.png)
 
 ---
 
@@ -40,6 +30,72 @@ Table of contents:
 - Every change syncs to collaborators in real time — and merges cleanly after offline edits
 - Installable on phones and desktops; works fully offline
 - Sharing, presence, and sync are all end-to-end encrypted
+
+---
+
+## Quick walkthrough — new document
+
+<!-- _class: tight -->
+
+- Pick a type on the home page; it's created locally and usable instantly
+
+![h:440](new-doc.gif)
+
+---
+
+## Quick walkthrough — link a device
+
+<!-- _class: tight -->
+
+- Scan the QR from another device; both then hold the same keys and sync automatically
+
+![h:440](linking-a-device.gif)
+
+---
+
+## Quick walkthrough — share with a friend
+
+<!-- _class: tight -->
+
+- Add them once, grant read / edit — then edit the same document together in real time
+
+![h:440](add-and-share-with-friend.gif)
+
+---
+
+## Presence works in any UI
+
+<!-- _class: tight -->
+
+- Every document is just JSON — each editor is one view over the same tree
+- Presence is a **path into that JSON** pointing at the selected node (e.g. `['events', uid, 'title']`), never screen coordinates
+- So any view can render a peer's selection — even the raw **JSON editor** highlights the exact same node the calendar or grid does
+
+![h:320](presence-updates.gif)
+
+---
+
+## Settings & connection status
+
+<!-- _class: tight -->
+
+- **Settings** — identity and display name, linked devices and their roles, add-friend
+- **Connection** — relay socket, this device's keys, and which peers are reachable (direct P2P vs relay)
+- The **presence dots** show each peer's transport at a glance: a **filled** dot = direct P2P, a **hollow ring** = via the relay
+
+![h:360](settings.png) ![h:360](connections.png)
+
+---
+
+## Misc screenshots
+
+<!-- _class: tight -->
+
+- **Time travel** - view document history and "restore" to a previous version
+- **Sharing panel** - allows you to change the role immediately
+
+![h:360](sharing.png) ![h:360](timeline.gif)
+
 
 ---
 
