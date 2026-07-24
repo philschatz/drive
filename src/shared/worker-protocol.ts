@@ -9,6 +9,7 @@ import type { RendezvousStatus } from './rendezvous-protocol';
 export type MainToWorker =
   | { type: 'init' }
   | { type: 'set-cache-disabled'; id: number; disabled: boolean }
+  | { type: 'set-presence-timing'; id: number; staleMs?: number; heartbeatMs?: number; livenessCheckMs?: number }
   | { type: 'clear-caches'; id: number }
   | { type: 'get-doc-list'; id: number }
   // `peek: true` = "don't count this read as the user viewing the doc" (home

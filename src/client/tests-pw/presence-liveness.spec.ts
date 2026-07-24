@@ -4,10 +4,13 @@ import { waitFor } from './support/peer';
 
 /**
  * Presence liveness. The worker hides peers whose heartbeats stop
- * (PRESENCE_STALE_MS = 12s, checked every 3s — see drive-engine.ts), while
- * heartbeats alone keep an idle peer visible. Two-peer assertions:
+ * (PRESENCE_STALE_MS, checked every liveness tick — see drive-engine.ts), while
+ * heartbeats alone keep an idle peer visible. To avoid sleeping past the 12s
+ * production default, this spec shrinks the windows via setPresenceTiming
+ * (stale 3s / heartbeat 1s / check 1s) before presence starts. Two-peer
+ * assertions:
  *
- *  1. Idle-but-alive: with zero presence traffic for 20s (> the stale window),
+ *  1. Idle-but-alive: with zero presence traffic for 4s (> the 3s stale window),
  *     alice must STAY visible to bob — hiding is for missed heartbeats, not
  *     idleness. (Guards against the upstream library bug where idle peers were
  *     pruned despite heartbeating: markSeen bumps lastUpdateAt but prune()
@@ -20,9 +23,15 @@ import { waitFor } from './support/peer';
  */
 test.describe('presence liveness (heartbeats)', () => {
   test('idle peers stay visible; a silently-dropped peer disappears', async ({ browser }) => {
-    test.setTimeout(240_000);
+    test.setTimeout(120_000);
     const { alice, bob, docId } = await setupSharedDoc(browser, 'edit');
     try {
+      // Shrink the presence windows before any presence setup so the
+      // idle/silent-drop assertions run in seconds, not past the 12s default.
+      const timing = { staleMs: 3_000, heartbeatMs: 1_000, livenessCheckMs: 1_000 };
+      for (const p of [alice, bob]) {
+        await p.page.evaluate((t) => (window as any).__drive.setPresenceTiming(t), timing);
+      }
       // Both peers must have the doc synced/loaded before starting presence
       // (the engine skips presence setup until the keyhive doc is ready).
       for (const p of [alice, bob]) {
@@ -60,9 +69,9 @@ test.describe('presence liveness (heartbeats)', () => {
         { label: 'bob sees alice viewing', timeout: 60_000, interval: 1_000 }
       );
 
-      // 1. Idle-but-alive: no presence traffic for 20s (> the 12s stale
+      // 1. Idle-but-alive: no presence traffic for 4s (> the 3s stale
       // window). Only heartbeats flow, and they must keep alice visible.
-      await bob.page.waitForTimeout(20_000);
+      await bob.page.waitForTimeout(4_000);
       const idleStates = await bob.page.evaluate(() => (window as any).__pwPeers ?? {});
       expect(
         Object.values(idleStates).some((p: any) => p?.value?.viewing === true),
@@ -81,36 +90,31 @@ test.describe('presence liveness (heartbeats)', () => {
       // 2b. Cold path: a real reload restarts bob's worker. The engine must
       // retry presence setup until the doc is ready, and alice must re-announce
       // her state to the fresh worker (empty-snapshot re-flush).
-      for (const p of [alice, bob]) {
-        p.page.on('console', (msg) => {
-          const t = msg.text();
-          if (/presence/i.test(t)) console.log(`[${p.name} console] ${t.slice(0, 250)}`);
-        });
-      }
       await bob.page.reload();
 
-      // Re-stash worker states in the reloaded page.
-      await bob.page.evaluate(async (d) => {
-        await (window as any).__drive.workerReady;
-        (window as any).__pwPeers = {};
-        (window as any).__drive.subscribePresence(d, (peers: any) => {
-          (window as any).__pwPeers = peers;
-        });
-      }, docId);
-      for (let i = 0; i < 8; i++) {
-        await bob.page.waitForTimeout(5_000);
-        const snap = await bob.page.evaluate(() => JSON.stringify((window as any).__pwPeers ?? {}).slice(0, 500));
-        console.log(`[debug t+${(i + 1) * 5}s] bob states: ${snap}, dots: ${await dots.count()}`);
-      }
+      // Re-stash worker states in the reloaded page. The reload reset bob's
+      // presence timing to defaults, so re-apply the short windows before
+      // presence sets up again (keeps the silent-drop assertion fast).
+      await bob.page.evaluate(
+        async (arg) => {
+          await (window as any).__drive.workerReady;
+          await (window as any).__drive.setPresenceTiming(arg.timing);
+          (window as any).__pwPeers = {};
+          (window as any).__drive.subscribePresence(arg.docId, (peers: any) => {
+            (window as any).__pwPeers = peers;
+          });
+        },
+        { docId, timing }
+      );
       await expect(dots, "alice's dot renders after a full reload").toHaveCount(1, {
         timeout: 60_000,
       });
 
       // Silent drop: no goodbye is sent — bob must notice the missing
-      // heartbeats (≤ 12s stale + 3s check tick + emit/render; 2x margin).
+      // heartbeats (≤ 3s stale + 1s check tick + emit/render; generous margin).
       await alice.close();
       await expect(dots, 'dot disappears after missed heartbeats').toHaveCount(0, {
-        timeout: 30_000,
+        timeout: 15_000,
       });
       await waitFor(
         () => bob.page.evaluate(() => (window as any).__pwPeers ?? {}),

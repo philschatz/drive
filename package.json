@@ -23,7 +23,7 @@
     "test:pw:open": "playwright test --ui",
     "stop": "pkill -f 'ts-node.*serve' || true",
     "syncthing": "node syncthing-automerge/merge.js ./.data",
-    "slides": "mkdir -p dist/slides && marp docs/presentation.md -o dist/slides/presentation.html && marp docs/presentation-brief.md -o dist/slides/presentation-brief.html && marp docs/presentation-deep-dive.md -o dist/slides/presentation-deep-dive.html"
+    "slides": "mkdir -p dist/slides && marp --no-stdin docs/presentation.md -o dist/slides/presentation.html && marp --no-stdin docs/presentation-brief.md -o dist/slides/presentation-brief.html && marp --no-stdin docs/presentation-deep-dive.md -o dist/slides/presentation-deep-dive.html"
   },
   "engines": {
     "node": ">=22.x"

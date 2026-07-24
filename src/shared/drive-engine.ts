@@ -73,14 +73,18 @@ export const RDV_MAX_DATA_BYTES = 256 * 1024;
 /** See OPEN_DOCS_IN_BACKGROUND in the original worker. */
 const OPEN_DOCS_IN_BACKGROUND = true;
 
+// These are mutable so the set-presence-timing test hook can shrink the
+// windows (specs drive a short stale window instead of sleeping past the 12s
+// default); production never reassigns them. There is one engine per worker,
+// so a module-level override is effectively per-engine.
 /** How often each peer's Presence broadcasts a heartbeat when otherwise idle. */
-export const PRESENCE_HEARTBEAT_MS = 5000;
+export let PRESENCE_HEARTBEAT_MS = 5000;
 /** A peer with no presence activity for this long is hidden from clients
  *  (two missed heartbeats plus network slack). */
-export const PRESENCE_STALE_MS = 12_000;
+export let PRESENCE_STALE_MS = 12_000;
 /** How often to re-check freshness between events; worst-case detection
  *  latency is PRESENCE_STALE_MS + this. */
-const PRESENCE_LIVENESS_CHECK_MS = 3000;
+let PRESENCE_LIVENESS_CHECK_MS = 3000;
 /** How often to re-attempt presence setup while the doc/keyhive isn't ready. */
 const PRESENCE_SETUP_RETRY_MS = 2000;
 
@@ -1176,6 +1180,17 @@ export class DriveEngine {
       return;
     }
 
+    if (msg.type === 'set-presence-timing') {
+      // Test hook: override presence timing so specs can drive a short stale
+      // window instead of sleeping past the 12s default. Takes effect on the
+      // next presence setup, so callers must set it before subscribing.
+      if (typeof msg.staleMs === 'number') PRESENCE_STALE_MS = msg.staleMs;
+      if (typeof msg.heartbeatMs === 'number') PRESENCE_HEARTBEAT_MS = msg.heartbeatMs;
+      if (typeof msg.livenessCheckMs === 'number') PRESENCE_LIVENESS_CHECK_MS = msg.livenessCheckMs;
+      emit({ type: 'result', id: msg.id, result: null });
+      return;
+    }
+
     if (msg.type === 'clear-caches') {
       try {
         this.queryResultCache.clear();
@@ -1856,8 +1871,17 @@ export class DriveEngine {
         if (!msg.peek) this.markViewed(msg.docId, heads);
         emit({ type: 'result', id: msg.id, result: { result, heads } });
       } catch (err: any) {
-        console.error('[engine] query failed for', msg.docId, err);
-        emit({ type: 'result', id: msg.id, error: errMsg(err) });
+        // "unavailable"/"not ready" just means the doc hasn't synced/loaded yet
+        // — an expected transient while a caller polls a doc into existence (the
+        // error is still returned below so the poll keeps going). Only genuine
+        // failures (e.g. a bad jq filter) warrant an error-level log.
+        const m = errMsg(err);
+        if (/unavailable|not ready/i.test(m)) {
+          console.debug('[engine] query deferred (doc not ready) for', msg.docId);
+        } else {
+          console.error('[engine] query failed for', msg.docId, err);
+        }
+        emit({ type: 'result', id: msg.id, error: m });
       }
       return;
     }

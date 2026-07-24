@@ -26,8 +26,12 @@ test('cache disabled: created doc survives reload', async ({ browser }) => {
     });
     expect(docId).toBeTruthy();
 
-    // Give enableSharing + reconcile time to settle.
-    await peer.page.waitForTimeout(4000);
+    // Wait for enableSharing + reconcile to register the doc in the list.
+    await peer.page.waitForFunction(
+      async (id) => (await (window as any).__drive.fetchDocList()).some((e: any) => e.id === id),
+      docId,
+      { timeout: 30_000 }
+    );
 
     const beforeReload = await peer.page.evaluate(async () => {
       const api = (window as any).__drive;
@@ -53,7 +57,15 @@ test('cache disabled: created doc survives reload', async ({ browser }) => {
     await peer.page.evaluate(() =>
       Promise.all([(window as any).__drive.workerReady, (window as any).__drive.keyhiveReady])
     );
-    await peer.page.waitForTimeout(4000);
+    // Poll for the doc to reappear post-reload (the behavior under test); the
+    // expect() below is the assertion of record. On regression this times out.
+    await peer.page
+      .waitForFunction(
+        async (id) => (await (window as any).__drive.fetchDocList()).some((e: any) => e.id === id),
+        docId,
+        { timeout: 30_000 }
+      )
+      .catch(() => {}); // let the expect() produce the diagnostic failure
 
     const afterReload = await peer.page.evaluate(async () => {
       const api = (window as any).__drive;

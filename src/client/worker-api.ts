@@ -407,6 +407,20 @@ export async function setCacheDisabled(disabled: boolean): Promise<void> {
   window.location.reload();
 }
 
+/**
+ * Test hook: override the worker's presence timing (stale window, heartbeat,
+ * liveness-check interval). Takes effect on the next presence setup, so call it
+ * before subscribing. No reload — used by the presence Playwright specs to run
+ * a short stale window instead of sleeping past the 12s default.
+ */
+export async function setPresenceTiming(opts: {
+  staleMs?: number;
+  heartbeatMs?: number;
+  livenessCheckMs?: number;
+}): Promise<void> {
+  await request('set-presence-timing', opts);
+}
+
 /** Wipe the worker's performance caches (query/validation LRUs + IDB cache:*) and reload. */
 export async function clearAllCaches(): Promise<void> {
   await request('clear-caches'); // worker clears its LRUs + idbDelPrefix(CACHE_PREFIX)
