@@ -16,12 +16,12 @@
 
 /** Source-of-truth keys for non-cache, non-settings persisted data. */
 export const KEYS = {
-  docIds:             'data:my-doc-ids',
-  userGroupId:        'data:auth:user-group-id',
+  docIds: 'data:my-doc-ids',
+  userGroupId: 'data:auth:user-group-id',
   /**
    * The single home of this user's settings, whose *value type* selects the storage mode:
    *   - a **string** = the Automerge docId of the synced, keyhive-private DriveSettings
-   *     document ⇒ SHARED mode (contacts + names, device names, and archived-doc
+to clean up   *     document ⇒ SHARED mode (contacts + names, device names, and archived-doc
    *     tombstones sync across the user's devices);
    *   - an **object** = the same settings shape held as a device-local JSON blob
    *     (`{'@type':'DriveSettings', …}`) ⇒ LOCAL mode (no sync, no user-group minted);
@@ -41,7 +41,7 @@ export const KEYS = {
    * the DriveSettings doc): it changes on every doc edit, and syncing that churn
    * would bloat keyhive on every change.
    */
-  lastViewedHeads:    'data:last-viewed-heads',
+  lastViewedHeads: 'data:last-viewed-heads',
 } as const;
 
 /**
@@ -54,10 +54,10 @@ export const KEYS = {
  * it stays device-local; see KEYS.lastViewedHeads.)
  */
 export const LEGACY_IDB_KEYS = {
-  contactNames:       'data:contact-names',
-  deviceNames:        'data:device-names',
+  contactNames: 'data:contact-names',
+  deviceNames: 'data:device-names',
   knownContactGroups: 'data:known-contact-groups',
-  archivedDocIds:     'data:archived-doc-ids',
+  archivedDocIds: 'data:archived-doc-ids',
 } as const;
 
 /** Everything under this prefix is disposable cache (deletable with no effect). */

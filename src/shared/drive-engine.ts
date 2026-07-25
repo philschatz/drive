@@ -1297,8 +1297,8 @@ export class DriveEngine {
   private rdvSend(frame: { type: string; rendezvousId: string; data?: Uint8Array }): void {
     this.host.network.sendOverlayFrame(frame);
   }
-  private rdvEvent(rendezvousId: string, status: RendezvousStatus, message?: string): void {
-    this.emit({ type: 'kh-rdv-event', rendezvousId, status, ...(message !== undefined ? { message } : {}) });
+  private rdvEvent(rendezvousId: string, status: RendezvousStatus, message?: string, extra?: { contactGroupId?: string; contactHasName?: boolean }): void {
+    this.emit({ type: 'kh-rdv-event', rendezvousId, status, ...(message !== undefined ? { message } : {}), ...(extra ?? {}) });
   }
   private async rdvSendPayload(rendezvousId: string, key: string, plaintext: string): Promise<void> {
     const framed = await encryptString(key, plaintext);
@@ -2295,13 +2295,19 @@ export class DriveEngine {
                 } catch { /* raw card string */ }
                 const result = await this.khOps!.receiveContactCard(cardJson);
                 const resolvedGroupId = replyGroupId ?? result.groupId ?? null;
-                if (!result.isOwnCard && resolvedGroupId) {
-                  await this.addKnownContactGroup(resolvedGroupId);
-                  await this.putContactName(resolvedGroupId, displayName);
+                const added = !result.isOwnCard && !!resolvedGroupId;
+                if (added) {
+                  await this.addKnownContactGroup(resolvedGroupId!);
+                  await this.putContactName(resolvedGroupId!, displayName);
                 }
                 this.rdvSessions.delete(rendezvousId);
                 this.rdvSend({ type: RDV_UNSUB, rendezvousId });
-                this.rdvEvent(rendezvousId, 'received');
+                // Surface who we added back (and whether they sent a name) so the
+                // sharer's UI can offer a name input when they didn't — the sharer
+                // otherwise has no chance to label a nameless friend.
+                this.rdvEvent(rendezvousId, 'received', undefined, added
+                  ? { contactGroupId: resolvedGroupId!, contactHasName: !!displayName?.trim() }
+                  : undefined);
               } catch (err: any) {
                 this.rdvSessions.delete(rendezvousId);
                 this.rdvSend({ type: RDV_UNSUB, rendezvousId });

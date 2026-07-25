@@ -115,4 +115,13 @@ export type WorkerToMain =
   | { type: 'kh-state-changed' }
   // Rendezvous progress (emitted for both the sharer and the receiver so each
   // side can render a step-by-step indicator; the receiver also gets a `result`)
-  | { type: 'kh-rdv-event'; rendezvousId: string; status: RendezvousStatus; message?: string };
+  | {
+      type: 'kh-rdv-event';
+      rendezvousId: string;
+      status: RendezvousStatus;
+      message?: string;
+      // Set on the sharer's terminal 'received' event: the contact we added back,
+      // and whether they sent a name (so the sharer's UI can prompt for one if not).
+      contactGroupId?: string;
+      contactHasName?: boolean;
+    };

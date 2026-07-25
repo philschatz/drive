@@ -15,6 +15,7 @@ import { useState, useCallback, useEffect } from 'preact/hooks';
 import { Button } from '@/components/ui/button';
 import { receiveContactCard, rendezvousReceive, getIdentity, onRendezvousEvent } from '../shared/keyhive-api';
 import type { RendezvousStatus } from '../worker-api';
+import { keyhiveReady, whenWsConnected } from '../shared/automerge';
 import { setContactName, getContactName } from '../contact-names';
 import { RendezvousProgress } from './RendezvousProgress';
 import { parseRendezvousToken } from '../../shared/rendezvous-url';
@@ -119,6 +120,12 @@ export function AddFriendPage({ cardData }: AddFriendPageProps) {
         // Pass our own name so the friend (who we add back automatically) can
         // label us without a second exchange.
         setStatus('Connecting to your friend\u2026 (keep this open until it completes)');
+        // Cold-open guard: this page auto-runs on mount, so wait for keyhive AND the
+        // relay socket before subscribing \u2014 an overlay frame (the rendezvous subscribe)
+        // sent before the WS is open is silently dropped, leaving us waiting forever
+        // for a peer that never arrives. The sharer gates its Start button the same way.
+        await keyhiveReady;
+        await whenWsConnected();
         // Our own name is stored as a User Group contact (keyed by user-group id).
         const me = await getIdentity();
         const myName = (me.userGroupId && getContactName(me.userGroupId)) || undefined;

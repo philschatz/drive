@@ -270,7 +270,15 @@ export function onKeyhiveStateChanged(fn: () => void): () => void {
 
 // ── Rendezvous sharer-side events ───────────────────────────────────────────
 
-export interface RendezvousEvent { rendezvousId: string; status: RendezvousStatus; message?: string }
+export interface RendezvousEvent {
+  rendezvousId: string;
+  status: RendezvousStatus;
+  message?: string;
+  /** On the sharer's terminal 'received' event: the contact we just added back. */
+  contactGroupId?: string;
+  /** Whether that contact arrived with a display name (else the sharer must prompt for one). */
+  contactHasName?: boolean;
+}
 type RendezvousEventListener = (e: RendezvousEvent) => void;
 const rdvEventListeners = new Set<RendezvousEventListener>();
 
@@ -418,6 +426,24 @@ export function useWsStatus(): boolean {
   }, []);
 
   return connected;
+}
+
+/**
+ * Resolve once the relay WebSocket is open (immediately if already connected).
+ * Imperative counterpart to useWsStatus, for non-component callers that must not
+ * send a relay overlay frame (e.g. a rendezvous subscribe) before the socket is
+ * up — otherwise the frame is dropped and never retried.
+ */
+export function whenWsConnected(): Promise<void> {
+  if (wsConnected) return Promise.resolve();
+  return new Promise<void>((resolve) => {
+    const listener: WsStatusListener = (isConnected) => {
+      if (!isConnected) return;
+      wsStatusListeners.delete(listener);
+      resolve();
+    };
+    wsStatusListeners.add(listener);
+  });
 }
 
 export function usePeerList(): string[] {

@@ -11,7 +11,7 @@
  * event status(es) that mean "done".
  */
 
-import { useState, useEffect } from 'preact/hooks';
+import { useState, useEffect, useRef } from 'preact/hooks';
 import { rendezvousCancel, onRendezvousEvent } from '../shared/keyhive-api';
 import type { RendezvousStatus } from '../worker-api';
 import { formatBytes } from '../../shared/format-bytes';
@@ -30,10 +30,16 @@ interface RendezvousShareProps {
   /** Step label while the payload is being exchanged. */
   transferLabel?: string;
   doneLabel: string;
+  /**
+   * Friend-share only: fired once the exchange completes with the contact we added
+   * back, so the caller can offer a name input when the friend sent no name. Device
+   * linking omits this (its terminal event is 'linked', which carries no contact).
+   */
+  onReceivedContact?: (info: { groupId: string; hasName: boolean }) => void;
 }
 
 export function RendezvousShare({
-  create, buildUrl, waitingLabel, transferLabel = 'Exchanging encrypted data…', doneLabel,
+  create, buildUrl, waitingLabel, transferLabel = 'Exchanging encrypted data…', doneLabel, onReceivedContact,
 }: RendezvousShareProps) {
   const [url, setUrl] = useState('');
   const [rendezvousId, setRendezvousId] = useState('');
@@ -41,6 +47,9 @@ export function RendezvousShare({
   const [phase, setPhase] = useState<RendezvousStatus | null>(null);
   const [transferDetail, setTransferDetail] = useState<string>();
   const [payloadBytes, setPayloadBytes] = useState<number>();
+  // Keep the latest callback reachable from the mount-only effect below.
+  const onReceivedContactRef = useRef(onReceivedContact);
+  onReceivedContactRef.current = onReceivedContact;
 
   useEffect(() => {
     let rid = '';
@@ -51,6 +60,9 @@ export function RendezvousShare({
       else {
         setPhase(e.status);
         if (e.status === 'sending' && e.message) setTransferDetail(e.message);
+        if (e.status === 'received' && e.contactGroupId) {
+          onReceivedContactRef.current?.({ groupId: e.contactGroupId, hasName: !!e.contactHasName });
+        }
       }
     });
     create()

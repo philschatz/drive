@@ -11,7 +11,7 @@ import { useState, useEffect, useCallback } from 'preact/hooks';
 import { Button } from '@/components/ui/button';
 import { Alert } from '@/components/ui/alert';
 import { getIdentity, ensureUserGroup, rendezvousCreateShare } from '../shared/keyhive-api';
-import { getContactName } from '../contact-names';
+import { getContactName, setContactName } from '../contact-names';
 import { keyhiveReady, useWsStatus } from '../shared/automerge';
 import { RendezvousShare } from './RendezvousShare';
 import { buildAddFriendRendezvousUrl } from './AddFriendPage';
@@ -22,6 +22,11 @@ export function ShareWithFriendPage({ path }: { path?: string }) {
   // Bump to (re)mount RendezvousShare; >0 means the share has been started.
   const [started, setStarted] = useState(0);
   const connected = useWsStatus();
+  // The friend we added back once the exchange completes; when they sent no name
+  // we prompt for one here (the sharer has no other chance to label them).
+  const [contact, setContact] = useState<{ groupId: string; hasName: boolean } | null>(null);
+  const [contactName, setContactNameInput] = useState('');
+  const [contactSaved, setContactSaved] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -39,10 +44,27 @@ export function ShareWithFriendPage({ path }: { path?: string }) {
     try {
       // A friend can't be granted access without a real group id, so ensure one exists.
       await ensureUserGroup({ create: true });
+      setContact(null);
+      setContactNameInput('');
+      setContactSaved(false);
       setStarted(n => n + 1);
     } catch (err: any) {
       setError('Could not prepare your share link: ' + err.message);
     }
+  };
+
+  const handleSaveContact = async () => {
+    if (!contact) return;
+    const trimmed = contactName.trim();
+    if (trimmed) {
+      try {
+        await setContactName(contact.groupId, trimmed);
+      } catch (err: any) {
+        setError('Could not save the name: ' + (err?.message ?? 'storage error'));
+        return;
+      }
+    }
+    setContactSaved(true);
   };
 
   return (
@@ -98,7 +120,34 @@ export function ShareWithFriendPage({ path }: { path?: string }) {
             waitingLabel="Waiting for your friend to open the link…"
             transferLabel="Exchanging contact info…"
             doneLabel="Connected — you're now contacts."
+            onReceivedContact={setContact}
           />
+
+          {contact && !contact.hasName && !contactSaved && (
+            <div className="mt-4 max-w-sm">
+              <p className="text-sm text-muted-foreground mb-2">
+                Your friend didn’t share a name. Add one so you can recognize them later.
+              </p>
+              <div className="flex gap-2">
+                <input
+                  className="flex-1 text-sm p-2 rounded border border-border"
+                  value={contactName}
+                  onInput={(e: any) => setContactNameInput(e.currentTarget.value)}
+                  onKeyDown={(e: any) => { if (e.key === 'Enter') handleSaveContact(); }}
+                  placeholder="Enter a name for this contact..."
+                  autoFocus
+                />
+                <Button size="sm" onClick={handleSaveContact}>Save</Button>
+              </div>
+            </div>
+          )}
+
+          {contactSaved && (
+            <p className="text-sm text-green-600 mt-3">
+              <span className="material-symbols-outlined align-middle mr-1" style={{ fontSize: 16 }}>check_circle</span>
+              Saved.
+            </p>
+          )}
         </div>
       )}
     </div>
