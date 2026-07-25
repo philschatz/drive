@@ -1,9 +1,11 @@
 /**
- * Version history sheet — opened from the version label in the HistorySlider.
+ * Version history sheet — the only history-mode surface, opened via the
+ * title-bar overflow's "View history" (see HistorySlider).
  *
  * Lists every version (newest first) with a relative time and a per-row Restore
- * button. Clicking a row previews that version (drives the slider); Restore
- * applies it via the worker (a forward-only change) and closes the sheet.
+ * button. Clicking a row previews that version live in the editor behind the
+ * sheet (drives the slider); Restore applies it via the worker (a forward-only
+ * change) and closes the sheet.
  */
 
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
@@ -53,7 +55,7 @@ export function VersionHistorySheet({ open, onOpenChange, history }: VersionHist
               onInput={(e: any) => onSliderChange(parseInt(e.target.value))}
             />
             <span className="text-xs text-muted-foreground tabular-nums whitespace-nowrap">
-              Version {version + 1} / {changeCount}
+              {version + 1}
             </span>
           </div>
         )}
@@ -73,7 +75,7 @@ export function VersionHistorySheet({ open, onOpenChange, history }: VersionHist
                   onClick={() => onSliderChange(entry.version)}
                   title="Preview this version"
                 >
-                  <span className="text-sm font-medium tabular-nums">Version {entry.version + 1}</span>
+                  <span className="text-sm font-medium tabular-nums">{entry.version + 1}</span>
                   {isLatest && <span className="ml-2 text-xs text-muted-foreground">(latest)</span>}
                   <span className="ml-2 text-xs text-muted-foreground">
                     {relativeTime(new Date(entry.time * 1000))}

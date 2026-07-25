@@ -1,11 +1,13 @@
 import type { ComponentChildren } from 'preact';
+import { useRef, useState } from 'preact/hooks';
 import { usePeerTransports, getWorkerPeerId } from './automerge';
 import { ConnectionStatus } from './ConnectionStatus';
 import { getWorkerUserGroupId } from '../worker-api';
-import { peerDisplayName, peerIdentityKey, PeerDot, type PresenceState } from './presence';
-import { AccessControl } from '../components/AccessControl';
+import { dedupePeers, peerDisplayName, peerIdentityKey, PeerDot, type PresenceState } from './presence';
+import { AccessControlSheet } from '../components/AccessControl';
 import { useAccess } from './useAccess';
 import { sourceUrl } from './doc-urls';
+import { OverflowMenu, type OverflowMenuItem } from './OverflowMenu';
 
 interface PeerLike {
   peerId: string;
@@ -13,6 +15,21 @@ interface PeerLike {
   value?: PresenceState | null;
 }
 
+/** Extra action contributed by an editor to the overflow (kebab) menu. */
+export interface OverflowItem {
+  /** Material Symbols icon name. */
+  icon: string;
+  label: string;
+  onSelect: () => void;
+  disabled?: boolean;
+}
+
+/**
+ * Material top app bar shared by all document editors: back button, type icon,
+ * (editable) title, live presence/connection cluster, and a trailing overflow
+ * menu holding the low-frequency actions (Rename / Share / History / Validation
+ * / Edit source + editor-specific `overflow` items).
+ */
 export function EditorTitleBar<P extends PeerLike>({
   icon,
   title,
@@ -27,9 +44,11 @@ export function EditorTitleBar<P extends PeerLike>({
   sourcePath,
   onToggleHistory,
   historyActive = false,
+  onUndo,
   onToggleValidation,
   validationActive = false,
   validationCount = 0,
+  overflow = [],
   children,
 }: {
   icon: string;
@@ -46,22 +65,95 @@ export function EditorTitleBar<P extends PeerLike>({
   sourcePath?: (string | number)[];
   onToggleHistory?: () => void;
   historyActive?: boolean;
+  /** Undo the latest change (shown as an overflow item when provided). */
+  onUndo?: () => void;
   onToggleValidation?: () => void;
   validationActive?: boolean;
   validationCount?: number;
+  /** Editor-specific extra overflow-menu actions (e.g. "Delete completed"). */
+  overflow?: OverflowItem[];
   children?: ComponentChildren;
 }) {
   const transports = usePeerTransports();
   const { access } = useAccess(docId);
+  const [shareOpen, setShareOpen] = useState(false);
+  const titleInputRef = useRef<HTMLInputElement>(null);
+
+  // Assemble the overflow entries. `title` mirrors the old inline-button
+  // tooltips (also keeps existing tests/locators working).
+  const menuItems: OverflowMenuItem[] = [];
+  if (titleEditable) {
+    menuItems.push({
+      icon: 'edit',
+      label: 'Rename',
+      title: 'Rename',
+      onSelect: () => {
+        const next = prompt('Rename', title);
+        if (next === null) return;
+        const trimmed = next.trim();
+        if (!trimmed) return;
+        // Commit through the same path as the inline title input.
+        onTitleChange?.(trimmed);
+        onTitleBlur?.(trimmed);
+      },
+    });
+  }
+  // Admins get a dedicated share button on the bar (they manage sharing);
+  // everyone else reaches the members list via the overflow menu.
+  const isAdmin = access === 'admin';
+  if (docId && !isAdmin) {
+    menuItems.push({
+      icon: 'share',
+      label: 'Share',
+      title: 'Share & permissions',
+      onSelect: () => setShareOpen(true),
+    });
+  }
+  if (onUndo) {
+    menuItems.push({
+      icon: 'undo',
+      label: 'Undo',
+      title: 'Undo',
+      onSelect: onUndo,
+    });
+  }
+  if (onToggleHistory) {
+    menuItems.push({
+      icon: 'history',
+      label: historyActive ? 'Close history' : 'History',
+      title: historyActive ? 'Close history' : 'Browse history',
+      onSelect: onToggleHistory,
+    });
+  }
+  if (onToggleValidation && validationCount! > 0) {
+    menuItems.push({
+      icon: 'warning',
+      label: `${validationActive ? 'Hide' : 'Show'} validation errors (${validationCount! > 99 ? '99+' : validationCount})`,
+      title: validationActive ? 'Hide validation errors' : `${validationCount} validation error${validationCount !== 1 ? 's' : ''}`,
+      onSelect: onToggleValidation,
+    });
+  }
+  menuItems.push(...overflow.map(item => ({ ...item, title: item.label })));
+  if (showSourceLink && docId) {
+    menuItems.push({
+      icon: 'code',
+      label: 'Edit source',
+      title: 'Edit Source',
+      href: sourceUrl(docId, sourcePath),
+      // Separate the navigation away from the in-place actions above it.
+      dividerBefore: menuItems.length > 0,
+    });
+  }
 
   return (
-    <div className="flex items-center gap-1.5 px-1 min-h-10 w-full">
+    <div className="flex items-center gap-1.5 pl-1 pr-2 min-h-14 w-full">
       {/* Left side */}
       <a
         href="#/"
-        className="inline-flex items-center justify-center h-9 w-9 rounded-md hover:bg-accent hover:text-accent-foreground shrink-0"
+        aria-label="Back"
+        className="inline-flex items-center justify-center h-10 w-10 rounded-full state-layer shrink-0"
       >
-        <span className="material-symbols-outlined">arrow_back</span>
+        <span className="material-symbols-outlined" style={{ fontSize: 24 }}>arrow_back</span>
       </a>
 
       <span className="material-symbols-outlined text-muted-foreground shrink-0" style={{ fontSize: 20 }}>
@@ -70,7 +162,9 @@ export function EditorTitleBar<P extends PeerLike>({
 
       {titleEditable ? (
         <input
-          className="border-0 bg-transparent text-lg font-bold outline-none flex-1 min-w-0"
+          ref={titleInputRef}
+          data-testid="doc-title-input"
+          className="border-0 bg-transparent md-title-large font-bold outline-none flex-1 min-w-0"
           value={title}
           onFocus={() => onTitleFocus?.()}
           onInput={(e: any) => onTitleChange?.(e.currentTarget.value)}
@@ -78,7 +172,7 @@ export function EditorTitleBar<P extends PeerLike>({
           onKeyDown={(e: any) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
         />
       ) : (
-        <span className="text-lg font-bold truncate flex-1 min-w-0">{title}</span>
+        <span className="md-title-large font-bold truncate flex-1 min-w-0">{title}</span>
       )}
 
       {children}
@@ -89,80 +183,47 @@ export function EditorTitleBar<P extends PeerLike>({
             collapse to a single dot (keyed by user-group id); all of the local user's
             own devices are hidden, not just the current one. */}
         <div className="flex items-center gap-1 max-w-[72px] sm:max-w-none overflow-hidden">
-          {(() => {
-            const myPeerId = getWorkerPeerId();
-            const myGroup = getWorkerUserGroupId();
-            const seen = new Set<string>();
-            return peers.filter(peer => {
-              if (peer.peerId === myPeerId) return false;
-              const ug = peer.value?.userGroupId;
-              if (myGroup && ug === myGroup) return false; // another of my own devices
-              const id = peerIdentityKey(peer.peerId, ug);
-              if (seen.has(id)) return false; // collapse a user's devices to one dot
-              seen.add(id);
-              return true;
-            }).map(peer => (
-              <PeerDot
-                key={peerIdentityKey(peer.peerId, peer.value?.userGroupId)}
-                peerId={peer.peerId}
-                userGroupId={peer.value?.userGroupId}
-                direct={transports[peer.peerId] === 'direct'}
-                label={peerTitle ? peerTitle(peer) : peerDisplayName(peer.peerId, peer.value?.userGroupId)}
-                sizeClass="w-3 h-3"
-              />
-            ));
-          })()}
+          {dedupePeers(peers, getWorkerPeerId(), getWorkerUserGroupId()).map(peer => (
+            <PeerDot
+              key={peerIdentityKey(peer.peerId, peer.value?.userGroupId)}
+              peerId={peer.peerId}
+              userGroupId={peer.value?.userGroupId}
+              direct={transports[peer.peerId] === 'direct'}
+              label={peerTitle ? peerTitle(peer) : peerDisplayName(peer.peerId, peer.value?.userGroupId)}
+              sizeClass="w-3 h-3"
+            />
+          ))}
         </div>
 
-        <ConnectionStatus />
+        <ConnectionStatus peers={peers} peerTitle={peerTitle} />
 
-        {/* Access badge + sharing button — one fixed spot for every access level
-            (next to the title the badge would drift with the flex-1 title input). */}
-        {(access === 'read' || access === 'edit' || access === 'admin') && (
-          <span className="text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded shrink-0">
-            {access === 'read' ? 'Read-only' : access === 'edit' ? 'Editing' : 'Admin'}
-          </span>
-        )}
-        {docId && (
-          <AccessControl
-            docId={docId}
-            access={access}
-          />
-        )}
-
-        {/* History & source — inline on sm+, collapsed into dropdown on mobile */}
-        {onToggleValidation && validationCount! > 0 && (
+        {/* Admins manage sharing, so they get the share button right on the
+            bar; other access levels find Share in the overflow menu. */}
+        {docId && isAdmin && (
           <button
-            className={`inline-flex items-center justify-center h-9 rounded-md hover:bg-accent hover:text-accent-foreground gap-0.5 px-1.5${validationActive ? ' bg-accent text-accent-foreground' : ''}`}
-            onClick={onToggleValidation}
-            title={validationActive ? 'Hide validation errors' : `${validationCount} validation error${validationCount !== 1 ? 's' : ''}`}
+            aria-label="Share"
+            title="Share & permissions"
+            className="inline-flex items-center justify-center h-10 w-10 rounded-full state-layer shrink-0"
+            onClick={() => setShareOpen(true)}
           >
-            <span className="material-symbols-outlined text-amber-500" style={{ fontSize: 18 }}>warning</span>
-            <span className="text-xs text-amber-600 font-medium">{validationCount! > 99 ? '99+' : validationCount}</span>
+            <span className="material-symbols-outlined" style={{ fontSize: 20 }}>share</span>
           </button>
         )}
 
-        {onToggleHistory && (
-          <button
-            className={`inline-flex items-center justify-center h-9 w-9 rounded-md hover:bg-accent hover:text-accent-foreground${historyActive ? ' bg-accent text-accent-foreground' : ''}`}
-            onClick={onToggleHistory}
-            title={historyActive ? 'Close history' : 'Browse history'}
-          >
-            <span className="material-symbols-outlined" style={{ fontSize: 18 }}>history</span>
-          </button>
-        )}
-
-        {showSourceLink && docId && (
-          <a
-            href={sourceUrl(docId, sourcePath)}
-            className="inline-flex items-center justify-center h-9 w-9 rounded-md hover:bg-accent hover:text-accent-foreground"
-            title="Edit Source"
-          >
-            <span className="material-symbols-outlined" style={{ fontSize: 18 }}>code</span>
-          </a>
-        )}
-
+        {/* Overflow (kebab) menu — Rename / Share / History / Validation /
+            editor-specific items / Edit source. */}
+        <OverflowMenu items={menuItems} />
       </div>
+
+      {/* Share & Permissions sheet — opened from the overflow menu. */}
+      {docId && (
+        <AccessControlSheet
+          docId={docId}
+          access={access}
+          open={shareOpen}
+          onOpenChange={setShareOpen}
+        />
+      )}
     </div>
   );
 }

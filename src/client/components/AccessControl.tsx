@@ -33,8 +33,18 @@ interface AccessControlProps {
   access?: string | null;
 }
 
-export function AccessControl({ docId, access: accessProp }: AccessControlProps) {
-  const [open, setOpen] = useState(false);
+interface AccessControlSheetProps extends AccessControlProps {
+  /** Controlled open state — lets any surface (title-bar menu, Home long-press) open the sheet. */
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}
+
+/**
+ * The Share & Permissions bottom sheet, controlled from outside.
+ * Use this directly when there is no dedicated trigger button (e.g. opened from
+ * an overflow menu or a long-press action sheet).
+ */
+export function AccessControlSheet({ docId, access: accessProp, open, onOpenChange }: AccessControlSheetProps) {
   const [members, setMembers] = useState<MemberInfo[]>([]);
   const [myAccess, setMyAccess] = useState<string | null>(accessProp ?? null);
   const [loaded, setLoaded] = useState(false);
@@ -163,26 +173,12 @@ export function AccessControl({ docId, access: accessProp }: AccessControlProps)
     }
   };
 
-  // Always list yourself first, regardless of role (sort is stable, so the
-  // remaining members keep the order getDocMembers returned them in).
-  const orderedMembers = [...members].sort((a, b) => (a.isMe ? 0 : 1) - (b.isMe ? 0 : 1));
+  // The current user is not shown (no self-remove, no own-role display) —
+  // leaving a doc is Home's Archive action.
+  const visibleMembers = members.filter(m => !m.isMe);
 
   return (
-    <>
-      <button
-        className="inline-flex items-center justify-center h-9 w-9 rounded-md hover:bg-accent hover:text-accent-foreground"
-        title={accessProp === undefined
-          ? 'Share & permissions'
-          : accessProp === null
-            ? 'No access · Share & permissions'
-            : `${accessTitle(accessProp)} access · Share & permissions`}
-        onClick={() => setOpen(true)}
-      >
-        {/* Generic share glyph — the access level shows as a text badge next to
-            the title (EditorTitleBar), not on this button. */}
-        <span className="material-symbols-outlined" style={{ fontSize: 18 }}>share</span>
-      </button>
-      <Sheet open={open} onOpenChange={setOpen}>
+    <Sheet open={open} onOpenChange={onOpenChange}>
         <SheetContent side="bottom" className="max-h-[85vh]">
           <SheetHeader>
             <SheetTitle>Share & Permissions</SheetTitle>
@@ -202,13 +198,13 @@ export function AccessControl({ docId, access: accessProp }: AccessControlProps)
             </div>
           )}
 
-          {/* Members list */}
+          {/* Members list (the current user is never shown) */}
           <div className="mt-4">
             <h3 className="text-sm font-medium mb-2">Members</h3>
-            {members.length === 0 && (
-              <p className="text-xs text-muted-foreground">No members found.</p>
+            {visibleMembers.length === 0 && loaded && (
+              <p className="text-xs text-muted-foreground">Not shared with anyone yet.</p>
             )}
-            {orderedMembers.map(member => (
+            {visibleMembers.map(member => (
               <div key={member.agentId} className="flex items-center gap-2 py-1.5 border-b border-border">
                 {/* Presence dot replaces the old group/single-device icon: for a
                     group it summarises all the user's devices (most-connected
@@ -219,7 +215,6 @@ export function AccessControl({ docId, access: accessProp }: AccessControlProps)
                     deviceStatuses,
                     member.type === 'group' ? member.deviceIds : [member.agentId],
                   )}
-                  suffix={member.isMe ? <span className="text-xs text-muted-foreground ml-1">(you)</span> : undefined}
                 />
                 {isAdmin ? (
                   <div className="flex items-center gap-1">
@@ -253,11 +248,7 @@ export function AccessControl({ docId, access: accessProp }: AccessControlProps)
           {isAdmin && (
             <div className="mt-6">
               <h3 className="text-sm font-medium mb-2">Share with a contact</h3>
-              {contacts.length === 0 ? (
-                <p className="text-xs text-muted-foreground mb-2">
-                  You have no contacts yet — add a friend to share with them.
-                </p>
-              ) : (
+              {contacts.length > 0 && (
                 <div className="flex items-center gap-2 mb-2">
                   <Select value={selectedContact} onValueChange={setSelectedContact}>
                     <SelectTrigger className="h-8 text-xs flex-1">
@@ -302,11 +293,6 @@ export function AccessControl({ docId, access: accessProp }: AccessControlProps)
             </div>
           )}
 
-          {/* My access */}
-          <div className="mt-6 text-xs text-muted-foreground">
-            Your role: <span className="capitalize font-medium">{myAccess || 'unknown'}</span>
-          </div>
-
           {/* Add-a-friend sheet — on close, refresh() runs so the new friend
               (recorded in pendingSelectRef) auto-selects in the dropdown above. */}
           <AddFriendSheet
@@ -319,6 +305,32 @@ export function AccessControl({ docId, access: accessProp }: AccessControlProps)
           />
         </SheetContent>
       </Sheet>
+  );
+}
+
+/**
+ * Trigger-button + sheet pairing (uncontrolled). Kept for surfaces that want a
+ * standalone share button; the title-bar overflow menu and Home use
+ * `AccessControlSheet` directly.
+ */
+export function AccessControl({ docId, access: accessProp }: AccessControlProps) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button
+        className="inline-flex items-center justify-center h-9 w-9 rounded-md hover:bg-accent hover:text-accent-foreground"
+        title={accessProp === undefined
+          ? 'Share & permissions'
+          : accessProp === null
+            ? 'No access · Share & permissions'
+            : `${accessTitle(accessProp)} access · Share & permissions`}
+        onClick={() => setOpen(true)}
+      >
+        {/* Generic share glyph — the access level shows as a text badge next to
+            the title (EditorTitleBar), not on this button. */}
+        <span className="material-symbols-outlined" style={{ fontSize: 18 }}>share</span>
+      </button>
+      <AccessControlSheet docId={docId} access={accessProp} open={open} onOpenChange={setOpen} />
     </>
   );
 }

@@ -393,7 +393,16 @@ export function Settings({ path }: { path?: string }) {
           />
           <Label htmlFor="debug-mode" className="cursor-pointer">Enable debugging (and disable cache)</Label>
         </div>
-        <Button size="sm" variant="destructive" onClick={handleClearCaches}>Clear Caches</Button>
+        <div className="flex items-center gap-2">
+          <Button size="sm" variant="destructive" onClick={handleClearCaches}>Clear Caches</Button>
+          {/* The status chip in the app bars opens a peers sheet now; the full
+              connection-debug page lives here. */}
+          <a href="#/connection">
+            <Button size="sm" variant="outline">
+              <span className="material-symbols-outlined">network_check</span> Connection details
+            </Button>
+          </a>
+        </div>
       </section>
 
       {/* Danger zone */}

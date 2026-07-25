@@ -68,7 +68,7 @@ test.describe('DataGrid', () => {
     await expect(cell(0, 0)).toContainText('Updated');
 
     // Rename the spreadsheet
-    const nameInput = page.locator('input.text-lg');
+    const nameInput = page.getByTestId('doc-title-input');
     await nameInput.fill('Renamed Sheet');
     await nameInput.blur();
     await expect(nameInput).toHaveValue('Renamed Sheet');

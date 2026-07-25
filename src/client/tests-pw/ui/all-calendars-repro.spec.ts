@@ -16,27 +16,31 @@ test.describe('AllCalendars discovery', () => {
     await app?.close();
   });
 
-  const allCalBtn = (app: App) => app.page.getByRole('button', { name: /All calendars/i });
+  // "All calendars" now lives in the Home top-bar overflow menu (aria-label
+  // "Menu"); the menu item only renders with 2+ calendar-ish docs.
+  const allCalItem = (app: App) => app.page.locator('md-menu-item', { hasText: 'All calendars' });
 
-  test('renders calendars + counters, and gates the Home button on 2+', async ({ browser }) => {
+  test('renders calendars + counters, and gates the Home menu item on 2+', async ({ browser }) => {
     app = await openApp(browser, 'all-cal');
     const page = app.page;
 
-    // One calendar → Home button hidden.
+    // One calendar → the menu item isn't rendered at all.
     await createDocViaUI(app, 'Calendar', 'Repro Cal');
     await expect(page).toHaveURL(/#\/d\//, { timeout: 15_000 });
     await page.evaluate(() => { window.location.hash = '#/'; });
     await expect(page.getByText('Repro Cal')).toBeVisible({ timeout: 15_000 });
-    await expect(allCalBtn(app)).toHaveCount(0);
+    await expect(allCalItem(app)).toHaveCount(0);
 
-    // Add a Counters (Habit Tracker) doc → two calendar-ish docs → button appears.
+    // Add a Counters (Habit Tracker) doc → two calendar-ish docs → item appears.
     await createDocViaUI(app, 'Habit Tracker', 'Repro Habits');
     await expect(page).toHaveURL(/#\/d\//, { timeout: 15_000 });
     await page.evaluate(() => { window.location.hash = '#/'; });
-    await expect(allCalBtn(app)).toBeVisible({ timeout: 15_000 });
+    await expect(allCalItem(app)).toHaveCount(1, { timeout: 15_000 });
 
     // The aggregate view discovers both and renders without "No calendars found".
-    await allCalBtn(app).click();
+    await page.getByRole('button', { name: 'Menu' }).click();
+    await expect(allCalItem(app)).toBeVisible();
+    await allCalItem(app).click();
     await expect(page).toHaveURL(/#\/calendars\//, { timeout: 15_000 });
     await expect(page.locator('#sx-cal > *').first()).toBeVisible({ timeout: 30_000 });
     await expect(page.getByText('No calendars found')).toHaveCount(0);

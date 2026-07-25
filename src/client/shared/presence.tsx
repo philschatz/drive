@@ -35,6 +35,29 @@ export function peerDisplayName(peerId: string, userGroupId?: string | null): st
   return getContactName(key) || `${key.slice(0, 8)}…`;
 }
 
+/**
+ * Filter a presence peer list down to the OTHER people to display: drops the
+ * local peer and all of the local user's own devices, and collapses a user's
+ * multiple devices to one entry (keyed by user-group id). Shared by the
+ * title-bar peer dots and the connection sheet.
+ */
+export function dedupePeers<P extends { peerId: string; value?: { userGroupId?: string } | null }>(
+  peers: P[],
+  myPeerId: string | null | undefined,
+  myGroup: string | null | undefined,
+): P[] {
+  const seen = new Set<string>();
+  return peers.filter(peer => {
+    if (myPeerId && peer.peerId === myPeerId) return false;
+    const ug = peer.value?.userGroupId;
+    if (myGroup && ug === myGroup) return false; // another of my own devices
+    const id = peerIdentityKey(peer.peerId, ug);
+    if (seen.has(id)) return false; // collapse a user's devices to one entry
+    seen.add(id);
+    return true;
+  });
+}
+
 /** Deterministic palette color for an arbitrary stable key (peer identity,
  *  calendar docId, …) — same palette the peer dots use. */
 export function colorForKey(key: string): string {

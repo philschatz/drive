@@ -91,7 +91,7 @@ export async function openApp(browser: Browser, name = 'ui'): Promise<App> {
 }
 
 /** Every document type lands on the consolidated `#/d/<docId>` route after creation;
- * the keys are the Home "New" menu item labels. */
+ * the keys are the Home Create-sheet item labels. */
 const URL_FRAGMENT = {
   Calendar: /#\/d\//,
   'Task list': /#\/d\//,
@@ -100,22 +100,32 @@ const URL_FRAGMENT = {
 } as const;
 
 /**
- * Create a document through the home page "New" menu (mirrors the Cypress
- * before() hooks): set the prompt answer, open the dropdown, pick the type, and
- * wait for the editor route.
+ * Create a document through the home page FAB → Create sheet. Docs are created
+ * as "Untitled" (no prompt anymore), so the requested name is applied through
+ * the editor's inline title input afterwards.
  */
 export async function createDocViaUI(
   app: App,
   type: keyof typeof URL_FRAGMENT,
   name: string
 ): Promise<void> {
-  app.setPromptAnswer(name);
-  await app.page.getByRole('button', { name: 'New' }).click();
-  // The menu-item name is "<icon> <label>"; anchor to the end so "Calendar"
-  // doesn't also match "Calendar+Counters".
-  const label = new RegExp(type.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$');
-  await app.page.getByRole('menuitem', { name: label }).click();
+  await app.page.getByRole('button', { name: 'New document' }).click();
+  // The Create bottom sheet lists one md-list-item per doc type. Scope to the
+  // sheet (Home rows are md-list-items too) and match by substring — an
+  // end-anchored regex fails against the shadow-DOM innerText's trailing
+  // newline. The create labels don't contain each other, so substring is safe.
+  await app.page
+    .getByTestId('create-doc-sheet')
+    .locator('md-list-item', { hasText: type })
+    .click();
   await expect(app.page).toHaveURL(URL_FRAGMENT[type], { timeout: 15_000 });
+
+  // Rename in place via the title-bar input.
+  const title = app.page.getByTestId('doc-title-input');
+  await expect(title).toBeVisible({ timeout: 15_000 });
+  await title.fill(name);
+  await title.press('Enter');
+  await expect(title).toHaveValue(name);
 }
 
 /** Select a value from a Radix UI Select by trigger id (ports cypress radixSelect). */

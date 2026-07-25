@@ -63,9 +63,11 @@ export function upsertToast(key: string, spec: ToastSpec | null) {
 /* ------------------------------------------------------------------ */
 
 const TONE_CLASSES: Record<ToastTone, string> = {
-  default: "border border-border bg-background text-foreground",
+  default: "border border-border bg-popover text-popover-foreground",
   destructive: "bg-destructive text-destructive-foreground",
-  warning: "bg-amber-500 text-white",
+  // Amber reads as "warning" independent of the MD3 palette; black text keeps
+  // it legible in both light and dark toast contexts.
+  warning: "bg-amber-500 text-black",
 };
 
 export function Toaster() {

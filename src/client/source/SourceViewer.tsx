@@ -180,6 +180,10 @@ export function SourceViewer({ docId, rest, readOnly }: { docId?: string; rest?:
   const [historyMeta, setHistoryMeta] = useState<Array<{ version: number; time: number }>>([]);
   const [changeCount, setChangeCount] = useState(0);
   const [version, setVersion] = useState(0);
+  // The version-history sheet auto-opens on the source viewer (deliberate:
+  // inspecting a doc usually means inspecting its changes) but stays closable —
+  // reopen via the title-bar History menu item.
+  const [historyOpen, setHistoryOpen] = useState(true);
   const [versionPatches, setVersionPatches] = useState<any[]>([]);
   const [docName, setDocName] = useState('Document');
   // Presence starts only once the doc handle is loaded — the engine's
@@ -384,14 +388,19 @@ export function SourceViewer({ docId, rest, readOnly }: { docId?: string; rest?:
   const versionTime = historyMeta[version]?.time ?? null;
 
   const historyAdapter: DocumentHistory = {
-    active: changeCount > 0,
+    active: historyOpen && changeCount > 0,
     editable,
     isLatest,
     version,
     changeCount,
     entries: historyMeta,
     time: versionTime,
-    toggleHistory: () => {},
+    toggleHistory: () => {
+      // Closing also returns the view to the live latest version so the source
+      // tree never stays silently pinned to an old snapshot.
+      if (historyOpen) jumpToLatest();
+      setHistoryOpen(!historyOpen);
+    },
     onSliderChange: (v: number) => {
       const latest = v === changeCount - 1;
       atLatest.current = latest;
@@ -433,14 +442,10 @@ export function SourceViewer({ docId, rest, readOnly }: { docId?: string; rest?:
         peers={peerList}
         peerTitle={(peer) => `${peerDisplayName(peer.peerId, peer.value?.userGroupId)}${peer.value?.focusedField ? ' (editing)' : ''}`}
         showSourceLink={false}
-
-      >
-        {snapshot && (
-          <Button variant="outline" size="sm" onClick={handleDownloadJson}>
-            <span className="material-symbols-outlined" style={{ fontSize: 16 }}>download</span> JSON
-          </Button>
-        )}
-      </EditorTitleBar>
+        onToggleHistory={historyAdapter.toggleHistory}
+        historyActive={historyAdapter.active}
+        overflow={snapshot ? [{ icon: 'download', label: 'Download JSON', onSelect: handleDownloadJson }] : []}
+      />
 
       {loadProgress !== null && (
         <Progress className="my-1 mx-4" value={loadProgress} />

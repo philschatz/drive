@@ -108,8 +108,10 @@ describe('AccessControl', () => {
     // Wait a tick — message should still not appear
     await new Promise(r => setTimeout(r, 50));
     expect(screen.queryByText('You no longer have access to this document')).toBeNull();
-    // Members should show placeholder, not the "no access" block
-    expect(screen.getByText('No members found.')).toBeDefined();
+    // While loading, neither the "no access" block nor the empty-members
+    // placeholder shows — just the section header.
+    expect(screen.getByText('Members')).toBeDefined();
+    expect(screen.queryByText('Not shared with anyone yet.')).toBeNull();
   });
 
   it('does not show "no access" message when access is granted', async () => {

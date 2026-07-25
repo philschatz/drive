@@ -35,7 +35,7 @@ test.describe('Unseen-changes dot', () => {
 
     // Created + viewed in the editor → no dot on the home list.
     await page.evaluate(() => { location.hash = '#/'; });
-    await expect(page.locator('a', { hasText: 'Unseen Dot' }).first()).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('md-list-item', { hasText: 'Unseen Dot' }).first()).toBeVisible({ timeout: 10_000 });
     await expect(dot).toHaveCount(0);
 
     // Mutate while only the home page (peek) is watching, with a change that is
@@ -51,13 +51,13 @@ test.describe('Unseen-changes dot', () => {
     await expect(dot).toBeVisible({ timeout: 10_000 });
 
     // Opening the doc (non-peek editor subscriptions) marks it viewed.
-    await page.locator('a', { hasText: 'Unseen Dot' }).first().click();
+    await page.locator('md-list-item', { hasText: 'Unseen Dot' }).first().click();
     await expect(page).toHaveURL(/#\/d\//, { timeout: 15_000 });
-    await expect(page.locator('[placeholder="Add a task..."]')).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByTestId('doc-title-input')).toHaveValue('Unseen Dot', { timeout: 10_000 });
 
     // Back home: the dot is gone.
     await page.evaluate(() => { location.hash = '#/'; });
-    await expect(page.locator('a', { hasText: 'Unseen Dot' }).first()).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('md-list-item', { hasText: 'Unseen Dot' }).first()).toBeVisible({ timeout: 10_000 });
     await expect(dot).toHaveCount(0);
   });
 });

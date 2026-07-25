@@ -1,32 +1,26 @@
-import { useEffect, useState } from 'preact/hooks';
 import type { DocumentHistory } from './useDocumentHistory';
 import { VersionHistorySheet } from './VersionHistorySheet';
 
+/**
+ * History mode UI: just the version-history bottom sheet — no persistent bar.
+ * Entering history mode ("View history" in the title-bar menu) opens the sheet;
+ * scrubbing previews the selected version in the editor behind it; dismissing
+ * the sheet exits history mode (back to latest, editable again).
+ *
+ * (Name kept from the old bar-based UI so editor call sites stay unchanged.)
+ */
 export function HistorySlider({ history }: { history: DocumentHistory }) {
-  const [showSheet, setShowSheet] = useState(false);
-
-  // The slider now lives inside the sheet, so entering history mode opens it
-  // (and leaving closes it). Closing while still in history mode is fine — the
-  // bar's "Version N" button reopens it.
-  useEffect(() => {
-    setShowSheet(history.active);
-  }, [history.active]);
-
   if (!history.active) return null;
 
   return (
-    <div className="flex items-center gap-2 px-2 py-1 bg-muted/50 border-b text-xs shrink-0">
-      {/* The version label is a button: it opens the version-history sheet, which
-          holds the slider and lets you browse and restore any version. */}
-      <button
-        className="ml-auto inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-muted-foreground whitespace-nowrap tabular-nums hover:bg-accent hover:text-accent-foreground"
-        onClick={() => setShowSheet(true)}
-        title="Browse version history"
-      >
-        <span className="material-symbols-outlined" style={{ fontSize: 14 }}>history</span>
-        Version {history.version + 1}
-      </button>
-      <VersionHistorySheet open={showSheet} onOpenChange={setShowSheet} history={history} />
-    </div>
+    <VersionHistorySheet
+      open={history.active}
+      onOpenChange={(open) => {
+        // Restore already exits history mode itself — only toggle when the
+        // dismissal happens while still active, so we don't re-enter.
+        if (!open && history.active) history.toggleHistory();
+      }}
+      history={history}
+    />
   );
 }

@@ -4,32 +4,170 @@
 
 @custom-variant dark (&:is(.dark *));
 
-@theme {
-  --color-background: hsl(0 0% 100%);
-  --color-foreground: hsl(0 0% 3.9%);
-  --color-card: hsl(0 0% 100%);
-  --color-card-foreground: hsl(0 0% 3.9%);
-  --color-popover: hsl(0 0% 100%);
-  --color-popover-foreground: hsl(0 0% 3.9%);
-  --color-primary: hsl(0 0% 9%);
-  --color-primary-foreground: hsl(0 0% 98%);
-  --color-secondary: hsl(0 0% 96.1%);
-  --color-secondary-foreground: hsl(0 0% 9%);
-  --color-muted: hsl(0 0% 96.1%);
-  --color-muted-foreground: hsl(0 0% 45.1%);
-  --color-accent: hsl(0 0% 96.1%);
-  --color-accent-foreground: hsl(0 0% 9%);
-  --color-destructive: hsl(0 84.2% 60.2%);
-  --color-destructive-foreground: hsl(0 0% 98%);
-  --color-border: hsl(0 0% 89.8%);
-  --color-input: hsl(0 0% 89.8%);
-  --color-ring: hsl(0 0% 3.9%);
+/* ------------------------------------------------------------------ *
+ * Material Design 3 design tokens
+ *
+ * Raw role values live in :root (light) and .dark, using the canonical
+ * `--md-sys-color-*` names that @material/web reads directly. The Tailwind
+ * `@theme inline` block below maps the shadcn/Radix `--color-*` utilities
+ * onto these same roles, so BOTH the md-* web components and the existing
+ * Tailwind-styled components share one palette.
+ *
+ * Palette: Material Theme Builder, blue seed. Dark values are present but
+ * NOT wired to prefers-color-scheme / QA'd this pass (dark-ready only).
+ * ------------------------------------------------------------------ */
+:root {
+  --md-sys-color-primary: #415F91;
+  --md-sys-color-surface-tint: #415F91;
+  --md-sys-color-on-primary: #FFFFFF;
+  --md-sys-color-primary-container: #D6E3FF;
+  --md-sys-color-on-primary-container: #284777;
+  --md-sys-color-secondary: #565F71;
+  --md-sys-color-on-secondary: #FFFFFF;
+  --md-sys-color-secondary-container: #DAE2F9;
+  --md-sys-color-on-secondary-container: #3E4759;
+  --md-sys-color-tertiary: #705575;
+  --md-sys-color-on-tertiary: #FFFFFF;
+  --md-sys-color-tertiary-container: #FAD8FD;
+  --md-sys-color-on-tertiary-container: #573E5C;
+  --md-sys-color-error: #BA1A1A;
+  --md-sys-color-on-error: #FFFFFF;
+  --md-sys-color-error-container: #FFDAD6;
+  --md-sys-color-on-error-container: #93000A;
+  --md-sys-color-background: #F9F9FF;
+  --md-sys-color-on-background: #191C20;
+  --md-sys-color-surface: #F9F9FF;
+  --md-sys-color-on-surface: #191C20;
+  --md-sys-color-surface-variant: #E0E2EC;
+  --md-sys-color-on-surface-variant: #43474E;
+  --md-sys-color-outline: #74777F;
+  --md-sys-color-outline-variant: #C4C6D0;
+  --md-sys-color-shadow: #000000;
+  --md-sys-color-scrim: #000000;
+  --md-sys-color-inverse-surface: #2E3036;
+  --md-sys-color-inverse-on-surface: #F0F0F7;
+  --md-sys-color-inverse-primary: #AAC7FF;
+  --md-sys-color-surface-dim: #D8DAE0;
+  --md-sys-color-surface-bright: #F9F9FF;
+  --md-sys-color-surface-container-lowest: #FFFFFF;
+  --md-sys-color-surface-container-low: #F3F3FA;
+  --md-sys-color-surface-container: #EDEDF4;
+  --md-sys-color-surface-container-high: #E7E8EE;
+  --md-sys-color-surface-container-highest: #E2E2E9;
+
+  /* Reference typeface used by @material/web type tokens */
+  --md-ref-typeface-plain: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --md-ref-typeface-brand: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+
+  /* MD3 shape scale (for @material/web + hand-built components) */
+  --md-sys-shape-corner-small: 8px;
+  --md-sys-shape-corner-medium: 12px;
+  --md-sys-shape-corner-large: 16px;
+  --md-sys-shape-corner-extra-large: 28px;
+
+  /* MD3 elevation (dp 1..5) */
+  --elevation-1: 0 1px 2px 0 rgb(0 0 0 / 0.30), 0 1px 3px 1px rgb(0 0 0 / 0.15);
+  --elevation-2: 0 1px 2px 0 rgb(0 0 0 / 0.30), 0 2px 6px 2px rgb(0 0 0 / 0.15);
+  --elevation-3: 0 4px 8px 3px rgb(0 0 0 / 0.15), 0 1px 3px 0 rgb(0 0 0 / 0.30);
+  --elevation-4: 0 6px 10px 4px rgb(0 0 0 / 0.15), 0 2px 3px 0 rgb(0 0 0 / 0.30);
+  --elevation-5: 0 8px 12px 6px rgb(0 0 0 / 0.15), 0 4px 4px 0 rgb(0 0 0 / 0.30);
+
+  /* Legacy shadcn token still referenced as var(--radius) by some components. */
   --radius: 0.5rem;
+}
+
+.dark {
+  --md-sys-color-primary: #AAC7FF;
+  --md-sys-color-surface-tint: #AAC7FF;
+  --md-sys-color-on-primary: #0A305F;
+  --md-sys-color-primary-container: #284777;
+  --md-sys-color-on-primary-container: #D6E3FF;
+  --md-sys-color-secondary: #BEC6DC;
+  --md-sys-color-on-secondary: #283141;
+  --md-sys-color-secondary-container: #3E4759;
+  --md-sys-color-on-secondary-container: #DAE2F9;
+  --md-sys-color-tertiary: #DDBCE0;
+  --md-sys-color-on-tertiary: #3F2844;
+  --md-sys-color-tertiary-container: #573E5C;
+  --md-sys-color-on-tertiary-container: #FAD8FD;
+  --md-sys-color-error: #FFB4AB;
+  --md-sys-color-on-error: #690005;
+  --md-sys-color-error-container: #93000A;
+  --md-sys-color-on-error-container: #FFDAD6;
+  --md-sys-color-background: #111318;
+  --md-sys-color-on-background: #E2E2E9;
+  --md-sys-color-surface: #111318;
+  --md-sys-color-on-surface: #E2E2E9;
+  --md-sys-color-surface-variant: #43474E;
+  --md-sys-color-on-surface-variant: #C4C6D0;
+  --md-sys-color-outline: #8E9099;
+  --md-sys-color-outline-variant: #43474E;
+  --md-sys-color-shadow: #000000;
+  --md-sys-color-scrim: #000000;
+  --md-sys-color-inverse-surface: #E2E2E9;
+  --md-sys-color-inverse-on-surface: #2E3036;
+  --md-sys-color-inverse-primary: #415F91;
+  --md-sys-color-surface-dim: #111318;
+  --md-sys-color-surface-bright: #37393E;
+  --md-sys-color-surface-container-lowest: #0C0E13;
+  --md-sys-color-surface-container-low: #191C20;
+  --md-sys-color-surface-container: #1D2024;
+  --md-sys-color-surface-container-high: #282A2F;
+  --md-sys-color-surface-container-highest: #33353A;
+}
+
+/* Map Tailwind color utilities onto the (mode-aware) MD3 roles. `inline`
+ * substitutes these var() expressions directly into utilities, so every
+ * existing `bg-*`/`text-*`/`border-*` becomes dark-aware with no markup change. */
+@theme inline {
+  --color-background: var(--md-sys-color-surface);
+  --color-foreground: var(--md-sys-color-on-surface);
+  --color-card: var(--md-sys-color-surface-container-low);
+  --color-card-foreground: var(--md-sys-color-on-surface);
+  --color-popover: var(--md-sys-color-surface-container);
+  --color-popover-foreground: var(--md-sys-color-on-surface);
+  --color-primary: var(--md-sys-color-primary);
+  --color-primary-foreground: var(--md-sys-color-on-primary);
+  --color-secondary: var(--md-sys-color-surface-container-high);
+  --color-secondary-foreground: var(--md-sys-color-on-surface);
+  --color-muted: var(--md-sys-color-surface-container-high);
+  --color-muted-foreground: var(--md-sys-color-on-surface-variant);
+  --color-accent: var(--md-sys-color-surface-container-high);
+  --color-accent-foreground: var(--md-sys-color-on-surface);
+  --color-destructive: var(--md-sys-color-error);
+  --color-destructive-foreground: var(--md-sys-color-on-error);
+  --color-border: var(--md-sys-color-outline-variant);
+  --color-input: var(--md-sys-color-outline-variant);
+  --color-ring: var(--md-sys-color-primary);
+
+  /* New MD3 roles exposed as utilities for the redesigned surfaces */
+  --color-surface: var(--md-sys-color-surface);
+  --color-surface-container-lowest: var(--md-sys-color-surface-container-lowest);
+  --color-surface-container-low: var(--md-sys-color-surface-container-low);
+  --color-surface-container: var(--md-sys-color-surface-container);
+  --color-surface-container-high: var(--md-sys-color-surface-container-high);
+  --color-surface-container-highest: var(--md-sys-color-surface-container-highest);
+  --color-on-surface: var(--md-sys-color-on-surface);
+  --color-on-surface-variant: var(--md-sys-color-on-surface-variant);
+  --color-primary-container: var(--md-sys-color-primary-container);
+  --color-on-primary-container: var(--md-sys-color-on-primary-container);
+  --color-secondary-container: var(--md-sys-color-secondary-container);
+  --color-on-secondary-container: var(--md-sys-color-on-secondary-container);
+  --color-outline: var(--md-sys-color-outline);
+  --color-outline-variant: var(--md-sys-color-outline-variant);
+  --color-inverse-surface: var(--md-sys-color-inverse-surface);
+  --color-inverse-on-surface: var(--md-sys-color-inverse-on-surface);
+  --color-error-container: var(--md-sys-color-error-container);
+  --color-on-error-container: var(--md-sys-color-on-error-container);
 }
 
 @keyframes slideIn {
   from { opacity: 0; transform: translateY(8px); }
   to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes slideUp {
+  from { transform: translateY(100%); }
+  to   { transform: translateY(0); }
 }
 @keyframes fadeOut {
   from { opacity: 1; }
@@ -57,4 +195,39 @@
   .material-symbols-outlined.icon-filled {
     font-variation-settings: 'FILL' 1;
   }
+}
+
+@layer components {
+  .elevation-1 { box-shadow: var(--elevation-1); }
+  .elevation-2 { box-shadow: var(--elevation-2); }
+  .elevation-3 { box-shadow: var(--elevation-3); }
+  .elevation-4 { box-shadow: var(--elevation-4); }
+  .elevation-5 { box-shadow: var(--elevation-5); }
+
+  /* MD3 type scale — compact subset for hand-built chrome (md-* components
+     self-style; these are for the TopAppBar title, list text, etc.) */
+  .md-headline-small { font-size: 1.5rem;   line-height: 2rem;    font-weight: 400; }
+  .md-title-large    { font-size: 1.375rem; line-height: 1.75rem; font-weight: 400; }
+  .md-title-medium   { font-size: 1rem;     line-height: 1.5rem;  font-weight: 500; letter-spacing: 0.009em; }
+  .md-body-large     { font-size: 1rem;     line-height: 1.5rem; }
+  .md-body-medium    { font-size: 0.875rem; line-height: 1.25rem; }
+  .md-label-large    { font-size: 0.875rem; line-height: 1.25rem; font-weight: 500; letter-spacing: 0.006em; }
+
+  /* State layer — Material hover/press overlay for hand-built interactive
+     surfaces (not md-* components, which have their own ripple). Apply
+     `.state-layer` to a relatively-positioned element. */
+  .state-layer { position: relative; isolation: isolate; }
+  .state-layer::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: currentColor;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 120ms ease;
+    z-index: -1;
+  }
+  .state-layer:hover::after  { opacity: 0.08; }
+  .state-layer:active::after { opacity: 0.12; }
 }

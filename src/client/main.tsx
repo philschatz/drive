@@ -1,6 +1,9 @@
 import 'temporal-polyfill/global';
 
 import './globals.css';
+// Register the @material/web (MD3) custom elements after globals.css so the
+// `--md-sys-color-*` tokens they read are already defined.
+import './md-elements';
 import { render } from 'preact';
 import { App } from './App';
 import { getHashPath, hashHistory } from './hash-history';

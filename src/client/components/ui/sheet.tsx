@@ -38,25 +38,37 @@ function Sheet({ open, onOpenChange, children }: SheetProps) {
 type Side = "top" | "bottom" | "left" | "right";
 
 const sideClasses: Record<Side, string> = {
-  top: "inset-x-0 top-0 border-b",
-  bottom: "inset-x-0 bottom-0 border-t",
-  left: "inset-y-0 left-0 h-full w-3/4 border-r sm:max-w-sm",
-  right: "inset-y-0 right-0 h-full w-3/4 border-l sm:max-w-sm",
+  top: "inset-x-0 top-0 border-b bg-background rounded-b-none",
+  // Material bottom sheet: rounded top, raised surface tone, elevation, safe-area
+  // inset, slide-up entrance. `max-h-[85vh]` is the common per-consumer default.
+  bottom:
+    "inset-x-0 bottom-0 bg-surface-container-low rounded-t-[28px] elevation-3 " +
+    "pb-[env(safe-area-inset-bottom)] animate-[slideUp_220ms_cubic-bezier(0.05,0.7,0.1,1)]",
+  left: "inset-y-0 left-0 h-full w-3/4 border-r bg-background sm:max-w-sm",
+  right: "inset-y-0 right-0 h-full w-3/4 border-l bg-background sm:max-w-sm",
 };
 
 interface SheetContentProps {
   side?: Side;
   className?: string;
+  /** Show the drag handle (bottom sheets only). Default true for `side="bottom"`. */
+  showHandle?: boolean;
   children?: any;
 }
 
-function SheetContent({ side = "right", className, children }: SheetContentProps) {
+function SheetContent({ side = "right", className, showHandle, children }: SheetContentProps) {
   const { onClose } = useContext(SheetCtx);
   const contentRef = useRef<HTMLDivElement>(null);
+  const isBottom = side === "bottom";
+  const handleVisible = showHandle ?? isBottom;
 
   useEffect(() => {
     const prev = document.activeElement as HTMLElement | null;
-    contentRef.current?.focus();
+    // Child effects run first — if a field inside already grabbed focus
+    // (e.g. TaskEditor's title), don't steal it back to the container.
+    if (!contentRef.current?.contains(document.activeElement)) {
+      contentRef.current?.focus();
+    }
     return () => { prev?.focus(); };
   }, []);
 
@@ -70,11 +82,14 @@ function SheetContent({ side = "right", className, children }: SheetContentProps
         ref={contentRef}
         tabIndex={-1}
         className={cn(
-          "fixed z-[200] gap-4 bg-background p-6 shadow-lg overflow-y-auto outline-none",
+          "fixed z-[200] gap-4 p-6 overflow-y-auto outline-none",
           sideClasses[side],
           className,
         )}
       >
+        {handleVisible && (
+          <div className="mx-auto -mt-2 mb-3 h-1 w-8 rounded-full bg-outline-variant" aria-hidden="true" />
+        )}
         <button
           className="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
           onClick={onClose}

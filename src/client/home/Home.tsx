@@ -6,17 +6,21 @@ import { getMyAccess, onKeyhiveStateChanged } from '../shared/keyhive-api';
 import { PeerDot } from '../shared/presence';
 import { Button } from '@/components/ui/button';
 import { Alert } from '@/components/ui/alert';
-import { DeleteButton } from '@/components/ui/delete-button';
-import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator } from '@/components/ui/dropdown-menu';
 import { Progress } from '@/components/ui/progress';
+import { Fab } from '@/components/ui/fab';
 import { AccessIcon } from '@/components/AccessIcon';
+import { OverflowMenu, type OverflowMenuItem } from '../shared/OverflowMenu';
+import { useLongPress } from '../shared/useLongPress';
+import { AccessControlSheet } from '@/components/AccessControl';
+import { CreateDocSheet, type ImportKind } from './CreateDocSheet';
+import { DocActionsSheet, type DocActionsTarget } from './DocActionsSheet';
 import dayjs from 'dayjs';
 import relativeTimePlugin from 'dayjs/plugin/relativeTime';
 
 dayjs.extend(relativeTimePlugin);
 import { a1ToInternal } from '@/datagrid/helpers';
-import { DOC_PLUGINS, iconForType, docTypeLabel, type DocTypePlugin } from '@/doc-plugins';
-import { docUrl, sourceUrl } from '@/shared/doc-urls';
+import { iconForType, docTypeLabel, type DocTypePlugin } from '@/doc-plugins';
+import { docUrl } from '@/shared/doc-urls';
 import { relativeTime } from '../../shared/relative-time';
 import { settingSet, settingSetSync } from '../idb-storage';
 
@@ -44,12 +48,74 @@ function applyQueryResult(prev: DocEntry[], docId: string, result: any, lastModi
   });
 }
 
+/**
+ * One document row: a Material two-line list item.
+ * Tap opens the doc; long-press / right-click / the trailing kebab opens the
+ * per-doc actions sheet (Share / Rename / Archive / View source).
+ */
+function DocListItem({ entry, unseenFlag, onOpen, onActions }: {
+  entry: DocEntry;
+  unseenFlag: boolean;
+  onOpen: (entry: DocEntry) => void;
+  onActions: (entry: DocEntry) => void;
+}) {
+  const noAccess = entry.access === null;
+  const lp = useLongPress({
+    onTap: () => onOpen(entry),
+    onLongPress: () => onActions(entry),
+  });
+  const supporting = entry.loading
+    ? 'Loading…'
+    : noAccess
+      ? 'No access'
+      : `${relativeTime(entry.lastUpdated)} · (${(entry.count ?? 0).toLocaleString()})`;
+
+  return (
+    <md-list-item type="button" data-testid="doc-row" {...lp}>
+      <md-icon slot="start">{iconForType(entry.type)}</md-icon>
+      <div
+        slot="headline"
+        className="flex items-center gap-1.5"
+        style={noAccess ? { textDecoration: 'line-through', opacity: 0.6 } : undefined}
+      >
+        <span className="truncate">{entry.name || 'Untitled'}</span>
+        {!noAccess && unseenFlag && (
+          <span
+            data-testid="unseen-dot"
+            className="w-2 h-2 rounded-full shrink-0 bg-primary"
+            title="New changes since you last viewed this document"
+          />
+        )}
+      </div>
+      <div slot="supporting-text" title={entry.lastUpdated || undefined}>{supporting}</div>
+      <span slot="end" className="flex items-center gap-0.5">
+        <span className="inline-flex items-center justify-center h-8 w-8 text-muted-foreground">
+          <AccessIcon access={entry.access ?? null} style={{ fontSize: 18 }} />
+        </span>
+        <button
+          aria-label={`More actions for ${entry.name || 'Untitled'}`}
+          title="More actions"
+          className="inline-flex items-center justify-center h-10 w-10 rounded-full state-layer text-muted-foreground"
+          onClick={(e: MouseEvent) => { e.stopPropagation(); onActions(entry); }}
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: 20 }}>more_vert</span>
+        </button>
+      </span>
+    </md-list-item>
+  );
+}
+
 export function Home({ path }: { path?: string }) {
   const [entries, setEntries] = useState<DocEntry[]>([]);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [importStatus, setImportStatus] = useState<{ label: string; progress: number } | null>(null);
   const [listLoading, setListLoading] = useState(true);
+  // Bottom sheets: FAB "Create" chooser, long-press per-doc actions, and the
+  // Share / Rename follow-ups they open.
+  const [createOpen, setCreateOpen] = useState(false);
+  const [actionsEntry, setActionsEntry] = useState<DocEntry | null>(null);
+  const [shareEntry, setShareEntry] = useState<DocActionsTarget | null>(null);
   const repoPeers = usePeerList();
   const transports = usePeerTransports();
 
@@ -131,10 +197,9 @@ export function Home({ path }: { path?: string }) {
 
 
   const handleCreate = async (plugin: DocTypePlugin) => {
-    const name = prompt(`${plugin.createLabel} name:`, 'Untitled');
-    if (name === null) return;
-    const resolvedName = name || 'Untitled';
-    const { docId } = await createDoc(plugin.createInitialDoc(resolvedName), { type: plugin.type, name: resolvedName });
+    // Create immediately as "Untitled" — the doc opens with its title inline-
+    // editable (and Rename in the title-bar menu), so no blocking name prompt.
+    const { docId } = await createDoc(plugin.createInitialDoc('Untitled'), { type: plugin.type, name: 'Untitled' });
     window.location.hash = docUrl(docId);
   };
 
@@ -745,14 +810,25 @@ export function Home({ path }: { path?: string }) {
     [entries],
   );
 
+  // Top-app-bar overflow: app-level destinations that used to be toolbar buttons.
+  const homeMenuItems: OverflowMenuItem[] = [
+    ...(calendarCount > 1
+      ? [{ icon: 'date_range', label: 'All calendars', href: '#/calendars/' }]
+      : []),
+    { icon: 'contacts', label: 'Contacts', href: '#/contacts' },
+    { icon: 'settings', label: 'Settings', href: '#/settings' },
+  ];
+
   return (
-    <div>
-      <div className="flex items-center gap-2 mb-4">
-        <h1 className="text-2xl font-bold">Automerge Documents</h1>
-        <ConnectionStatus showDot />
+    <div className="max-w-screen-md mx-auto px-2 sm:px-4 pb-28">
+      {/* Top app bar */}
+      <div className="flex items-center gap-2 min-h-14 pl-2">
+        <h1 className="md-title-large font-bold flex-1 min-w-0 truncate">Documents</h1>
+        <ConnectionStatus showDot peers={repoPeers.map(peerId => ({ peerId }))} />
         {repoPeers.map(peerId => (
           <PeerDot key={peerId} peerId={peerId} direct={transports[peerId] === 'direct'} />
         ))}
+        <OverflowMenu aria-label="Menu" items={homeMenuItems} />
       </div>
 
       {importStatus && (
@@ -774,119 +850,28 @@ export function Home({ path }: { path?: string }) {
         </Alert>
       )}
 
-      <div className="flex items-center gap-2 mb-2 flex-wrap">
-        {calendarCount > 1 && (
-          <a href="#/calendars/">
-            <Button variant="outline">
-              <span className="material-symbols-outlined">date_range</span> All calendars
-            </Button>
-          </a>
-        )}
-        <a href="#/contacts">
-          <Button variant="outline">
-            <span className="material-symbols-outlined">contacts</span> Contacts
-          </Button>
-        </a>
-        <a href="#/settings">
-          <Button variant="outline">
-            <span className="material-symbols-outlined">settings</span> Settings
-          </Button>
-        </a>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="outline">
-              <span className="material-symbols-outlined">add</span> New
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent>
-            {DOC_PLUGINS.map(p => (
-              <DropdownMenuItem key={p.type} onSelect={() => handleCreate(p)}>
-                <span className="material-symbols-outlined">{p.icon}</span> {p.createLabel}
-              </DropdownMenuItem>
-            ))}
-            <DropdownMenuSeparator />
-            <DropdownMenuItem onSelect={() => icsInputRef.current?.click()}>
-              <span className="material-symbols-outlined">date_range</span> Import .ics
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => xlsInputRef.current?.click()}>
-              <span className="material-symbols-outlined">grid_on</span> Import .xlsx
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => jsonInputRef.current?.click()}>
-              <span className="material-symbols-outlined">code</span> Import .json
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-        <input type="file" ref={icsInputRef} accept=".ics,text/calendar" style={{ display: 'none' }} onChange={handleImportIcs as any} />
-        <input type="file" ref={xlsInputRef} accept=".xls,.xlsx,.csv" style={{ display: 'none' }} onChange={handleImportXlsx as any} />
-        <input type="file" ref={jsonInputRef} accept=".json,application/json" style={{ display: 'none' }} onChange={handleImportJson as any} />
-      </div>
+      {/* Document list */}
+      <md-list style={{ background: 'transparent' }}>
+        {sortedEntries.map(entry => (
+          <DocListItem
+            key={entry.documentId}
+            entry={entry}
+            unseenFlag={!!unseen[entry.documentId]}
+            onOpen={e => { window.location.hash = docUrl(e.documentId); }}
+            onActions={setActionsEntry}
+          />
+        ))}
+      </md-list>
+      {entries.length === 0 && (
+        <p className="text-sm text-muted-foreground py-4">
+          {listLoading ? 'Loading documents…' : 'No documents yet.'}
+        </p>
+      )}
 
-      <div className="flex flex-col">
-        {sortedEntries.map(entry => {
-          const noEntryAccess = entry.access === null;
-          const viewPath = docUrl(entry.documentId);
-          const icon = iconForType(entry.type);
-          return (
-            <div
-              key={entry.documentId}
-              className="flex items-center gap-2 py-1 px-1 flex-nowrap border-b border-border"
-            >
-              <span className="material-symbols-outlined" style={{ width: '1.2rem', textAlign: 'center', color: '#666' }}>{icon}</span>
-              <a href={viewPath} className="text-sm flex-1 hover:underline flex items-center gap-1" style={noEntryAccess ? { textDecoration: 'line-through', opacity: 0.6 } : undefined}>
-                {entry.name || 'Untitled'}
-                {!noEntryAccess && unseen[entry.documentId] && (
-                  <span
-                    data-testid="unseen-dot"
-                    className="w-2 h-2 rounded-full shrink-0 bg-sky-500"
-                    title="New changes since you last viewed this document"
-                  />
-                )}
-              </a>
-              {entry.loading ? (
-                <Progress className="w-16" value={0} title="Loading..." />
-              ) : entry.access === null ? (
-                <span className="text-xs text-muted-foreground flex items-center gap-1" title="You no longer have access to updates">
-                  No access
-                </span>
-              ) : (
-                <>
-                  <a href={viewPath} className="text-xs text-muted-foreground no-underline" style={{ minWidth: '4rem', textAlign: 'right' }} title={entry.lastUpdated || undefined}>
-                    {relativeTime(entry.lastUpdated)}
-                  </a>
-                  <a href={viewPath} className="text-xs text-muted-foreground no-underline">
-                    ({(entry.count ?? 0).toLocaleString()})
-                  </a>
-                </>
-              )}
-              <span className="inline-flex items-center justify-center h-8 w-8 text-muted-foreground">
-                <AccessIcon access={entry.access ?? null} style={{ fontSize: 18 }} />
-              </span>
-              {!noEntryAccess && (
-                <DeleteButton
-                  className="h-8 w-8"
-                  iconSize={18}
-                  icon="archive"
-                  tooltip="Archive"
-                  confirmMessage={`Archive "${entry.name || 'Untitled'}" ${docLabel(entry)}?`}
-                  onConfirm={() => handleArchive(entry)}
-                />
-              )}
-              <a
-                href={sourceUrl(entry.documentId)}
-                className="inline-flex items-center justify-center h-8 w-8 rounded-md text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-                title="View Source"
-              >
-                <span className="material-symbols-outlined">code</span>
-              </a>
-            </div>
-          );
-        })}
-        {entries.length === 0 && (
-          <p className="text-sm text-muted-foreground py-4">
-            {listLoading ? 'Loading documents…' : 'No documents yet.'}
-          </p>
-        )}
-      </div>
+      {/* Hidden import inputs (targets of the Create sheet's import rows) */}
+      <input type="file" ref={icsInputRef} accept=".ics,text/calendar" style={{ display: 'none' }} onChange={handleImportIcs as any} />
+      <input type="file" ref={xlsInputRef} accept=".xls,.xlsx,.csv" style={{ display: 'none' }} onChange={handleImportXlsx as any} />
+      <input type="file" ref={jsonInputRef} accept=".json,application/json" style={{ display: 'none' }} onChange={handleImportJson as any} />
 
       <div className="flex items-center gap-2 mb-2">
         {installPrompt ? (
@@ -903,6 +888,45 @@ export function Home({ path }: { path?: string }) {
       <div className="text-xs text-muted-foreground mt-4 text-center">
         <a href={`https://github.com/philschatz/drive/commit/${__APP_VERSION__}`} target="_blank" rel="noopener noreferrer" className="hover:underline">{__APP_VERSION__}</a> · built {dayjs(__BUILD_TIME__).fromNow()}
       </div>
+
+      {/* FAB → Create sheet (doc types + imports) */}
+      <Fab icon="add" aria-label="New document" onClick={() => setCreateOpen(true)} />
+      <CreateDocSheet
+        open={createOpen}
+        onOpenChange={setCreateOpen}
+        onCreate={handleCreate}
+        onImport={(kind: ImportKind) => {
+          const ref = kind === 'ics' ? icsInputRef : kind === 'xlsx' ? xlsInputRef : jsonInputRef;
+          ref.current?.click();
+        }}
+      />
+
+      {/* Long-press / kebab → per-doc actions, with Share & Rename follow-ups */}
+      <DocActionsSheet
+        entry={actionsEntry}
+        onOpenChange={open => { if (!open) setActionsEntry(null); }}
+        onShare={setShareEntry}
+        onRename={e => {
+          const name = prompt('Rename', e.name || 'Untitled');
+          if (name === null) return;
+          const trimmed = name.trim();
+          if (!trimmed) return;
+          updateDoc(e.documentId, (d, n) => { d.name = n; }, trimmed);
+        }}
+        onArchive={e => {
+          if (confirm(`Archive "${e.name || 'Untitled'}" ${docLabel(e as DocEntry)}?`)) {
+            handleArchive(e as DocEntry);
+          }
+        }}
+      />
+      {shareEntry && (
+        <AccessControlSheet
+          docId={shareEntry.documentId}
+          access={shareEntry.access}
+          open
+          onOpenChange={open => { if (!open) setShareEntry(null); }}
+        />
+      )}
     </div>
   );
 }

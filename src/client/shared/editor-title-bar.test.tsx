@@ -12,6 +12,19 @@ jest.mock('./presence', () => ({
   peerColor: (id: string) => `#${id.slice(0, 6)}`,
   peerDisplayName: (id: string) => `Peer ${id.slice(0, 8)}`,
   peerIdentityKey: (id: string, ug?: string | null) => ug || id.split('-')[0],
+  // Mirrors the real filter: drop self + own devices, collapse per identity.
+  dedupePeers: (peers: any[], myPeerId?: string | null, myGroup?: string | null) => {
+    const seen = new Set<string>();
+    return peers.filter((peer: any) => {
+      if (myPeerId && peer.peerId === myPeerId) return false;
+      const ug = peer.value?.userGroupId;
+      if (myGroup && ug === myGroup) return false;
+      const id = ug || peer.peerId.split('-')[0];
+      if (seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    });
+  },
   PeerDot: ({ peerId, label }: any) => <span title={label ?? `Peer ${peerId}`} />,
 }));
 
@@ -30,6 +43,7 @@ jest.mock('./keyhive-api', () => ({
 
 jest.mock('../components/AccessControl', () => ({
   AccessControl: () => null,
+  AccessControlSheet: () => null,
 }));
 
 let mockAccessReturn = { access: null, canEdit: true, loaded: true };
@@ -85,7 +99,9 @@ describe('EditorTitleBar', () => {
     const onBlur = jest.fn();
     render(<EditorTitleBar icon="grid" title="Test" titleEditable onTitleBlur={onBlur} />);
     const input = screen.getByDisplayValue('Test') as HTMLInputElement;
-    fireEvent.blur(input);
+    // preact/compat (loaded via the Sheet's createPortal import) aliases onBlur
+    // to a focusout listener; dispatch the native event jsdom-side.
+    fireEvent(input, new FocusEvent('focusout', { bubbles: true }));
     expect(onBlur).toHaveBeenCalled();
   });
 
@@ -177,21 +193,27 @@ describe('EditorTitleBar', () => {
     expect(backLink.getAttribute('href')).toBe('#/');
   });
 
-  it('shows Read-only badge when access is read', () => {
+  it('shows the inline share button for admins (no overflow Share item)', () => {
+    mockAccessReturn = { access: 'admin', canEdit: true, loaded: true };
+    render(<EditorTitleBar icon="grid" title="Test" docId="doc-123" />);
+    const btn = screen.getByLabelText('Share');
+    expect(btn.tagName).toBe('BUTTON');
+    // Exactly one Share surface — the inline button, not a duplicate menu item.
+    expect(screen.getAllByTitle('Share & permissions').length).toBe(1);
+  });
+
+  it('keeps Share in the overflow menu for non-admins', () => {
+    mockAccessReturn = { access: 'read', canEdit: false, loaded: true };
+    render(<EditorTitleBar icon="grid" title="Test" docId="doc-123" />);
+    expect(screen.queryByLabelText('Share')).toBeNull();
+    expect(screen.getByTitle('Share & permissions').tagName.toLowerCase()).toBe('md-menu-item');
+  });
+
+  it('shows no access badge text for any access level', () => {
     mockAccessReturn = { access: 'read', canEdit: false, loaded: true };
     render(<EditorTitleBar icon="grid" title="Test" />);
-    expect(screen.getByText('Read-only')).toBeDefined();
-  });
-
-  it('does not show Read-only badge when access is admin', () => {
-    mockAccessReturn = { access: 'admin', canEdit: true, loaded: true };
-    render(<EditorTitleBar icon="grid" title="Test" />);
     expect(screen.queryByText('Read-only')).toBeNull();
-  });
-
-  it('does not show Read-only badge when access is null (unshared doc)', () => {
-    mockAccessReturn = { access: null, canEdit: true, loaded: true };
-    render(<EditorTitleBar icon="grid" title="Test" />);
-    expect(screen.queryByText('Read-only')).toBeNull();
+    expect(screen.queryByText('Admin')).toBeNull();
+    expect(screen.queryByText('Editing')).toBeNull();
   });
 });

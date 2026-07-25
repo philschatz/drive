@@ -7,15 +7,14 @@ import { useDocumentHistory } from '../shared/useDocumentHistory';
 import { useCanEdit } from '../shared/useCanEdit';
 import { replaceDocHash, encodeRestPath } from '../shared/doc-urls';
 import { HistorySlider } from '../shared/HistorySlider';
+import { useLongPress } from '../shared/useLongPress';
 import type { TaskDocument, Task } from './schema';
 import { TaskEditor } from './TaskEditor';
 import { useDocumentValidation } from '../shared/useDocumentValidation';
 import { ValidationPanel } from '../shared/ValidationPanel';
 import { DocLoader } from '../shared/useDocument';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Checkbox } from '@/components/ui/checkbox';
 import { Badge } from '@/components/ui/badge';
+import { Fab } from '@/components/ui/fab';
 
 interface EditorState {
   uid: string;
@@ -23,7 +22,7 @@ interface EditorState {
   isNew: boolean;
 }
 
-const TASKS_QUERY = '{ tasks: (.tasks // {}), name: (.name // "Tasks"), description: (.description // "") }';
+const TASKS_QUERY = '{ tasks: (.tasks // {}), name: (.name // "Tasks") }';
 
 const PATH_PROP_TO_FIELDS: Record<string, string[]> = {
   title: ['ted-title'],
@@ -56,13 +55,81 @@ function sortedTasks(tasks: Record<string, Task>): { uid: string; task: Task }[]
   return [...incomplete, ...done];
 }
 
+/**
+ * One task row: tap toggles completion, long-press / right-click / trailing
+ * kebab opens the editor. The row itself carries the checkbox semantics
+ * (role/aria-checked); the leading md-checkbox is purely visual.
+ */
+function TaskListItem({ uid, task, canEdit, peerEditingTasks, onToggle, onEdit }: {
+  uid: string;
+  task: Task;
+  canEdit: boolean;
+  peerEditingTasks: Record<string, PeerFieldInfo>;
+  onToggle: (uid: string, task: Task) => void;
+  onEdit: (uid: string, task: Task) => void;
+}) {
+  const isDone = task.progress === 'completed' || task.progress === 'cancelled';
+  const peerEdit = peerEditingTasks[uid];
+  const lp = useLongPress({
+    onTap: () => { if (canEdit) onToggle(uid, task); },
+    onLongPress: () => { if (canEdit) onEdit(uid, task); },
+  });
+
+  return (
+    // NOTE: @material/web components shim host `role`/`aria-*` attributes into
+    // `data-*`, so row semantics can't be set here. The md-checkbox below is the
+    // state carrier for AT; the row itself is a button (md-list-item internal).
+    <md-list-item
+      type="button"
+      data-checked={isDone ? 'true' : 'false'}
+      data-testid="task-row"
+      style={{ opacity: peerEdit ? 0.5 : undefined }}
+      {...lp}
+    >
+      {/* checked must be a real boolean: Preact skips writing `checked` when the
+          value is null/undefined, so `isDone || undefined` would never uncheck.
+          Visual + AT state only — the row owns the interaction (tabIndex -1 keeps
+          it out of the tab order; pointer-events-none blocks stray clicks). */}
+      <md-checkbox
+        slot="start"
+        checked={isDone}
+        disabled={!canEdit}
+        tabIndex={-1}
+        className="pointer-events-none"
+      />
+      <div
+        slot="headline"
+        style={{
+          textDecoration: isDone ? 'line-through' : 'none',
+          opacity: isDone ? 0.5 : 1,
+        }}
+      >
+        {task.title || 'Untitled'}
+      </div>
+      <span slot="end" className="flex items-center gap-1.5">
+        {task.due && <Badge variant="secondary">{task.due.substring(0, 10)}</Badge>}
+        {task.priority ? <Badge variant="default">P{task.priority}</Badge> : null}
+        <PresenceDot fieldId={uid} peerFocusedFields={peerEditingTasks} />
+        {canEdit && (
+          <button
+            aria-label={`Edit ${task.title || 'Untitled'}`}
+            title="Edit"
+            className="inline-flex items-center justify-center h-10 w-10 rounded-full state-layer text-muted-foreground"
+            onClick={(e: MouseEvent) => { e.stopPropagation(); onEdit(uid, task); }}
+          >
+            <span className="material-symbols-outlined" style={{ fontSize: 20 }}>more_vert</span>
+          </button>
+        )}
+      </span>
+    </md-list-item>
+  );
+}
+
 export function Tasks({ docId, rest, readOnly }: { docId?: string; rest?: string; readOnly?: boolean; path?: string }) {
   const taskId = rest?.startsWith('tasks/') ? rest.slice(6).split('/')[0] : undefined;
   const [listName, setListName] = useState('Tasks');
-  const [listDesc, setListDesc] = useState('');
   const [tasks, setTasks] = useState<Record<string, Task>>({});
   const [editorState, setEditorState] = useState<EditorState | null>(null);
-  const [quickAddText, setQuickAddText] = useState('');
   const [showValidation, setShowValidation] = useState(false);
 
   const history = useDocumentHistory(docId!);
@@ -76,10 +143,10 @@ export function Tasks({ docId, rest, readOnly }: { docId?: string; rest?: string
   const editorStateRef = useRef(editorState);
   editorStateRef.current = editorState;
   const titleFocusedRef = useRef(false);
-  const descFocusedRef = useRef(false);
-  const quickAddRef = useRef<HTMLInputElement>(null);
   const pendingTaskIdRef = useRef(taskId);
 
+  // Auto-save: commits arrive on field blur/change while the editor stays open
+  // (dismissing the sheet is the only "done" gesture).
   const saveTask = useCallback((uid: string, taskData: Task) => {
     if (!canEditRef.current || !docId) return;
     updateDoc(docId, (d, deepAssign, uid, taskData) => {
@@ -93,7 +160,6 @@ export function Tasks({ docId, rest, readOnly }: { docId?: string; rest?: string
         deepAssign(d.tasks[uid], taskData);
       }
     }, deepAssign, uid, taskData);
-    setEditorState(null);
   }, [docId]);
 
   const deleteTask = useCallback((uid: string) => {
@@ -110,15 +176,6 @@ export function Tasks({ docId, rest, readOnly }: { docId?: string; rest?: string
     }
     setEditorState({ uid: uid!, task: task!, isNew });
   }, []);
-
-  const handleQuickAdd = useCallback(() => {
-    const title = quickAddText.trim();
-    if (!title) return;
-    const uid = generateUid();
-    const task: Task = { '@type': 'Task', title, progress: 'needs-action' };
-    saveTask(uid, task);
-    setQuickAddText('');
-  }, [quickAddText, saveTask]);
 
   const deleteCompleted = useCallback(() => {
     if (!canEditRef.current || !docId) return;
@@ -185,7 +242,6 @@ export function Tasks({ docId, rest, readOnly }: { docId?: string; rest?: string
         setListName(result.name);
         document.title = result.name + ' - Tasks';
       }
-      if (!descFocusedRef.current) setListDesc(result.description || '');
       // Update history tracking
       onNewHeadsRef.current(heads);
 
@@ -252,83 +308,42 @@ export function Tasks({ docId, rest, readOnly }: { docId?: string; rest?: string
         peerTitle={(peer) => `${peerDisplayName(peer.peerId, peer.value?.userGroupId)}${peer.value?.focusedField ? ' (editing)' : ''}`}
         onToggleHistory={history.toggleHistory}
         historyActive={history.active}
+        onUndo={canEdit ? history.undoLastChange : undefined}
         onToggleValidation={() => setShowValidation(v => !v)}
         validationActive={showValidation}
         validationCount={validationErrors.length}
         sourcePath={focusPath}
+        overflow={canEdit ? [{ icon: 'delete_sweep', label: 'Delete completed', onSelect: deleteCompleted }] : []}
       />
       <HistorySlider history={history} />
-      <div style={noAccess ? { opacity: 0.4, pointerEvents: 'none' } : undefined}>
-      <input
-        className="border-0 bg-transparent text-sm text-muted-foreground outline-none w-full"
-        placeholder="Add a description..."
-        value={listDesc}
-        onFocus={() => { descFocusedRef.current = true; }}
-        onInput={(e: any) => setListDesc(e.currentTarget.value)}
-        readOnly={!canEdit}
-        onBlur={(e: any) => {
-          descFocusedRef.current = false;
-          if (!docId || !canEdit) return;
-          const desc = e.currentTarget.value.trim();
-          setListDesc(desc);
-          updateDoc(docId, (d, desc) => { d.description = desc || undefined; }, desc);
-        }}
-        onKeyDown={(e: any) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
-      />
+      <div
+        className="max-w-screen-md mx-auto w-full px-2 sm:px-4 pb-28"
+        style={noAccess ? { opacity: 0.4, pointerEvents: 'none' } : undefined}
+      >
       {showValidation && <ValidationPanel errors={validationErrors} docId={docId} />}
-      {canEdit && (
-      <div className="flex items-center gap-2 mb-3">
-        <Input
-          ref={quickAddRef}
-          autoFocus
-          placeholder="Add a task..."
-          value={quickAddText}
-          onInput={(e: any) => setQuickAddText(e.currentTarget.value)}
-          onKeyDown={(e: any) => { if (e.key === 'Enter') handleQuickAdd(); }}
-          className="flex-1"
-        />
-        <Button onClick={handleQuickAdd}>Add</Button>
-        <Button variant="outline" className="text-destructive" onClick={deleteCompleted}>Delete Completed</Button>
-      </div>
+
+      <md-list style={{ background: 'transparent' }}>
+        {sorted.map(({ uid, task }) => (
+          <TaskListItem
+            key={uid}
+            uid={uid}
+            task={task}
+            canEdit={canEdit}
+            peerEditingTasks={peerEditingTasks}
+            onToggle={toggleComplete}
+            onEdit={openEditor}
+          />
+        ))}
+      </md-list>
+      {sorted.length === 0 && (
+        <p className="text-sm text-muted-foreground py-4">No tasks yet.</p>
       )}
 
-      <div className="flex flex-col">
-        {sorted.map(({ uid, task }) => {
-          const isDone = task.progress === 'completed' || task.progress === 'cancelled';
-          const peerEdit = peerEditingTasks[uid];
-          return (
-            <div
-              key={uid}
-              className="flex items-center gap-2 py-1 px-1 flex-nowrap border-b border-border"
-              style={{ cursor: 'default', opacity: peerEdit ? 0.5 : undefined }}
-            >
-              <Checkbox
-                checked={isDone}
-                disabled={!canEdit}
-                onCheckedChange={() => toggleComplete(uid, task)}
-              />
-              <span
-                className="text-sm flex-1 cursor-pointer"
-                style={{
-                  textDecoration: isDone ? 'line-through' : 'none',
-                  opacity: isDone ? 0.5 : 1,
-                }}
-                onClick={() => openEditor(uid, task)}
-              >
-                {task.title || 'Untitled'}
-              </span>
-              {task.due && <Badge variant="secondary">{task.due.substring(0, 10)}</Badge>}
-              {task.priority ? <Badge variant="default" className="bg-pink-500">P{task.priority}</Badge> : null}
-              <PresenceDot fieldId={uid} peerFocusedFields={peerEditingTasks} />
-            </div>
-          );
-        })}
-        {sorted.length === 0 && (
-          <p className="text-sm text-muted-foreground py-4">No tasks yet. Add one above.</p>
-        )}
       </div>
 
-      </div>
+      {canEdit && (
+        <Fab icon="add" aria-label="New task" onClick={() => openEditor(null, null)} />
+      )}
 
       <TaskEditor
         uid={editorState?.uid || ''}
@@ -338,6 +353,7 @@ export function Tasks({ docId, rest, readOnly }: { docId?: string; rest?: string
         onSave={saveTask}
         onDelete={deleteTask}
         onClose={() => setEditorState(null)}
+        onAddAnother={() => openEditor(null, null)}
         onFieldFocus={handleFieldFocus}
         peerFocusedFields={peerFocusedFields}
       />
