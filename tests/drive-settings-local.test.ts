@@ -181,4 +181,77 @@ describe('one-way opt-in (local → shared)', () => {
     expect(kv.get(KEY).contacts[ID]).toBe('Alice');   // data preserved
     expect(engine.driveSettingsHandle.__local).toBe(true);
   });
+
+  it('reuses an existing reachable DriveSettings doc instead of creating a duplicate', async () => {
+    const { engine, kv, result } = makeEngine();
+    await engine.ensureLocalSettings();
+    await engine.putContactName(ID, 'Alice');
+
+    const EXISTING = '2'.repeat(48); // the already-synced settings doc's id
+    let shared: any = { '@type': 'DriveSettings', contacts: {}, deviceNames: {}, archivedDocIds: {} };
+    engine.Automerge = Automerge;
+    engine.khOps = {
+      // The doc is reachable but NOT in accessibleKhIds (its group/CGKA ops
+      // haven't fully synced) — the exact case the old permission-gated discovery missed.
+      enumerateUserDocs: async () => ({ reachableKhIds: ['kh'], accessibleKhIds: [] }),
+    };
+    engine.amDocIdFromBytes = () => EXISTING;
+    // findReachableDriveSettingsDocs reads @type off the loaded handle.
+    engine.getOrLoadHandle = async () => ({
+      isReady: () => true,
+      doc: () => shared,
+      change: (fn: any) => { const c = structuredClone(shared); fn(c); shared = c; },
+      on: () => {},
+    });
+    // Emulate loadDriveSettingsHandle adopting the reachable doc.
+    engine.loadDriveSettingsHandle = async (docId: string) => {
+      engine.driveSettingsDocId = docId;
+      engine.driveSettingsHandle = {
+        doc: () => shared,
+        change: (fn: any) => { const c = structuredClone(shared); fn(c); shared = c; },
+        on: () => {},
+      };
+      return engine.driveSettingsHandle;
+    };
+    // Must NOT be called on the reuse path.
+    let created = false;
+    engine.ensureDriveSettingsDoc = async () => { created = true; return null; };
+
+    await engine.handleMessage({ type: 'enable-settings-sync', id: 1 });
+
+    expect(result().error).toBeUndefined();
+    expect(created).toBe(false);                 // no duplicate minted
+    expect(engine.settingsMode).toBe('shared');
+    expect(kv.get(KEY)).toBe(EXISTING);          // pointer adopts the existing doc (a string)
+    expect(shared.contacts[ID]).toBe('Alice');   // local blob seeded into the adopted doc
+  });
+
+  it('creates a new doc when no reachable DriveSettings doc exists', async () => {
+    const { engine, result } = makeEngine();
+    await engine.ensureLocalSettings();
+    await engine.putContactName(ID, 'Alice');
+
+    let shared: any = { '@type': 'DriveSettings', contacts: {}, deviceNames: {}, archivedDocIds: {} };
+    engine.Automerge = Automerge;
+    engine.khOps = { enumerateUserDocs: async () => ({ reachableKhIds: [], accessibleKhIds: [] }) };
+    engine.amDocIdFromBytes = () => DOC;
+    let created = false;
+    engine.ensureDriveSettingsDoc = async () => {
+      created = true;
+      engine.driveSettingsHandle = {
+        doc: () => shared,
+        change: (fn: any) => { const c = structuredClone(shared); fn(c); shared = c; },
+        on: () => {},
+      };
+      engine.driveSettingsDocId = DOC;
+      return engine.driveSettingsHandle;
+    };
+
+    await engine.handleMessage({ type: 'enable-settings-sync', id: 1 });
+
+    expect(result().error).toBeUndefined();
+    expect(created).toBe(true);                  // fell through to create
+    expect(engine.settingsMode).toBe('shared');
+    expect(shared.contacts[ID]).toBe('Alice');
+  });
 });

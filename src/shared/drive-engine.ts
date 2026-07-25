@@ -383,26 +383,11 @@ export class DriveEngine {
 
     const userGroupId = await this.khOps.getUserGroupId();
 
-    // 2) Guarded discovery among the user's OWN private docs (migration path for
-    //    already-linked devices with no pointer). Secure: a spoof doc shared by a
-    //    contact always retains that contact's permanently-rooted device as a
-    //    non-"me" member, so members.every(isMe) rejects it.
-    if (userGroupId) {
-      const own = await this.findOwnDriveSettingsDocs(userGroupId);
-      if (own.length) {
-        const canonical = own[0]; // lowest docId — deterministic across devices
-        await this.host.kv.set(KEYS.driveSettings, canonical);
-        const handle = await this.loadDriveSettingsHandle(canonical);
-        if (handle) {
-          if (own.length > 1) await this.mergeRedundantSettingsDocs(own.slice(1));
-          await this.mergeLegacyIntoSettings();
-          return handle;
-        }
-      }
-    }
-
-    // 3) Create it. createKeyhiveDoc mints the user-group if absent, so this
-    //    doubles as the first-write identity bootstrap.
+    // 2) Create it. createKeyhiveDoc mints the user-group if absent, so this
+    //    doubles as the first-write identity bootstrap. Reuse of an existing
+    //    settings doc is NOT attempted ambiently here — the enable-settings-sync
+    //    handler does that explicitly (findReachableDriveSettingsDocs) at the
+    //    user-initiated button press.
     if (opts.create || userGroupId) {
       const handle = await this.createDriveSettingsDoc();
       await this.mergeLegacyIntoSettings();
@@ -534,16 +519,20 @@ export class DriveEngine {
   }
 
   /**
-   * Guarded discovery: automerge docIds of DriveSettings docs private to this
-   * user's own group/devices, sorted ascending (canonical = [0]). Only ever used
-   * as a one-time migration convergence for already-linked devices.
+   * Explicit reuse discovery for the "sync settings across devices" opt-in:
+   * automerge docIds of every REACHABLE DriveSettings doc, sorted ascending
+   * (canonical = [0]). Deliberately skips the member/permission check the old
+   * guarded discovery used — a doc synced from another of the user's devices
+   * whose keyhive group/CGKA ops haven't fully arrived yet fails that check, and
+   * that is exactly the doc we must adopt instead of minting a duplicate. Only
+   * invoked from the enable-settings-sync handler (one-time, user-initiated).
    */
-  private async findOwnDriveSettingsDocs(_userGroupId: string): Promise<string[]> {
+  private async findReachableDriveSettingsDocs(): Promise<string[]> {
     if (!this.khOps || !this.amDocIdFromBytes) return [];
     const found: string[] = [];
     try {
-      const { accessibleKhIds } = await this.khOps.enumerateUserDocs();
-      for (const khId of accessibleKhIds) {
+      const { reachableKhIds } = await this.khOps.enumerateUserDocs();
+      for (const khId of reachableKhIds) {
         const amId = this.amDocIdFromBytes(base64ToBytes(khId));
         let handle: any;
         try {
@@ -551,17 +540,10 @@ export class DriveEngine {
           if (handle.isReady && !handle.isReady()) await handle.whenReady?.(['ready', 'unavailable']).catch(() => {});
         } catch { continue; }
         const doc = handle?.doc?.();
-        if (!doc || doc['@type'] !== 'DriveSettings') continue;
-        try {
-          // Security guard: only a doc private to me (every member is "me" — my
-          // device or my user-group). A contact's spoof always keeps that
-          // contact's permanently-rooted device as a non-me member.
-          const members = await this.khOps.getDocMembers(khId);
-          if (members.length && members.every(m => m.isMe)) found.push(amId);
-        } catch { /* incomplete CGKA — skip */ }
+        if (doc && doc['@type'] === 'DriveSettings') found.push(amId);
       }
     } catch (err) {
-      console.warn('[engine] findOwnDriveSettingsDocs failed:', errMsg(err));
+      console.warn('[engine] findReachableDriveSettingsDocs failed:', errMsg(err));
     }
     return found.sort();
   }
@@ -1736,6 +1718,19 @@ export class DriveEngine {
       return;
     }
 
+    // Read-only probe (no mutation, no mode flip): the docId of an existing
+    // reachable DriveSettings doc to adopt, or null. Used by the Settings page to
+    // decide whether "sync settings" is a permanent create (confirm) or a reuse.
+    if (msg.type === 'get-reachable-settings-doc') {
+      try {
+        const docs = this.khOps ? await this.findReachableDriveSettingsDocs() : [];
+        emit({ type: 'result', id: msg.id, result: docs[0] ?? null });
+      } catch (err) {
+        emit({ type: 'result', id: msg.id, error: errMsg(err) });
+      }
+      return;
+    }
+
     // One-way opt-in: migrate the device-local settings blob into a synced DriveSettings
     // doc and switch to SHARED mode. There is no reverse (Shared is permanent).
     if (msg.type === 'enable-settings-sync') {
@@ -1756,7 +1751,21 @@ export class DriveEngine {
         this.driveSettingsHandle = null;
         this.driveSettingsDocId = null;
         this.ensureSettingsInFlight = null;
-        const handle = await this.ensureDriveSettingsDoc({ create: true });
+        // Reuse an existing reachable DriveSettings doc (e.g. one already synced from
+        // another of this user's devices) rather than minting a duplicate. Skip the
+        // member/permission check — a synced-but-not-yet-CGKA-complete doc fails it, and
+        // that is the very case we need to catch. Create only when none is reachable.
+        let handle: any = null;
+        const reachable = await this.findReachableDriveSettingsDocs();
+        if (reachable.length) {
+          const canonical = reachable[0]; // lowest docId — deterministic across devices
+          handle = await this.loadDriveSettingsHandle(canonical);
+          if (handle) {
+            await this.host.kv.set(KEYS.driveSettings, canonical); // string pointer = SHARED
+            if (reachable.length > 1) await this.mergeRedundantSettingsDocs(reachable.slice(1));
+          }
+        }
+        if (!handle) handle = await this.ensureDriveSettingsDoc({ create: true });
         if (!handle) {
           // Rollback: keyhive/doc unavailable. The key still holds the blob object
           // (createDriveSettingsDoc never reached its kv.set), so no data is lost.

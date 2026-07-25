@@ -503,6 +503,16 @@ export async function enableSettingsSync(): Promise<void> {
 }
 
 /**
+ * Read-only probe: the docId of an existing reachable DriveSettings doc this device
+ * could adopt (already synced from another of the user's devices), or null. No
+ * side effects — lets the Settings page decide whether enabling sync is a permanent
+ * create (needs confirmation) or a frictionless reuse, BEFORE prompting.
+ */
+export async function getReachableSettingsDoc(): Promise<string | null> {
+  return (await request('get-reachable-settings-doc', {})) as string | null;
+}
+
+/**
  * Test hook: override the worker's presence timing (stale window, heartbeat,
  * liveness-check interval). Takes effect on the next presence setup, so call it
  * before subscribing. No reload — used by the presence Playwright specs to run

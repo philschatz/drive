@@ -150,6 +150,7 @@ export function getContactCard(): Promise<string> { return Promise.resolve(''); 
 export function receiveContactCard(): Promise<any> { return Promise.resolve({}); }
 export function getSettingsMode(): Promise<any> { return Promise.resolve({ mode: 'local', hasUserGroup: false }); }
 export function enableSettingsSync(): Promise<void> { return Promise.resolve(); }
+export function getReachableSettingsDoc(): Promise<string | null> { return Promise.resolve(null); }
 export function setDebugEnabled(): Promise<void> { return Promise.resolve(); }
 export function clearAllCaches(): Promise<void> { return Promise.resolve(); }
 export function deleteAllData(): Promise<void> { return Promise.resolve(); }

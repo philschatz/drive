@@ -10,6 +10,10 @@ export type MainToWorker =
   | { type: 'init' }
   | { type: 'set-debug-mode'; id: number; enabled: boolean }
   | { type: 'get-settings-mode'; id: number }
+  // Read-only probe: does a reachable DriveSettings doc already exist to adopt?
+  // Returns its docId (string) or null. Lets the UI decide whether enabling sync
+  // is a permanent CREATE (needs confirmation) or a frictionless reuse.
+  | { type: 'get-reachable-settings-doc'; id: number }
   | { type: 'enable-settings-sync'; id: number }
   // Seed THIS device's name to `name` only if none is stored yet (called once at
   // startup with the main-thread-generated default; the name is generated on the

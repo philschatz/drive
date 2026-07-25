@@ -15,7 +15,7 @@ import {
   type IdentityInfo,
 } from '../shared/keyhive-api';
 import { useDevices, useDeviceStatuses } from '../shared/use-devices';
-import { setDebugEnabled, clearAllCaches, deleteAllData, enableSettingsSync } from '../worker-api';
+import { setDebugEnabled, clearAllCaches, deleteAllData, enableSettingsSync, getReachableSettingsDoc } from '../worker-api';
 import { idbGet, idbSet, isDebugEnabled, KEYS } from '../idb-storage';
 import { getContactName, setContactName, getAllContactNames } from '../contact-names';
 import { getAllDeviceNames, setDeviceName } from '../device-names';
@@ -91,14 +91,21 @@ export function Settings({ path }: { path?: string }) {
   };
 
   const handleEnableSync = async () => {
-    if (!window.confirm(
+    setError('');
+    // Probe FIRST (before any prompt): if a synced settings doc already exists and
+    // is reachable, just adopt it — no scary "this is permanent" confirmation. Only
+    // CREATING a brand-new synced doc is the irreversible step worth confirming.
+    let existing: string | null = null;
+    try {
+      existing = await getReachableSettingsDoc();
+    } catch { /* fall through to the confirm+create path */ }
+    if (!existing && !window.confirm(
       'Sync your settings (contacts, device names, seen state) across your devices?\n\n' +
       "This is permanent — synced settings can't be made device-only again.",
     )) return;
     setSyncing(true);
-    setError('');
     try {
-      await enableSettingsSync(); // migrates local settings into the synced doc
+      await enableSettingsSync(); // adopts the existing reachable doc, else creates + migrates
       window.location.reload();
     } catch (err: any) {
       setError('Could not enable settings sync: ' + (err.message ?? err));
