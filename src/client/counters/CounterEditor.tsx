@@ -5,6 +5,8 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
+import { DeleteButton } from '@/components/ui/delete-button';
+import { relativeTime } from '../../shared/relative-time';
 import type { CounterEvent } from './schema';
 import type { RecurrenceRule, NDay } from '../calendar/schema';
 
@@ -27,12 +29,15 @@ interface CounterEditorProps {
   event: CounterEvent;
   isNew: boolean;
   opened: boolean;
+  /** Whether the current user may edit; gates the per-completion delete buttons. */
+  canEdit?: boolean;
   onSave: (uid: string, data: CounterEvent) => void;
   onDelete: (uid: string) => void;
+  onDeleteCompletion: (uid: string, key: string) => void;
   onClose: () => void;
 }
 
-export function CounterEditor({ uid, event, isNew, opened, onSave, onDelete, onClose }: CounterEditorProps) {
+export function CounterEditor({ uid, event, isNew, opened, canEdit = true, onSave, onDelete, onDeleteCompletion, onClose }: CounterEditorProps) {
   const [title, setTitle] = useState(event.title || '');
   const [startTime, setStartTime] = useState(event.startTime ? event.startTime.substring(0, 5) : '');
   const [duration, setDuration] = useState(event.duration || '');
@@ -55,7 +60,21 @@ export function CounterEditor({ uid, event, isNew, opened, onSave, onDelete, onC
     setByDay((event.recurrenceRule?.byDay || []).map(d => d.day));
   }, [event]);
 
+  // Re-render every 30s while open so relative completion times stay current
+  // ("just now" → "a minute ago") without needing a new click.
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!opened) return;
+    // window.* — the `interval` state setter above shadows the global setInterval.
+    const t = window.setInterval(() => setTick(n => n + 1), 30_000);
+    return () => window.clearInterval(t);
+  }, [opened]);
+
   const recurring = frequency !== 'none';
+
+  // Recorded completions, newest first. Keys are lexicographically-sortable
+  // local-datetime strings, so a reverse string sort is chronological.
+  const completionKeys = Object.keys(event.completions ?? {}).sort((a, b) => (a < b ? 1 : -1));
 
   const handleSave = () => {
     let recurrenceRule: RecurrenceRule | undefined;
@@ -160,6 +179,32 @@ export function CounterEditor({ uid, event, isNew, opened, onSave, onDelete, onC
             <Button variant="outline" onClick={onClose}>Cancel</Button>
             {!isNew && <Button variant="ghost" className="text-destructive hover:text-destructive" onClick={handleDelete}>Delete</Button>}
           </div>
+
+          {!isNew && (
+            <div className="mt-6 border-t border-border pt-4">
+              <h3 className="text-xs font-semibold uppercase text-muted-foreground mb-2">
+                Completions ({completionKeys.length})
+              </h3>
+              {completionKeys.length === 0 ? (
+                <p className="text-sm text-muted-foreground">No completions yet.</p>
+              ) : (
+                <ul className="flex flex-col">
+                  {completionKeys.map(key => (
+                    <li key={key} className="flex items-center gap-2 py-1 border-b border-border">
+                      <span className="text-sm flex-1" title={key}>{relativeTime(key)}</span>
+                      {canEdit && (
+                        <DeleteButton
+                          tooltip="Delete completion"
+                          confirmMessage={`Delete this completion (${relativeTime(key)})?`}
+                          onConfirm={() => onDeleteCompletion(uid, key)}
+                        />
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
         </div>
       </SheetContent>
     </Sheet>

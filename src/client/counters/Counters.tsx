@@ -146,6 +146,16 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
     }, uid, clickKey());
   }, [docId]);
 
+  // Remove a single recorded completion (a mis-click). This is its own mutation:
+  // saveCounter re-attaches the completions map wholesale and never deletes keys.
+  const deleteCompletion = useCallback((uid: string, key: string) => {
+    if (!canEditRef.current || !docId) return;
+    updateDoc(docId, (d, uid, key) => {
+      const ev = d.events[uid];
+      if (ev?.completions) delete ev.completions[key];
+    }, uid, key);
+  }, [docId]);
+
   const openEditor = useCallback((uid: string | null, event: CounterEvent | null) => {
     const isNew = !uid;
     if (isNew) {
@@ -331,13 +341,23 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
                   cursor: canEdit ? 'pointer' : 'default',
                   opacity: peerEditingEvents[uid] ? 0.5 : status === 'done' ? 0.6 : 1,
                 }}
-                onClick={() => { if (canEdit) recordClick(uid); }}
-                title={canEdit ? 'Click to record a completion' : undefined}
+                onClick={() => { if (canEdit) openEditor(uid, ev); }}
+                title={canEdit ? 'Click to edit' : undefined}
               >
-                <span className="material-symbols-outlined text-lg" style={{ color: iconColor }}>
-                  {icon}
-                </span>
-                <span className="text-sm flex-1">{ev.title || 'Untitled'}</span>
+                {/* Icon + title: the completion-recording target (checkbox-style).
+                    stopPropagation so it doesn't also open the editor. */}
+                <div
+                  className="flex items-center gap-2 min-w-0"
+                  onClick={(e: any) => { if (canEdit) { e.stopPropagation(); recordClick(uid); } }}
+                  title={canEdit ? 'Click to record a completion' : undefined}
+                >
+                  <span className="material-symbols-outlined text-lg" style={{ color: iconColor }}>
+                    {icon}
+                  </span>
+                  <span className="text-sm truncate">{ev.title || 'Untitled'}</span>
+                </div>
+                {/* Stretch: clicking here (the rest of the row) opens the editor. */}
+                <div className="flex-1" />
                 {schedule && <Badge variant="secondary">{schedule}</Badge>}
                 {clickCount > 0 && <Badge variant="outline" title={`${clickCount} recorded`}>{clickCount}×</Badge>}
                 {canEdit && (
@@ -402,8 +422,10 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
         event={editorState?.event || { '@type': 'Event', title: '' }}
         isNew={editorState?.isNew || false}
         opened={!!editorState}
+        canEdit={canEdit}
         onSave={saveCounter}
         onDelete={deleteCounter}
+        onDeleteCompletion={deleteCompletion}
         onClose={() => setEditorState(null)}
       />
     </>

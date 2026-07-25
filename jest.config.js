@@ -67,6 +67,11 @@ module.exports = {
         '^preact/compat$': '<rootDir>/node_modules/preact/compat/dist/compat.js',
         '^preact$': '<rootDir>/node_modules/preact/dist/preact.js',
         '^react$': '<rootDir>/node_modules/preact/compat/dist/compat.js',
+        // Radix primitives compile to the automatic JSX runtime; route both the
+        // prod and dev variants to Preact so Radix-based UI (Label/Select/…)
+        // renders under jsdom instead of pulling in real React.
+        '^react/jsx-runtime$': '<rootDir>/node_modules/preact/jsx-runtime/dist/jsxRuntime.js',
+        '^react/jsx-dev-runtime$': '<rootDir>/node_modules/preact/jsx-runtime/dist/jsxRuntime.js',
         '^react-dom$': '<rootDir>/node_modules/preact/compat/dist/compat.js',
         '^react-dom/test-utils$': '<rootDir>/node_modules/preact/test-utils/dist/testUtils.js',
         '\\.css$': '<rootDir>/src/client/__mocks__/style.js',

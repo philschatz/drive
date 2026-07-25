@@ -41,10 +41,18 @@ test.describe('Counters', () => {
     await expect(page.getByRole('heading', { name: 'To do' })).toBeVisible();
     await expect(row).toHaveAttribute('data-status', 'pending');
 
-    // Clicking the row records a completion: it moves to "Done" with a 1× badge.
-    await row.click();
+    // Clicking the icon+title records a completion: it moves to "Done" with a 1× badge.
+    await row.getByText('Stretch').click();
     await expect(row).toHaveAttribute('data-status', 'done');
     await expect(page.getByRole('heading', { name: 'Done' })).toBeVisible();
+    await expect(row.getByText('1×')).toBeVisible();
+
+    // Clicking the rest of the row (here the 1× badge) opens the editor, not a
+    // completion. Cancel to leave serial state untouched.
+    await row.getByText('1×').click();
+    await expect(page.getByText('Edit Counter')).toBeVisible();
+    await page.getByRole('button', { name: 'Cancel' }).click();
+    await expect(page.getByText('Edit Counter')).toBeHidden();
     await expect(row.getByText('1×')).toBeVisible();
 
     // "No repeat" makes a schedule-less tally where every click counts.
@@ -54,8 +62,8 @@ test.describe('Counters', () => {
     const tally = page.locator('[data-testid="counter-list"] div', { hasText: 'Pushups' }).first();
     await expect(tally).toHaveAttribute('data-status', 'tally');
     await expect(page.getByRole('heading', { name: 'No schedule' })).toBeVisible();
-    await tally.click();
-    await tally.click();
+    await tally.getByText('Pushups').click();
+    await tally.getByText('Pushups').click();
     await expect(tally.getByText('2×')).toBeVisible();
 
     // "Other…" opens the editor pre-filled; saving creates the item and returns
