@@ -9,6 +9,12 @@ import type { RendezvousStatus } from './rendezvous-protocol';
 export type MainToWorker =
   | { type: 'init' }
   | { type: 'set-debug-mode'; id: number; enabled: boolean }
+  | { type: 'get-settings-mode'; id: number }
+  | { type: 'enable-settings-sync'; id: number }
+  // Seed THIS device's name to `name` only if none is stored yet (called once at
+  // startup with the main-thread-generated default; the name is generated on the
+  // main thread since the worker has no reliable `navigator`).
+  | { type: 'ensure-device-name'; id: number; agentId: string; name: string }
   | { type: 'set-presence-timing'; id: number; staleMs?: number; heartbeatMs?: number; livenessCheckMs?: number }
   | { type: 'clear-caches'; id: number }
   | { type: 'get-doc-list'; id: number }

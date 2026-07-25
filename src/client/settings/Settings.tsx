@@ -15,9 +15,11 @@ import {
   type IdentityInfo,
 } from '../shared/keyhive-api';
 import { useDevices, useDeviceStatuses } from '../shared/use-devices';
-import { setDebugEnabled, clearAllCaches, deleteAllData } from '../worker-api';
+import { setDebugEnabled, clearAllCaches, deleteAllData, enableSettingsSync } from '../worker-api';
 import { idbGet, idbSet, isDebugEnabled, KEYS } from '../idb-storage';
-import { getContactName, setContactName } from '../contact-names';
+import { getContactName, setContactName, getAllContactNames } from '../contact-names';
+import { getAllDeviceNames, setDeviceName } from '../device-names';
+import { sourceUrl } from '../shared/doc-urls';
 import { navigateToUrlOrHash } from '../shared/navigate-url';
 export function Settings({ path }: { path?: string }) {
   const [identity, setIdentity] = useState<IdentityInfo | null>(null);
@@ -31,6 +33,10 @@ export function Settings({ path }: { path?: string }) {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const [debugEnabled] = useState(isDebugEnabled());
+  // Automerge docId of the synced DriveSettings doc when in SHARED mode; null in LOCAL
+  // mode (where KEYS.driveSettings holds the settings blob object, not a docId string).
+  const [settingsDocId, setSettingsDocId] = useState<string | null>(null);
+  const [syncing, setSyncing] = useState(false);
 
   // The device list, its live refresh, and removal are owned by the shared hook.
   const { devices, removeDevice, changeDeviceRole } = useDevices({ onError: setError, onMessage: setMessage });
@@ -44,6 +50,10 @@ export function Settings({ path }: { path?: string }) {
       const name = (id.userGroupId && getContactName(id.userGroupId)) || '';
       setDisplayName(name);
       setSavedName(name);
+      // KEYS.driveSettings holds a docId string (SHARED) or a blob object (LOCAL);
+      // only a string is a real settings-doc pointer.
+      const settingsVal = await idbGet<unknown>(KEYS.driveSettings);
+      setSettingsDocId(typeof settingsVal === 'string' ? settingsVal : null);
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -80,6 +90,22 @@ export function Settings({ path }: { path?: string }) {
     }
   };
 
+  const handleEnableSync = async () => {
+    if (!window.confirm(
+      'Sync your settings (contacts, device names, seen state) across your devices?\n\n' +
+      "This is permanent — synced settings can't be made device-only again.",
+    )) return;
+    setSyncing(true);
+    setError('');
+    try {
+      await enableSettingsSync(); // migrates local settings into the synced doc
+      window.location.reload();
+    } catch (err: any) {
+      setError('Could not enable settings sync: ' + (err.message ?? err));
+      setSyncing(false);
+    }
+  };
+
   const handleClearCaches = async () => {
     try {
       await clearAllCaches(); // clears caches, then reloads the page
@@ -99,11 +125,11 @@ export function Settings({ path }: { path?: string }) {
 
   const handleExport = async () => {
     try {
-      const [docList, contactNames, deviceNames] = await Promise.all([
-        idbGet<unknown[]>(KEYS.docIds).then(v => v ?? []),
-        idbGet<Record<string, string>>(KEYS.contactNames).then(v => v ?? {}),
-        idbGet<Record<string, string>>(KEYS.deviceNames).then(v => v ?? {}),
-      ]);
+      // Contact/device names now live in the synced DriveSettings doc; read them
+      // from the worker-hydrated caches. docList stays a device-local hint.
+      const docList = await idbGet<unknown[]>(KEYS.docIds).then(v => v ?? []);
+      const contactNames = getAllContactNames();
+      const deviceNames = getAllDeviceNames();
       const payload = { version: 1, exportedAt: new Date().toISOString(), docList, contactNames, deviceNames };
       const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
@@ -134,12 +160,14 @@ export function Settings({ path }: { path?: string }) {
           throw new Error('Invalid backup: contactNames must be an object.');
         // Legacy backups may carry an `invites` field — it's no longer used, so ignore it.
         // `deviceNames` was added later; older backups omit it, so default to {}.
-        const deviceNames = (payload.deviceNames && typeof payload.deviceNames === 'object' && !Array.isArray(payload.deviceNames))
+        const deviceNames: Record<string, string> = (payload.deviceNames && typeof payload.deviceNames === 'object' && !Array.isArray(payload.deviceNames))
           ? payload.deviceNames : {};
+        await idbSet(KEYS.docIds, payload.docList);
+        // Contact/device names live in the synced DriveSettings doc now — restore
+        // them through the worker so they land in (and re-sync from) that document.
         await Promise.all([
-          idbSet(KEYS.docIds, payload.docList),
-          idbSet(KEYS.contactNames, payload.contactNames),
-          idbSet(KEYS.deviceNames, deviceNames),
+          ...Object.entries(payload.contactNames as Record<string, string>).map(([id, name]) => setContactName(id, name)),
+          ...Object.entries(deviceNames).map(([id, name]) => setDeviceName(id, name)),
         ]);
         window.location.reload();
       } catch (err: any) {
@@ -213,6 +241,18 @@ export function Settings({ path }: { path?: string }) {
                 {identity.deviceId.slice(0, 16)}...
               </code>
             </div>
+            {settingsDocId && (
+              <div className="flex items-center gap-2">
+                <span className="text-muted-foreground">Shared Settings:</span>
+                <a
+                  href={sourceUrl(settingsDocId)}
+                  className="text-xs font-mono text-primary underline underline-offset-2"
+                  title="View / edit your shared settings (contacts, device names, seen state)"
+                >
+                  {settingsDocId.slice(0, 16)}…
+                </a>
+              </div>
+            )}
           </div>
         ) : (
           <p className="text-sm text-muted-foreground">Keyhive not available.</p>
@@ -259,6 +299,39 @@ export function Settings({ path }: { path?: string }) {
             Link Device
           </a>
         </div>
+      </section>
+
+      {/* Settings storage — Local (default) vs Shared (one-way opt-in) */}
+      <section className="mb-6">
+        <h2 className="text-lg font-semibold mb-2">Settings Storage</h2>
+        {settingsDocId ? (
+          <p className="text-xs text-muted-foreground">
+            Your settings (contacts, device names, seen state) are{' '}
+            <strong>synced across your devices</strong>. See the “Shared Settings” link in the
+            Identity section above to inspect them.
+          </p>
+        ) : (
+          <>
+            <p className="text-xs text-muted-foreground mb-2">
+              Your settings are stored <strong>only on this device</strong>. You can sync them across
+              your devices — this is <strong>permanent</strong> and can’t be undone.
+            </p>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={handleEnableSync}
+              disabled={syncing || !identity?.userGroupId}
+              title={identity?.userGroupId ? undefined : 'Add a contact or link a device first to enable synced settings'}
+            >
+              {syncing ? 'Enabling…' : 'Sync settings across devices'}
+            </Button>
+            {!identity?.userGroupId && (
+              <p className="text-[11px] text-muted-foreground mt-1">
+                Add a contact or link a device first to enable synced settings.
+              </p>
+            )}
+          </>
+        )}
       </section>
 
       {/* Navigate to URL */}

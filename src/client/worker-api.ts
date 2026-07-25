@@ -14,6 +14,7 @@ export type { RendezvousStatus } from '../shared/rendezvous-protocol';
 import { idbDelPrefix, settingGet, settingSetSync, closeDb, CACHE_PREFIX } from './idb-storage';
 import { setContactNamesDispatch, applyContactNamesFromWorker } from './contact-names';
 import { setDeviceNamesDispatch, applyDeviceNamesFromWorker } from './device-names';
+import { generateDefaultDeviceName } from './lib/device-name';
 import type { ArchiveDocResult } from './shared/keyhive-types';
 import { startWebRTCBridge } from './webrtc-bridge';
 import { WorkerClient } from './worker-client';
@@ -179,7 +180,17 @@ let _workerUserGroupId: string | null = null;
 export function getWorkerUserGroupId(): string | null { return _workerUserGroupId; }
 keyhiveReady
   .then(() => getIdentity())
-  .then((id) => { _workerUserGroupId = id.userGroupId; })
+  .then((id) => {
+    _workerUserGroupId = id.userGroupId;
+    // Seed this device's name once, at device creation: generate the default here
+    // (the worker has no reliable `navigator`) and let the worker persist it
+    // set-if-absent, so the device has a real, editable name instead of a live
+    // placeholder. Fire-and-forget — must not block or fail identity hydration.
+    if (typeof navigator !== 'undefined') {
+      request('ensure-device-name', { agentId: id.agentId, name: generateDefaultDeviceName() })
+        .catch((err) => console.warn('[worker-api] ensure-device-name failed:', err));
+    }
+  })
   .catch(() => { /* never became ready — leave null */ });
 
 // ── Connection status ───────────────────────────────────────────────────────
@@ -443,6 +454,26 @@ export async function setDebugEnabled(enabled: boolean): Promise<void> {
   settingSetSync('debug-enable', enabled); // sync mirror, read on next load
   await request('set-debug-mode', { enabled }); // worker persists IDB + clears caches if enabling
   window.location.reload();
+}
+
+export type SettingsMode = 'local' | 'shared';
+
+/**
+ * Current settings storage mode: LOCAL (device-local JSON blob) or SHARED (synced
+ * DriveSettings doc), plus whether a keyhive user-group exists (gates the opt-in).
+ */
+export async function getSettingsMode(): Promise<{ mode: SettingsMode; hasUserGroup: boolean }> {
+  return request<{ mode: SettingsMode; hasUserGroup: boolean }>('get-settings-mode', {});
+}
+
+/**
+ * One-way opt-in: migrate this device's local settings into a synced DriveSettings
+ * doc and switch to SHARED mode (irreversible). Requires an existing user-group.
+ * Does NOT reload — the caller decides (the Settings page reloads; the device-link
+ * flow proceeds straight into the rendezvous so the new pointer is handed off).
+ */
+export async function enableSettingsSync(): Promise<void> {
+  await request('enable-settings-sync', {});
 }
 
 /**

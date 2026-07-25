@@ -359,3 +359,84 @@ test('a newly linked device loads the original device\'s documents', async ({ br
     await deviceB?.close();
   }
 });
+
+/**
+ * Regression: same as above, but the ORIGINAL device has opted into SHARED
+ * settings (it owns a keyhive-private DriveSettings doc). Linking a new device
+ * must still load AND decrypt the original's existing documents — the new device
+ * adopts the settings-doc pointer, and that adoption must not stall keyhive
+ * convergence for the rest of the library. Default settings mode is Local, so
+ * this Shared-host path is otherwise untested.
+ */
+test('a newly linked device loads documents when the host uses Shared settings', async ({ browser }) => {
+  let deviceA: Peer | undefined;
+  let deviceB: Peer | undefined;
+  try {
+    [deviceA, deviceB] = await Promise.all([newPeer(browser, 'deviceA'), newPeer(browser, 'deviceB')]);
+
+    // Device A: established group + a document, THEN opt into Shared settings so it
+    // owns a synced DriveSettings doc (the precondition that reproduces the bug).
+    await deviceA.call('ensureUserGroup', { create: true });
+    const { docId } = await deviceA.call('createDoc', {
+      '@type': 'TaskList',
+      name: 'My list',
+      tasks: {},
+    });
+    await deviceA.call('enableSettingsSync');
+    await waitFor(
+      () => deviceA!.call('getSettingsMode'),
+      (m) => m.mode === 'shared',
+      { label: 'deviceA is in Shared settings mode' },
+    );
+    const a = await deviceA.call('getLinkPayload');
+    expect(a.userGroupId).toBeTruthy();
+
+    // Link device B via the encrypted rendezvous (what the UI does).
+    const { rendezvousId, key } = await deviceA.call('rendezvousCreateDeviceLink');
+    const linkedPromise = deviceA.page.evaluate(
+      (rid) => new Promise<string>((resolve) => {
+        const off = (window as any).__drive.onRendezvousEvent((e: any) => {
+          if (e.rendezvousId === rid && (e.status === 'linked' || e.status === 'error')) {
+            off(); resolve(e.status);
+          }
+        });
+      }),
+      rendezvousId,
+    );
+    await deviceB.call('rendezvousJoinDeviceLink', rendezvousId, key);
+    expect(await linkedPromise).toBe('linked');
+
+    await waitFor(
+      () => deviceB!.call('getIdentity'),
+      (id) => id.userGroupId === a.userGroupId,
+      { label: 'deviceB adopts shared group' },
+    );
+
+    // The original device's document must appear AND its content must decrypt on
+    // the new device — despite the adopted (initially unavailable) settings doc.
+    await waitFor(
+      () => deviceB!.call('getDocList'),
+      (list) => list.some((e) => e.id === docId),
+      { label: 'deviceB loads the original device\'s doc (Shared host)', timeout: 45_000 },
+    );
+    await waitFor(
+      () => deviceB!.call('queryDoc', docId, '.name').then((r) => r.result).catch(() => null),
+      (result) => result === 'My list',
+      { label: 'deviceB reads the synced doc content (Shared host)', timeout: 45_000 },
+    );
+
+    // The shared DriveSettings doc itself must also sync to deviceB (its adoption is
+    // now event-driven, not re-polled every ingest). deviceA seeded its own device
+    // name at startup, which enableSettingsSync copied into the shared doc; deviceB
+    // learns it ONLY by loading that doc.
+    const idA = await deviceA.call('getIdentity');
+    await waitFor(
+      () => deviceB!.call('getAllDeviceNames'),
+      (names) => !!names[idA.agentId],
+      { label: 'deviceB syncs the shared settings doc', timeout: 45_000 },
+    );
+  } finally {
+    await deviceA?.close();
+    await deviceB?.close();
+  }
+});

@@ -12,6 +12,7 @@ import { Alert } from '@/components/ui/alert';
 import { DeviceList } from '@/components/DeviceList';
 import { useDevices, useDeviceStatuses } from '../shared/use-devices';
 import { rendezvousCreateDeviceLink, getIdentity } from '../shared/keyhive-api';
+import { getSettingsMode, enableSettingsSync } from '../worker-api';
 import { resolveDeviceName } from '../device-names';
 import { useWsStatus } from '../shared/automerge';
 import { RendezvousShare } from './RendezvousShare';
@@ -22,7 +23,32 @@ export function LinkDeviceSharePage({ path }: { path?: string }) {
   const [message, setMessage] = useState('');
   // Bump to (re)mount RendezvousShare; >0 means the share has been started.
   const [started, setStarted] = useState(0);
+  const [preparing, setPreparing] = useState(false);
   const connected = useWsStatus();
+
+  // Start linking. If this device still keeps its settings LOCAL, first ask whether to
+  // sync them to the new device — "yes" opts into SHARED (one-way) before the rendezvous
+  // so the settings-doc pointer gets handed off; an already-SHARED device skips the ask.
+  const handleStart = async () => {
+    setError('');
+    setPreparing(true);
+    try {
+      const { mode } = await getSettingsMode();
+      if (mode === 'local') {
+        const sync = window.confirm(
+          'Sync your settings (contacts, device names, seen state) to the new device?\n\n' +
+          'If you agree, your settings will sync across your devices from now on (this is permanent). ' +
+          'Otherwise each device keeps its own settings.',
+        );
+        if (sync) await enableSettingsSync();
+      }
+      setStarted(n => n + 1);
+    } catch (err: any) {
+      setError('Could not start linking: ' + (err.message ?? err));
+    } finally {
+      setPreparing(false);
+    }
+  };
 
   const { devices, removeDevice, changeDeviceRole } = useDevices({ onError: setError, onMessage: setMessage });
   const deviceStatuses = useDeviceStatuses();
@@ -63,11 +89,11 @@ export function LinkDeviceSharePage({ path }: { path?: string }) {
         <Button
           size="sm"
           variant="outline"
-          onClick={() => setStarted(n => n + 1)}
-          disabled={!connected}
+          onClick={handleStart}
+          disabled={!connected || preparing}
           title={connected ? undefined : 'Disconnected from the server — reconnect to start the process'}
         >
-          Start the process
+          {preparing ? 'Preparing…' : 'Start the process'}
         </Button>
         {started > 0 && (
           <div className="mt-2">

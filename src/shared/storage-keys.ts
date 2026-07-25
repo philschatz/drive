@@ -17,30 +17,47 @@
 /** Source-of-truth keys for non-cache, non-settings persisted data. */
 export const KEYS = {
   docIds:             'data:my-doc-ids',
+  userGroupId:        'data:auth:user-group-id',
   /**
-   * Docs the user archived from the home page while their user-group still had
-   * access (the self-revoke wasn't possible). Map of automerge docId →
-   * { grantSigs }: the direct-grant signatures at archive time, so a later
-   * grant with an unseen signature (a deliberate re-share) un-archives the doc.
-   * reconcileHomeDocs skips these in its add-back pass.
+   * The single home of this user's settings, whose *value type* selects the storage mode:
+   *   - a **string** = the Automerge docId of the synced, keyhive-private DriveSettings
+   *     document ⇒ SHARED mode (contacts + names, device names, and archived-doc
+   *     tombstones sync across the user's devices);
+   *   - an **object** = the same settings shape held as a device-local JSON blob
+   *     (`{'@type':'DriveSettings', …}`) ⇒ LOCAL mode (no sync, no user-group minted);
+   *   - **absent** ⇒ LOCAL (a fresh blob is seeded).
+   * The docId half is TRUSTED state — only ever set from local creation, the one-way
+   * "sync settings" opt-in, or the device-link rendezvous; never by scanning synced docs
+   * for `@type:'DriveSettings'` (a contact could share a spoof). Opting into SHARED
+   * overwrites the blob with the docId string and is irreversible. See
+   * src/client/settings/schema.ts and ensureDriveSettingsDoc/ensureLocalSettings in
+   * drive-engine.ts.
    */
-  archivedDocIds:     'data:archived-doc-ids',
-  contactNames:       'data:contact-names',
-  /**
-   * Friendly per-device names, keyed by device agentId (parallel to contactNames,
-   * which is keyed by user-group id). Holds this device's own name plus peer
-   * device names learned during the device-link rendezvous. A blank/absent entry
-   * falls back to a generated default (see src/client/lib/device-name.ts).
-   */
-  deviceNames:        'data:device-names',
-  knownContactGroups: 'data:known-contact-groups',
+  driveSettings: 'data:auth:drive-settings-doc-id',
   /**
    * Per-device seen state: automerge docId → the doc's heads (sorted) when a
-   * viewing (non-peek) query last saw it. Missing entry = never viewed = the
-   * home page shows the new-changes dot.
+   * viewing (non-peek) query last saw it. Missing entry = never viewed = the home
+   * page shows the new-changes dot. Deliberately device-local (never synced into
+   * the DriveSettings doc): it changes on every doc edit, and syncing that churn
+   * would bloat keyhive on every change.
    */
   lastViewedHeads:    'data:last-viewed-heads',
-  userGroupId:        'data:auth:user-group-id',
+} as const;
+
+/**
+ * Legacy `data:*` IDB keys whose data now lives in the synced DriveSettings
+ * document (contacts + names merged into one `contacts` map; device names and
+ * archived-doc tombstones moved verbatim). Read once by the engine's one-time
+ * migration (which seeds the doc, then deletes them) and still referenced by the
+ * idb v1→v2 rename map so an even older profile lands on these names first. No
+ * live code writes them. (Seen state, `data:last-viewed-heads`, was NOT moved —
+ * it stays device-local; see KEYS.lastViewedHeads.)
+ */
+export const LEGACY_IDB_KEYS = {
+  contactNames:       'data:contact-names',
+  deviceNames:        'data:device-names',
+  knownContactGroups: 'data:known-contact-groups',
+  archivedDocIds:     'data:archived-doc-ids',
 } as const;
 
 /** Everything under this prefix is disposable cache (deletable with no effect). */

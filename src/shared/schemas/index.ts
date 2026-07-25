@@ -24,14 +24,18 @@ import { calendarSchemaPlugin } from '../../client/calendar/schema';
 import { taskListSchemaPlugin } from '../../client/tasks/schema';
 import { dataGridSchemaPlugin } from '../../client/datagrid/schema';
 import { countersSchemaPlugin } from '../../client/counters/schema';
+import { driveSettingsSchemaPlugin } from '../../client/settings/schema';
 
 /** Every known document type's validation core. Adding a document type means
- * registering its schema core here and its full plugin in src/client/doc-plugins. */
+ * registering its schema core here and its full plugin in src/client/doc-plugins.
+ * `DriveSettings` is the exception: it has no editor View, so it is registered
+ * here (validation) but intentionally NOT in DOC_PLUGINS. */
 export const SCHEMA_PLUGINS: DocSchemaPlugin[] = [
   calendarSchemaPlugin,
   taskListSchemaPlugin,
   dataGridSchemaPlugin,
   countersSchemaPlugin,
+  driveSettingsSchemaPlugin,
 ];
 
 /**
