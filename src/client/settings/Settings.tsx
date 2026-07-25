@@ -3,10 +3,12 @@
  */
 
 import { useState, useEffect, useCallback } from 'preact/hooks';
-import { Button, buttonVariants } from '@/components/ui/button';
+import { Button } from '@/components/ui/button';
 import { Alert } from '@/components/ui/alert';
 import { DeviceList } from '@/components/DeviceList';
 import { ScanQrButton } from '@/components/ScanQrButton';
+import { AddFriendSheet } from './AddFriendSheet';
+import { AddDeviceSheet } from './AddDeviceSheet';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import {
@@ -37,6 +39,8 @@ export function Settings({ path }: { path?: string }) {
   // mode (where KEYS.driveSettings holds the settings blob object, not a docId string).
   const [settingsDocId, setSettingsDocId] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
+  const [addFriendOpen, setAddFriendOpen] = useState(false);
+  const [addDeviceOpen, setAddDeviceOpen] = useState(false);
 
   // The device list, its live refresh, and removal are owned by the shared hook.
   const { devices, removeDevice, changeDeviceRole } = useDevices({ onError: setError, onMessage: setMessage });
@@ -287,10 +291,10 @@ export function Settings({ path }: { path?: string }) {
           </Button>
         </div>
         <div className="mt-3 flex items-center gap-2">
-          <a href="#/add-friend" className={buttonVariants({ variant: 'outline', size: 'sm' })}>
+          <Button variant="outline" size="sm" onClick={() => setAddFriendOpen(true)}>
             <span className="material-symbols-outlined mr-1" style={{ fontSize: 16 }}>person_add</span>
             Add Friend
-          </a>
+          </Button>
         </div>
       </section>
 
@@ -299,12 +303,12 @@ export function Settings({ path }: { path?: string }) {
         <h2 className="text-lg font-semibold mb-2">Devices</h2>
         <DeviceList devices={devices} onRemove={removeDevice} onChangeRole={changeDeviceRole} statuses={deviceStatuses} />
 
-        {/* Link another device — full flow on its own page */}
+        {/* Link another device — opens the linking sheet */}
         <div className="mt-4">
-          <a href="#/link-device" className={buttonVariants({ variant: 'outline', size: 'sm' })}>
+          <Button variant="outline" size="sm" onClick={() => setAddDeviceOpen(true)}>
             <span className="material-symbols-outlined mr-1" style={{ fontSize: 16 }}>devices</span>
             Link Device
-          </a>
+          </Button>
         </div>
       </section>
 
@@ -404,6 +408,9 @@ export function Settings({ path }: { path?: string }) {
           Delete All Data
         </Button>
       </section>
+
+      <AddFriendSheet open={addFriendOpen} onOpenChange={setAddFriendOpen} />
+      <AddDeviceSheet open={addDeviceOpen} onOpenChange={setAddDeviceOpen} />
     </div>
   );
 }

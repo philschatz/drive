@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback } from 'preact/hooks';
-import { Button, buttonVariants } from '@/components/ui/button';
+import { Button } from '@/components/ui/button';
 import { Alert } from '@/components/ui/alert';
 import { DeleteButton } from '@/components/ui/delete-button';
 import { EditableUserName } from '@/components/EditableUserName';
 import { ScanQrButton } from '@/components/ScanQrButton';
+import { AddFriendSheet } from '../settings/AddFriendSheet';
 import { getDocMembers, getKnownContacts, getIdentity } from '../shared/keyhive-api';
 import { keyhiveReady } from '../shared/automerge';
 import { fetchDocList } from '../worker-api';
@@ -32,6 +33,7 @@ export function Contacts({ path }: { path?: string }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [addFriendOpen, setAddFriendOpen] = useState(false);
   const deviceStatuses = useDeviceStatuses();
 
   const toggleExpanded = (agentId: string) => {
@@ -160,10 +162,10 @@ export function Contacts({ path }: { path?: string }) {
           <span className="material-symbols-outlined" style={{ fontSize: 16 }}>refresh</span>
         </Button>
         <ScanQrButton className="ml-auto" onError={setError} />
-        <a href="#/add-friend" className={buttonVariants({ variant: 'outline', size: 'sm' })}>
+        <Button variant="outline" size="sm" onClick={() => setAddFriendOpen(true)}>
           <span className="material-symbols-outlined mr-1" style={{ fontSize: 16 }}>person_add</span>
           Add Friend
-        </a>
+        </Button>
       </div>
 
       {error && (
@@ -247,6 +249,11 @@ export function Contacts({ path }: { path?: string }) {
       {!loading && contacts.length === 0 && (
         <p className="text-sm text-muted-foreground py-4">No contacts yet. Share a document to discover contacts.</p>
       )}
+
+      <AddFriendSheet
+        open={addFriendOpen}
+        onOpenChange={(o) => { setAddFriendOpen(o); if (!o) refresh(); }}
+      />
     </div>
   );
 }

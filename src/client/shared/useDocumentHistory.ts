@@ -12,6 +12,8 @@ export interface DocumentHistory {
   version: number;
   /** Total number of changes in history */
   changeCount: number;
+  /** The full list of versions (index + epoch-seconds timestamp), newest last. */
+  entries: Array<{ version: number; time: number }>;
   /** Timestamp of the current history entry */
   time: number | null;
   /** Toggle history mode on/off */
@@ -20,8 +22,8 @@ export interface DocumentHistory {
   onSliderChange: (version: number) => void;
   /** Jump to the latest version */
   jumpToLatest: () => void;
-  /** Undo all changes after the current version */
-  undoToVersion: () => void;
+  /** Restore the document to a specific version, then exit history mode. */
+  restoreToVersion: (version: number) => Promise<void>;
   /**
    * Call this from your subscribeQuery callback with the new heads.
    * Used to track when new changes arrive while in history mode.
@@ -76,16 +78,15 @@ export function useDocumentHistory(docId: string): DocumentHistory {
     setDocVersion(docId, null);
   }, [docId, changeCount]);
 
-  const undoToVersion = useCallback(async () => {
-    if (!active || isLatest) return;
-    await restoreDocToVersion(docId, version);
+  const restoreToVersion = useCallback(async (target: number) => {
+    await restoreDocToVersion(docId, target);
     // Worker clears pinnedVersion after restore; exit history mode
     setDocVersion(docId, null);
     setVersion(-1);
     setEntries([]);
     setChangeCount(0);
     atLatestRef.current = true;
-  }, [active, isLatest, docId, version]);
+  }, [docId]);
 
   /**
    * Called by editor's subscribeQuery callback when new heads arrive.
@@ -110,11 +111,12 @@ export function useDocumentHistory(docId: string): DocumentHistory {
     isLatest,
     version,
     changeCount,
+    entries,
     time,
     toggleHistory,
     onSliderChange,
     jumpToLatest,
-    undoToVersion,
+    restoreToVersion,
     onNewHeads,
   };
 }

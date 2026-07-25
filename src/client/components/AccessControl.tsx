@@ -4,7 +4,7 @@
  * Rendered as a Sheet (slide-over panel) triggered from the editor title bar.
  */
 
-import { useState, useEffect, useCallback } from 'preact/hooks';
+import { useState, useEffect, useCallback, useRef } from 'preact/hooks';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Button } from '@/components/ui/button';
 import { DeleteButton } from '@/components/ui/delete-button';
@@ -21,6 +21,7 @@ import {
   type MemberInfo,
 } from '../shared/keyhive-api';
 import { getContactName, mergeCachedContacts } from '../contact-names';
+import { AddFriendSheet } from '../settings/AddFriendSheet';
 import { EditableUserName } from './EditableUserName';
 import { accessTitle } from './AccessIcon';
 import { useDeviceStatuses, mostConnectedStatus } from '../shared/use-devices';
@@ -42,6 +43,10 @@ export function AccessControl({ docId, access: accessProp }: AccessControlProps)
   const [inviteRole, setInviteRole] = useState<string>('read');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [addFriendOpen, setAddFriendOpen] = useState(false);
+  // A friend just added via the sheet, to auto-select in the dropdown once they
+  // surface in the contacts list (see refresh()).
+  const pendingSelectRef = useRef<string | null>(null);
   const deviceStatuses = useDeviceStatuses();
 
   const isAdmin = myAccess?.toLowerCase() === 'admin';
@@ -78,6 +83,12 @@ export function AccessControl({ docId, access: accessProp }: AccessControlProps)
       const c = mergeCachedContacts(contactsResult.value, exclude);
       setContacts(c);
       setSelectedContact(prev => {
+        // A friend just added via the sheet wins as soon as they appear in the list.
+        const pending = pendingSelectRef.current;
+        if (pending && c.some(ct => ct.agentId === pending)) {
+          pendingSelectRef.current = null;
+          return pending;
+        }
         if (prev && c.some(ct => ct.agentId === prev)) return prev;
         return c.length > 0 ? c[0].agentId : '';
       });
@@ -172,7 +183,7 @@ export function AccessControl({ docId, access: accessProp }: AccessControlProps)
         <span className="material-symbols-outlined" style={{ fontSize: 18 }}>share</span>
       </button>
       <Sheet open={open} onOpenChange={setOpen}>
-        <SheetContent>
+        <SheetContent side="bottom" className="max-h-[85vh]">
           <SheetHeader>
             <SheetTitle>Share & Permissions</SheetTitle>
           </SheetHeader>
@@ -243,11 +254,11 @@ export function AccessControl({ docId, access: accessProp }: AccessControlProps)
             <div className="mt-6">
               <h3 className="text-sm font-medium mb-2">Share with a contact</h3>
               {contacts.length === 0 ? (
-                <p className="text-xs text-muted-foreground mb-3">
-                  <a href="#/add-friend" className="underline">Add a friend</a>
+                <p className="text-xs text-muted-foreground mb-2">
+                  You have no contacts yet — add a friend to share with them.
                 </p>
               ) : (
-                <div className="flex items-center gap-2 mb-3">
+                <div className="flex items-center gap-2 mb-2">
                   <Select value={selectedContact} onValueChange={setSelectedContact}>
                     <SelectTrigger className="h-8 text-xs flex-1">
                       <SelectValue />
@@ -284,6 +295,10 @@ export function AccessControl({ docId, access: accessProp }: AccessControlProps)
                   </Button>
                 </div>
               )}
+              <Button variant="outline" size="sm" onClick={() => setAddFriendOpen(true)}>
+                <span className="material-symbols-outlined mr-1" style={{ fontSize: 16 }}>person_add</span>
+                Add a friend
+              </Button>
             </div>
           )}
 
@@ -291,6 +306,17 @@ export function AccessControl({ docId, access: accessProp }: AccessControlProps)
           <div className="mt-6 text-xs text-muted-foreground">
             Your role: <span className="capitalize font-medium">{myAccess || 'unknown'}</span>
           </div>
+
+          {/* Add-a-friend sheet — on close, refresh() runs so the new friend
+              (recorded in pendingSelectRef) auto-selects in the dropdown above. */}
+          <AddFriendSheet
+            open={addFriendOpen}
+            onOpenChange={(o) => {
+              setAddFriendOpen(o);
+              if (!o) refresh();
+            }}
+            onAdded={(groupId) => { pendingSelectRef.current = groupId; }}
+          />
         </SheetContent>
       </Sheet>
     </>

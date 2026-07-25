@@ -53,6 +53,13 @@ jest.mock('../shared/use-devices', () => ({
   mostConnectedStatus: () => ({ online: false }),
 }));
 
+// AddFriendSheet transitively imports shared/automerge → worker-api (import.meta /
+// new Worker), which the jsdom jest env can't load. These tests don't open the
+// sheet, so stub it out.
+jest.mock('../settings/AddFriendSheet', () => ({
+  AddFriendSheet: () => null,
+}));
+
 import { AccessControl } from './AccessControl';
 
 beforeEach(() => {

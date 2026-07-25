@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'preact/hooks';
-import { openDoc, subscribeQuery, updateDoc, getDocHistory, debugGetVersionPatches, setDocVersion } from '../worker-api';
+import { openDoc, subscribeQuery, updateDoc, getDocHistory, debugGetVersionPatches, setDocVersion, restoreDocToVersion } from '../worker-api';
 import { peerColor, peerDisplayName, usePresence } from '../shared/presence';
 import { EditorTitleBar } from '../shared/EditorTitleBar';
 import { HistorySlider } from '../shared/HistorySlider';
@@ -389,6 +389,7 @@ export function SourceViewer({ docId, rest, readOnly }: { docId?: string; rest?:
     isLatest,
     version,
     changeCount,
+    entries: historyMeta,
     time: versionTime,
     toggleHistory: () => {},
     onSliderChange: (v: number) => {
@@ -401,7 +402,14 @@ export function SourceViewer({ docId, rest, readOnly }: { docId?: string; rest?:
       if (!latest) loadHistory();
     },
     jumpToLatest,
-    undoToVersion: () => {},
+    restoreToVersion: async (target: number) => {
+      if (!docId) return;
+      await restoreDocToVersion(docId, target);
+      // Worker clears pinnedVersion after restore; return to the live latest view.
+      atLatest.current = true;
+      setDocVersion(docId, null);
+      loadHistory();
+    },
     onNewHeads: () => {},
   };
 

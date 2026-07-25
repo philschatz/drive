@@ -3,8 +3,9 @@ import { newPeer, waitFor, type Peer } from './support/peer';
 
 /**
  * End-to-end "Add Friend" through the real UI + link (not the worker API):
- *   - the sharer opens #/add-friend, clicks "Start the process", and the QR link
- *     appears in a readonly input we read out of the DOM;
+ *   - the sharer opens the Add Friend sheet (from Contacts), which auto-starts the
+ *     rendezvous — no "Start the process" button — and the QR link appears in a
+ *     readonly input we read out of the DOM;
  *   - a SECOND, genuinely-cold browser opens that link directly — AddFriendPage's
  *     doReceive() runs on mount, so the receiver's worker/keyhive may still be
  *     booting (the real-world race the worker-level rendezvous.spec never hits,
@@ -45,13 +46,16 @@ async function coldOpenLink(browser: Browser, name: string, url: string): Promis
   return { name, context, page, call, close: () => context.close() };
 }
 
-/** Sharer opens Add Friend, starts the exchange, and returns the QR/link URL. */
+/** Sharer opens the Add Friend sheet, which auto-starts the exchange, and returns the QR/link URL. */
 async function startShareAndGetLink(alice: Peer): Promise<string> {
-  await alice.page.goto('/#/add-friend');
-  const startBtn = alice.page.getByRole('button', { name: 'Start the process' });
-  await expect(startBtn).toBeEnabled({ timeout: 30_000 }); // gated on the relay WS connecting
-  await startBtn.click();
+  // Drive it from Contacts (not Settings): the sheet auto-starts on open, so there's
+  // no "Start the process" button, and Contacts has no other "Save" button to collide
+  // with the sheet's contact-name Save used by the naming test below.
+  await alice.page.goto('/#/contacts');
+  await alice.page.getByRole('button', { name: 'Add Friend' }).click();
 
+  // The sheet stages the rendezvous once keyhive + the relay WS are ready; the
+  // readonly link input appears when it's staged (the generous timeout covers connect).
   const linkInput = alice.page.locator('input[readonly]');
   await expect(linkInput).toHaveValue(/#\/add-friend\/r\./, { timeout: 30_000 });
   return linkInput.inputValue();

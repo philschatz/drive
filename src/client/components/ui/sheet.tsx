@@ -63,7 +63,7 @@ function SheetContent({ side = "right", className, children }: SheetContentProps
   return (
     <>
       <div
-        className="overlay fixed inset-0 z-[200] bg-black/80"
+        className="overlay fixed inset-0 z-[200] bg-black/50"
         onClick={onClose}
       />
       <div
