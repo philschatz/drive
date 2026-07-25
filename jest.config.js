@@ -1,4 +1,9 @@
 process.env.AUTOMERGE_DATA_DIR = '.data-jest';
+// Silence the relay's per-message firehose + info logs under the test runner
+// (mirrors playwright.config.ts). See src/backend/relay-log.ts — this also gates
+// the expected-hardening relayWarn/relayError lines, leaving genuine internal
+// failures (raw console.error) still visible. Workers inherit this env.
+process.env.RELAY_QUIET = '1';
 
 /** @type {import('jest').Config} */
 module.exports = {
@@ -11,6 +16,7 @@ module.exports = {
       testTimeout: 15000,
       globalSetup: '<rootDir>/tests/setup.js',
       setupFiles: ['<rootDir>/tests/setup-subduction.js'],
+      setupFilesAfterEnv: ['<rootDir>/tests/support/setup-console.ts'],
       roots: ['<rootDir>/src', '<rootDir>/tests'],
       // Only *.test.ts — *.spec.ts is reserved for Playwright (src/client/tests-pw).
       testMatch: ['**/__tests__/**/*.ts', '**/?(*.)+(test).ts'],
@@ -39,6 +45,7 @@ module.exports = {
       displayName: 'ui',
       preset: 'ts-jest',
       testEnvironment: 'jsdom',
+      setupFilesAfterEnv: ['<rootDir>/tests/support/setup-console.ts'],
       roots: ['<rootDir>/src/client'],
       testMatch: ['**/?(*.)+(test).tsx', '**/clipboard.test.ts'],
       transform: {

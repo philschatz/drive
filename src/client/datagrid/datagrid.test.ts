@@ -552,14 +552,6 @@ describe('HyperFormula array spill', () => {
     const { registerCustomFunctions } = require('./hf-functions');
     registerCustomFunctions();
 
-    // Check if the test's HyperFormula has our FILTER registered
-    const hfFuncs = HyperFormula.getRegisteredFunctionNames('enGB');
-    console.log('FILTER in test HF:', hfFuncs.includes('FILTER'));
-
-    // Check if it's the same instance
-    const HF2 = require('hyperformula').default;
-    console.log('Same HF instance:', HyperFormula === HF2);
-
     const hf = HyperFormula.buildFromArray([
       ['Alice',   100, false, '=FILTER(A1:B5,C1:C5)', null],
       ['Bob',     200, true,  null, null],

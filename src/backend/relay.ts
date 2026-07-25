@@ -1,7 +1,7 @@
 import type { IncomingMessage } from 'http';
 import { WebSocket, WebSocketServer } from 'ws';
 import { Encoder, decode } from 'cbor-x';
-import { logMessage, relayInfo, shortId } from './relay-log';
+import { logMessage, relayInfo, relayError, shortId } from './relay-log';
 import { RELAY_PEER_ID, RELAY_LEAVE } from '../shared/relay-identity';
 import { RDV_SUB, RDV_UNSUB, RDV_MSG, RDV_PEER } from '../shared/rendezvous-protocol';
 import { WRTC_SIGNAL } from '../shared/webrtc-signal';
@@ -99,7 +99,7 @@ export class WebSocketRelay {
       .split(',').map((s) => s.trim()).filter(Boolean);
     const origin = request?.headers.origin;
     if (allowedOrigins.length > 0 && origin && !allowedOrigins.includes(origin)) {
-      console.error(`[relay] refusing connection: origin ${origin} not allowed`);
+      relayError(`[relay] refusing connection: origin ${origin} not allowed`);
       ws.on('error', () => { }); // a refused socket must not crash on transport errors
       ws.close(1008, 'origin not allowed');
       return;
@@ -112,7 +112,7 @@ export class WebSocketRelay {
     const maxConnections = envInt('RELAY_MAX_CONNECTIONS', 1024);
     const maxPerIp = envInt('RELAY_MAX_CONNECTIONS_PER_IP', 64);
     if (this.connectionCount >= maxConnections || (ip !== undefined && (this.connectionsPerIp.get(ip) ?? 0) >= maxPerIp)) {
-      console.error(`[relay] refusing connection${ip ? ` from ${ip}` : ''}: too many connections (${this.connectionCount} open)`);
+      relayError(`[relay] refusing connection${ip ? ` from ${ip}` : ''}: too many connections (${this.connectionCount} open)`);
       ws.on('error', () => { });
       ws.close(1013, 'relay at capacity'); // 1013 = Try Again Later
       return;
@@ -205,7 +205,7 @@ export class WebSocketRelay {
     try {
       message = decode(buf);
     } catch (e) {
-      console.error('[relay] Failed to decode CBOR message:', e);
+      relayError('[relay] Failed to decode CBOR message:', e);
       return;
     }
 
@@ -228,7 +228,7 @@ export class WebSocketRelay {
       // the newcomer instead; ids whose socket is no longer OPEN may be reused.
       const existing = this.sockets.get(senderId);
       if (existing && existing !== ws && existing.readyState === WebSocket.OPEN) {
-        console.error(`[relay] rejecting join: ${shortId(senderId)} is already connected`);
+        relayError(`[relay] rejecting join: ${shortId(senderId)} is already connected`);
         ws.close(1008, 'peer id already connected');
         return;
       }
@@ -329,7 +329,7 @@ export class WebSocketRelay {
     if (ws.readyState !== WebSocket.OPEN) return false;
     const maxBuffered = envInt('RELAY_MAX_BUFFERED_BYTES', 2 * relayMaxPayloadBytes());
     if (ws.bufferedAmount > maxBuffered) {
-      console.error(`[relay] ${shortId(peerLabel)} is ${ws.bufferedAmount} bytes behind (limit ${maxBuffered}) — disconnecting slow peer`);
+      relayError(`[relay] ${shortId(peerLabel)} is ${ws.bufferedAmount} bytes behind (limit ${maxBuffered}) — disconnecting slow peer`);
       ws.terminate();
       return false;
     }
@@ -359,7 +359,7 @@ export class WebSocketRelay {
         this.safeSend(ws, peerMsg, rid);
       }
       set.add(ws);
-      console.log(`[relay] rendezvous ${shortId(rid)}: ${set.size} listening`);
+      relayInfo(`[relay] rendezvous ${shortId(rid)}: ${set.size} listening`);
     } else if (message.type === RDV_UNSUB) {
       const set = this.rendezvous.get(rid);
       if (set && set.delete(ws) && set.size === 0) this.rendezvous.delete(rid);

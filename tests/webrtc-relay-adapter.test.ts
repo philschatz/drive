@@ -15,6 +15,7 @@ import { Encoder, decode } from 'cbor-x';
 import { makeWebRTCRelayAdapter } from '../src/client/webrtc-relay-adapter';
 import { MAX_MESSAGE_BYTES } from '../src/client/webrtc-chunk';
 import { WRTC_SIGNAL } from '../src/shared/webrtc-signal';
+import { captureConsole } from './support/console';
 
 const cbor = new Encoder({ tagUint8Array: false, useRecords: false });
 const RELAY_ID = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=';
@@ -222,7 +223,10 @@ describe('WebRTCRelayAdapter routing', () => {
     const received: any[] = [];
     adapter.on('message', (m) => received.push(m));
 
+    // The oversized message logs an expected warning as it's dropped — swallow it.
+    const con = captureConsole(['warn']);
     port.deliver({ kind: 'data-in', peerId: 'peerB', bytes: new Uint8Array(MAX_MESSAGE_BYTES + 1) });
+    con.restore();
     expect(received).toHaveLength(0);
   });
 

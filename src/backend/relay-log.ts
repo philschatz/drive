@@ -11,6 +11,21 @@ export function relayInfo(...args: unknown[]): void {
   if (!RELAY_QUIET) console.log(...args);
 }
 
+/**
+ * Expected-condition relay log — a policy/hardening response the relay makes on
+ * purpose (peer-id squat rejection, connection-cap refusal, slow-peer
+ * disconnect, malformed-frame rejection). These are normal for an
+ * internet-facing relay and are exercised by tests, so they're gated by
+ * RELAY_QUIET. Genuinely-unexpected internal failures should stay on raw
+ * console.error so real bugs surface even under RELAY_QUIET.
+ */
+export function relayWarn(...args: unknown[]): void {
+  if (!RELAY_QUIET) console.warn(...args);
+}
+export function relayError(...args: unknown[]): void {
+  if (!RELAY_QUIET) console.error(...args);
+}
+
 /** Truncate the base64 key but keep any `-suffix` intact — the suffix is the
  * per-service part of a peerId ('drive', 'caldav-server'), so it's what tells
  * two services of the same device apart in collision/routing logs. */

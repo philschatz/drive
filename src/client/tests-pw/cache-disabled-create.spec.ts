@@ -49,7 +49,6 @@ test('cache disabled: created doc survives reload', async ({ browser }) => {
       });
       return { getDocList: await api.getDocList(), fetched, idbList };
     });
-    console.log('BEFORE RELOAD:', JSON.stringify(beforeReload));
 
     // Reload.
     await peer.page.reload();
@@ -83,8 +82,6 @@ test('cache disabled: created doc survives reload', async ({ browser }) => {
       });
       return { getDocList: await api.getDocList(), fetched, idbList };
     });
-    console.log('AFTER RELOAD:', JSON.stringify(afterReload));
-    console.log('RECONCILE LOGS:', logs.filter(l => l.includes('reconcile')).join(' | '));
 
     expect(afterReload.fetched.some((e: any) => e.id === docId)).toBe(true);
   } finally {

@@ -5,6 +5,7 @@
 import 'temporal-polyfill/global';
 import { generateDates, rebuildExpanded } from './recurrence';
 import type { CalendarEvent } from './schema';
+import { captureConsole } from '../../../tests/support/console';
 
 const RANGE_START = '2026-01-01';
 const RANGE_END = '2026-06-30';
@@ -94,7 +95,10 @@ describe('rebuildExpanded robustness', () => {
       bad: { '@type': 'Event', title: 'Bad', start: 'not-a-real-date', recurrenceRule: { frequency: 'monthly' } } as any,
     };
     let expanded: ReturnType<typeof rebuildExpanded> = [];
+    // The `bad` event's expansion throws and logs an expected warning — swallow it.
+    const con = captureConsole(['warn']);
     expect(() => { expanded = rebuildExpanded(events, '2026-01-01', '2026-01-31'); }).not.toThrow();
+    con.restore();
     expect(expanded.map(e => e.uid)).toContain('good');
     expect(expanded.map(e => e.uid)).not.toContain('bad');
   });
