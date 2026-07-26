@@ -16,7 +16,7 @@ export { toPlain, syncToTarget } from '../../shared/sync-to-target';
  * Editor-facing wrapper: undo/redo plus one stable `onHeads` callback to invoke
  * from the editor's `subscribeQuery` handler, which feeds both the version
  * slider and the undo cursor. Kept here so every document type wires undo the
- * same way (see EditorTitleBar's undo/redo buttons).
+ * same way (see DocumentTitleBar's undo/redo buttons).
  *
  * The callback is routed through a ref so subscription effects with docId-only
  * deps never capture a stale version of it.

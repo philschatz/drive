@@ -1,10 +1,10 @@
-import { BarIconButton } from '../shared/EditorTitleBar';
+import { BarIconButton } from '../shared/DocumentTitleBar';
 
 /**
  * Top bar shown while a cell is selected (focus mode). Replaces the shared
- * EditorTitleBar: a checkmark returns to overview mode, undo/redo mirror the
+ * DocumentTitleBar: a checkmark returns to overview mode, undo/redo mirror the
  * overview bar, and the trailing button opens the text-formatting sheet.
- * Matches EditorTitleBar's metrics (56px bar, 40px circular state-layer
+ * Matches DocumentTitleBar's metrics (56px bar, 40px circular state-layer
  * buttons, Material Symbols icons).
  */
 export function FocusTopBar({

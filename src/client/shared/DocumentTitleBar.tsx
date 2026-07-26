@@ -112,7 +112,7 @@ export function BarIconButton({
  * from the shared `useHideOnScroll()` hook, so dragging up hides the chrome and
  * dragging back down reveals it in every document type.
  */
-export function EditorTitleBar<P extends PeerLike>({
+export function DocumentTitleBar<P extends PeerLike>({
   icon,
   title,
   titleEditable = false,

@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'preact/hooks'
 import './tasks.css';
 import { subscribeQuery, updateDoc, deepAssign } from '../worker-api';
 import { peerColor, peerDisplayName, usePresence, PresenceDot, type PeerFieldInfo } from '../shared/presence';
-import { EditorTitleBar } from '../shared/EditorTitleBar';
+import { DocumentTitleBar } from '../shared/DocumentTitleBar';
 import { useDocumentHistory } from '../shared/useDocumentHistory';
 import { useEditorUndoRedo } from '../shared/useUndoRedo';
 import { useHideOnScroll } from '../shared/useHideOnScroll';
@@ -290,7 +290,7 @@ export function Tasks({ docId, rest, readOnly }: { docId?: string; rest?: string
   return (
     <DocLoader docId={docId}>
     <>
-      <EditorTitleBar
+      <DocumentTitleBar
         icon="checklist"
         title={listName}
         titleEditable={canEdit}

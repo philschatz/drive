@@ -4,7 +4,7 @@ import './calendar.css';
 import type { PeerState } from '../shared/automerge';
 import { openDoc, subscribeQuery, updateDoc, queryDoc, deepAssign, fetchDocList } from '../worker-api';
 import { initPresence, colorForKey, type PresenceState } from '../shared/presence';
-import { EditorTitleBar } from '../shared/EditorTitleBar';
+import { DocumentTitleBar } from '../shared/DocumentTitleBar';
 import type { CalendarEvent } from './schema';
 import { mapMultiCalToSXEvents, createMultiCalSXCalendar } from './schedule-x';
 import type { MultiCalEventLookupMap, CalendarSource } from './schedule-x';
@@ -306,7 +306,7 @@ export function AllCalendars({ path }: { path?: string }) {
 
   return (
     <div className="calendar-page">
-      <EditorTitleBar
+      <DocumentTitleBar
         icon="calendar_month"
         title="All Calendars"
         showSourceLink={false}

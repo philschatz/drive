@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'preact/hooks';
 import { openDoc, subscribeQuery, updateDoc, getDocHistory, debugGetVersionPatches, setDocVersion, restoreDocToVersion } from '../worker-api';
 import { peerColor, peerDisplayName, usePresence } from '../shared/presence';
-import { EditorTitleBar } from '../shared/EditorTitleBar';
+import { DocumentTitleBar } from '../shared/DocumentTitleBar';
 import { HistorySlider } from '../shared/HistorySlider';
 import type { DocumentHistory } from '../shared/useDocumentHistory';
 import { usePresenceLog, PresenceLogTable } from '../shared/PresenceLog';
@@ -423,7 +423,7 @@ export function SourceViewer({ docId, rest, readOnly }: { docId?: string; rest?:
 
   return (
     <div className="viewer">
-      <EditorTitleBar
+      <DocumentTitleBar
         icon="code"
         title={docName}
         titleEditable={editable}

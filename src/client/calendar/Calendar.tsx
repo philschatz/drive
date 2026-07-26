@@ -3,7 +3,7 @@ import '@schedule-x/theme-default/dist/index.css';
 import './calendar.css';
 import { subscribeQuery, updateDoc, deepAssign } from '../worker-api';
 import { peerDisplayName, usePresence } from '../shared/presence';
-import { EditorTitleBar } from '../shared/EditorTitleBar';
+import { DocumentTitleBar } from '../shared/DocumentTitleBar';
 import { useDocumentHistory } from '../shared/useDocumentHistory';
 import { useEditorUndoRedo } from '../shared/useUndoRedo';
 import { useHideOnScroll } from '../shared/useHideOnScroll';
@@ -185,7 +185,7 @@ function CalendarInner({ docId, readOnly, initialEventId }: { docId: string; rea
 
   return (
     <div className="calendar-page">
-      <EditorTitleBar
+      <DocumentTitleBar
         icon="date_range"
         title={calName}
         titleEditable={canEdit}

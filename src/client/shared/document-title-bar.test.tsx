@@ -1,6 +1,6 @@
 import { render, screen, fireEvent } from '@testing-library/preact';
 
-// Mock automerge module before importing EditorTitleBar
+// Mock automerge module before importing DocumentTitleBar
 jest.mock('./automerge', () => ({
   useWsStatus: jest.fn(() => true),
   usePeerTransports: jest.fn(() => ({})),
@@ -58,38 +58,38 @@ jest.mock('../components/ui/dropdown-menu', () => ({
   DropdownMenuItem: () => null,
 }));
 
-import { EditorTitleBar } from './EditorTitleBar';
+import { DocumentTitleBar } from './DocumentTitleBar';
 import { useWsStatus } from './automerge';
 
 const mockUseConnectionStatus = useWsStatus as jest.Mock;
 
-describe('EditorTitleBar', () => {
+describe('DocumentTitleBar', () => {
   beforeEach(() => {
     mockUseConnectionStatus.mockReturnValue(true);
     mockAccessReturn = { access: null, canEdit: true, loaded: true };
   });
 
   it('renders icon and title', () => {
-    render(<EditorTitleBar icon="calendar_month" title="My Calendar" />);
+    render(<DocumentTitleBar icon="calendar_month" title="My Calendar" />);
     expect(screen.getByText('calendar_month')).toBeDefined();
     expect(screen.getByText('My Calendar')).toBeDefined();
   });
 
   it('renders title as plain text when not editable', () => {
-    render(<EditorTitleBar icon="grid" title="Sheet" />);
+    render(<DocumentTitleBar icon="grid" title="Sheet" />);
     const el = screen.getByText('Sheet');
     expect(el.tagName).toBe('SPAN');
   });
 
   it('renders title as input when editable', () => {
-    render(<EditorTitleBar icon="grid" title="Sheet" titleEditable />);
+    render(<DocumentTitleBar icon="grid" title="Sheet" titleEditable />);
     const input = screen.getByDisplayValue('Sheet') as HTMLInputElement;
     expect(input.tagName).toBe('INPUT');
   });
 
   it('calls onTitleChange on input', () => {
     const onChange = jest.fn();
-    render(<EditorTitleBar icon="grid" title="Old" titleEditable onTitleChange={onChange} />);
+    render(<DocumentTitleBar icon="grid" title="Old" titleEditable onTitleChange={onChange} />);
     const input = screen.getByDisplayValue('Old') as HTMLInputElement;
     fireEvent.input(input, { target: { value: 'New' } });
     expect(onChange).toHaveBeenCalled();
@@ -97,7 +97,7 @@ describe('EditorTitleBar', () => {
 
   it('calls onTitleBlur on blur', () => {
     const onBlur = jest.fn();
-    render(<EditorTitleBar icon="grid" title="Test" titleEditable onTitleBlur={onBlur} />);
+    render(<DocumentTitleBar icon="grid" title="Test" titleEditable onTitleBlur={onBlur} />);
     const input = screen.getByDisplayValue('Test') as HTMLInputElement;
     // preact/compat (loaded via the Sheet's createPortal import) aliases onBlur
     // to a focusout listener; dispatch the native event jsdom-side.
@@ -109,13 +109,13 @@ describe('EditorTitleBar', () => {
   // accessible name (see ConnectionStatus).
   it('shows a connected wifi icon when connected', () => {
     mockUseConnectionStatus.mockReturnValue(true);
-    render(<EditorTitleBar icon="grid" title="Test" />);
+    render(<DocumentTitleBar icon="grid" title="Test" />);
     expect(screen.getByLabelText('Connected').textContent).toBe('wifi_password');
   });
 
   it('shows an offline wifi icon when not connected', () => {
     mockUseConnectionStatus.mockReturnValue(false);
-    render(<EditorTitleBar icon="grid" title="Test" />);
+    render(<DocumentTitleBar icon="grid" title="Test" />);
     expect(screen.getByLabelText('Disconnected').textContent).toBe('wifi_off');
   });
 
@@ -125,7 +125,7 @@ describe('EditorTitleBar', () => {
       { peerId: 'aabbcc' },
       { peerId: '112233' },
     ];
-    render(<EditorTitleBar icon="grid" title="Test" peers={peers} />);
+    render(<DocumentTitleBar icon="grid" title="Test" peers={peers} />);
     // Self should be filtered out, so 2 dots
     const dots = document.querySelectorAll('[title^="Peer "]');
     expect(dots.length).toBe(2);
@@ -134,7 +134,7 @@ describe('EditorTitleBar', () => {
   it('uses peerTitle for dot tooltips', () => {
     const peers = [{ peerId: 'abc123', name: 'Alice' }];
     render(
-      <EditorTitleBar
+      <DocumentTitleBar
         icon="grid"
         title="Test"
         peers={peers}
@@ -146,24 +146,24 @@ describe('EditorTitleBar', () => {
   });
 
   it('shows source link when docId is provided', () => {
-    render(<EditorTitleBar icon="grid" title="Test" docId="doc-123" />);
+    render(<DocumentTitleBar icon="grid" title="Test" docId="doc-123" />);
     const link = screen.getByTitle('Edit Source') as HTMLAnchorElement;
     expect(link.getAttribute('href')).toBe('#/source/doc-123');
   });
 
   it('hides source link when showSourceLink is false', () => {
-    render(<EditorTitleBar icon="grid" title="Test" docId="doc-123" showSourceLink={false} />);
+    render(<DocumentTitleBar icon="grid" title="Test" docId="doc-123" showSourceLink={false} />);
     expect(screen.queryByTitle('Edit Source')).toBeNull();
   });
 
   it('hides source link when no docId', () => {
-    render(<EditorTitleBar icon="grid" title="Test" />);
+    render(<DocumentTitleBar icon="grid" title="Test" />);
     expect(screen.queryByTitle('Edit Source')).toBeNull();
   });
 
   it('offers History in the kebab by default', () => {
     const onToggle = jest.fn();
-    render(<EditorTitleBar icon="grid" title="Test" onToggleHistory={onToggle} />);
+    render(<DocumentTitleBar icon="grid" title="Test" onToggleHistory={onToggle} />);
     const item = screen.getByTitle('History');
     expect(item.tagName.toLowerCase()).toBe('md-menu-item');
     fireEvent.click(item);
@@ -172,7 +172,7 @@ describe('EditorTitleBar', () => {
 
   it('puts History on the bar with historyPlacement="bar"', () => {
     const onToggle = jest.fn();
-    render(<EditorTitleBar icon="grid" title="Test" onToggleHistory={onToggle} historyPlacement="bar" />);
+    render(<DocumentTitleBar icon="grid" title="Test" onToggleHistory={onToggle} historyPlacement="bar" />);
     const btn = screen.getByLabelText('History');
     expect(btn.tagName).toBe('BUTTON');
     fireEvent.click(btn);
@@ -180,7 +180,7 @@ describe('EditorTitleBar', () => {
   });
 
   it('does not render history button when onToggleHistory is not provided', () => {
-    render(<EditorTitleBar icon="grid" title="Test" />);
+    render(<DocumentTitleBar icon="grid" title="Test" />);
     expect(screen.queryByTitle('Browse history')).toBeNull();
     expect(screen.queryByTitle('History')).toBeNull();
   });
@@ -188,7 +188,7 @@ describe('EditorTitleBar', () => {
   it('renders the document action on the bar', () => {
     const onSelect = jest.fn();
     render(
-      <EditorTitleBar
+      <DocumentTitleBar
         icon="grid"
         title="Test"
         action={{ icon: 'bar_chart', label: 'Chart', onSelect }}
@@ -201,35 +201,35 @@ describe('EditorTitleBar', () => {
   });
 
   it('links validation errors to the source editor', () => {
-    render(<EditorTitleBar icon="grid" title="Test" docId="doc-123" hasValidationErrors />);
+    render(<DocumentTitleBar icon="grid" title="Test" docId="doc-123" hasValidationErrors />);
     const link = screen.getByLabelText('Validation errors');
     expect(link.tagName).toBe('A');
     expect(link.getAttribute('href')).toContain('doc-123');
   });
 
   it('omits the validation warning when there are no errors', () => {
-    render(<EditorTitleBar icon="grid" title="Test" docId="doc-123" />);
+    render(<DocumentTitleBar icon="grid" title="Test" docId="doc-123" />);
     expect(screen.queryByLabelText('Validation errors')).toBeNull();
   });
 
   it('renders children in the middle', () => {
     render(
-      <EditorTitleBar icon="grid" title="Test">
+      <DocumentTitleBar icon="grid" title="Test">
         <span data-testid="child">Extra</span>
-      </EditorTitleBar>
+      </DocumentTitleBar>
     );
     expect(screen.getByTestId('child')).toBeDefined();
   });
 
   it('has back link to home', () => {
-    render(<EditorTitleBar icon="grid" title="Test" />);
+    render(<DocumentTitleBar icon="grid" title="Test" />);
     const backLink = screen.getByText('arrow_back').closest('a') as HTMLAnchorElement;
     expect(backLink.getAttribute('href')).toBe('#/');
   });
 
   it('shows the inline share button for admins (no overflow Share item)', () => {
     mockAccessReturn = { access: 'admin', canEdit: true, loaded: true };
-    render(<EditorTitleBar icon="grid" title="Test" docId="doc-123" />);
+    render(<DocumentTitleBar icon="grid" title="Test" docId="doc-123" />);
     const btn = screen.getByLabelText('Share');
     expect(btn.tagName).toBe('BUTTON');
     // Exactly one Share surface — the inline button, not a duplicate menu item.
@@ -238,14 +238,14 @@ describe('EditorTitleBar', () => {
 
   it('keeps Share in the overflow menu for non-admins', () => {
     mockAccessReturn = { access: 'read', canEdit: false, loaded: true };
-    render(<EditorTitleBar icon="grid" title="Test" docId="doc-123" />);
+    render(<DocumentTitleBar icon="grid" title="Test" docId="doc-123" />);
     expect(screen.queryByLabelText('Share')).toBeNull();
     expect(screen.getByTitle('Share & permissions').tagName.toLowerCase()).toBe('md-menu-item');
   });
 
   it('shows no access badge text for any access level', () => {
     mockAccessReturn = { access: 'read', canEdit: false, loaded: true };
-    render(<EditorTitleBar icon="grid" title="Test" />);
+    render(<DocumentTitleBar icon="grid" title="Test" />);
     expect(screen.queryByText('Read-only')).toBeNull();
     expect(screen.queryByText('Admin')).toBeNull();
     expect(screen.queryByText('Editing')).toBeNull();

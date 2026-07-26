@@ -14,7 +14,7 @@ interface PeerLike {
  * the peers on this document and whether each is connected directly (P2P) or
  * via the relay. (The connection-debug page is reachable from Settings.)
  *
- * Reused by Home (with a colored status dot) and the EditorTitleBar (label only).
+ * Reused by Home (with a colored status dot) and the DocumentTitleBar (label only).
  */
 export function ConnectionStatus<P extends PeerLike>({
   showDot = false,

@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'preact/hooks';
 import { subscribeQuery, updateDoc } from '../worker-api';
 import { peerColor, usePresence } from '../shared/presence';
-import { EditorTitleBar } from '../shared/EditorTitleBar';
+import { DocumentTitleBar } from '../shared/DocumentTitleBar';
 import { peerDisplayName, type PeerFieldInfo } from '../shared/presence';
 import { useGridCommands, commitReorder, commitAutofill, applyFormatToSelection, type GridCommandState, type GridCommandContext } from './commands';
 import { CommandContextMenuContent } from './CommandBar';
@@ -1545,7 +1545,7 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
           onOpenFormat={canEdit ? () => setFormatSheetOpen(true) : undefined}
         />
       ) : (
-      <EditorTitleBar
+      <DocumentTitleBar
         icon="grid_on"
         title={gridName}
         titleEditable={canEdit}

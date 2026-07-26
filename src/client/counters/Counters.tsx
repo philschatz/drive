@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'preact/hooks';
 import { subscribeQuery, updateDoc } from '../worker-api';
 import { peerColor, peerDisplayName, usePresence, PresenceDot, type PeerFieldInfo } from '../shared/presence';
-import { EditorTitleBar } from '../shared/EditorTitleBar';
+import { DocumentTitleBar } from '../shared/DocumentTitleBar';
 import { useDocumentHistory } from '../shared/useDocumentHistory';
 import { useEditorUndoRedo } from '../shared/useUndoRedo';
 import { useHideOnScroll } from '../shared/useHideOnScroll';
@@ -361,7 +361,7 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
   return (
     <DocLoader docId={docId}>
     <>
-      <EditorTitleBar
+      <DocumentTitleBar
         icon="event_repeat"
         title={listName}
         titleEditable={canEdit}

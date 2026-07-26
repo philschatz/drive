@@ -327,7 +327,7 @@ export function AccessControl({ docId, access: accessProp }: AccessControlProps)
         onClick={() => setOpen(true)}
       >
         {/* Generic share glyph — the access level shows as a text badge next to
-            the title (EditorTitleBar), not on this button. */}
+            the title (DocumentTitleBar), not on this button. */}
         <span className="material-symbols-outlined" style={{ fontSize: 18 }}>share</span>
       </button>
       <AccessControlSheet docId={docId} access={accessProp} open={open} onOpenChange={setOpen} />
