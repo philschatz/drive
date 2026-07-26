@@ -1,10 +1,11 @@
-import { useState, useEffect, useCallback } from 'preact/hooks';
+import { useState, useCallback } from 'preact/hooks';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
   Select, SelectTrigger, SelectValue, SelectContent, SelectItem,
 } from '@/components/ui/select';
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { colIndexToLetter, shortId } from './helpers';
 import type { ConditionalFormatRule, ConditionalFormatRange, DataGridCellFormat } from './schema';
 
@@ -30,10 +31,10 @@ const CONDITION_TYPES: { value: string; label: string }[] = [
 const NO_VALUE_CONDITIONS = new Set(['isEmpty', 'isNotEmpty']);
 
 // ============================================================
-// ConditionalFormatPanel
+// ConditionalFormatSheet
 // ============================================================
 
-interface ConditionalFormatPanelProps {
+interface ConditionalFormatSheetProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   rules: Record<string, ConditionalFormatRule> | undefined;
@@ -47,10 +48,10 @@ interface ConditionalFormatPanelProps {
   visibleColIds: string[];
 }
 
-export function ConditionalFormatPanel({
+export function ConditionalFormatSheet({
   open, onOpenChange, rules, sortedRowIds, sortedColIds, currentSheetId, mutate,
   selectedCell, selectionRange, visibleRowIds, visibleColIds,
-}: ConditionalFormatPanelProps) {
+}: ConditionalFormatSheetProps) {
   const [editing, setEditing] = useState<string | 'new' | null>(null);
   const [rangeText, setRangeText] = useState('');
   const [conditionType, setConditionType] = useState('gt');
@@ -261,32 +262,15 @@ export function ConditionalFormatPanel({
   const condLabel = (type: string) =>
     CONDITION_TYPES.find(c => c.value === type)?.label ?? type;
 
-  const handleClose = useCallback(() => onOpenChange(false), [onOpenChange]);
-
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') handleClose();
-    };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [open, handleClose]);
-
-  if (!open) return null;
-
   return (
-    <div className="cond-format-panel">
-      <div className="flex items-center justify-between mb-4">
-        <h2 className="text-lg font-semibold">Conditional Formatting</h2>
-        <button
-          className="rounded-sm opacity-70 hover:opacity-100 focus:outline-none"
-          onClick={handleClose}
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
-        </button>
-      </div>
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent side="bottom" className="max-h-[85vh] p-4">
+      <SheetHeader>
+        <SheetTitle>Conditional Formatting</SheetTitle>
+      </SheetHeader>
 
-      <div className="space-y-3">
+      {/* SheetContent doesn't forward extra props — testid goes on a wrapper */}
+      <div className="space-y-3 mt-2" data-testid="cond-format-sheet">
         {editing ? (
           // Editor
           <div className="space-y-3">
@@ -448,7 +432,8 @@ export function ConditionalFormatPanel({
           </>
         )}
       </div>
-    </div>
+      </SheetContent>
+    </Sheet>
   );
 }
 

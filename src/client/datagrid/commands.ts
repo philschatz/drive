@@ -10,6 +10,7 @@ import type { DataGridDocument, DataGridCell, DataGridCellFormat } from './schem
 import {
   FONT_FAMILIES, FONT_SIZES, NUMBER_FORMATS, PRESET_COLORS, BORDER_PRESETS,
 } from './format-presets';
+import { applyFreezeCount } from './sheet-actions';
 
 // ============================================================
 // Shortcut — canonical keyboard shortcut definition
@@ -232,6 +233,9 @@ export interface GridCommandsApi {
   dispatchKey(e: KeyboardEvent, isMod: boolean): boolean;
   /** Execute the paste command with optional native ClipboardEvent data. */
   executePaste(pasteEvent?: ClipboardEvent): void;
+  /** Resolve a single command id into an executable entry (read-only gated),
+   * for ad-hoc surfaces like the bottom bar's quick actions. */
+  resolveById(id: string): ResolvedEntry & { kind: 'command' };
 }
 
 // ============================================================
@@ -1685,22 +1689,8 @@ const visibilityPlugin: GridPlugin = {
       execute: (s, ctx) => {
         const sh = ctxSheet(ctx);
         if (!sh) return;
-        const indices = rowIndices(s);
-        const maxVisIdx = Math.max(...indices);
-        const freezeUpToId = ctx.visibleRowIds[maxVisIdx];
-        if (!freezeUpToId) return;
-        const allEntries = sortedEntries(sh.rows);
-        const freezeUpToOrigIdx = allEntries.findIndex(([id]) => id === freezeUpToId);
-        const idsToFreeze: string[] = [];
-        const idsToUnfreeze: string[] = [];
-        for (let i = 0; i < allEntries.length; i++) {
-          if (i <= freezeUpToOrigIdx) idsToFreeze.push(allEntries[i][0]);
-          else idsToUnfreeze.push(allEntries[i][0]);
-        }
-        ctx.mutate((d, sid, idsToFreeze, idsToUnfreeze) => {
-          for (const id of idsToFreeze) d.sheets[sid].rows[id].frozen = true;
-          for (const id of idsToUnfreeze) delete d.sheets[sid].rows[id].frozen;
-        }, [ctx.currentSheetId, idsToFreeze, idsToUnfreeze]);
+        // Freeze the visible prefix up to the selection's last row
+        applyFreezeCount(ctx.mutate, ctx.currentSheetId, sh, ctx.visibleRowIds, 'row', Math.max(...rowIndices(s)) + 1);
         ctx.setContextMenu(null);
       },
     },
@@ -1727,22 +1717,8 @@ const visibilityPlugin: GridPlugin = {
       execute: (s, ctx) => {
         const sh = ctxSheet(ctx);
         if (!sh) return;
-        const indices = colIndices(s);
-        const maxVisIdx = Math.max(...indices);
-        const freezeUpToId = ctx.visibleColIds[maxVisIdx];
-        if (!freezeUpToId) return;
-        const allEntries = sortedEntries(sh.columns);
-        const freezeUpToOrigIdx = allEntries.findIndex(([id]) => id === freezeUpToId);
-        const idsToFreeze: string[] = [];
-        const idsToUnfreeze: string[] = [];
-        for (let i = 0; i < allEntries.length; i++) {
-          if (i <= freezeUpToOrigIdx) idsToFreeze.push(allEntries[i][0]);
-          else idsToUnfreeze.push(allEntries[i][0]);
-        }
-        ctx.mutate((d, sid, idsToFreeze, idsToUnfreeze) => {
-          for (const id of idsToFreeze) d.sheets[sid].columns[id].frozen = true;
-          for (const id of idsToUnfreeze) delete d.sheets[sid].columns[id].frozen;
-        }, [ctx.currentSheetId, idsToFreeze, idsToUnfreeze]);
+        // Freeze the visible prefix up to the selection's last column
+        applyFreezeCount(ctx.mutate, ctx.currentSheetId, sh, ctx.visibleColIds, 'col', Math.max(...colIndices(s)) + 1);
         ctx.setContextMenu(null);
       },
     },
@@ -2150,5 +2126,12 @@ export function useGridCommands(
     }
   }
 
-  return { toolbar, menus, cellCtx, rowCtx, colCtx, sheetCtx, allSearchable, dispatchKey, executePaste };
+  function resolveById(id: string): ResolvedEntry & { kind: 'command' } {
+    const entry = resolveCommands([id], state, ctx)[0] as ResolvedEntry & { kind: 'command' };
+    // Same read-only gate as resolveSlot.
+    if (!state.canEdit && !READ_ONLY_COMMANDS.has(id)) entry.isEnabled = false;
+    return entry;
+  }
+
+  return { toolbar, menus, cellCtx, rowCtx, colCtx, sheetCtx, allSearchable, dispatchKey, executePaste, resolveById };
 }

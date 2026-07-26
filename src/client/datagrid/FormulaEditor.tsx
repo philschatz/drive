@@ -2,17 +2,10 @@ import { useRef, useEffect, useCallback } from 'preact/hooks';
 import type { EditorView, ViewUpdate } from '@codemirror/view';
 import { letterToColIndex } from './helpers';
 
-// Rotating palette for cell/range reference colors (Google Sheets style)
-const REF_COLORS = [
-  '#f9ab00', // amber
-  '#4285f4', // blue
-  '#00acc1', // teal
-  '#ea4335', // red
-  '#9334e6', // purple
-  '#34a853', // green
-  '#fa7b17', // orange
-  '#e91e8a', // pink
-];
+// Rotating palette for cell/range reference colors.
+// Shared with peer-presence colors so formula tokens, grid ref decorations,
+// and every other categorical consumer draw from one Material palette.
+import { MATERIAL_CATEGORICAL as REF_COLORS } from '../shared/categorical-colors';
 
 export interface FormulaRef {
   col: number;
@@ -371,6 +364,16 @@ function findEnclosingFunctionSpan(
   return best;
 }
 
+/** Imperative surface for the editor. CodeMirror loads lazily, so calls made
+ * before the view exists are buffered and replayed once it mounts. */
+export interface FormulaEditorApi {
+  /** Insert text at the cursor (replacing any selection) and keep focus. */
+  insertText(text: string): void;
+  /** Focus the editor with the cursor at the end of the content. */
+  focus(): void;
+  hasFocus(): boolean;
+}
+
 interface FormulaEditorProps {
   value: string;
   onInput: (value: string) => void;
@@ -386,6 +389,10 @@ interface FormulaEditorProps {
    * rejects edits. Used by the formula bar on read-only grids. */
   readOnly?: boolean;
   className?: string;
+  /** Shown while the editor is empty (CodeMirror placeholder extension). */
+  placeholder?: string;
+  /** Receives the imperative API while mounted (null after unmount). */
+  apiRef?: { current: FormulaEditorApi | null };
 }
 
 export function FormulaEditor({
@@ -401,10 +408,14 @@ export function FormulaEditor({
   autoFocus,
   readOnly,
   className,
+  placeholder,
+  apiRef,
 }: FormulaEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const focusedRef = useRef(false);
+  // Ops issued before the lazy-loaded view exists; replayed on mount.
+  const pendingOpsRef = useRef<((view: EditorView) => void)[]>([]);
   const callbacksRef = useRef({ onInput, onCommit, onCancel, onBlur, onFocus, onTab, onHighlightsChange });
   callbacksRef.current = { onInput, onCommit, onCancel, onBlur, onFocus, onTab, onHighlightsChange };
 
@@ -414,6 +425,29 @@ export function FormulaEditor({
     const highlights = extractHighlights(text, cursorPos);
     callbacksRef.current.onHighlightsChange?.(highlights);
   }, []);
+
+  // Imperative API — buffers ops until the lazy-loaded view is ready.
+  const runOrQueue = useCallback((op: (view: EditorView) => void) => {
+    const view = viewRef.current;
+    if (view) op(view);
+    else pendingOpsRef.current.push(op);
+  }, []);
+
+  useEffect(() => {
+    if (!apiRef) return;
+    apiRef.current = {
+      insertText: (text) => runOrQueue(view => {
+        view.dispatch(view.state.replaceSelection(text));
+        view.focus();
+      }),
+      focus: () => runOrQueue(view => {
+        view.focus();
+        view.dispatch({ selection: { anchor: view.state.doc.length } });
+      }),
+      hasFocus: () => focusedRef.current,
+    };
+    return () => { apiRef.current = null; };
+  }, [apiRef, runOrQueue]);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -533,6 +567,7 @@ export function FormulaEditor({
         doc: lastExternalValue.current,
         extensions: [
           ...(readOnly ? [EditorState.readOnly.of(true), EditorView.editable.of(false)] : []),
+          ...(placeholder ? [cmView.placeholder(placeholder)] : []),
           commitKeymap,
           formulaHighlighter,
           autocompletion({ override: [completionSource], activateOnTyping: true, icons: false }),
@@ -540,13 +575,14 @@ export function FormulaEditor({
           eventHandlers,
           EditorView.theme({
             '&': { fontSize: '0.85rem', fontFamily: 'monospace', background: 'transparent' },
-            '.cm-content': { padding: '2px 0', caretColor: '#000' },
+            '.cm-content': { padding: '2px 0', caretColor: 'var(--md-sys-color-on-surface)' },
             '&.cm-focused': { outline: 'none' },
             '.cm-line': { padding: '0' },
             '.cm-scroller': { overflowX: 'auto', overflowY: 'hidden' },
-            '.cm-tooltip.cm-tooltip-autocomplete': { border: '1px solid #dee2e6', borderRadius: '4px', boxShadow: '0 4px 12px rgba(0,0,0,0.15)', fontSize: '0.8rem', fontFamily: 'monospace' },
+            '.cm-placeholder': { color: 'var(--md-sys-color-on-surface-variant)' },
+            '.cm-tooltip.cm-tooltip-autocomplete': { border: '1px solid var(--md-sys-color-outline-variant)', borderRadius: '4px', boxShadow: 'var(--elevation-2)', fontSize: '0.8rem', fontFamily: 'monospace', background: 'var(--md-sys-color-surface)' },
             '.cm-tooltip.cm-tooltip-autocomplete ul li': { padding: '3px 8px' },
-            '.cm-tooltip.cm-tooltip-autocomplete ul li[aria-selected]': { background: '#228be6', color: '#fff' },
+            '.cm-tooltip.cm-tooltip-autocomplete ul li[aria-selected]': { background: 'var(--md-sys-color-primary)', color: 'var(--md-sys-color-on-primary)' },
             '.cm-completionLabel': { fontFamily: 'monospace' },
           }),
         ],
@@ -560,6 +596,9 @@ export function FormulaEditor({
         view.focus();
         view.dispatch({ selection: { anchor: lastExternalValue.current.length } });
       }
+
+      // Replay imperative API calls made while CodeMirror was still loading.
+      for (const op of pendingOpsRef.current.splice(0)) op(view);
     });
 
     return () => {
@@ -568,7 +607,7 @@ export function FormulaEditor({
       viewRef.current = null;
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [functionNames, readOnly]);
+  }, [functionNames, readOnly, placeholder]);
 
   // Sync external value changes — skip while focused (editor is authoritative).
   // Always update lastExternalValue so the CM view gets the right doc when it

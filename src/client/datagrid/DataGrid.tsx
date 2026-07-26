@@ -3,24 +3,34 @@ import { subscribeQuery, updateDoc } from '../worker-api';
 import { peerColor, usePresence } from '../shared/presence';
 import { EditorTitleBar } from '../shared/EditorTitleBar';
 import { peerDisplayName, type PeerFieldInfo } from '../shared/presence';
-import { useGridCommands, commitReorder, commitAutofill, type GridCommandState, type GridCommandContext } from './commands';
-import { CommandMenuBar, CommandToolbar, CommandContextMenuContent } from './CommandBar';
-import { CommandSearch } from './CommandSearch';
-import { ConditionalFormatPanel } from './ConditionalFormatPanel';
+import { useGridCommands, commitReorder, commitAutofill, applyFormatToSelection, type GridCommandState, type GridCommandContext } from './commands';
+import { CommandContextMenuContent } from './CommandBar';
+import { FocusTopBar, BarIconButton } from './FocusTopBar';
+import { ConditionalFormatSheet } from './ConditionalFormatSheet';
+import { FormatSheet } from './FormatSheet';
 import { ContextMenu, ContextMenuTrigger } from '@/components/ui/context-menu';
 import {
   sortedEntries, colIndexToLetter, shortId,
   a1ToInternal, internalToA1,
   getDisplayValue,
 } from './helpers';
-import { FormulaEditor, type FormulaHighlight, isRange } from './FormulaEditor';
+import { type FormulaEditorApi, type FormulaHighlight, isRange } from './FormulaEditor';
+import { BottomEditorBar, type AggregateChip } from './BottomEditorBar';
+import { FormulaInsertSheet } from './FormulaInsertSheet';
+import { computeSelectionAggregates } from './aggregates';
+import { pointToCell } from './grid-geometry';
+import { useHideOnScroll } from '../shared/useHideOnScroll';
 import { buildFormatCache, buildIndexMaps, formatToCss, formatDisplayValue, isAccountingFormat, resolveConditionalFormat } from './formatting';
 import type { DataGridCellFormat } from './schema';
-import { SheetTabs } from './SheetTabs';
+import { SheetTabsBar } from './SheetTabsBar';
+import { SheetListSheet } from './SheetListSheet';
+import { SheetOptionsSheet } from './SheetOptionsSheet';
+import { applyFreezeCount } from './sheet-actions';
 import { useUndoRedo } from '../shared/useUndoRedo';
 import { useDocumentHistory } from '../shared/useDocumentHistory';
 import { useCanEdit } from '../shared/useCanEdit';
-import { pushDocHash, replaceDocHash, encodeRestPath } from '../shared/doc-urls';
+import { pushDocHash } from '../shared/doc-urls';
+import { useFocusPathSync } from '../shared/useFocusPathSync';
 import { HistorySlider } from '../shared/HistorySlider';
 import { useDocumentValidation } from '../shared/useDocumentValidation';
 import { ValidationPanel } from '../shared/ValidationPanel';
@@ -115,21 +125,31 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
   const [syncing, setSyncing] = useState(false);
   const titleFocusedRef = useRef(false);
   const editFromBarRef = useRef(false);
+  /** Imperative handle on the bottom-bar CodeMirror editor. */
+  const formulaApiRef = useRef<FormulaEditorApi | null>(null);
+  /** Set when an edit starts from the grid (typing/Enter/dbl-click) so the
+   * post-render effect focuses the bottom editor after the value synced. */
+  const pendingEditorFocusRef = useRef(false);
+  const [formulaInsertOpen, setFormulaInsertOpen] = useState(false);
   const tableRef = useRef<HTMLDivElement>(null);
   const lastClickedRowRef = useRef<number | null>(null);
   const lastClickedColRef = useRef<number | null>(null);
   const dragRef = useRef<{ type: 'row' | 'col'; indices: number[] } | null>(null);
   const justDraggedRef = useRef(false);
   const cellDragRef = useRef<{ anchor: [number, number] } | null>(null);
+  /** Touch drag that started inside the selection — resizes it (see the
+   * touch-action CSS on .selected/.in-range cells). */
+  const touchSelRef = useRef<{ pointerId: number; startX: number; startY: number; startCell: [number, number]; active: boolean } | null>(null);
   const autofillDragRef = useRef<{ sourceRange: { minCol: number; maxCol: number; minRow: number; maxRow: number } } | null>(null);
   const dispatchKeyRef = useRef<((e: KeyboardEvent, isMod: boolean) => boolean) | null>(null);
   const commandCtxRef = useRef<GridCommandContext | null>(null);
   const executePasteRef = useRef<((e?: ClipboardEvent) => void) | null>(null);
-  const sheetRenameRef = useRef<((id: string) => void) | null>(null);
   const [autofillTarget, setAutofillTarget] = useState<{ minCol: number; maxCol: number; minRow: number; maxRow: number } | null>(null);
   const [clipboardSource, setClipboardSource] = useState<{ minRow: number; maxRow: number; minCol: number; maxCol: number } | null>(null);
-  const [sheetContextMenu, setSheetContextMenu] = useState<string | null>(null);
   const [condFormatOpen, setCondFormatOpen] = useState(false);
+  const [sheetListOpen, setSheetListOpen] = useState(false);
+  const [sheetOptionsOpen, setSheetOptionsOpen] = useState(false);
+  const [formatSheetOpen, setFormatSheetOpen] = useState(false);
   const clipboardRef = useRef<{
     values: string[][];
     formats: (DataGridCellFormat | undefined)[][];
@@ -137,32 +157,11 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
     range: { minRow: number; maxRow: number; minCol: number; maxCol: number };
   } | null>(null);
 
-  const [addRowCount, setAddRowCount] = useState<number | null>(10);
   const [mcResults, setMcResults] = useState<MCResults | null>(null);
   const condFormatResultsRef = useRef<CondFormatResults | null>(null);
   const [showValidation, setShowValidation] = useState(false);
 
   const [currentSheetId, setCurrentSheetId] = useState<string | null>(null);
-
-  const addRows = () => {
-    if (addRowCount == null) return;
-    const count = Math.max(1, Math.min(1000, addRowCount));
-    if (!currentSheetId || !docId) return;
-    const sid = currentSheetId;
-    const sheet = activeSheetRef.current;
-    if (!sheet) return;
-    const rowEntries = sortedEntries(sheet.rows);
-    const lastIdx = rowEntries.length > 0 ? rowEntries[rowEntries.length - 1][1].index : 0;
-    const newRowEntries: Array<[string, { index: number }]> = [];
-    for (let i = 0; i < count; i++) {
-      newRowEntries.push([shortId(), { index: lastIdx + i + 1 }]);
-    }
-    mutate((d, sid, newRowEntries) => {
-      for (const [id, entry] of newRowEntries) {
-        d.sheets[sid].rows[id] = entry as any;
-      }
-    }, [sid, newRowEntries]);
-  };
 
   // Memoize sorted IDs from the active sheet
   const meta = docMetaRef.current;
@@ -296,6 +295,7 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
     if (!meta?.sheets) return [];
     return sortedEntries(meta.sheets).map(([id, s]: [string, any]) => ({ id, name: s.name, hidden: s.hidden }));
   }, [meta?.sheets]);
+  const visibleSheetIds = useMemo(() => sheetOrder.filter(s => !s.hidden).map(s => s.id), [sheetOrder]);
 
   const sheetNameLookup = useCallback((sheetId: string) => {
     return meta?.sheets?.[sheetId]?.name;
@@ -774,6 +774,22 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
     mutate((d, draggedId, newIdx) => { d.sheets[draggedId].index = newIdx; }, [draggedId, newIdx]);
   }, [mutate]);
 
+  // Move a sheet one step among the *visible* tabs (hidden sheets are hopped
+  // over). Reuses the reorder index-midpoint math via handleReorderSheet.
+  const handleMoveSheet = useCallback((id: string, dir: -1 | 1) => {
+    const m = docMetaRef.current;
+    if (!m) return;
+    const order = sortedEntries(m.sheets);
+    const visible = order.filter(([, s]: [string, any]) => !s.hidden).map(([sid]) => sid);
+    const vi = visible.indexOf(id);
+    const ni = vi + dir;
+    if (vi < 0 || ni < 0 || ni >= visible.length) return;
+    const neighborId = visible[ni];
+    const filtered = order.filter(([sid]) => sid !== id);
+    const nIdx = filtered.findIndex(([sid]) => sid === neighborId);
+    handleReorderSheet(id, dir < 0 ? nIdx : nIdx + 1);
+  }, [handleReorderSheet]);
+
   // -- Context menu handlers --
 
   const handleRowContextMenu = useCallback((ri: number, e: MouseEvent) => {
@@ -802,11 +818,23 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
     setContextMenu({ type: 'col', indices });
   }, [selectedCols]);
 
+  // Focus the bottom-bar editor after grid-initiated edits (typing, Enter,
+  // double-click). Runs post-render so FormulaEditor's value-sync effect has
+  // already pushed editValue into CodeMirror (child effects run first).
+  useEffect(() => {
+    if (editingCell && pendingEditorFocusRef.current) {
+      pendingEditorFocusRef.current = false;
+      formulaApiRef.current?.focus();
+    }
+  }, [editingCell]);
+
   // Keyboard navigation
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
     if (e.key === 'Escape') {
       if (editingCell) { cancelEdit(); return; }
       if (selectionAnchor) { setSelectionAnchor(null); return; }
+      // Nothing to cancel — leave focus mode (deselect the cell).
+      setSelectedCell(null);
       return;
     }
     if (editingCell) return;
@@ -820,6 +848,7 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
       e.preventDefault();
       setSelectionAnchor(null);
       startEditing(col, row);
+      pendingEditorFocusRef.current = true;
       return;
     }
     if (e.shiftKey && (e.key === 'ArrowRight' || e.key === 'ArrowLeft' || e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
@@ -847,6 +876,7 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
       setSelectionAnchor(null);
       setEditingCell([col, row]);
       setEditValue(e.key);
+      pendingEditorFocusRef.current = true;
       return;
     }
     else return;
@@ -1096,10 +1126,9 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
         if (ar >= 0 && ac >= 0) setSelectionAnchor([ac, ar]);
       }
       pendingCellRef.current = null;
-    } else if (!selectedCell) {
-      // Default to first cell when no cell specified in URL
-      setSelectedCell([0, 0]);
     }
+    // No default selection: with no cell in the URL the grid opens in
+    // overview mode (selectedCell === null).
   }, [visibleRowIds, visibleColIds]);
 
   // Automerge path to the focused cell (used for both URL sync and Edit Source link)
@@ -1115,18 +1144,19 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
   // All three derive from focusPath (the primary selected cell).
   // The URL additionally encodes the range anchor as a query param (?anchor=rowId:colId);
   // presence only tracks the primary cell since PresenceState.focusedField is a single path.
-  useEffect(() => {
-    if (!docId || !focusPath) return;
-    broadcast('focusedField', focusPath.length > 2 ? focusPath : null);
-    let anchorQuery: string | undefined;
-    if (selectionAnchor && selectedCell) {
-      const [ac, ar] = selectionAnchor;
-      if (ar < visibleRowIds.length && ac < visibleColIds.length) {
-        anchorQuery = `?anchor=${visibleRowIds[ar]}:${visibleColIds[ac]}`;
-      }
+  let anchorQuery: string | undefined;
+  if (selectionAnchor && selectedCell) {
+    const [ac, ar] = selectionAnchor;
+    if (ar < visibleRowIds.length && ac < visibleColIds.length) {
+      anchorQuery = `?anchor=${visibleRowIds[ar]}:${visibleColIds[ac]}`;
     }
-    replaceDocHash(docId, encodeRestPath(focusPath), anchorQuery);
-  }, [focusPath, selectionAnchor, selectedCell, visibleRowIds, visibleColIds, docId, broadcast]);
+  }
+  // (docId gated on focusPath: while the sheet is still loading we must not
+  // clear the URL's cell path — pendingCellRef still has to resolve it.)
+  useFocusPathSync(focusPath ? docId : null, focusPath, broadcast, {
+    query: anchorQuery,
+    presencePath: focusPath && focusPath.length > 2 ? focusPath : null,
+  });
 
   // Handle sheetId prop changes from back/forward navigation
   useEffect(() => {
@@ -1301,14 +1331,10 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
     setSelectedCols,
     undo,
     redo,
-    targetSheetId: sheetContextMenu ?? undefined,
     onDeleteSheet: handleDeleteSheet,
     onHideSheet: handleHideSheet,
-    onRenameSheet: (id) => {
-      // Close context menu first, then SheetTabs will handle inline rename
-      setSheetContextMenu(null);
-      sheetRenameRef.current?.(id);
-    },
+    // Renaming happens in the sheet-options bottom sheet
+    onRenameSheet: () => setSheetOptionsOpen(true),
     formatCache,
     openConditionalFormatPanel: () => setCondFormatOpen(true),
   };
@@ -1335,9 +1361,97 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
     return () => el.removeEventListener('paste', handlePaste);
   }, [gridMounted]);
 
+  const focusMode = selectedCell !== null;
+
+  // Scroll-direction chrome hiding (overview mode only): scrolling down hides
+  // the top bar and sheet tabs, scrolling up reveals them.
+  const chromeHidden = useHideOnScroll(tableRef, gridMounted) && !focusMode;
+
+  // Effective selection rectangle (single cell = 1×1) — drives the corner
+  // decorations and the inside-the-selection touch-resize gesture.
+  const selRect = selectedCell
+    ? (selectionRange ?? { minCol: selectedCell[0], maxCol: selectedCell[0], minRow: selectedCell[1], maxRow: selectedCell[1] })
+    : null;
+
+  const exitFocusMode = () => {
+    commitEdit();
+    setSelectedCell(null);
+    setSelectionAnchor(null);
+    setEditingCell(null);
+  };
+
+  // Formula preview — last computed value of the cell being edited, shown as
+  // an overlay above the bottom editor.
+  let editorPreviewValue: string | undefined;
+  if (editingCell && editValue.startsWith('=') && effectiveSheetId) {
+    const cached = computedValues.get(`${effectiveSheetId}:${visibleRowIds[editingCell[1]]}:${visibleColIds[editingCell[0]]}`);
+    if (cached != null) editorPreviewValue = String(cached);
+  }
+
+  // Aggregates over a numeric multi-cell selection (Sum/Avg/Min/Max/Count),
+  // formatted with the shared numFmt when every numeric cell agrees on one.
+  // They replace the (single-cell) editor in the bottom bar — never while an
+  // edit is in progress.
+  let aggregateChips: AggregateChip[] | null = null;
+  if (focusMode && selectionRange && isMultiSelect && !editingCell && doc2) {
+    const cells: { display: string; numFmt?: string }[] = [];
+    const MAX_AGG_CELLS = 5000; // bound the per-render work on huge selections
+    outer: for (let r = selectionRange.minRow; r <= selectionRange.maxRow; r++) {
+      for (let c = selectionRange.minCol; c <= selectionRange.maxCol; c++) {
+        if (cells.length >= MAX_AGG_CELLS) break outer;
+        const rowId = visibleRowIds[r];
+        const colId = visibleColIds[c];
+        if (!rowId || !colId) continue;
+        const raw = doc2.cells[`${rowId}:${colId}`]?.value || '';
+        const display = getDisplayValue(computedValues, raw, effectiveSheetId ?? '', rowId, colId);
+        const numFmt = formatCache.get(`${visibleRowOriginalIndices[r]}:${visibleColOriginalIndices[c]}`)?.numFmt;
+        cells.push({ display, numFmt });
+      }
+    }
+    const agg = computeSelectionAggregates(cells);
+    if (agg) {
+      const fmt = (n: number) => {
+        const s = String(Number(n.toFixed(6))); // trim float noise
+        return agg.numFmt ? formatDisplayValue(s, agg.numFmt) : s;
+      };
+      aggregateChips = [
+        { label: 'Sum', value: fmt(agg.sum) },
+        { label: 'Avg', value: fmt(agg.avg) },
+        { label: 'Min', value: fmt(agg.min) },
+        { label: 'Max', value: fmt(agg.max) },
+        { label: 'Count', value: String(agg.count) },
+      ];
+    }
+  }
+
+  // Insert a function from the formula sheet: start a formula if the cell
+  // isn't being edited, else insert at the cursor.
+  const insertFunction = (name: string) => {
+    if (!canEditRef.current || !selectedCell) return;
+    if (!editingCell) {
+      setEditingCell([...selectedCell] as [number, number]);
+      setEditValue(`=${name}(`);
+      pendingEditorFocusRef.current = true;
+    } else {
+      formulaApiRef.current?.insertText((editValue.trim() ? '' : '=') + name + '(');
+    }
+  };
+
   return (
     <DocLoader docId={docId}>
-    <div className="datagrid-page">
+    <div className={'datagrid-page' + (chromeHidden ? ' chrome-hidden' : '')}>
+      <div className="datagrid-top-chrome">
+      {focusMode ? (
+        <FocusTopBar
+          cellLabel={cellLabel}
+          canUndo={canUndo}
+          canRedo={canRedo}
+          onUndo={undo}
+          onRedo={redo}
+          onDone={exitFocusMode}
+          onOpenFormat={canEdit ? () => setFormatSheetOpen(true) : undefined}
+        />
+      ) : (
       <EditorTitleBar
         icon="grid_on"
         title={gridName}
@@ -1359,7 +1473,16 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
         validationActive={showValidation}
         validationCount={validationErrors.length}
         sourcePath={focusPath}
-      />
+      >
+        {canEdit && (
+          <div className="flex items-center shrink-0">
+            <BarIconButton icon="undo" label="Undo" onClick={undo} disabled={!canUndo} size={22} />
+            <BarIconButton icon="redo" label="Redo" onClick={redo} disabled={!canRedo} size={22} />
+          </div>
+        )}
+      </EditorTitleBar>
+      )}
+      </div>
       <HistorySlider history={history} />
       <div className="datagrid-body">
       <div className="datagrid-main" style={noAccess ? { opacity: 0.4, pointerEvents: 'none' as const } : undefined}>
@@ -1367,71 +1490,6 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
 
       {columnDefs.length > 0 && doc2 && (
         <>
-          <CommandMenuBar menus={commands.menus} />
-
-          {/* overflow-x-clip (not hidden): too-narrow windows clip the button strip
-              instead of wrapping, while the search dropdown below stays visible. */}
-          <div className="flex items-center gap-1 mb-1 overflow-x-clip bg-blue-50 px-2 py-1 rounded">
-            <CommandSearch entries={commands.allSearchable} />
-            <CommandToolbar entries={commands.toolbar} />
-          </div>
-
-          {/* Formula bar — shows a CodeMirror editor once a cell is selected,
-              so CodeMirror is never loaded at page-load time (avoids OOM crash). */}
-          <div className="formula-bar">
-            <span className="formula-cell-label">{cellLabel}</span>
-            {selectedCell ? (
-              <FormulaEditor
-                className="formula-bar-cm"
-                readOnly={!canEdit}
-                value={editingCell ? editValue : formulaBarValue}
-                onInput={setEditValue}
-                onFocus={() => {
-                  if (!canEditRef.current) return;
-                  if (!editingCell) {
-                    editFromBarRef.current = true;
-                    startEditing(selectedCell[0], selectedCell[1]);
-                  }
-                }}
-                onCommit={() => {
-                  const cell = editingCell;
-                  commitEdit();
-                  if (cell) {
-                    const nextRow = Math.min(cell[1] + 1, visibleRowIds.length - 1);
-                    selectCell(cell[0], nextRow);
-                  }
-                  tableRef.current?.focus();
-                }}
-                onCancel={() => {
-                  cancelEdit();
-                  tableRef.current?.focus();
-                }}
-                onTab={() => {
-                  const cell = editingCell;
-                  commitEdit();
-                  if (cell) {
-                    const nextCol = Math.min(cell[0] + 1, visibleColIds.length - 1);
-                    selectCell(nextCol, cell[1]);
-                  }
-                  tableRef.current?.focus();
-                }}
-                onHighlightsChange={setFormulaRefHighlights}
-                onBlur={() => {
-                  setTimeout(() => {
-                    const ae = document.activeElement;
-                    if (ae?.closest('.formula-bar-cm')) return;
-                    if (ae?.closest('.cell-editor-cm')) return;
-                    commitEdit();
-                  }, 0);
-                }}
-                functionNames={formulaNames}
-                autoFocus={false}
-              />
-            ) : (
-              <input className="formula-input" readOnly value="" />
-            )}
-          </div>
-
           {syncing && (
             <div className="hf-sync-bar">
               <div className="hf-sync-bar-fill" />
@@ -1614,7 +1672,7 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
                         if (refInfo) {
                           const c = refInfo.color;
                           const dash = `2px dashed ${c}`;
-                          const none = '1px solid #dee2e6';
+                          const none = '1px solid var(--md-sys-color-outline-variant)';
                           cellStyle.borderTop = refInfo.top ? dash : none;
                           cellStyle.borderRight = refInfo.right ? dash : none;
                           cellStyle.borderBottom = refInfo.bottom ? dash : none;
@@ -1622,8 +1680,8 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
                           if (refInfo.active) cellStyle.background = `${c}18`;
                         }
                         if (clipboardSource && ci >= clipboardSource.minCol && ci <= clipboardSource.maxCol && ri >= clipboardSource.minRow && ri <= clipboardSource.maxRow) {
-                          const dash = '2px dashed #228be6';
-                          const none = '1px solid #dee2e6';
+                          const dash = '2px dashed var(--md-sys-color-primary)';
+                          const none = '1px solid var(--md-sys-color-outline-variant)';
                           cellStyle.borderTop = ri === clipboardSource.minRow ? dash : none;
                           cellStyle.borderBottom = ri === clipboardSource.maxRow ? dash : none;
                           cellStyle.borderLeft = ci === clipboardSource.minCol ? dash : none;
@@ -1636,7 +1694,7 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
                         const isSpillTarget = spillTargetsRef.current.has(`${effectiveSheetId}:${rowId}:${colId}`);
                         if (isFrozenCol || isFrozenRow) {
                           cellStyle.position = 'sticky';
-                          if (!cellStyle.background && !isSpillTarget) cellStyle.background = '#fff';
+                          if (!cellStyle.background && !isSpillTarget) cellStyle.background = 'var(--md-sys-color-surface)';
                           if (isFrozenCol) {
                             cellStyle.left = `${frozenColOffsets[ci]}px`;
                           }
@@ -1652,14 +1710,14 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
                         return (
                           <td
                             key={colId}
-                            className={'datagrid-cell' + (isSelected && !refInfo && !isEditing ? ' selected' : '') + (inRange && isMultiSelect ? ' in-range' : '') + (inAutofillTarget ? ' autofill-target' : '') + (isRowSelected || selectedCols.has(ci) ? ' header-selected' : '') + (peers ? ' peer-focused' : '') + (refInfo ? ' formula-ref-highlight' : '') + (isMcSource ? ' dist-source' : mcStats ? ' dist-dependent' : '') + (spillTargetsRef.current.has(`${effectiveSheetId}:${rowId}:${colId}`) ? ' spill-target' : '') + (isEvaluating ? ' evaluating' : '') + frozenClass}
+                            className={'datagrid-cell' + (isSelected && !refInfo && !isEditing ? ' selected' : '') + (isEditing ? ' editing' : '') + (inRange && isMultiSelect ? ' in-range' : '') + (inAutofillTarget ? ' autofill-target' : '') + (isRowSelected || selectedCols.has(ci) ? ' header-selected' : '') + (peers ? ' peer-focused' : '') + (refInfo ? ' formula-ref-highlight' : '') + (isMcSource ? ' dist-source' : mcStats ? ' dist-dependent' : '') + (spillTargetsRef.current.has(`${effectiveSheetId}:${rowId}:${colId}`) ? ' spill-target' : '') + (isEvaluating ? ' evaluating' : '') + frozenClass}
                             style={Object.keys(cellStyle).length > 0 ? cellStyle : undefined}
                             title={mcStats ? `μ=${mcStats.mean.toFixed(2)} σ=${mcStats.stdev.toFixed(2)} [P5=${mcStats.p5.toFixed(2)}, P95=${mcStats.p95.toFixed(2)}]` : peers ? `${peerDisplayName(peers.peerId, peers.userGroupId)} is editing` : undefined}
                             data-cell-col={ci}
                             data-cell-row={ri}
                             onMouseDown={(e: any) => {
                               if (e.button !== 0) return;
-                              if (isEditing) return; // let the in-cell editor handle clicks
+                              if (isEditing) return; // clicking the cell being edited keeps the edit
                               if (editingCell) commitEdit();
                               if (e.shiftKey && selectedCell) {
                                 if (!selectionAnchor) setSelectionAnchor([...selectedCell] as [number, number]);
@@ -1669,55 +1727,70 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
                                 cellDragRef.current = { anchor: [ci, ri] };
                               }
                             }}
-                            onDblClick={() => startEditing(ci, ri)}
+                            onDblClick={() => {
+                              startEditing(ci, ri);
+                              pendingEditorFocusRef.current = true;
+                            }}
+                            // Touch drag starting inside the selection resizes it; the
+                            // touch-action CSS on .selected/.in-range keeps the browser
+                            // from hijacking these drags for scrolling. Mouse keeps the
+                            // existing mousedown drag-select path.
+                            onPointerDown={(e: any) => {
+                              if (e.pointerType === 'mouse') return;
+                              if (editingCell) return;
+                              const inSel = selRect && ci >= selRect.minCol && ci <= selRect.maxCol && ri >= selRect.minRow && ri <= selRect.maxRow;
+                              if (!inSel) return;
+                              touchSelRef.current = { pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, startCell: [ci, ri], active: false };
+                              e.currentTarget.setPointerCapture(e.pointerId);
+                            }}
+                            onPointerMove={(e: any) => {
+                              const ts = touchSelRef.current;
+                              if (!ts || e.pointerId !== ts.pointerId) return;
+                              if (!ts.active) {
+                                // Small move threshold so a plain tap still just selects
+                                if (Math.abs(e.clientX - ts.startX) + Math.abs(e.clientY - ts.startY) < 8) return;
+                                ts.active = true;
+                                setSelectionAnchor(ts.startCell);
+                              }
+                              const el = tableRef.current;
+                              if (!el) return;
+                              const rect = el.getBoundingClientRect();
+                              const thead = el.querySelector('thead');
+                              setSelectedCell(pointToCell(e.clientX, e.clientY, {
+                                containerLeft: rect.left,
+                                containerTop: rect.top,
+                                scrollLeft: el.scrollLeft,
+                                scrollTop: el.scrollTop,
+                                colWidths: columnDefs.map((c: any) => c.width || 100),
+                                rowCount: visibleRowIds.length,
+                                rowHeight: ROW_HEIGHT,
+                                headerHeight: thead ? thead.getBoundingClientRect().height : ROW_HEIGHT,
+                                rowHeaderWidth: 48,
+                                frozenRowCount,
+                                frozenColCount,
+                              }));
+                            }}
+                            onPointerUp={(e: any) => {
+                              const ts = touchSelRef.current;
+                              if (!ts || ts.pointerId !== e.pointerId) return;
+                              touchSelRef.current = null;
+                              // A captured tap without movement doesn't produce compat
+                              // mouse events (touch-action: none) — collapse the
+                              // selection to the tapped cell ourselves.
+                              if (!ts.active) selectCell(ts.startCell[0], ts.startCell[1]);
+                            }}
+                            onPointerCancel={(e: any) => {
+                              if (touchSelRef.current?.pointerId === e.pointerId) touchSelRef.current = null;
+                            }}
                             onContextMenu={() => {
                               if (!isSelected && !inRange) selectCell(ci, ri);
                               setContextMenu({ type: 'cell', indices: [] });
                             }}
                           >
                             {isEditing ? (
-                              <>
-                                <FormulaEditor
-                                  value={editValue}
-                                  onInput={setEditValue}
-                                  onHighlightsChange={setFormulaRefHighlights}
-                                  onCommit={() => {
-                                    commitEdit();
-                                    const nextRow = Math.min(ri + 1, visibleRowIds.length - 1);
-                                    selectCell(ci, nextRow);
-                                    tableRef.current?.focus();
-                                  }}
-                                  onCancel={() => {
-                                    cancelEdit();
-                                    tableRef.current?.focus();
-                                  }}
-                                  onTab={() => {
-                                    commitEdit();
-                                    const nextCol = Math.min(ci + 1, visibleColIds.length - 1);
-                                    selectCell(nextCol, ri);
-                                    tableRef.current?.focus();
-                                  }}
-                                  onBlur={() => {
-                                    setTimeout(() => {
-                                      const ae = document.activeElement;
-                                      if (ae?.closest?.('.cell-editor-cm')) return;
-                                      if (ae?.closest?.('.formula-editor-cm')) return;
-                                      if (ae?.closest?.('.formula-bar-cm')) return;
-                                      commitEdit();
-                                    }, 0);
-                                  }}
-                                  functionNames={formulaNames}
-                                  autoFocus={!editFromBarRef.current}
-                                  className="cell-editor-cm"
-                                />
-                                {(() => {
-                                  // Formula preview — show last computed value from worker
-                                  if (!editValue.startsWith('=') || !effectiveSheetId) return null;
-                                  const previewKey = `${effectiveSheetId}:${visibleRowIds[editingCell![1]]}:${visibleColIds[editingCell![0]]}`;
-                                  const cached = computedValues.get(previewKey);
-                                  return cached != null ? <div className="cell-eval-tooltip">{String(cached)}</div> : null;
-                                })()}
-                              </>
+                              // Editing happens in the bottom editor bar; the cell
+                              // itself just mirrors the in-progress text.
+                              <span className="datagrid-cell-editing-text">{editValue}</span>
                             ) : isAccountingFormat(cellFmt?.numFmt) && !display.startsWith('#') ? (
                               <span className="datagrid-cell-accounting">
                                 <span className="acct-symbol">$</span>
@@ -1739,6 +1812,22 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
                                 }}
                               />
                             )}
+                            {/* Corner decorations — purely visual (pointer-events: none):
+                                hint that the selection can be resized by dragging from
+                                inside it. Formula refs get matching corners in their
+                                (shared-palette) color. */}
+                            {selRect && !editingCell && ci === selRect.minCol && ri === selRect.minRow && (
+                              <div className="selection-handle handle-tl" />
+                            )}
+                            {selRect && !editingCell && !showAutofillHandle && ci === selRect.maxCol && ri === selRect.maxRow && (
+                              <div className="selection-handle handle-br" />
+                            )}
+                            {refInfo && refInfo.top && refInfo.left && (
+                              <div className="selection-handle handle-tl" style={{ background: refInfo.color }} />
+                            )}
+                            {refInfo && refInfo.bottom && refInfo.right && (
+                              <div className="selection-handle handle-br" style={{ background: refInfo.color }} />
+                            )}
                           </td>
                         );
                       })}
@@ -1756,32 +1845,6 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
                 })()}
               </tbody>
             </table>
-            {canEdit && (
-              <div className="add-rows-bar">
-                <button
-                  className="add-rows-link"
-                  onClick={() => addRows()}
-                >Add</button>
-                {' '}
-                <input
-                  type="number"
-                  className="add-rows-input"
-                  value={addRowCount ?? ''}
-                  min={1}
-                  max={1000}
-                  onInput={(e: any) => {
-                    const v = e.currentTarget.value;
-                    setAddRowCount(v === '' ? null : (parseInt(v, 10) || 10));
-                  }}
-                  onFocus={(e: any) => e.currentTarget.select()}
-                  onKeyDown={(e: any) => {
-                    e.stopPropagation();
-                    if (e.key === 'Enter') addRows();
-                  }}
-                />
-                {' more rows at the bottom'}
-              </div>
-            )}
           </div>
           </ContextMenuTrigger>
           <CommandContextMenuContent
@@ -1794,30 +1857,24 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
           />
           </ContextMenu>
 
-          <ContextMenu modal={false} onOpenChange={(open: boolean) => { if (!open) setSheetContextMenu(null); }}>
-            <ContextMenuTrigger>
-              <SheetTabs
-                sheets={sheetOrder}
-                currentSheetId={currentSheetId ?? ''}
-                readOnly={!canEdit}
-                onSelect={handleSelectSheet}
-                onAdd={handleAddSheet}
-                onRename={handleRenameSheet}
-                onReorder={handleReorderSheet}
-                onContextMenu={(id) => setSheetContextMenu(id)}
-                onUnhide={handleUnhideSheet}
-                renameRef={sheetRenameRef}
-              />
-            </ContextMenuTrigger>
-            <CommandContextMenuContent entries={commands.sheetCtx} preventCloseAutoFocus />
-          </ContextMenu>
+          {!focusMode && (
+            <SheetTabsBar
+              sheets={sheetOrder}
+              currentSheetId={effectiveSheetId ?? ''}
+              readOnly={!canEdit}
+              onSelect={handleSelectSheet}
+              onAdd={handleAddSheet}
+              onOpenList={() => setSheetListOpen(true)}
+              onOpenOptions={() => setSheetOptionsOpen(true)}
+            />
+          )}
           </div>
         </>
       )}
 
       </div>
 
-      <ConditionalFormatPanel
+      <ConditionalFormatSheet
         open={condFormatOpen}
         onOpenChange={setCondFormatOpen}
         rules={currentSheet?.conditionalFormats}
@@ -1831,6 +1888,118 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
         visibleColIds={visibleColIds}
       />
       </div>
+
+      {/* Focus-mode bottom bar: the (single) cell editor + quick actions.
+          Mounted only while a cell is selected so CodeMirror never loads at
+          page-load time (avoids the OOM crash — see FormulaEditor). */}
+      {focusMode && columnDefs.length > 0 && doc2 && (
+        <BottomEditorBar
+          value={editingCell ? editValue : formulaBarValue}
+          onInput={setEditValue}
+          onEditorFocus={() => {
+            if (!canEditRef.current) return;
+            if (!editingCell && selectedCell) {
+              editFromBarRef.current = true;
+              startEditing(selectedCell[0], selectedCell[1]);
+            }
+          }}
+          onCommit={() => {
+            const cell = editingCell;
+            commitEdit();
+            if (cell) {
+              const nextRow = Math.min(cell[1] + 1, visibleRowIds.length - 1);
+              selectCell(cell[0], nextRow);
+            }
+            tableRef.current?.focus();
+          }}
+          onCancel={() => {
+            cancelEdit();
+            tableRef.current?.focus();
+          }}
+          onTab={() => {
+            const cell = editingCell;
+            commitEdit();
+            if (cell) {
+              const nextCol = Math.min(cell[0] + 1, visibleColIds.length - 1);
+              selectCell(nextCol, cell[1]);
+            }
+            tableRef.current?.focus();
+          }}
+          onBlur={() => {
+            setTimeout(() => {
+              const ae = document.activeElement;
+              if (ae?.closest('.bottom-editor-bar')) return;
+              commitEdit();
+            }, 0);
+          }}
+          onHighlightsChange={setFormulaRefHighlights}
+          functionNames={formulaNames}
+          readOnly={!canEdit}
+          apiRef={formulaApiRef}
+          previewValue={editorPreviewValue}
+          resolveCommand={commands.resolveById}
+          onOpenFormat={canEdit ? () => setFormatSheetOpen(true) : undefined}
+          onInsertFormula={() => setFormulaInsertOpen(true)}
+          aggregates={aggregateChips}
+          multiSelect={isMultiSelect && !editingCell}
+        />
+      )}
+      <FormulaInsertSheet
+        open={formulaInsertOpen}
+        onOpenChange={setFormulaInsertOpen}
+        customFunctionNames={formulaNames}
+        onInsert={insertFunction}
+      />
+      <FormatSheet
+        open={formatSheetOpen}
+        onOpenChange={setFormatSheetOpen}
+        currentFormat={currentCellFormat}
+        onApply={(patch) => {
+          if (commandCtxRef.current) applyFormatToSelection(commandCtxRef.current, patch);
+        }}
+        onClear={() => commands.resolveById('clear-formatting').execute()}
+        onOpenConditional={() => setCondFormatOpen(true)}
+      />
+      <SheetListSheet
+        open={sheetListOpen}
+        onOpenChange={setSheetListOpen}
+        sheets={sheetOrder}
+        currentSheetId={effectiveSheetId ?? ''}
+        readOnly={!canEdit}
+        onPick={(id) => {
+          const s = sheetOrder.find(sh => sh.id === id);
+          if (s?.hidden) {
+            if (!canEditRef.current) return;
+            handleUnhideSheet(id);
+          }
+          handleSelectSheet(id);
+        }}
+      />
+      {effectiveSheetId && (
+        <SheetOptionsSheet
+          open={sheetOptionsOpen}
+          onOpenChange={setSheetOptionsOpen}
+          sheetId={effectiveSheetId}
+          sheetName={meta?.sheets?.[effectiveSheetId]?.name ?? ''}
+          onRename={handleRenameSheet}
+          canMoveLeft={visibleSheetIds.indexOf(effectiveSheetId) > 0}
+          canMoveRight={visibleSheetIds.indexOf(effectiveSheetId) >= 0 && visibleSheetIds.indexOf(effectiveSheetId) < visibleSheetIds.length - 1}
+          onMove={handleMoveSheet}
+          canHide={visibleSheetIds.length > 1}
+          onHide={handleHideSheet}
+          canDelete={sheetOrder.length > 1}
+          onDelete={handleDeleteSheet}
+          frozenRows={frozenRowCount}
+          frozenCols={frozenColCount}
+          maxFrozenRows={Math.max(0, visibleRowIds.length - 1)}
+          maxFrozenCols={Math.max(0, visibleColIds.length - 1)}
+          onSetFrozen={(kind, count) => {
+            const sh = activeSheetRef.current;
+            if (!sh || !effectiveSheetId) return;
+            applyFreezeCount(mutate, effectiveSheetId, sh, kind === 'row' ? visibleRowIds : visibleColIds, kind, count);
+          }}
+        />
+      )}
     </div>
     </DocLoader>
   );

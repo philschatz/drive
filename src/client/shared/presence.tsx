@@ -3,10 +3,7 @@ import { subscribePresence, setPresence, usePeerTransports } from '../worker-api
 import type { PeerState } from './automerge';
 import { getContactName } from '../contact-names';
 
-const PEER_COLORS = [
-  '#e91e63', '#9c27b0', '#673ab7', '#3f51b5',
-  '#009688', '#ff9800', '#795548', '#607d8b',
-];
+import { MATERIAL_CATEGORICAL as PEER_COLORS } from './categorical-colors';
 
 export interface PresenceState {
   viewing: boolean;

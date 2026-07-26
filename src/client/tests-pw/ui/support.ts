@@ -40,8 +40,12 @@ export interface App {
  * for the doc name) and records fatal worker errors so a failed worker load fails
  * the test instead of silently passing.
  */
-export async function openApp(browser: Browser, name = 'ui'): Promise<App> {
-  const context = await browser.newContext();
+export async function openApp(
+  browser: Browser,
+  name = 'ui',
+  contextOptions?: Parameters<Browser['newContext']>[0]
+): Promise<App> {
+  const context = await browser.newContext(contextOptions);
   const page = await context.newPage();
 
   const fatalErrors: string[] = [];
