@@ -24,6 +24,7 @@ import { docUrl } from '@/shared/doc-urls';
 import { relativeTime } from '../../shared/relative-time';
 import { settingSet, settingSetSync } from '../idb-storage';
 import type { ImportProgress } from './import-docs';
+import { useInstallNudge } from './install-nudge';
 
 declare const __APP_VERSION__: string;
 declare const __BUILD_TIME__: string;
@@ -329,25 +330,7 @@ export function Home({ path }: { path?: string }) {
     }
   }, []);
 
-  const [installPrompt, setInstallPrompt] = useState<any>(null);
-  const isStandalone = window.matchMedia('(display-mode: standalone)').matches
-    || (navigator as any).standalone === true;
-
-  useEffect(() => {
-    const handler = (e: Event) => {
-      e.preventDefault();
-      setInstallPrompt(e);
-    };
-    window.addEventListener('beforeinstallprompt', handler);
-    return () => window.removeEventListener('beforeinstallprompt', handler);
-  }, []);
-
-  const handleInstall = async () => {
-    if (!installPrompt) return;
-    installPrompt.prompt();
-    const { outcome } = await installPrompt.userChoice;
-    if (outcome === 'accepted') setInstallPrompt(null);
-  };
+  useInstallNudge();
 
   const sortedEntries = useMemo(() => {
     const indexById = new Map(entries.map((e, i) => [e.documentId, i]));
@@ -451,18 +434,6 @@ export function Home({ path }: { path?: string }) {
       <input type="file" ref={icsInputRef} accept=".ics,text/calendar" style={{ display: 'none' }} onChange={handleImportIcs as any} />
       <input type="file" ref={xlsInputRef} accept=".xls,.xlsx,.csv" style={{ display: 'none' }} onChange={handleImportXlsx as any} />
       <input type="file" multiple ref={jsonInputRef} accept=".json,.md,application/json,text/markdown" style={{ display: 'none' }} onChange={handleImportJson as any} />
-
-      <div className="flex items-center gap-2 mb-2">
-        {installPrompt ? (
-          <Button variant="outline" size="sm" onClick={handleInstall}>
-            <span className="material-symbols-outlined">install_mobile</span> Add to Homescreen
-          </Button>
-        ) : !isStandalone && (
-          <span className="text-xs text-muted-foreground">
-            Install: use your browser's <em>"Add to Home screen"</em> or <em>"Install app"</em> menu option
-          </span>
-        )}
-      </div>
 
       <div className="text-xs text-muted-foreground mt-4 text-center">
         <a href={`https://github.com/philschatz/drive/commit/${__APP_VERSION__}`} target="_blank" rel="noopener noreferrer" className="hover:underline">{__APP_VERSION__}</a> · built {dayjs(__BUILD_TIME__).fromNow()}
