@@ -1,6 +1,8 @@
 import type { DocTypePlugin } from '../types';
 import { taskListSchemaPlugin } from './schema';
-import { Tasks } from './Tasks';
+import { lazyView } from '../../shared/lazy-view';
+
+const Tasks = lazyView(() => import('./Tasks').then(m => m.Tasks));
 
 export const taskListPlugin: DocTypePlugin = {
   ...taskListSchemaPlugin,

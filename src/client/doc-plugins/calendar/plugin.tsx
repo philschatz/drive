@@ -1,6 +1,8 @@
 import type { DocTypePlugin } from '../types';
 import { calendarSchemaPlugin } from './schema';
-import { Calendar } from './Calendar';
+import { lazyView } from '../../shared/lazy-view';
+
+const Calendar = lazyView(() => import('./Calendar').then(m => m.Calendar));
 
 export const calendarPlugin: DocTypePlugin = {
   ...calendarSchemaPlugin,

@@ -9,7 +9,7 @@
  * `import.meta.glob` is lazy by default, so each example stays in its own chunk
  * and nothing is fetched until someone actually asks for the examples.
  */
-import type { ImportItem } from '../Home';
+import type { ImportItem } from '../import-docs';
 
 const jsonLoaders = import.meta.glob<{ default: Record<string, unknown> }>('./*.json');
 const markdownLoaders = import.meta.glob<string>('./*.md', { query: '?raw', import: 'default' });

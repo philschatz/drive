@@ -1,12 +1,5 @@
-// The editor components drag in worker bootstrapping (import.meta) and
-// schedule-x internals that don't load under jest; this test only checks
-// registry metadata, so stub the Views out. The schema cores stay real.
-jest.mock('./calendar/Calendar', () => ({ Calendar: () => null }));
-jest.mock('./tasks/Tasks', () => ({ Tasks: () => null }));
-jest.mock('./datagrid/DataGrid', () => ({ DataGrid: () => null }));
-jest.mock('./counters/Counters', () => ({ Counters: () => null }));
-jest.mock('./sentences/SentencesView', () => ({ SentencesView: () => null }));
-
+// The plugin Views are lazy (see shared/lazy-view.ts), so importing the
+// registry never loads the editor components — no View mocks needed here.
 import { DOC_PLUGINS } from './index';
 import { SCHEMA_PLUGINS } from '../../shared/schemas';
 

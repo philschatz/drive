@@ -7,9 +7,13 @@
  */
 
 import { useState } from 'preact/hooks';
+import { Suspense } from 'preact/compat';
 import { Button } from '@/components/ui/button';
-import { QrScanner } from '@/components/QrScanner';
+import { lazyView } from '@/shared/lazy-view';
 import { navigateToUrlOrHash } from '@/shared/navigate-url';
+
+// jsqr is ~250K of source; load it only when the user actually starts a scan.
+const QrScanner = lazyView(() => import('@/components/QrScanner').then(m => m.QrScanner));
 
 interface ScanQrButtonProps {
   className?: string;
@@ -32,7 +36,9 @@ export function ScanQrButton({ className, onError }: ScanQrButtonProps) {
         Scan their QR Code
       </Button>
       {scanning && (
-        <QrScanner onResult={handleResult} onClose={() => setScanning(false)} />
+        <Suspense fallback={null}>
+          <QrScanner onResult={handleResult} onClose={() => setScanning(false)} />
+        </Suspense>
       )}
     </>
   );

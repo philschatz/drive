@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'preact/hooks';
+import { Suspense } from 'preact/compat';
 import { openDoc, subscribeQuery } from './worker-api';
 import { getDocPlugin } from './doc-plugins';
 import { DocLoader } from './shared/useDocument';
@@ -80,16 +81,22 @@ function DocViewResolver({ docId, rest }: { docId: string; rest?: string }) {
     );
   }
 
+  const spinner = (
+    <div className="flex justify-center mt-24">
+      <span className="material-symbols-outlined animate-spin text-muted-foreground">progress_activity</span>
+    </div>
+  );
+
   // Hold until @type and access are both known so the view mounts exactly once,
   // with the right readOnly state (no flash of editing chrome on read-only docs).
   // Cached docs resolve synchronously, so the spinner is imperceptible for them.
-  if (docType === undefined || !loaded || !plugin) {
-    return (
-      <div className="flex justify-center mt-24">
-        <span className="material-symbols-outlined animate-spin text-muted-foreground">progress_activity</span>
-      </div>
-    );
-  }
+  if (docType === undefined || !loaded || !plugin) return spinner;
 
-  return <plugin.View docId={docId} rest={rest} readOnly={!canEdit} />;
+  // Views are code-split (see shared/lazy-view.ts); the first visit per
+  // type fetches its chunk behind the same spinner.
+  return (
+    <Suspense fallback={spinner}>
+      <plugin.View docId={docId} rest={rest} readOnly={!canEdit} />
+    </Suspense>
+  );
 }

@@ -1,6 +1,8 @@
 import type { DocTypePlugin, DocViewProps } from '../types';
 import { dataGridSchemaPlugin } from './schema';
-import { DataGrid } from './DataGrid';
+import { lazyView } from '../../shared/lazy-view';
+
+const DataGrid = lazyView(() => import('./DataGrid').then(m => m.DataGrid));
 
 const sid = () => Math.random().toString(36).slice(2, 10);
 
