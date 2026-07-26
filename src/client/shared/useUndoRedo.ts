@@ -12,6 +12,29 @@ export { toPlain, syncToTarget } from '../../shared/sync-to-target';
  * Each undo/redo fetches the real history length from the worker to avoid
  * cursor drift from race conditions during init or remote edits.
  */
+/**
+ * Editor-facing wrapper: undo/redo plus one stable `onHeads` callback to invoke
+ * from the editor's `subscribeQuery` handler, which feeds both the version
+ * slider and the undo cursor. Kept here so every document type wires undo the
+ * same way (see EditorTitleBar's undo/redo buttons).
+ *
+ * The callback is routed through a ref so subscription effects with docId-only
+ * deps never capture a stale version of it.
+ */
+export function useEditorUndoRedo(
+  docId: string,
+  history: { onNewHeads: (heads: string[]) => void },
+) {
+  const { undo, redo, canUndo, canRedo, onHeadsUpdate } = useUndoRedo(docId);
+  const latestRef = useRef<(heads: string[]) => void>(() => {});
+  latestRef.current = (heads: string[]) => {
+    history.onNewHeads(heads);
+    onHeadsUpdate(heads);
+  };
+  const onHeads = useCallback((heads: string[]) => latestRef.current(heads), []);
+  return { undo, redo, canUndo, canRedo, onHeads };
+}
+
 export function useUndoRedo(docId: string) {
   // Logical cursor: which version the doc currently represents.
   const cursorRef = useRef(-1);

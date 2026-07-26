@@ -1,66 +1,71 @@
-import { computeFreezeIds, applyFreezeCount } from './sheet-actions';
+import { effectiveFrozenCount, applyFreezeCount } from './sheet-actions';
 
-describe('computeFreezeIds', () => {
-  const all = ['a', 'b', 'c', 'd', 'e'];
+describe('effectiveFrozenCount', () => {
+  const visible = ['a', 'b', 'c', 'd'];
 
-  it('freezes the prefix up to the count-th visible id', () => {
-    expect(computeFreezeIds(all, all, 2)).toEqual({
-      idsToFreeze: ['a', 'b'],
-      idsToUnfreeze: ['c', 'd', 'e'],
-    });
+  it('returns the stored count', () => {
+    expect(effectiveFrozenCount(3, visible)).toBe(3);
   });
 
-  it('count 0 unfreezes everything', () => {
-    expect(computeFreezeIds(all, all, 0)).toEqual({
-      idsToFreeze: [],
-      idsToUnfreeze: all,
-    });
+  it('is 0 when nothing is stored', () => {
+    expect(effectiveFrozenCount(undefined, visible)).toBe(0);
   });
 
-  it('includes hidden items interleaved in the frozen prefix', () => {
-    // 'b' is hidden: freezing 2 visible items ⇒ prefix a,b,c
-    const visible = ['a', 'c', 'd', 'e'];
-    expect(computeFreezeIds(all, visible, 2)).toEqual({
-      idsToFreeze: ['a', 'b', 'c'],
-      idsToUnfreeze: ['d', 'e'],
-    });
+  it('clamps so at least one row/col stays scrollable', () => {
+    expect(effectiveFrozenCount(99, visible)).toBe(3);
+    expect(effectiveFrozenCount(4, visible)).toBe(3);
   });
 
-  it('clamps a count past the end to all items', () => {
-    expect(computeFreezeIds(all, all, 99)).toEqual({
-      idsToFreeze: all,
-      idsToUnfreeze: [],
-    });
+  it('is 0 for an empty sheet', () => {
+    expect(effectiveFrozenCount(2, [])).toBe(0);
   });
 
-  it('handles empty visible lists', () => {
-    expect(computeFreezeIds(all, [], 3)).toEqual({
-      idsToFreeze: [],
-      idsToUnfreeze: all,
-    });
+  it('never goes negative', () => {
+    expect(effectiveFrozenCount(-5, visible)).toBe(0);
   });
 });
 
 describe('applyFreezeCount', () => {
-  it('mutates the right collection with args-only data', () => {
-    const sheet = {
-      rows: { r1: { index: 1 }, r2: { index: 2 }, r3: { index: 3 } },
-      columns: { c1: { index: 1 }, c2: { index: 2 } },
-    };
-    const doc: any = { sheets: { s1: structuredClone(sheet) } };
-    const mutate = (fn: (d: any, ...args: any[]) => void, args: unknown[]) => fn(doc, ...args);
+  const makeDoc = () => ({
+    sheets: {
+      s1: {
+        rows: { r1: { index: 1, frozen: true }, r2: { index: 2 }, r3: { index: 3 } },
+        columns: { c1: { index: 1 }, c2: { index: 2 } },
+      } as any,
+    },
+  });
 
-    applyFreezeCount(mutate, 's1', sheet, ['r1', 'r2', 'r3'], 'row', 2);
-    expect(doc.sheets.s1.rows.r1.frozen).toBe(true);
-    expect(doc.sheets.s1.rows.r2.frozen).toBe(true);
-    expect(doc.sheets.s1.rows.r3.frozen).toBeUndefined();
-
-    applyFreezeCount(mutate, 's1', sheet, ['r1', 'r2', 'r3'], 'row', 0);
+  it('writes the count and clears legacy flags', () => {
+    const doc = makeDoc();
+    applyFreezeCount((fn, args) => fn(doc, ...args), 's1', 'row', 2);
+    expect(doc.sheets.s1.frozenRows).toBe(2);
     expect(doc.sheets.s1.rows.r1.frozen).toBeUndefined();
-    expect(doc.sheets.s1.rows.r2.frozen).toBeUndefined();
+  });
 
-    applyFreezeCount(mutate, 's1', sheet, ['c1', 'c2'], 'col', 1);
-    expect(doc.sheets.s1.columns.c1.frozen).toBe(true);
-    expect(doc.sheets.s1.columns.c2.frozen).toBeUndefined();
+  it('deletes the field entirely when unfreezing', () => {
+    const doc = makeDoc();
+    applyFreezeCount((fn, args) => fn(doc, ...args), 's1', 'row', 2);
+    applyFreezeCount((fn, args) => fn(doc, ...args), 's1', 'row', 0);
+    expect('frozenRows' in doc.sheets.s1).toBe(false);
+  });
+
+  it('writes columns independently of rows', () => {
+    const doc = makeDoc();
+    applyFreezeCount((fn, args) => fn(doc, ...args), 's1', 'col', 1);
+    expect(doc.sheets.s1.frozenCols).toBe(1);
+    expect(doc.sheets.s1.frozenRows).toBeUndefined();
+  });
+
+  it('floors and clamps the stored count', () => {
+    const doc = makeDoc();
+    applyFreezeCount((fn, args) => fn(doc, ...args), 's1', 'row', 2.7);
+    expect(doc.sheets.s1.frozenRows).toBe(2);
+    applyFreezeCount((fn, args) => fn(doc, ...args), 's1', 'row', -3);
+    expect('frozenRows' in doc.sheets.s1).toBe(false);
+  });
+
+  it('ignores an unknown sheet id', () => {
+    const doc = makeDoc();
+    expect(() => applyFreezeCount((fn, args) => fn(doc, ...args), 'nope', 'row', 1)).not.toThrow();
   });
 });

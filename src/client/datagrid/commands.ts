@@ -113,6 +113,8 @@ export interface GridCommandContext {
   onHideSheet?: (id: string) => void;
   onRenameSheet?: (id: string) => void;
   openConditionalFormatPanel?: () => void;
+  /** Open the row-height / column-width sheet for the current selection. */
+  openResizeSheet?: (kind: 'row' | 'col') => void;
   formatCache?: Map<string, DataGridCellFormat>;
 }
 
@@ -687,9 +689,45 @@ const clipboardPlugin: GridPlugin = {
   },
 };
 
+/**
+ * Autofill a whole row/column selection by continuing the pattern of the
+ * neighbour just before it (the row above / column to the left) — the same
+ * result as dragging that neighbour's fill handle across the selection.
+ */
+function autofillFromNeighbour(
+  s: GridCommandState,
+  ctx: GridCommandContext,
+  kind: 'row' | 'col',
+): void {
+  const indices = kind === 'row' ? rowIndices(s) : colIndices(s);
+  if (indices.length === 0) return;
+  const start = Math.min(...indices);
+  const end = Math.max(...indices);
+  if (start <= 0) return; // nothing before it to extend
+  const lastCol = ctx.visibleColIds.length - 1;
+  const lastRow = ctx.visibleRowIds.length - 1;
+  if (lastCol < 0 || lastRow < 0) return;
+  const source = kind === 'row'
+    ? { minCol: 0, maxCol: lastCol, minRow: start - 1, maxRow: start - 1 }
+    : { minCol: start - 1, maxCol: start - 1, minRow: 0, maxRow: lastRow };
+  const fill = kind === 'row'
+    ? { minCol: 0, maxCol: lastCol, minRow: start, maxRow: end }
+    : { minCol: start, maxCol: end, minRow: 0, maxRow: lastRow };
+  commitAutofill(ctx, source, fill);
+  ctx.setContextMenu(null);
+}
+
 const rowPlugin: GridPlugin = {
   id: 'row',
   commands: [
+    {
+      id: 'autofill-rows',
+      defaultLabel: 'Autofill',
+      icon: 'stat_minus_1',
+      // Needs a row above to extend from.
+      isEnabled: s => rowIndices(s).length > 0 && Math.min(...rowIndices(s)) > 0,
+      execute: (s, ctx) => autofillFromNeighbour(s, ctx, 'row'),
+    },
     {
       id: 'insert-row-above',
       defaultLabel: s => {
@@ -849,24 +887,12 @@ const rowPlugin: GridPlugin = {
     },
     {
       id: 'set-row-height',
-      defaultLabel: 'Set row height\u2026',
+      defaultLabel: 'Resize rows\u2026',
       icon: 'height',
       isEnabled: s => rowIndices(s).length > 0,
-      execute: (s, ctx) => {
-        const indices = rowIndices(s);
-        const ids = indices.map(i => ctx.visibleRowIds[i]).filter(Boolean);
-        if (ids.length === 0) return;
-        const sh = ctxSheet(ctx);
-        const currentHeight = sh?.rows[ids[0]]?.height || 28;
-        const input = window.prompt('Row height (px):', String(currentHeight));
-        if (input === null) return;
-        const height = Math.max(16, Math.min(500, parseInt(input, 10)));
-        if (isNaN(height)) return;
-        ctx.mutate((d, sid, ids, height) => {
-          for (const id of ids) d.sheets[sid].rows[id].height = height;
-        }, [ctx.currentSheetId, ids, height]);
-        ctx.setContextMenu(null);
-      },
+      // The value is picked in a bottom sheet (ResizeSheet), which applies it
+      // through applyRowHeight.
+      execute: (_, ctx) => ctx.openResizeSheet?.('row'),
     },
   ],
   slots: {
@@ -902,6 +928,14 @@ const rowPlugin: GridPlugin = {
 const columnPlugin: GridPlugin = {
   id: 'column',
   commands: [
+    {
+      id: 'autofill-cols',
+      defaultLabel: 'Autofill',
+      icon: 'stat_minus_1',
+      // Needs a column to the left to extend from.
+      isEnabled: s => colIndices(s).length > 0 && Math.min(...colIndices(s)) > 0,
+      execute: (s, ctx) => autofillFromNeighbour(s, ctx, 'col'),
+    },
     {
       id: 'insert-col-left',
       defaultLabel: s => {
@@ -1061,24 +1095,10 @@ const columnPlugin: GridPlugin = {
     },
     {
       id: 'set-col-width',
-      defaultLabel: 'Set column width\u2026',
+      defaultLabel: 'Resize columns\u2026',
       icon: 'width',
       isEnabled: s => colIndices(s).length > 0,
-      execute: (s, ctx) => {
-        const indices = colIndices(s);
-        const ids = indices.map(i => ctx.visibleColIds[i]).filter(Boolean);
-        if (ids.length === 0) return;
-        const sh = ctxSheet(ctx);
-        const currentWidth = sh?.columns[ids[0]]?.width || 100;
-        const input = window.prompt('Column width (px):', String(currentWidth));
-        if (input === null) return;
-        const width = Math.max(20, Math.min(2000, parseInt(input, 10)));
-        if (isNaN(width)) return;
-        ctx.mutate((d, sid, ids, width) => {
-          for (const id of ids) d.sheets[sid].columns[id].width = width;
-        }, [ctx.currentSheetId, ids, width]);
-        ctx.setContextMenu(null);
-      },
+      execute: (_, ctx) => ctx.openResizeSheet?.('col'),
     },
   ],
   slots: {
@@ -1687,10 +1707,8 @@ const visibilityPlugin: GridPlugin = {
       icon: 'push_pin',
       isEnabled: s => rowIndices(s).length > 0,
       execute: (s, ctx) => {
-        const sh = ctxSheet(ctx);
-        if (!sh) return;
         // Freeze the visible prefix up to the selection's last row
-        applyFreezeCount(ctx.mutate, ctx.currentSheetId, sh, ctx.visibleRowIds, 'row', Math.max(...rowIndices(s)) + 1);
+        applyFreezeCount(ctx.mutate, ctx.currentSheetId, 'row', Math.max(...rowIndices(s)) + 1);
         ctx.setContextMenu(null);
       },
     },
@@ -1700,13 +1718,8 @@ const visibilityPlugin: GridPlugin = {
       icon: 'push_pin',
       isEnabled: s => s.hasFrozenRows,
       execute: (_, ctx) => {
-        const sh = ctxSheet(ctx);
-        if (!sh) return;
-        const ids = Object.entries(sh.rows).filter(([, r]: [string, any]) => r.frozen).map(([id]) => id);
-        if (ids.length === 0) return;
-        ctx.mutate((d, sid, ids) => {
-          for (const id of ids) delete d.sheets[sid].rows[id].frozen;
-        }, [ctx.currentSheetId, ids]);
+        applyFreezeCount(ctx.mutate, ctx.currentSheetId, 'row', 0);
+        ctx.setContextMenu(null);
       },
     },
     {
@@ -1715,10 +1728,8 @@ const visibilityPlugin: GridPlugin = {
       icon: 'push_pin',
       isEnabled: s => colIndices(s).length > 0,
       execute: (s, ctx) => {
-        const sh = ctxSheet(ctx);
-        if (!sh) return;
         // Freeze the visible prefix up to the selection's last column
-        applyFreezeCount(ctx.mutate, ctx.currentSheetId, sh, ctx.visibleColIds, 'col', Math.max(...colIndices(s)) + 1);
+        applyFreezeCount(ctx.mutate, ctx.currentSheetId, 'col', Math.max(...colIndices(s)) + 1);
         ctx.setContextMenu(null);
       },
     },
@@ -1728,13 +1739,8 @@ const visibilityPlugin: GridPlugin = {
       icon: 'push_pin',
       isEnabled: s => s.hasFrozenCols,
       execute: (_, ctx) => {
-        const sh = ctxSheet(ctx);
-        if (!sh) return;
-        const ids = Object.entries(sh.columns).filter(([, c]: [string, any]) => c.frozen).map(([id]) => id);
-        if (ids.length === 0) return;
-        ctx.mutate((d, sid, ids) => {
-          for (const id of ids) delete d.sheets[sid].columns[id].frozen;
-        }, [ctx.currentSheetId, ids]);
+        applyFreezeCount(ctx.mutate, ctx.currentSheetId, 'col', 0);
+        ctx.setContextMenu(null);
       },
     },
   ],

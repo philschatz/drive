@@ -5,6 +5,8 @@ import { subscribeQuery, updateDoc, deepAssign } from '../worker-api';
 import { peerDisplayName, usePresence } from '../shared/presence';
 import { EditorTitleBar } from '../shared/EditorTitleBar';
 import { useDocumentHistory } from '../shared/useDocumentHistory';
+import { useEditorUndoRedo } from '../shared/useUndoRedo';
+import { useHideOnScroll } from '../shared/useHideOnScroll';
 import { useCanEdit } from '../shared/useCanEdit';
 import { useFocusPathSync } from '../shared/useFocusPathSync';
 import { HistorySlider } from '../shared/HistorySlider';
@@ -49,10 +51,12 @@ function CalendarInner({ docId, readOnly, initialEventId }: { docId: string; rea
   const [showValidation, setShowValidation] = useState(false);
   const [calSettingsOpen, setCalSettingsOpen] = useState(false);
   const history = useDocumentHistory(docId);
-  // Route new heads through a ref so the (deps-stable) subscription effect always
-  // calls the current onNewHeads, not the active:false version captured at mount.
-  const onNewHeadsRef = useRef(history.onNewHeads);
-  onNewHeadsRef.current = history.onNewHeads;
+  // Feeds both the version slider and the undo cursor; ref-routed inside the
+  // hook so the (deps-stable) subscription effect never calls a stale one.
+  const { undo, redo, canUndo, canRedo, onHeads } = useEditorUndoRedo(docId, history);
+  // The calendar page is fixed-height, so this tracks schedule-x's own grid
+  // scroller (the hook listens for scrolls from any element).
+  const hidden = useHideOnScroll();
   const validationErrors = useDocumentValidation(docId);
   const { canEdit, canEditRef, noAccess } = useCanEdit(docId, readOnly, history);
   const eventsRef = useRef<Record<string, CalendarEvent>>({});
@@ -158,7 +162,7 @@ function CalendarInner({ docId, readOnly, initialEventId }: { docId: string; rea
         document.title = result.name + ' - Calendar';
       }
       setCalDesc(result.description || '');
-      onNewHeadsRef.current(heads);
+      onHeads(heads);
       refreshCalendar();
       refreshEditorFromEvents(eventsRef.current);
       // Auto-open event from URL on first load
@@ -202,7 +206,11 @@ function CalendarInner({ docId, readOnly, initialEventId }: { docId: string; rea
         peerTitle={(peer) => `${peerDisplayName(peer.peerId, peer.value?.userGroupId)}${peer.value?.focusedField ? ' (editing)' : ''}`}
         onToggleHistory={history.toggleHistory}
         historyActive={history.active}
-        onUndo={canEdit ? history.undoLastChange : undefined}
+        onUndo={canEdit ? undo : undefined}
+        onRedo={canEdit ? redo : undefined}
+        canUndo={canUndo}
+        canRedo={canRedo}
+        hidden={hidden}
         onToggleValidation={() => setShowValidation(v => !v)}
         validationActive={showValidation}
         validationCount={validationErrors.length}

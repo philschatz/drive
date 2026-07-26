@@ -65,6 +65,11 @@
   border-collapse: collapse;
   table-layout: fixed;
   font-size: 0.85rem;
+  /* Cell text is never selected directly (copy works off the cell selection,
+     editing happens in the bottom bar) — so a mouse drag across cells extends
+     the selection rectangle instead of smearing a text selection over it. */
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .datagrid-table th,
@@ -74,14 +79,15 @@
 }
 
 /* Corner header (top-left).
-   Sticky z-index ladder: corner (6) > col headers (5) > row headers (4) >
-   frozen row+col cells (3) > frozen cells (2) > highlighted cells (1) —
-   headers must always cover cells sliding beneath them, even selected ones. */
+   Sticky z-index ladder: corner (7) > col headers (6) > pinned row header (5,
+   set inline) > row headers (4) > frozen row+col cells (3) > frozen cells (2) >
+   highlighted cells (1) — headers must always cover cells sliding beneath
+   them, even selected ones. */
 .datagrid-corner-header {
   position: sticky;
   top: 0;
   left: 0;
-  z-index: 6;
+  z-index: 7;
   background: var(--md-sys-color-surface-container);
   cursor: pointer;
 }
@@ -102,7 +108,7 @@
   cursor: grab;
   position: sticky;
   top: 0;
-  z-index: 5;
+  z-index: 6;
 }
 
 .col-resize-handle {
@@ -149,7 +155,7 @@
   color: var(--md-sys-color-on-surface-variant);
   position: sticky;
   top: 0;
-  z-index: 5;
+  z-index: 6;
 }
 .datagrid-col-unhide:hover {
   background: var(--md-sys-color-secondary-container);

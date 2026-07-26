@@ -4,6 +4,8 @@ import { subscribeQuery, updateDoc, deepAssign } from '../worker-api';
 import { peerColor, peerDisplayName, usePresence, PresenceDot, type PeerFieldInfo } from '../shared/presence';
 import { EditorTitleBar } from '../shared/EditorTitleBar';
 import { useDocumentHistory } from '../shared/useDocumentHistory';
+import { useEditorUndoRedo } from '../shared/useUndoRedo';
+import { useHideOnScroll } from '../shared/useHideOnScroll';
 import { useCanEdit } from '../shared/useCanEdit';
 import { useFocusPathSync } from '../shared/useFocusPathSync';
 import { HistorySlider } from '../shared/HistorySlider';
@@ -133,10 +135,10 @@ export function Tasks({ docId, rest, readOnly }: { docId?: string; rest?: string
   const [showValidation, setShowValidation] = useState(false);
 
   const history = useDocumentHistory(docId!);
-  // Route new heads through a ref so the (docId-only-deps) subscription effect
-  // always calls the current onNewHeads, not the active:false version at mount.
-  const onNewHeadsRef = useRef(history.onNewHeads);
-  onNewHeadsRef.current = history.onNewHeads;
+  // Feeds both the version slider and the undo cursor; ref-routed inside the
+  // hook so the (docId-only-deps) subscription effect never calls a stale one.
+  const { undo, redo, canUndo, canRedo, onHeads } = useEditorUndoRedo(docId!, history);
+  const hidden = useHideOnScroll();
   const validationErrors = useDocumentValidation(docId);
   const { canEdit, canEditRef, noAccess } = useCanEdit(docId, readOnly, history);
   const { peers, peerList, broadcast } = usePresence(docId);
@@ -239,8 +241,8 @@ export function Tasks({ docId, rest, readOnly }: { docId?: string; rest?: string
         setListName(result.name);
         document.title = result.name + ' - Tasks';
       }
-      // Update history tracking
-      onNewHeadsRef.current(heads);
+      // Update history tracking + undo cursor
+      onHeads(heads);
 
       // Auto-open task from URL on first load
       if (pendingTaskIdRef.current && result.tasks) {
@@ -305,7 +307,11 @@ export function Tasks({ docId, rest, readOnly }: { docId?: string; rest?: string
         peerTitle={(peer) => `${peerDisplayName(peer.peerId, peer.value?.userGroupId)}${peer.value?.focusedField ? ' (editing)' : ''}`}
         onToggleHistory={history.toggleHistory}
         historyActive={history.active}
-        onUndo={canEdit ? history.undoLastChange : undefined}
+        onUndo={canEdit ? undo : undefined}
+        onRedo={canEdit ? redo : undefined}
+        canUndo={canUndo}
+        canRedo={canRedo}
+        hidden={hidden}
         onToggleValidation={() => setShowValidation(v => !v)}
         validationActive={showValidation}
         validationCount={validationErrors.length}

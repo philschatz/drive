@@ -11,18 +11,32 @@ interface SheetProps {
   children?: any;
 }
 
+/** Currently-open sheets, innermost last — so Escape only closes the topmost
+ * one when sheets are layered (e.g. a colour picker over a formatting sheet). */
+const openSheets: object[] = [];
+
 function Sheet({ open, onOpenChange, children }: SheetProps) {
   const handleClose = useCallback(() => {
     onOpenChange?.(false);
   }, [onOpenChange]);
 
+  const tokenRef = useRef({});
+
   useEffect(() => {
     if (!open) return;
+    const token = tokenRef.current;
+    openSheets.push(token);
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') handleClose();
+      if (e.key !== 'Escape') return;
+      if (openSheets[openSheets.length - 1] !== token) return; // a sheet is on top of us
+      handleClose();
     };
     document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      const i = openSheets.indexOf(token);
+      if (i !== -1) openSheets.splice(i, 1);
+    };
   }, [open, handleClose]);
 
   if (!open) return null;
@@ -81,6 +95,10 @@ function SheetContent({ side = "right", className, showHandle, children }: Sheet
       <div
         ref={contentRef}
         tabIndex={-1}
+        // Marks this as overlay content: shared behaviours that react to page
+        // scrolling (e.g. useHideOnScroll's toolbar hiding) ignore scrolling
+        // that happens inside a sheet.
+        data-overlay-content=""
         className={cn(
           "fixed z-[200] gap-4 p-6 overflow-y-auto outline-none",
           sideClasses[side],
@@ -90,12 +108,13 @@ function SheetContent({ side = "right", className, showHandle, children }: Sheet
         {handleVisible && (
           <div className="mx-auto -mt-2 mb-3 h-1 w-8 rounded-full bg-outline-variant" aria-hidden="true" />
         )}
+        {/* Same 40px circular target as the app-bar icon buttons. */}
         <button
-          className="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+          aria-label="Close"
+          className="absolute right-2 top-2 inline-flex items-center justify-center h-10 w-10 rounded-full state-layer focus:outline-none"
           onClick={onClose}
         >
-          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
-          <span className="sr-only">Close</span>
+          <span className="material-symbols-outlined" style={{ fontSize: 24 }}>close</span>
         </button>
         {children}
       </div>

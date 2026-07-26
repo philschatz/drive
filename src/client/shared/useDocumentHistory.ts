@@ -25,11 +25,6 @@ export interface DocumentHistory {
   /** Restore the document to a specific version, then exit history mode. */
   restoreToVersion: (version: number) => Promise<void>;
   /**
-   * Undo the most recent change by restoring the previous version (appends a
-   * forward-only revert change; invoking it again re-reverts, i.e. redo).
-   */
-  undoLastChange?: () => Promise<void>;
-  /**
    * Call this from your subscribeQuery callback with the new heads.
    * Used to track when new changes arrive while in history mode.
    */
@@ -93,12 +88,6 @@ export function useDocumentHistory(docId: string): DocumentHistory {
     atLatestRef.current = true;
   }, [docId]);
 
-  const undoLastChange = useCallback(async () => {
-    const h = await getDocHistory(docId);
-    if (h.length < 2) return; // nothing before the current version
-    await restoreDocToVersion(docId, h.length - 2);
-  }, [docId]);
-
   /**
    * Called by editor's subscribeQuery callback when new heads arrive.
    * When at latest in history mode, advance the slider to track new changes.
@@ -128,7 +117,6 @@ export function useDocumentHistory(docId: string): DocumentHistory {
     onSliderChange,
     jumpToLatest,
     restoreToVersion,
-    undoLastChange,
     onNewHeads,
   };
 }

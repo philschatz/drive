@@ -17,14 +17,12 @@ export interface DataGridColumn {
   name: string;
   width?: number;
   hidden?: boolean;
-  frozen?: boolean;
 }
 
 export interface DataGridRow {
   index: number;
   height?: number;
   hidden?: boolean;
-  frozen?: boolean;
 }
 
 export interface DataGridBorder {
@@ -84,6 +82,10 @@ export interface DataGridSheet {
   name: string;
   index: number;
   hidden?: boolean;
+  /** Number of leading visible rows pinned to the top (0/absent = none). */
+  frozenRows?: number;
+  /** Number of leading visible columns pinned to the left (0/absent = none). */
+  frozenCols?: number;
   columns: Record<string, DataGridColumn>;
   rows: Record<string, DataGridRow>;
   cells: Record<string, DataGridCell>;
@@ -103,14 +105,12 @@ const dataGridColumnSchema = obj({
   name: str({ optional: true }),
   width: num({ min: 0, optional: true }),
   hidden: bool({ optional: true }),
-  frozen: bool({ optional: true }),
 });
 
 const dataGridRowSchema = obj({
   index: num({ min: 0 }),
   height: num({ min: 0, optional: true }),
   hidden: bool({ optional: true }),
-  frozen: bool({ optional: true }),
 });
 
 const dataGridBorderSchema = obj({
@@ -174,6 +174,8 @@ const dataGridSheetSchema = obj({
   name: str(),
   index: num(),
   hidden: bool({ optional: true }),
+  frozenRows: num({ min: 0, optional: true }),
+  frozenCols: num({ min: 0, optional: true }),
   columns: record(dataGridColumnSchema, { keyPattern: DATAGRID_ID_RE }),
   rows: record(dataGridRowSchema, { keyPattern: DATAGRID_ID_RE }),
   cells: record(dataGridCellSchema),

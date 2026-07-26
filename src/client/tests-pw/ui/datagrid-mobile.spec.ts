@@ -77,9 +77,9 @@ test.describe('DataGrid mobile', () => {
       { x: from.x + from.width / 2, y: from.y + from.height / 2 },
       { x: to.x + to.width / 2, y: to.y + to.height / 2 },
     );
-    // B2:C4 selected → 2 cols × 3 rows in range
+    // B2:C4 selected → 2 cols × 3 rows in range, C4 the primary cell
     await expect(page.locator('.datagrid-cell.in-range')).toHaveCount(6);
-    await expect(page.getByTestId('focus-top-bar')).toContainText('B2:C4');
+    await expect(cell(2, 3)).toHaveClass(/selected/);
     // Multi-cell selection hides the formula editor (no numeric cells → no aggregates either)
     await expect(page.locator('.bottom-editor-cm')).toHaveCount(0);
   });
@@ -117,7 +117,8 @@ test.describe('DataGrid mobile', () => {
     const scrollAfter = await container.evaluate(el => el.scrollTop);
     expect(scrollAfter).toBeGreaterThan(scrollBefore);
     // Selection survived the pan
-    await expect(page.getByTestId('focus-top-bar')).toContainText('B2:C4');
+    await expect(page.locator('.datagrid-cell.in-range')).toHaveCount(6);
+    await expect(page.getByTestId('focus-top-bar')).toBeVisible();
   });
 
   test('aggregates replace the editor for numeric selections', async () => {
@@ -177,13 +178,16 @@ test.describe('DataGrid mobile', () => {
     await nameInput.press('Enter');
     await expect(tabsBar.locator('[data-sheet-tab]', { hasText: 'Budget' })).toBeVisible();
 
-    // Move left swaps the tab order (md-list-item rows, not buttons)
+    // Move left swaps the tab order. Unavailable actions are omitted, not
+    // disabled: Budget is last, so only "Move left" is offered.
     const moveLeft = options.locator('md-list-item', { hasText: 'Move left' });
     const moveRight = options.locator('md-list-item', { hasText: 'Move right' });
-    await expect.poll(() => moveRight.evaluate((el: any) => el.disabled)).toBe(true);
+    await expect(moveRight).toHaveCount(0);
     await moveLeft.click();
     await expect(tabsBar.locator('[data-sheet-tab]').first()).toContainText('Budget');
-    await expect.poll(() => moveLeft.evaluate((el: any) => el.disabled)).toBe(true);
+    // Now first: "Move left" disappears and "Move right" appears
+    await expect(moveLeft).toHaveCount(0);
+    await expect(moveRight).toHaveCount(1);
 
     // Freeze 2 rows via the stepper; down disabled at 0, value updates
     const rowsUp = page.getByRole('button', { name: 'Increase frozen rows' });
@@ -231,6 +235,127 @@ test.describe('DataGrid mobile', () => {
     // Scroll back up
     await container.evaluate(el => { el.scrollTop = 150; });
     await expect(pageEl).not.toHaveClass(/chrome-hidden/);
+  });
+
+  test('frozen rows pin flush under the header and cover scrolling rows', async () => {
+    const page = app.page;
+    const container = page.locator('.datagrid-container');
+    await container.evaluate(el => { el.scrollTop = 0; });
+
+    // Freeze the first row via the sheet options stepper
+    const tabsBar = page.getByTestId('sheet-tabs-bar');
+    await tabsBar.locator('[data-sheet-tab]', { hasText: 'Sheet 1' }).click();
+    await page.getByRole('button', { name: 'Increase frozen rows' }).click();
+    await expect(page.getByTestId('freeze-rows-stepper-value')).toHaveText('1');
+    await page.keyboard.press('Escape');
+
+    // Stored as a count on the sheet, not per-row flags
+    const docId = /#\/d\/([^/?]+)/.exec(page.url())![1];
+    const sheet = await page.evaluate((docId) =>
+      (window as any).__drive.queryDoc(docId, '.sheets | to_entries | map(.value) | .[0]'), docId);
+    expect(sheet.result.frozenRows).toBe(1);
+    expect(Object.values(sheet.result.rows).some((r: any) => r.frozen)).toBe(false);
+
+    // Measure the sticky header *cell* — the <thead> element itself isn't
+    // sticky (its <th>s are), so its rect is meaningless once scrolled.
+    const geom = async () => page.evaluate(() => {
+      const colHeader = document.querySelector('.datagrid-col-header')!.getBoundingClientRect();
+      const headers = [...document.querySelectorAll('.datagrid-row-header')];
+      const r1 = headers.find(el => el.textContent === '1')!.getBoundingClientRect();
+      const r2 = headers.find(el => el.textContent === '2')!.getBoundingClientRect();
+      return { headerBottom: colHeader.bottom, r1Top: r1.top, r1Bottom: r1.bottom, r2Top: r2.top };
+    });
+
+    // At rest: the pinned row starts exactly where the header ends (the bug
+    // pushed it ~8px lower, overlapping row 2), and row 2 follows it.
+    const atRest = await geom();
+    expect(Math.abs(atRest.r1Top - atRest.headerBottom)).toBeLessThanOrEqual(1);
+    expect(atRest.r2Top).toBeGreaterThanOrEqual(atRest.r1Bottom - 1);
+
+    // Scrolled: row 1 stays pinned in the same place, row 2 has moved up under it
+    await container.evaluate(el => { el.scrollTop = 200; });
+    await page.waitForTimeout(200);
+    const scrolled = await geom();
+    expect(Math.abs(scrolled.r1Top - scrolled.headerBottom)).toBeLessThanOrEqual(1);
+    expect(scrolled.r2Top).toBeLessThan(atRest.r2Top);
+
+    // Unfreeze for the following tests
+    await tabsBar.locator('[data-sheet-tab]', { hasText: 'Sheet 1' }).click();
+    await page.getByRole('button', { name: 'Decrease frozen rows' }).click();
+    await expect(page.getByTestId('freeze-rows-stepper-value')).toHaveText('0');
+    await page.keyboard.press('Escape');
+    await container.evaluate(el => { el.scrollTop = 0; });
+  });
+
+  test('long-press a row header opens the context menu, resize applies', async () => {
+    const page = app.page;
+    await page.locator('.datagrid-container').evaluate(el => { el.scrollTop = 0; });
+
+    // Long-press row 3's header (touch): 450ms hold without moving
+    const header = page.locator('.datagrid-row-header').filter({ hasText: /^3$/ });
+    const box = (await header.boundingBox())!;
+    const cdp = await page.context().newCDPSession(page);
+    const point = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [point] });
+    await page.waitForTimeout(600);
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    await cdp.detach();
+
+    const menu = page.getByTestId('header-menu-row');
+    await expect(menu).toBeVisible();
+    // Assert on the headlines: an item's text also includes its icon's ligature
+    // name (md-icon renders the glyph name as text), so substring matching on
+    // the whole item is ambiguous.
+    const headlines = (loc: typeof menu) => loc.locator('md-menu-item div[slot="headline"]');
+    await expect(headlines(menu)).toHaveText(['Cut', 'Copy', 'Autofill', 'Clear', 'Delete', 'More']);
+
+    // The kebab reveals the structural actions
+    await page.getByTestId('header-menu-more').click();
+    const more = page.getByTestId('header-menu-row-more');
+    await expect(more).toBeVisible();
+    await expect(headlines(more)).toHaveText(['Back', 'Freeze rows', 'Hide row', 'Resize']);
+
+    // Resize → stepper sheet; stepping applies immediately
+    await more.locator('md-menu-item', { hasText: 'Resize' }).click();
+    const resize = page.getByTestId('resize-sheet');
+    await expect(resize).toBeVisible();
+    await expect(resize).toContainText('Applies to 1 row.');
+    await page.getByTestId('resize-input').fill('60');
+    await page.getByTestId('resize-input').press('Enter');
+    await expect.poll(async () => (await header.boundingBox())!.height).toBeGreaterThan(50);
+
+    // Reset restores the default height
+    await resize.getByRole('button', { name: 'Reset' }).click();
+    await expect.poll(async () => (await header.boundingBox())!.height).toBeLessThan(40);
+    await page.keyboard.press('Escape');
+    await expect(resize).not.toBeVisible();
+  });
+
+  test('autofill extends a row from its neighbour', async () => {
+    const page = app.page;
+    const cellText = (col: number, row: number) => cell(col, row).innerText();
+    await page.locator('.datagrid-container').evaluate(el => { el.scrollTop = 0; });
+
+    // Seed a series in rows 1-2 of column C, then autofill row 3 from row 2
+    const editor = page.locator('.bottom-editor-cm .cm-content');
+    const setCell = async (col: number, row: number, text: string) => {
+      await cell(col, row).click();
+      await editor.click();
+      await editor.pressSequentially(text, { delay: 20 });
+      await editor.press('Enter');
+    };
+    await setCell(2, 0, '5');
+    await setCell(2, 1, '10');
+    await page.getByRole('button', { name: 'Done' }).click();
+
+    // Right-click row 3's header (desktop path to the same menu)
+    await page.locator('.datagrid-row-header').filter({ hasText: /^3$/ }).click({ button: 'right' });
+    const menu = page.getByTestId('header-menu-row');
+    await expect(menu).toBeVisible();
+    await menu.locator('md-menu-item', { hasText: 'Autofill' }).click();
+
+    // Row 3 continues the +5 progression from the row above
+    await expect.poll(() => cellText(2, 2), { timeout: 10_000 }).toBe('15');
   });
 
   test('format sheet applies formatting and opens conditional rules', async () => {

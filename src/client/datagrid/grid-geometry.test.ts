@@ -1,4 +1,4 @@
-import { pointToCell, type GridGeometry } from './grid-geometry';
+import { pointToCell, buildRowOffsets, rowAtOffset, type GridGeometry } from './grid-geometry';
 import { nextChromeState } from '../shared/useHideOnScroll';
 
 const base: GridGeometry = {
@@ -7,8 +7,7 @@ const base: GridGeometry = {
   scrollLeft: 0,
   scrollTop: 0,
   colWidths: [100, 100, 100],
-  rowCount: 10,
-  rowHeight: 28,
+  rowOffsets: buildRowOffsets(new Array(10).fill(28)),
   headerHeight: 28,
   rowHeaderWidth: 48,
   frozenRowCount: 0,
@@ -46,7 +45,7 @@ describe('pointToCell', () => {
   });
 
   it('maps the sticky frozen-row band to frozen indices while scrolled', () => {
-    const g = { ...base, rowCount: 30, frozenRowCount: 2, scrollTop: 280 };
+    const g = { ...base, rowOffsets: buildRowOffsets(new Array(30).fill(28)), frozenRowCount: 2, scrollTop: 280 };
     // Within the frozen band: second frozen row
     expect(pointToCell(58, 28 + 28 + 5, g)[1]).toBe(1);
     // Below the band: scrolled content row
@@ -59,6 +58,44 @@ describe('pointToCell', () => {
     expect(pointToCell(48 + 50, 40, g)[0]).toBe(0);
     // Past the band: scrolled content column
     expect(pointToCell(160, 40, g)[0]).toBe(2);
+  });
+});
+
+describe('buildRowOffsets / rowAtOffset', () => {
+  it('accumulates heights with a trailing total', () => {
+    expect(buildRowOffsets([28, 60, 28])).toEqual([0, 28, 88, 116]);
+  });
+
+  it('handles an empty grid', () => {
+    expect(buildRowOffsets([])).toEqual([0]);
+    expect(rowAtOffset([0], 50)).toBe(0);
+  });
+
+  it('finds the row containing an offset with mixed heights', () => {
+    const offsets = buildRowOffsets([28, 60, 28, 100]);
+    expect(rowAtOffset(offsets, 0)).toBe(0);
+    expect(rowAtOffset(offsets, 27)).toBe(0);
+    expect(rowAtOffset(offsets, 28)).toBe(1);
+    expect(rowAtOffset(offsets, 87)).toBe(1);
+    expect(rowAtOffset(offsets, 88)).toBe(2);
+    expect(rowAtOffset(offsets, 116)).toBe(3);
+  });
+
+  it('clamps out-of-range offsets', () => {
+    const offsets = buildRowOffsets([28, 28]);
+    expect(rowAtOffset(offsets, -10)).toBe(0);
+    expect(rowAtOffset(offsets, 10_000)).toBe(1);
+  });
+});
+
+describe('pointToCell with variable row heights', () => {
+  it('resolves rows by cumulative offset, not a constant height', () => {
+    const g: GridGeometry = { ...base, rowOffsets: buildRowOffsets([28, 100, 28]) };
+    // Row 1 is 100px tall: y just past the header lands in row 0 …
+    expect(pointToCell(58, 28 + 5, g)[1]).toBe(0);
+    // … 50px further down is still row 1, which a uniform 28px would call row 2
+    expect(pointToCell(58, 28 + 28 + 50, g)[1]).toBe(1);
+    expect(pointToCell(58, 28 + 128 + 5, g)[1]).toBe(2);
   });
 });
 

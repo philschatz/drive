@@ -24,11 +24,47 @@ export interface OverflowItem {
   disabled?: boolean;
 }
 
+/** Circular 40px icon button matching the app bar's metrics. */
+export function BarIconButton({
+  icon,
+  label,
+  onClick,
+  disabled,
+  active,
+  size = 22,
+}: {
+  icon: string;
+  label: string;
+  onClick?: () => void;
+  disabled?: boolean;
+  active?: boolean;
+  size?: number;
+}) {
+  return (
+    <button
+      aria-label={label}
+      title={label}
+      disabled={disabled}
+      onClick={onClick}
+      className={
+        'inline-flex items-center justify-center h-10 w-10 rounded-full state-layer shrink-0 disabled:opacity-30' +
+        (active ? ' bg-secondary-container text-on-secondary-container' : '')
+      }
+    >
+      <span className="material-symbols-outlined" style={{ fontSize: size }}>{icon}</span>
+    </button>
+  );
+}
+
 /**
  * Material top app bar shared by all document editors: back button, type icon,
- * (editable) title, live presence/connection cluster, and a trailing overflow
- * menu holding the low-frequency actions (Rename / Share / History / Validation
- * / Edit source + editor-specific `overflow` items).
+ * (editable) title, undo/redo, live presence/connection cluster, and a trailing
+ * overflow menu holding the low-frequency actions (Rename / Share / History /
+ * Validation / Edit source + editor-specific `overflow` items).
+ *
+ * The bar is sticky and hides itself when `hidden` is set — editors get that
+ * from the shared `useHideOnScroll()` hook, so dragging up hides the chrome and
+ * dragging back down reveals it in every document type.
  */
 export function EditorTitleBar<P extends PeerLike>({
   icon,
@@ -45,10 +81,15 @@ export function EditorTitleBar<P extends PeerLike>({
   onToggleHistory,
   historyActive = false,
   onUndo,
+  onRedo,
+  canUndo,
+  canRedo,
   onToggleValidation,
   validationActive = false,
   validationCount = 0,
   overflow = [],
+  hidden = false,
+  sticky = true,
   children,
 }: {
   icon: string;
@@ -65,13 +106,22 @@ export function EditorTitleBar<P extends PeerLike>({
   sourcePath?: (string | number)[];
   onToggleHistory?: () => void;
   historyActive?: boolean;
-  /** Undo the latest change (shown as an overflow item when provided). */
+  /** Undo the latest change — rendered as a bar button (with redo). */
   onUndo?: () => void;
+  /** Redo the change undone last. */
+  onRedo?: () => void;
+  canUndo?: boolean;
+  canRedo?: boolean;
   onToggleValidation?: () => void;
   validationActive?: boolean;
   validationCount?: number;
   /** Editor-specific extra overflow-menu actions (e.g. "Delete completed"). */
   overflow?: OverflowItem[];
+  /** Slide the bar out of view (see useHideOnScroll). */
+  hidden?: boolean;
+  /** Set false when the bar sits in a fixed-height flex layout that positions
+   * it itself (DataGrid), rather than over scrolling page content. */
+  sticky?: boolean;
   children?: ComponentChildren;
 }) {
   const transports = usePeerTransports();
@@ -110,14 +160,6 @@ export function EditorTitleBar<P extends PeerLike>({
       onSelect: () => setShareOpen(true),
     });
   }
-  if (onUndo) {
-    menuItems.push({
-      icon: 'undo',
-      label: 'Undo',
-      title: 'Undo',
-      onSelect: onUndo,
-    });
-  }
   if (onToggleHistory) {
     menuItems.push({
       icon: 'history',
@@ -147,7 +189,13 @@ export function EditorTitleBar<P extends PeerLike>({
   }
 
   return (
-    <div className="flex items-center gap-1.5 pl-1 pr-2 min-h-14 w-full">
+    <div
+      className={
+        'flex items-center gap-1.5 pl-1 pr-2 min-h-14 w-full bg-surface transition-transform duration-200' +
+        (sticky ? ' sticky top-0 z-20' : '') +
+        (hidden ? ' -translate-y-full' : '')
+      }
+    >
       {/* Left side */}
       <a
         href="#/"
@@ -180,6 +228,14 @@ export function EditorTitleBar<P extends PeerLike>({
 
       {/* Right side */}
       <div className="flex items-center gap-1 sm:gap-1.5 ml-auto shrink-0">
+        {/* Undo / redo — every doc type restores through the shared version
+            history (see useUndoRedo), so both live on the bar, not the menu. */}
+        {onUndo && (
+          <BarIconButton icon="undo" label="Undo" onClick={onUndo} disabled={canUndo === false} />
+        )}
+        {onRedo && (
+          <BarIconButton icon="redo" label="Redo" onClick={onRedo} disabled={canRedo === false} />
+        )}
         {/* Peer dots — clipped to ~4 dots on narrow screens. Devices of the same user
             collapse to a single dot (keyed by user-group id); all of the local user's
             own devices are hidden, not just the current one. */}

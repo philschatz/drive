@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'preact/hooks';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import {
   Select, SelectTrigger, SelectValue, SelectContent, SelectItem,
@@ -88,6 +89,42 @@ function SectionLabel({ children }: { children: string }) {
 }
 
 /**
+ * Icon button previewing the colour it edits (an underline swatch, like the
+ * desktop pickers) — tapping it opens the colour subsheet.
+ */
+function ColorButton({
+  icon,
+  label,
+  color,
+  fallback,
+  onClick,
+}: {
+  icon: string;
+  label: string;
+  color: string | undefined;
+  /** Swatch shown when no colour is set. */
+  fallback: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      aria-label={label}
+      title={label}
+      onClick={onClick}
+      data-testid={`format-${icon}`}
+      className="relative inline-flex items-center justify-center h-10 w-10 rounded-full state-layer shrink-0"
+    >
+      <span className="material-symbols-outlined" style={{ fontSize: 22 }}>{icon}</span>
+      <span
+        aria-hidden="true"
+        className="absolute bottom-1 left-2 right-2 h-1 rounded-sm border border-outline-variant"
+        style={{ background: color ?? fallback }}
+      />
+    </button>
+  );
+}
+
+/**
  * Text-formatting bottom sheet (focus mode): font, size, styles, colors,
  * alignment, number formats, conditional formatting, clear. Applies each
  * change to the current selection immediately and stays open — formatting is
@@ -113,6 +150,11 @@ export function FormatSheet({
   const fontSize = currentFormat?.fontSize ?? 11;
   const smaller = FONT_SIZES.filter(s => s < fontSize);
   const larger = FONT_SIZES.filter(s => s > fontSize);
+  // Which colour subsheet is layered on top of this one, if any.
+  const [colorTarget, setColorTarget] = useState<'text' | 'fill' | null>(null);
+
+  // Don't leave a subsheet open behind a dismissed parent.
+  useEffect(() => { if (!open) setColorTarget(null); }, [open]);
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -140,6 +182,22 @@ export function FormatSheet({
             onClick={() => onApply({ hAlign: 'center' })} />
           <ToggleButton icon="format_align_right" label="Align right" checked={currentFormat?.hAlign === 'right'}
             onClick={() => onApply({ hAlign: 'right' })} />
+          <span className="w-px h-6 bg-outline-variant mx-1" />
+          {/* Colours live in their own subsheets; the swatch shows the current one. */}
+          <ColorButton
+            icon="format_color_text"
+            label="Text color"
+            color={currentFormat?.textColor}
+            fallback="var(--md-sys-color-on-surface)"
+            onClick={() => setColorTarget('text')}
+          />
+          <ColorButton
+            icon="format_color_fill"
+            label="Fill color"
+            color={currentFormat?.bgColor}
+            fallback="transparent"
+            onClick={() => setColorTarget('fill')}
+          />
         </div>
 
         {/* Font family + size stepper */}
@@ -179,22 +237,6 @@ export function FormatSheet({
           </div>
         </div>
 
-        <SectionLabel>Text color</SectionLabel>
-        <ColorGrid
-          value={currentFormat?.textColor}
-          onChange={(c) => onApply({ textColor: c })}
-          onReset={() => onApply({ textColor: undefined })}
-          resetLabel="Default"
-        />
-
-        <SectionLabel>Fill color</SectionLabel>
-        <ColorGrid
-          value={currentFormat?.bgColor}
-          onChange={(c) => onApply({ bgColor: c })}
-          onReset={() => onApply({ bgColor: undefined })}
-          resetLabel="No fill"
-        />
-
         <SectionLabel>Number format</SectionLabel>
         <md-list style={{ background: 'transparent' }}>
           {NUMBER_FORMATS.map(nf => {
@@ -229,6 +271,26 @@ export function FormatSheet({
         </md-list>
         </div>
       </SheetContent>
+
+      {/* Colour subsheet, layered over the format sheet so dismissing it
+          returns here rather than closing everything. */}
+      <Sheet open={colorTarget !== null} onOpenChange={(o) => { if (!o) setColorTarget(null); }}>
+        <SheetContent side="bottom" className="max-h-[70vh] p-4">
+          <div data-testid="color-sheet">
+            <SheetHeader>
+              <SheetTitle>{colorTarget === 'fill' ? 'Fill color' : 'Text color'}</SheetTitle>
+            </SheetHeader>
+            <div className="mt-2">
+              <ColorGrid
+                value={colorTarget === 'fill' ? currentFormat?.bgColor : currentFormat?.textColor}
+                onChange={(c) => onApply(colorTarget === 'fill' ? { bgColor: c } : { textColor: c })}
+                onReset={() => onApply(colorTarget === 'fill' ? { bgColor: undefined } : { textColor: undefined })}
+                resetLabel={colorTarget === 'fill' ? 'No fill' : 'Default'}
+              />
+            </div>
+          </div>
+        </SheetContent>
+      </Sheet>
     </Sheet>
   );
 }

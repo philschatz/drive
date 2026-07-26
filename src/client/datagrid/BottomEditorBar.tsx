@@ -160,7 +160,9 @@ export function BottomEditorBar({
             <button
               key={ch}
               aria-label={`Insert ${ch}`}
-              className="flex-1 min-w-9 h-10 state-layer font-mono md-body-large text-on-surface"
+              // Same touch target and glyph size as the app-bar icon buttons.
+              className="flex-1 min-w-10 h-12 state-layer font-mono text-on-surface leading-none"
+              style={{ fontSize: 22 }}
               // preventDefault keeps focus (and the on-screen keyboard) in the editor
               onPointerDown={(e: any) => e.preventDefault()}
               onMouseDown={(e: any) => e.preventDefault()}

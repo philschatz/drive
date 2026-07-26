@@ -1,50 +1,81 @@
-import { sortedEntries } from './helpers';
+/**
+ * Freeze bookkeeping.
+ *
+ * Freezing is a count on the sheet (`frozenRows` / `frozenCols`): the first N
+ * *visible* rows/columns are pinned.
+ */
 
 /**
- * Freeze bookkeeping shared by the freeze commands (freeze up to the
- * selection) and the sheet-options steppers (freeze the first N visible
- * rows/columns).
- *
- * Frozen state is a per-row/col `frozen` flag whose rendered meaning is the
- * contiguous prefix of *visible* items — so freezing "the first N visible"
- * must also flag any hidden items interleaved in that prefix (and unflag
- * everything after it) to keep the stored state canonical.
+ * Frozen count to render for a sheet: the stored count, clamped so it can never
+ * exceed the rows/columns that exist (a synced count can outlive them) and
+ * always leaves one unfrozen so there is something left to scroll.
  */
-export function computeFreezeIds(
-  allIdsInOrder: string[],
-  visibleIds: string[],
-  count: number,
-): { idsToFreeze: string[]; idsToUnfreeze: string[] } {
-  if (count <= 0 || visibleIds.length === 0) {
-    return { idsToFreeze: [], idsToUnfreeze: [...allIdsInOrder] };
-  }
-  const upToId = visibleIds[Math.min(count, visibleIds.length) - 1];
-  const upToIdx = allIdsInOrder.indexOf(upToId);
-  if (upToIdx < 0) return { idsToFreeze: [], idsToUnfreeze: [...allIdsInOrder] };
-  return {
-    idsToFreeze: allIdsInOrder.slice(0, upToIdx + 1),
-    idsToUnfreeze: allIdsInOrder.slice(upToIdx + 1),
-  };
+export function effectiveFrozenCount(storedCount: number | undefined, visibleIds: string[]): number {
+  return Math.max(0, Math.min(storedCount ?? 0, Math.max(0, visibleIds.length - 1)));
+}
+
+/** Default rendered row height / column width when none is stored (px). */
+export const DEFAULT_ROW_HEIGHT = 28;
+export const DEFAULT_COL_WIDTH = 100;
+
+/** Allowed size range per axis, matching the schema's `min: 0` with a usable floor. */
+export const SIZE_LIMITS = {
+  row: { min: 16, max: 500, step: 4 },
+  col: { min: 20, max: 2000, step: 10 },
+} as const;
+
+/**
+ * Set (or clear) the height/width of specific rows/columns. `size === null`
+ * removes the stored value, restoring the default.
+ */
+export function applyItemSize(
+  mutate: (fn: (d: any, ...args: any[]) => void, args: unknown[]) => void,
+  sheetId: string,
+  kind: 'row' | 'col',
+  ids: string[],
+  size: number | null,
+): void {
+  if (ids.length === 0) return;
+  const limits = SIZE_LIMITS[kind];
+  const next = size === null
+    ? null
+    : Math.max(limits.min, Math.min(limits.max, Math.round(size)));
+  if (next !== null && isNaN(next)) return;
+  mutate((d, sid, kind, ids, next) => {
+    const sheet = d.sheets[sid];
+    if (!sheet) return;
+    const coll = kind === 'row' ? sheet.rows : sheet.columns;
+    const field = kind === 'row' ? 'height' : 'width';
+    for (const id of ids) {
+      const item = coll[id];
+      if (!item) continue;
+      if (next === null) delete item[field];
+      else item[field] = next;
+    }
+  }, [sheetId, kind, ids, next]);
 }
 
 /**
- * Set the number of frozen visible rows/columns on a sheet. `count === 0`
- * unfreezes everything. The mutation callback is serialized (updateDoc), so
- * everything goes through args.
+ * Set the number of frozen visible rows/columns on a sheet. The mutation
+ * callback is serialized (updateDoc), so all data travels through args.
  */
 export function applyFreezeCount(
   mutate: (fn: (d: any, ...args: any[]) => void, args: unknown[]) => void,
   sheetId: string,
-  sheet: { rows: Record<string, any>; columns: Record<string, any> },
-  visibleIds: string[],
   kind: 'row' | 'col',
   count: number,
 ): void {
-  const allIds = sortedEntries(kind === 'row' ? sheet.rows : sheet.columns).map(([id]: [string, any]) => id);
-  const { idsToFreeze, idsToUnfreeze } = computeFreezeIds(allIds, visibleIds, count);
-  mutate((d, sid, kind, idsToFreeze, idsToUnfreeze) => {
-    const coll = kind === 'row' ? d.sheets[sid].rows : d.sheets[sid].columns;
-    for (const id of idsToFreeze) coll[id].frozen = true;
-    for (const id of idsToUnfreeze) delete coll[id].frozen;
-  }, [sheetId, kind, idsToFreeze, idsToUnfreeze]);
+  const next = Math.max(0, Math.floor(count));
+  mutate((d, sid, kind, next) => {
+    const sheet = d.sheets[sid];
+    if (!sheet) return;
+    const field = kind === 'row' ? 'frozenRows' : 'frozenCols';
+    if (next === 0) delete sheet[field];
+    else sheet[field] = next;
+    // Older builds marked individual rows/columns with a `frozen` flag, which
+    // is no longer part of the schema — drop any left behind.
+    for (const item of Object.values(kind === 'row' ? sheet.rows : sheet.columns) as any[]) {
+      if (item.frozen !== undefined) delete item.frozen;
+    }
+  }, [sheetId, kind, next]);
 }

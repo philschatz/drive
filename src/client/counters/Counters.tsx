@@ -3,6 +3,8 @@ import { subscribeQuery, updateDoc } from '../worker-api';
 import { peerColor, peerDisplayName, usePresence, PresenceDot, type PeerFieldInfo } from '../shared/presence';
 import { EditorTitleBar } from '../shared/EditorTitleBar';
 import { useDocumentHistory } from '../shared/useDocumentHistory';
+import { useEditorUndoRedo } from '../shared/useUndoRedo';
+import { useHideOnScroll } from '../shared/useHideOnScroll';
 import { useCanEdit } from '../shared/useCanEdit';
 import { useFocusPathSync } from '../shared/useFocusPathSync';
 import { HistorySlider } from '../shared/HistorySlider';
@@ -183,8 +185,8 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
   }, []);
 
   const history = useDocumentHistory(docId!);
-  const onNewHeadsRef = useRef(history.onNewHeads);
-  onNewHeadsRef.current = history.onNewHeads;
+  const { undo, redo, canUndo, canRedo, onHeads } = useEditorUndoRedo(docId!, history);
+  const hidden = useHideOnScroll();
   const validationErrors = useDocumentValidation(docId);
   const { canEdit, canEditRef, noAccess } = useCanEdit(docId, readOnly, history);
   const { peers, peerList, broadcast } = usePresence(docId);
@@ -280,7 +282,7 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
         setListName(result.name);
         document.title = result.name + ' - Counters';
       }
-      onNewHeadsRef.current(heads);
+      onHeads(heads);
 
       if (pendingEventIdRef.current && result.events) {
         const ev = result.events[pendingEventIdRef.current];
@@ -380,7 +382,11 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
         peerTitle={(peer) => `${peerDisplayName(peer.peerId, peer.value?.userGroupId)}${peer.value?.focusedField ? ' (editing)' : ''}`}
         onToggleHistory={history.toggleHistory}
         historyActive={history.active}
-        onUndo={canEdit ? history.undoLastChange : undefined}
+        onUndo={canEdit ? undo : undefined}
+        onRedo={canEdit ? redo : undefined}
+        canUndo={canUndo}
+        canRedo={canRedo}
+        hidden={hidden}
         onToggleValidation={() => setShowValidation(v => !v)}
         validationActive={showValidation}
         validationCount={validationErrors.length}

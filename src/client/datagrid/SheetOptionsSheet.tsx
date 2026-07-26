@@ -115,31 +115,33 @@ export function SheetOptionsSheet({
           />
         </div>
 
+        {/* Unavailable actions are omitted rather than shown disabled — a lone
+            sheet has nowhere to move and can't be hidden or deleted. */}
         <md-list style={{ background: 'transparent' }} className="mt-2">
-          <md-list-item type="button" disabled={!canMoveLeft || undefined} onClick={() => onMove(sheetId, -1)}>
-            <md-icon slot="start">chevron_left</md-icon>
-            <div slot="headline">Move left</div>
-          </md-list-item>
-          <md-list-item type="button" disabled={!canMoveRight || undefined} onClick={() => onMove(sheetId, 1)}>
-            <md-icon slot="start">chevron_right</md-icon>
-            <div slot="headline">Move right</div>
-          </md-list-item>
-          <md-list-item
-            type="button"
-            disabled={!canHide || undefined}
-            onClick={() => { onOpenChange(false); onHide(sheetId); }}
-          >
-            <md-icon slot="start">visibility_off</md-icon>
-            <div slot="headline">Hide sheet</div>
-          </md-list-item>
-          <md-list-item
-            type="button"
-            disabled={!canDelete || undefined}
-            onClick={() => { onOpenChange(false); onDelete(sheetId); }}
-          >
-            <md-icon slot="start" style={{ color: 'var(--md-sys-color-error)' }}>delete</md-icon>
-            <div slot="headline" style={{ color: 'var(--md-sys-color-error)' }}>Delete sheet</div>
-          </md-list-item>
+          {canMoveLeft && (
+            <md-list-item type="button" onClick={() => onMove(sheetId, -1)}>
+              <md-icon slot="start">chevron_left</md-icon>
+              <div slot="headline">Move left</div>
+            </md-list-item>
+          )}
+          {canMoveRight && (
+            <md-list-item type="button" onClick={() => onMove(sheetId, 1)}>
+              <md-icon slot="start">chevron_right</md-icon>
+              <div slot="headline">Move right</div>
+            </md-list-item>
+          )}
+          {canHide && (
+            <md-list-item type="button" onClick={() => { onOpenChange(false); onHide(sheetId); }}>
+              <md-icon slot="start">visibility_off</md-icon>
+              <div slot="headline">Hide sheet</div>
+            </md-list-item>
+          )}
+          {canDelete && (
+            <md-list-item type="button" onClick={() => { onOpenChange(false); onDelete(sheetId); }}>
+              <md-icon slot="start" style={{ color: 'var(--md-sys-color-error)' }}>delete</md-icon>
+              <div slot="headline" style={{ color: 'var(--md-sys-color-error)' }}>Delete sheet</div>
+            </md-list-item>
+          )}
         </md-list>
 
         <md-divider role="separator" className="my-2" />

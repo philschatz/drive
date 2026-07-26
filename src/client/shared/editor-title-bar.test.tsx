@@ -105,16 +105,18 @@ describe('EditorTitleBar', () => {
     expect(onBlur).toHaveBeenCalled();
   });
 
-  it('shows Connected when connected', () => {
+  // The status is icon-only; the state is exposed through the button's
+  // accessible name (see ConnectionStatus).
+  it('shows a connected wifi icon when connected', () => {
     mockUseConnectionStatus.mockReturnValue(true);
     render(<EditorTitleBar icon="grid" title="Test" />);
-    expect(screen.getByText('Connected')).toBeDefined();
+    expect(screen.getByLabelText('Connected').textContent).toBe('wifi_password');
   });
 
-  it('shows Disconnected when not connected', () => {
+  it('shows an offline wifi icon when not connected', () => {
     mockUseConnectionStatus.mockReturnValue(false);
     render(<EditorTitleBar icon="grid" title="Test" />);
-    expect(screen.getByText('Disconnected')).toBeDefined();
+    expect(screen.getByLabelText('Disconnected').textContent).toBe('wifi_off');
   });
 
   it('renders peer dots for other peers', () => {

@@ -5,7 +5,7 @@ import { EditorTitleBar } from '../shared/EditorTitleBar';
 import { peerDisplayName, type PeerFieldInfo } from '../shared/presence';
 import { useGridCommands, commitReorder, commitAutofill, applyFormatToSelection, type GridCommandState, type GridCommandContext } from './commands';
 import { CommandContextMenuContent } from './CommandBar';
-import { FocusTopBar, BarIconButton } from './FocusTopBar';
+import { FocusTopBar } from './FocusTopBar';
 import { ConditionalFormatSheet } from './ConditionalFormatSheet';
 import { FormatSheet } from './FormatSheet';
 import { ContextMenu, ContextMenuTrigger } from '@/components/ui/context-menu';
@@ -18,14 +18,16 @@ import { type FormulaEditorApi, type FormulaHighlight, isRange } from './Formula
 import { BottomEditorBar, type AggregateChip } from './BottomEditorBar';
 import { FormulaInsertSheet } from './FormulaInsertSheet';
 import { computeSelectionAggregates } from './aggregates';
-import { pointToCell } from './grid-geometry';
+import { pointToCell, buildRowOffsets, rowAtOffset } from './grid-geometry';
 import { useHideOnScroll } from '../shared/useHideOnScroll';
 import { buildFormatCache, buildIndexMaps, formatToCss, formatDisplayValue, isAccountingFormat, resolveConditionalFormat } from './formatting';
 import type { DataGridCellFormat } from './schema';
 import { SheetTabsBar } from './SheetTabsBar';
 import { SheetListSheet } from './SheetListSheet';
 import { SheetOptionsSheet } from './SheetOptionsSheet';
-import { applyFreezeCount } from './sheet-actions';
+import { applyFreezeCount, effectiveFrozenCount, applyItemSize } from './sheet-actions';
+import { HeaderContextMenu, type HeaderMenuPage } from './HeaderContextMenu';
+import { ResizeSheet } from './ResizeSheet';
 import { useUndoRedo } from '../shared/useUndoRedo';
 import { useDocumentHistory } from '../shared/useDocumentHistory';
 import { useCanEdit } from '../shared/useCanEdit';
@@ -91,6 +93,12 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
   const [editValue, setEditValue] = useState('');
   const [selectedRows, setSelectedRows] = useState<Set<number>>(new Set());
   const [selectedCols, setSelectedCols] = useState<Set<number>>(new Set());
+  // Mirrors of the header selections, so the (identity-stable) context-menu and
+  // long-press handlers always see the current selection.
+  const selectedRowsRef = useRef(selectedRows);
+  selectedRowsRef.current = selectedRows;
+  const selectedColsRef = useRef(selectedCols);
+  selectedColsRef.current = selectedCols;
   const [contextMenu, setContextMenu] = useState<{
     type: 'row' | 'col' | 'cell';
     indices: number[];
@@ -104,6 +112,10 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
 
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(600);
+  // Measured height of the sticky <thead>. Frozen rows stick *below* it, so
+  // assuming ROW_HEIGHT here (the header is shorter) pushed the pinned rows
+  // down over their neighbours and let unfrozen rows scroll up behind them.
+  const [headerHeight, setHeaderHeight] = useState(20);
   const ROW_HEIGHT = 28;
   const OVERSCAN = 15;
   const [rawDoc, setRawDoc] = useState<any>(null);
@@ -150,6 +162,10 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
   const [sheetListOpen, setSheetListOpen] = useState(false);
   const [sheetOptionsOpen, setSheetOptionsOpen] = useState(false);
   const [formatSheetOpen, setFormatSheetOpen] = useState(false);
+  /** Anchored row/column header menu (long-press or right-click). */
+  const [headerMenu, setHeaderMenu] = useState<{ kind: 'row' | 'col'; anchor: HTMLElement; page: HeaderMenuPage } | null>(null);
+  const [resizeKind, setResizeKind] = useState<'row' | 'col' | null>(null);
+  const longPressRef = useRef<{ timer: number; startX: number; startY: number } | null>(null);
   const clipboardRef = useRef<{
     values: string[][];
     formats: (DataGridCellFormat | undefined)[][];
@@ -230,26 +246,16 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
     return gaps;
   }, [visibleRowIds, visibleRowOriginalIndices, sortedRowIds]);
 
-  // Frozen row/col counts (contiguous from the start of visible items)
-  const frozenColCount = useMemo(() => {
-    if (!currentSheet?.columns) return 0;
-    let count = 0;
-    for (const id of visibleColIds) {
-      if (currentSheet.columns[id]?.frozen) count++;
-      else break;
-    }
-    return count;
-  }, [visibleColIds, currentSheet?.columns]);
+  // Frozen row/col counts — a number on the sheet, clamped to what exists.
+  const frozenColCount = useMemo(
+    () => effectiveFrozenCount(currentSheet?.frozenCols, visibleColIds),
+    [currentSheet?.frozenCols, visibleColIds],
+  );
 
-  const frozenRowCount = useMemo(() => {
-    if (!currentSheet?.rows) return 0;
-    let count = 0;
-    for (const id of visibleRowIds) {
-      if (currentSheet.rows[id]?.frozen) count++;
-      else break;
-    }
-    return count;
-  }, [visibleRowIds, currentSheet?.rows]);
+  const frozenRowCount = useMemo(
+    () => effectiveFrozenCount(currentSheet?.frozenRows, visibleRowIds),
+    [currentSheet?.frozenRows, visibleRowIds],
+  );
 
   const formatCache = useMemo(() => {
     return buildFormatCache(currentSheet?.formats, sortedRowIds, sortedColIds);
@@ -280,15 +286,19 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
     return offsets;
   }, [frozenColCount, columnDefs]);
 
+  // Rows can carry individual heights, so scroll/virtualization math runs off
+  // cumulative offsets instead of a constant row height.
+  const rowHeights = useMemo(
+    () => visibleRowIds.map(id => currentSheet?.rows?.[id]?.height || ROW_HEIGHT),
+    [visibleRowIds, currentSheet?.rows],
+  );
+  const rowOffsets = useMemo(() => buildRowOffsets(rowHeights), [rowHeights]);
+
   const frozenRowOffsets = useMemo(() => {
     const offsets: number[] = [];
-    let acc = ROW_HEIGHT; // thead height
-    for (let i = 0; i < frozenRowCount; i++) {
-      offsets.push(acc);
-      acc += ROW_HEIGHT;
-    }
+    for (let i = 0; i < frozenRowCount; i++) offsets.push(headerHeight + rowOffsets[i]);
     return offsets;
-  }, [frozenRowCount]);
+  }, [frozenRowCount, headerHeight, rowOffsets]);
 
   // Sheet ordering for tabs — derived from lightweight metadata
   const sheetOrder = useMemo(() => {
@@ -410,13 +420,10 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
     if (!el) return;
 
     // Vertical: account for sticky header + frozen rows
-    const thead = el.querySelector('thead');
-    const headerHeight = thead ? thead.getBoundingClientRect().height : ROW_HEIGHT;
-    const frozenRowsHeight = frozenRowCount * ROW_HEIGHT;
-    const stickyTop = headerHeight + frozenRowsHeight;
+    const stickyTop = headerHeight + rowOffsets[frozenRowCount];
 
-    const cellTop = row * ROW_HEIGHT;
-    const cellBottom = cellTop + ROW_HEIGHT;
+    const cellTop = rowOffsets[row] ?? 0;
+    const cellBottom = rowOffsets[row + 1] ?? cellTop + ROW_HEIGHT;
     const visibleTop = el.scrollTop + stickyTop;
     const visibleBottom = el.scrollTop + el.clientHeight;
 
@@ -446,7 +453,7 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
     } else if (cellRight > visibleRight) {
       el.scrollLeft = cellRight - el.clientWidth;
     }
-  }, [columnDefs, frozenRowCount, frozenColCount, frozenColOffsets]);
+  }, [columnDefs, frozenRowCount, frozenColCount, frozenColOffsets, headerHeight, rowOffsets]);
 
   // Compute normalized selection rectangle
   const selectionRange = useMemo(() => {
@@ -792,31 +799,103 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
 
   // -- Context menu handlers --
 
-  const handleRowContextMenu = useCallback((ri: number, e: MouseEvent) => {
-    const indices = selectedRows.has(ri) ? [...selectedRows].sort((a, b) => a - b) : [ri];
-    if (!selectedRows.has(ri)) {
-      setSelectedRows(new Set([ri]));
-      setSelectedCols(new Set());
-      setSelectedCell(null);
-      lastClickedRowRef.current = ri;
+  /**
+   * Open the header context menu (long-press on touch, right-click on desktop),
+   * selecting the pressed row/column first unless it's already in the selection.
+   * Both triggers pass the header element so the menu can anchor to it.
+   */
+  const openHeaderMenu = useCallback((kind: 'row' | 'col', index: number, anchor: HTMLElement) => {
+    if (kind === 'row') {
+      const indices = selectedRowsRef.current.has(index)
+        ? [...selectedRowsRef.current].sort((a, b) => a - b)
+        : [index];
+      if (!selectedRowsRef.current.has(index)) {
+        setSelectedRows(new Set([index]));
+        setSelectedCols(new Set());
+        setSelectedCell(null);
+        lastClickedRowRef.current = index;
+      }
+      setContextMenu({ type: 'row', indices });
+    } else {
+      const indices = selectedColsRef.current.has(index)
+        ? [...selectedColsRef.current].sort((a, b) => a - b)
+        : [index];
+      if (!selectedColsRef.current.has(index)) {
+        setSelectedCols(new Set([index]));
+        setSelectedRows(new Set());
+        setSelectedCell(null);
+        lastClickedColRef.current = index;
+      }
+      setContextMenu({ type: 'col', indices });
     }
-    // Read-only: selecting via right-click still works, but no menu opens
-    // (stopPropagation keeps the radix trigger from seeing the event).
-    if (!canEditRef.current) { e.preventDefault(); e.stopPropagation(); return; }
-    setContextMenu({ type: 'row', indices });
-  }, [selectedRows]);
+    setHeaderMenu({ kind, anchor, page: 'main' });
+  }, []);
+
+  const handleRowContextMenu = useCallback((ri: number, e: MouseEvent) => {
+    // The grid-wide Radix context menu handles cells; headers use their own
+    // anchored menu, so keep the event away from the Radix trigger either way.
+    e.preventDefault();
+    e.stopPropagation();
+    if (!canEditRef.current) {
+      // Read-only: selecting via right-click still works, but no menu opens.
+      if (!selectedRowsRef.current.has(ri)) {
+        setSelectedRows(new Set([ri]));
+        setSelectedCols(new Set());
+        setSelectedCell(null);
+      }
+      return;
+    }
+    openHeaderMenu('row', ri, e.currentTarget as HTMLElement);
+  }, [openHeaderMenu]);
 
   const handleColContextMenu = useCallback((ci: number, e: MouseEvent) => {
-    const indices = selectedCols.has(ci) ? [...selectedCols].sort((a, b) => a - b) : [ci];
-    if (!selectedCols.has(ci)) {
-      setSelectedCols(new Set([ci]));
-      setSelectedRows(new Set());
-      setSelectedCell(null);
-      lastClickedColRef.current = ci;
+    e.preventDefault();
+    e.stopPropagation();
+    if (!canEditRef.current) {
+      if (!selectedColsRef.current.has(ci)) {
+        setSelectedCols(new Set([ci]));
+        setSelectedRows(new Set());
+        setSelectedCell(null);
+      }
+      return;
     }
-    if (!canEditRef.current) { e.preventDefault(); e.stopPropagation(); return; }
-    setContextMenu({ type: 'col', indices });
-  }, [selectedCols]);
+    openHeaderMenu('col', ci, e.currentTarget as HTMLElement);
+  }, [openHeaderMenu]);
+
+  /**
+   * Long-press on a header (touch only) opens the same menu. Kept inline rather
+   * than via useLongPress because headers already own pointer/mouse handlers for
+   * drag-to-reorder, and the press must abort as soon as a drag starts.
+   */
+  const headerLongPress = useCallback((kind: 'row' | 'col', index: number) => ({
+    onPointerDown: (e: any) => {
+      if (e.pointerType === 'mouse' || !canEditRef.current) return;
+      const anchor = e.currentTarget as HTMLElement;
+      const startX = e.clientX;
+      const startY = e.clientY;
+      const timer = window.setTimeout(() => {
+        longPressRef.current = null;
+        openHeaderMenu(kind, index, anchor);
+      }, 450);
+      longPressRef.current = { timer, startX, startY };
+    },
+    onPointerMove: (e: any) => {
+      const lp = longPressRef.current;
+      if (!lp) return;
+      if (Math.abs(e.clientX - lp.startX) + Math.abs(e.clientY - lp.startY) > 10) {
+        clearTimeout(lp.timer);
+        longPressRef.current = null;
+      }
+    },
+    onPointerUp: () => {
+      if (longPressRef.current) clearTimeout(longPressRef.current.timer);
+      longPressRef.current = null;
+    },
+    onPointerCancel: () => {
+      if (longPressRef.current) clearTimeout(longPressRef.current.timer);
+      longPressRef.current = null;
+    },
+  }), [openHeaderMenu]);
 
   // Focus the bottom-bar editor after grid-initiated edits (typing, Enter,
   // double-click). Runs post-render so FormulaEditor's value-sync effect has
@@ -904,13 +983,21 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
     const handleScroll = () => {
       setScrollTop(el.scrollTop);
     };
+    const thead = el.querySelector('thead');
     const updateHeight = () => {
       setViewportHeight(el.clientHeight);
+      // Frozen rows stick below the header, so its real height (font/zoom
+      // dependent) is load-bearing — never assume ROW_HEIGHT.
+      if (thead) {
+        const h = thead.getBoundingClientRect().height;
+        if (h > 0) setHeaderHeight(h);
+      }
     };
     updateHeight();
     el.addEventListener('scroll', handleScroll, { passive: true });
     const ro = new ResizeObserver(updateHeight);
     ro.observe(el);
+    if (thead) ro.observe(thead);
     return () => {
       el.removeEventListener('scroll', handleScroll);
       ro.disconnect();
@@ -1209,28 +1296,6 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
     return raw.startsWith('=') ? internalToA1(raw, origRow, origCol, sortedRowIds, sortedColIds, sheetNameLookup, sheetRowColLookup) : raw;
   }, [selectedCell, currentSheet, visibleRowIds, visibleColIds, sortedRowIds, sortedColIds, sheetNameLookup, sheetRowColLookup, effectiveSheetId]);
 
-  // Cell address label (e.g. "A1", "A1:C3", "2:5", "A:C")
-  const cellLabel = useMemo(() => {
-    if (selectedRows.size > 0) {
-      const rows = [...selectedRows].sort((a, b) => a - b);
-      const min = visibleRowOriginalIndices[rows[0]] + 1;
-      const max = visibleRowOriginalIndices[rows[rows.length - 1]] + 1;
-      return min === max ? `${min}:${min}` : `${min}:${max}`;
-    }
-    if (selectedCols.size > 0) {
-      const cols = [...selectedCols].sort((a, b) => a - b);
-      const min = colIndexToLetter(visibleColOriginalIndices[cols[0]]);
-      const max = colIndexToLetter(visibleColOriginalIndices[cols[cols.length - 1]]);
-      return min === max ? `${min}:${min}` : `${min}:${max}`;
-    }
-    if (!selectedCell) return '';
-    const [col, row] = selectedCell;
-    if (selectionRange && isMultiSelect) {
-      return `${colIndexToLetter(visibleColOriginalIndices[selectionRange.minCol])}${visibleRowOriginalIndices[selectionRange.minRow] + 1}:${colIndexToLetter(visibleColOriginalIndices[selectionRange.maxCol])}${visibleRowOriginalIndices[selectionRange.maxRow] + 1}`;
-    }
-    return `${colIndexToLetter(visibleColOriginalIndices[col])}${visibleRowOriginalIndices[row] + 1}`;
-  }, [selectedCell, selectedRows, selectedCols, selectionRange, isMultiSelect, visibleColOriginalIndices, visibleRowOriginalIndices]);
-
   const formulaNames = CUSTOM_FN_NAMES;
 
   // Build a map of cell positions → formula ref highlight info (for coloring grid cells)
@@ -1298,8 +1363,8 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
     sheetCount: sheetOrder.length,
     hasHiddenRows: rowMetas.some((r: any) => r.hidden),
     hasHiddenCols: colMetas.some((c: any) => c.hidden),
-    hasFrozenRows: rowMetas.some((r: any) => r.frozen),
-    hasFrozenCols: colMetas.some((c: any) => c.frozen),
+    hasFrozenRows: frozenRowCount > 0,
+    hasFrozenCols: frozenColCount > 0,
     contextScope: contextMenu
       ? { type: contextMenu.type, indices: contextMenu.indices }
       : null,
@@ -1337,6 +1402,7 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
     onRenameSheet: () => setSheetOptionsOpen(true),
     formatCache,
     openConditionalFormatPanel: () => setCondFormatOpen(true),
+    openResizeSheet: (kind) => { setHeaderMenu(null); setResizeKind(kind); },
   };
   commandCtxRef.current = commandCtx;
   const commands = useGridCommands(commandState, commandCtx);
@@ -1424,6 +1490,21 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
     }
   }
 
+  // Rows/columns the resize sheet applies to, and the size it should show
+  // (the first target's stored value, or null when it uses the default).
+  const resizeTargetIds = (() => {
+    if (!resizeKind) return [] as string[];
+    const indices = resizeKind === 'row' ? currentRowIndices : currentColIndices;
+    const ids = resizeKind === 'row' ? visibleRowIds : visibleColIds;
+    return indices.map(i => ids[i]).filter(Boolean);
+  })();
+  const resizeCurrentSize = (() => {
+    if (!resizeKind || !doc2 || resizeTargetIds.length === 0) return null;
+    const item = resizeKind === 'row' ? doc2.rows[resizeTargetIds[0]] : doc2.columns[resizeTargetIds[0]];
+    const size = resizeKind === 'row' ? item?.height : item?.width;
+    return typeof size === 'number' ? size : null;
+  })();
+
   // Insert a function from the formula sheet: start a formula if the cell
   // isn't being edited, else insert at the cursor.
   const insertFunction = (name: string) => {
@@ -1443,7 +1524,6 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
       <div className="datagrid-top-chrome">
       {focusMode ? (
         <FocusTopBar
-          cellLabel={cellLabel}
           canUndo={canUndo}
           canRedo={canRedo}
           onUndo={undo}
@@ -1473,14 +1553,14 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
         validationActive={showValidation}
         validationCount={validationErrors.length}
         sourcePath={focusPath}
-      >
-        {canEdit && (
-          <div className="flex items-center shrink-0">
-            <BarIconButton icon="undo" label="Undo" onClick={undo} disabled={!canUndo} size={22} />
-            <BarIconButton icon="redo" label="Redo" onClick={redo} disabled={!canRedo} size={22} />
-          </div>
-        )}
-      </EditorTitleBar>
+        onUndo={canEdit ? undo : undefined}
+        onRedo={canEdit ? redo : undefined}
+        canUndo={canUndo}
+        canRedo={canRedo}
+        // The bar sits above the grid's own scroll container in a fixed-height
+        // flex column, so .datagrid-top-chrome positions and hides it.
+        sticky={false}
+      />
       )}
       </div>
       <HistorySlider history={history} />
@@ -1552,6 +1632,7 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
                           onClick={(e: any) => handleColHeaderClick(ci, e)}
                           onContextMenu={(e: any) => handleColContextMenu(ci, e)}
                           onMouseDown={(e: any) => handleHeaderMouseDown('col', ci, e)}
+                          {...headerLongPress('col', ci)}
                         >
                           {colIndexToLetter(visibleColOriginalIndices[ci])}
                           <div className="col-resize-handle" onMouseDown={(e: any) => handleResizeMouseDown(ci, e)} onDblClick={(e: any) => { e.stopPropagation(); autoFitColumn(ci); }} />
@@ -1570,16 +1651,18 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
               <tbody>
                 {(() => {
                   const totalRows = visibleRowIds.length;
-                  const firstVisible = Math.floor(scrollTop / ROW_HEIGHT);
+                  // Row positions come from the cumulative offsets, so rows with
+                  // custom heights stay aligned with the scroll position.
+                  const firstVisible = rowAtOffset(rowOffsets, scrollTop);
                   // Always render frozen rows (they're sticky and must stay in the DOM)
                   const startRow = Math.max(frozenRowCount, firstVisible - OVERSCAN);
-                  const visibleCount = Math.ceil(viewportHeight / ROW_HEIGHT);
-                  const endRow = Math.min(totalRows, firstVisible + visibleCount + OVERSCAN);
+                  const lastVisible = rowAtOffset(rowOffsets, scrollTop + viewportHeight);
+                  const endRow = Math.min(totalRows, lastVisible + 1 + OVERSCAN);
                   // Build row indices: frozen rows first (always rendered), then virtualized window
                   const rowIndicesToRender: number[] = [];
                   for (let i = 0; i < frozenRowCount && i < totalRows; i++) rowIndicesToRender.push(i);
                   // Spacer insertion point: after frozen rows, before virtualized rows
-                  const spacerHeight = startRow > frozenRowCount ? (startRow - frozenRowCount) * ROW_HEIGHT : 0;
+                  const spacerHeight = startRow > frozenRowCount ? rowOffsets[startRow] - rowOffsets[frozenRowCount] : 0;
                   for (let i = startRow; i < endRow; i++) rowIndicesToRender.push(i);
                   let spacerInserted = false;
                   return (
@@ -1613,14 +1696,18 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
                           </td>
                         </tr>
                       )}
-                    <tr key={rowId}>
+                    <tr key={rowId} style={{ height: rowHeights[ri] + 'px' }}>
                       <td
                         className={'datagrid-row-header' + (isRowSelected ? ' selected' : selectedCell && selectedCell[1] === ri ? ' active' : '') + dropClass + (isLastFrozenRow ? ' frozen-row-last' : '')}
-                        style={isFrozenRow ? { position: 'sticky', left: 0, top: frozenRowTop, zIndex: 3 } : undefined}
+                        // Pinned in both axes: above plain row headers (which scroll
+                        // beneath it) but below the column headers. See the z-index
+                        // ladder in datagrid.css.
+                        style={isFrozenRow ? { position: 'sticky', left: 0, top: frozenRowTop, zIndex: 5 } : undefined}
                         data-row-index={ri}
                         onClick={(e: any) => handleRowHeaderClick(ri, e)}
                         onContextMenu={(e: any) => handleRowContextMenu(ri, e)}
                         onMouseDown={(e: any) => handleHeaderMouseDown('row', ri, e)}
+                        {...headerLongPress('row', ri)}
                       >
                         {visibleRowOriginalIndices[ri] + 1}
                       </td>
@@ -1719,9 +1806,14 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
                               if (e.button !== 0) return;
                               if (isEditing) return; // clicking the cell being edited keeps the edit
                               if (editingCell) commitEdit();
+                              // Suppress the native drag-select (which would otherwise
+                              // smear a text selection across the page once the pointer
+                              // leaves the table); focus is set explicitly below.
+                              e.preventDefault();
                               if (e.shiftKey && selectedCell) {
                                 if (!selectionAnchor) setSelectionAnchor([...selectedCell] as [number, number]);
                                 setSelectedCell([ci, ri]);
+                                tableRef.current?.focus();
                               } else {
                                 selectCell(ci, ri);
                                 cellDragRef.current = { anchor: [ci, ri] };
@@ -1755,16 +1847,14 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
                               const el = tableRef.current;
                               if (!el) return;
                               const rect = el.getBoundingClientRect();
-                              const thead = el.querySelector('thead');
                               setSelectedCell(pointToCell(e.clientX, e.clientY, {
                                 containerLeft: rect.left,
                                 containerTop: rect.top,
                                 scrollLeft: el.scrollLeft,
                                 scrollTop: el.scrollTop,
                                 colWidths: columnDefs.map((c: any) => c.width || 100),
-                                rowCount: visibleRowIds.length,
-                                rowHeight: ROW_HEIGHT,
-                                headerHeight: thead ? thead.getBoundingClientRect().height : ROW_HEIGHT,
+                                rowOffsets,
+                                headerHeight,
                                 rowHeaderWidth: 48,
                                 frozenRowCount,
                                 frozenColCount,
@@ -1836,7 +1926,7 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
                   );
                 })}
                       {endRow < totalRows && (
-                        <tr style={{ height: (totalRows - endRow) * ROW_HEIGHT + 'px' }}>
+                        <tr style={{ height: (rowOffsets[totalRows] - rowOffsets[endRow]) + 'px' }}>
                           <td colSpan={visibleColIds.length + 1} />
                         </tr>
                       )}
@@ -1950,6 +2040,28 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
         customFunctionNames={formulaNames}
         onInsert={insertFunction}
       />
+      {/* Row/column header menu — long-press (touch) or right-click. */}
+      <HeaderContextMenu
+        kind={headerMenu?.kind ?? 'row'}
+        anchor={headerMenu?.anchor ?? null}
+        page={headerMenu?.page ?? 'main'}
+        onPageChange={(page) => setHeaderMenu(m => m && { ...m, page })}
+        onClose={() => { setHeaderMenu(null); setContextMenu(null); }}
+        resolveCommand={commands.resolveById}
+        onResize={() => { const k = headerMenu?.kind ?? 'row'; setHeaderMenu(null); setResizeKind(k); }}
+      />
+      <ResizeSheet
+        open={resizeKind !== null}
+        onOpenChange={(o) => { if (!o) setResizeKind(null); }}
+        kind={resizeKind ?? 'row'}
+        count={resizeTargetIds.length}
+        currentSize={resizeCurrentSize}
+        onApply={(size) => {
+          if (effectiveSheetId && resizeKind) {
+            applyItemSize(mutate, effectiveSheetId, resizeKind, resizeTargetIds, size);
+          }
+        }}
+      />
       <FormatSheet
         open={formatSheetOpen}
         onOpenChange={setFormatSheetOpen}
@@ -1994,9 +2106,7 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
           maxFrozenRows={Math.max(0, visibleRowIds.length - 1)}
           maxFrozenCols={Math.max(0, visibleColIds.length - 1)}
           onSetFrozen={(kind, count) => {
-            const sh = activeSheetRef.current;
-            if (!sh || !effectiveSheetId) return;
-            applyFreezeCount(mutate, effectiveSheetId, sh, kind === 'row' ? visibleRowIds : visibleColIds, kind, count);
+            if (effectiveSheetId) applyFreezeCount(mutate, effectiveSheetId, kind, count);
           }}
         />
       )}

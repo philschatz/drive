@@ -36,8 +36,11 @@ export function ConnectionStatus<P extends PeerLike>({
 
   return (
     <>
+      {/* Icon-only status (the label was pure noise on a narrow bar); the
+          accessible name still reads "Connected"/"Disconnected". */}
       <button
-        className={`flex items-center gap-2 cursor-pointer hover:opacity-80 ${className}`}
+        aria-label={connected ? 'Connected' : 'Disconnected'}
+        className={`inline-flex items-center gap-2 cursor-pointer hover:opacity-80 ${className}`}
         title={connected
           ? 'Connected to relay. Tap for peer details.'
           : 'Not connected to relay. Tap for peer details.'}
@@ -49,8 +52,12 @@ export function ConnectionStatus<P extends PeerLike>({
             style={{ backgroundColor: connected ? '#4caf50' : '#f44336' }}
           />
         )}
-        <span className="text-xs text-muted-foreground whitespace-nowrap">
-          {connected ? 'Connected' : 'Disconnected'}
+        <span
+          className={`material-symbols-outlined shrink-0 ${connected ? 'text-on-surface-variant' : 'text-error'}`}
+          style={{ fontSize: 20 }}
+          aria-hidden="true"
+        >
+          {connected ? 'wifi_password' : 'wifi_off'}
         </span>
       </button>
 
@@ -61,10 +68,13 @@ export function ConnectionStatus<P extends PeerLike>({
           </SheetHeader>
 
           <div className="mt-3 flex items-center gap-2 text-sm">
-            <div
-              className="w-2 h-2 rounded-full shrink-0"
-              style={{ backgroundColor: connected ? '#4caf50' : '#f44336' }}
-            />
+            <span
+              className={`material-symbols-outlined shrink-0 ${connected ? 'text-on-surface-variant' : 'text-error'}`}
+              style={{ fontSize: 20 }}
+              aria-hidden="true"
+            >
+              {connected ? 'wifi_password' : 'wifi_off'}
+            </span>
             {connected ? 'Connected to relay' : 'Not connected to relay'}
           </div>
 
