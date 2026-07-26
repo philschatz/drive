@@ -219,7 +219,7 @@ export function EventEditor({ uid, event, masterEvent, recurrenceDate, isNew, op
 
   return (
     <Sheet open={opened} onOpenChange={(open: boolean) => { if (!open) onClose(); }}>
-      <SheetContent side="right" className="panel">
+      <SheetContent side="bottom" className="panel max-h-[85vh]">
         <SheetHeader>
           <SheetTitle>{heading}</SheetTitle>
         </SheetHeader>

@@ -14,6 +14,8 @@ import { mapToSXEvents, createSXCalendar } from './schedule-x';
 import type { EventLookupMap } from './schedule-x';
 import { initDragDrop } from './drag-drop';
 import { EventEditor } from './EventEditor';
+import { CalendarSettings } from './CalendarSettings';
+import { Fab } from '@/components/ui/fab';
 import { useDocumentValidation } from '../shared/useDocumentValidation';
 import { ValidationPanel } from '../shared/ValidationPanel';
 import { DocLoader } from '../shared/useDocument';
@@ -45,6 +47,7 @@ function CalendarInner({ docId, readOnly, initialEventId }: { docId: string; rea
   const [calDesc, setCalDesc] = useState('');
   const [calColor, setCalColor] = useState('#039be5');
   const [showValidation, setShowValidation] = useState(false);
+  const [calSettingsOpen, setCalSettingsOpen] = useState(false);
   const history = useDocumentHistory(docId);
   // Route new heads through a ref so the (deps-stable) subscription effect always
   // calls the current onNewHeads, not the active:false version captured at mount.
@@ -62,7 +65,6 @@ function CalendarInner({ docId, readOnly, initialEventId }: { docId: string; rea
   const calColorRef = useRef('#039be5');
   const calTZRef = useRef(Intl.DateTimeFormat().resolvedOptions().timeZone);
   const titleFocusedRef = useRef(false);
-  const descFocusedRef = useRef(false);
   const pendingEventIdRef = useRef(initialEventId);
 
   const getEvents = useCallback(() => eventsRef.current, []);
@@ -158,7 +160,7 @@ function CalendarInner({ docId, readOnly, initialEventId }: { docId: string; rea
         setCalName(result.name);
         document.title = result.name + ' - Calendar';
       }
-      if (!descFocusedRef.current) setCalDesc(result.description || '');
+      setCalDesc(result.description || '');
       onNewHeadsRef.current(heads);
       refreshCalendar();
       refreshEditorFromEvents(eventsRef.current);
@@ -203,51 +205,31 @@ function CalendarInner({ docId, readOnly, initialEventId }: { docId: string; rea
         peerTitle={(peer) => `${peerDisplayName(peer.peerId, peer.value?.userGroupId)}${peer.value?.focusedField ? ' (editing)' : ''}`}
         onToggleHistory={history.toggleHistory}
         historyActive={history.active}
+        onUndo={canEdit ? history.undoLastChange : undefined}
         onToggleValidation={() => setShowValidation(v => !v)}
         validationActive={showValidation}
         validationCount={validationErrors.length}
         sourcePath={focusPath}
-      >
-        <input
-          type="color"
-          value={calColor}
-          title="Calendar color"
-          style={{ width: 28, height: 28, padding: 0, border: 'none', borderRadius: 4, cursor: 'pointer', background: 'none' }}
-          onInput={(e: any) => {
-            const color = e.currentTarget.value;
-            setCalColor(color);
-            calColorRef.current = color;
-            document.documentElement.style.setProperty('--cal-color', color);
-            refreshCalendar();
-          }}
-          disabled={!canEdit}
-          onChange={(e: any) => {
-            if (!canEdit || !docId) return;
-            const color = e.currentTarget.value;
-            updateDoc(docId, (d, color) => { d.color = color; }, color);
-          }}
-        />
-      </EditorTitleBar>
+        overflow={canEdit
+          ? [{ icon: 'palette', label: 'Calendar settings', onSelect: () => setCalSettingsOpen(true) }]
+          : []}
+      />
       <HistorySlider history={history} />
       <div style={noAccess ? { opacity: 0.4, pointerEvents: 'none' } : undefined}>
-      <input
-        className="border-0 bg-transparent text-sm text-muted-foreground outline-none w-full"
-        placeholder="Add a description..."
-        value={calDesc}
-        onFocus={() => { descFocusedRef.current = true; }}
-        onInput={(e: any) => setCalDesc(e.currentTarget.value)}
-        readOnly={!canEdit}
-        onBlur={(e: any) => {
-          descFocusedRef.current = false;
-          if (!canEdit || !docId) return;
-          const desc = e.currentTarget.value.trim();
-          setCalDesc(desc);
-          updateDoc(docId, (d, desc) => { d.description = desc || undefined; }, desc);
-        }}
-        onKeyDown={(e: any) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
-      />
       {showValidation && <ValidationPanel errors={validationErrors} docId={docId} />}
       <div id="sx-cal" />
+      {/* Name / color / description live in the Calendar-settings sheet (overflow menu). */}
+      <CalendarSettings
+        opened={calSettingsOpen}
+        docId={docId}
+        name={calName}
+        description={calDesc}
+        color={calColor}
+        onClose={() => setCalSettingsOpen(false)}
+      />
+      {canEdit && (
+        <Fab icon="add" aria-label="New event" onClick={() => openEditor(null, null, null, null)} />
+      )}
       <EventEditor
         uid={editorState?.uid || ''}
         event={editorState?.event || { '@type': 'Event', title: '', start: '', duration: 'PT1H', timeZone: null }}

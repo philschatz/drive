@@ -6,14 +6,12 @@ import { useDocumentHistory } from '../shared/useDocumentHistory';
 import { useCanEdit } from '../shared/useCanEdit';
 import { replaceDocHash, encodeRestPath } from '../shared/doc-urls';
 import { HistorySlider } from '../shared/HistorySlider';
+import { useLongPress } from '../shared/useLongPress';
 import { useDocumentValidation } from '../shared/useDocumentValidation';
 import { ValidationPanel } from '../shared/ValidationPanel';
 import { DocLoader } from '../shared/useDocument';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
-import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
-import { DeleteButton } from '@/components/ui/delete-button';
+import { Fab } from '@/components/ui/fab';
 import type { CounterEvent } from './schema';
 import { sortedCounters, metMissedByWeek, isArchived, type CounterEntry, type CounterStatus } from './occurrences';
 import { MetMissedChart } from './Chart';
@@ -61,20 +59,66 @@ function describeSchedule(ev: CounterEvent): string | null {
   return every + freq + days + at;
 }
 
+/**
+ * One counter row: tap records a completion, long-press / right-click / trailing
+ * kebab opens the editor (which also holds Archive and Delete).
+ */
+function CounterListItem({ uid, ev, status, canEdit, peerEditingEvents, onRecord, onEdit }: {
+  uid: string;
+  ev: CounterEvent;
+  status: CounterStatus;
+  canEdit: boolean;
+  peerEditingEvents: Record<string, PeerFieldInfo>;
+  onRecord: (uid: string) => void;
+  onEdit: (uid: string, ev: CounterEvent) => void;
+}) {
+  const clickCount = Object.keys(ev.completions || {}).length;
+  const schedule = describeSchedule(ev);
+  const iconColor = status === 'done'
+    ? 'var(--md-sys-color-primary)'
+    : status === 'overdue' ? 'var(--md-sys-color-error)' : undefined;
+  const icon = status === 'done' ? 'check_circle' : status === 'overdue' ? 'error' : status === 'tally' ? 'exposure_plus_1' : 'radio_button_unchecked';
+  const lp = useLongPress({
+    onTap: () => { if (canEdit) onRecord(uid); },
+    onLongPress: () => { if (canEdit) onEdit(uid, ev); },
+  });
+
+  return (
+    <md-list-item
+      type="button"
+      data-status={status}
+      data-testid="counter-row"
+      style={{ opacity: peerEditingEvents[uid] ? 0.5 : status === 'done' ? 0.6 : 1 }}
+      {...lp}
+    >
+      <span slot="start" className="material-symbols-outlined text-lg" style={{ color: iconColor }}>
+        {icon}
+      </span>
+      <div slot="headline">{ev.title || 'Untitled'}</div>
+      <span slot="end" className="flex items-center gap-1.5">
+        {schedule && <Badge variant="secondary">{schedule}</Badge>}
+        {clickCount > 0 && <Badge variant="outline" title={`${clickCount} recorded`}>{clickCount}×</Badge>}
+        <PresenceDot fieldId={uid} peerFocusedFields={peerEditingEvents} />
+        {canEdit && (
+          <button
+            aria-label={`Edit ${ev.title || 'Untitled'}`}
+            title="Edit"
+            className="inline-flex items-center justify-center h-10 w-10 rounded-full state-layer text-muted-foreground"
+            onClick={(e: MouseEvent) => { e.stopPropagation(); onEdit(uid, ev); }}
+          >
+            <span className="material-symbols-outlined" style={{ fontSize: 20 }}>more_vert</span>
+          </button>
+        )}
+      </span>
+    </md-list-item>
+  );
+}
+
 export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: string; readOnly?: boolean; path?: string }) {
   const eventId = rest?.startsWith('events/') ? rest.slice(7).split('/')[0] : undefined;
   const [listName, setListName] = useState('Counters');
   const [events, setEvents] = useState<Record<string, CounterEvent>>({});
   const [editorState, setEditorState] = useState<EditorState | null>(null);
-  const [quickAddText, setQuickAddText] = useState('');
-  // Repeat cadence for the quick-add row. Defaults to 'daily' so a new user's
-  // first habit recurs and they immediately see the occurrence tracking in
-  // action. 'none' = a schedule-less tally, 'other' = open the full editor
-  // (pre-filled) on Add/Enter. Sticky across adds.
-  const [quickAddFreq, setQuickAddFreq] = useState<'none' | 'daily' | 'weekly' | 'monthly' | 'other'>('daily');
-  // Set when the editor was opened from the quick-add "Other" flow so that
-  // saving returns focus to the quick-add input (to add another item).
-  const refocusAfterSaveRef = useRef(false);
   const [showValidation, setShowValidation] = useState(false);
   // Re-derive "today" when the clock is read; a minute tick keeps statuses fresh
   // across midnight without re-rendering on every click.
@@ -95,6 +139,8 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
   const titleFocusedRef = useRef(false);
   const pendingEventIdRef = useRef(eventId);
 
+  // Auto-save: commits arrive on field blur/change while the editor stays open
+  // (dismissing the sheet is the only "done" gesture).
   const saveCounter = useCallback((uid: string, data: CounterEvent) => {
     if (!canEditRef.current || !docId) return;
     updateDoc(docId, (d, uid, data) => {
@@ -108,13 +154,6 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
       if (completions) clean.completions = completions;
       d.events[uid] = clean;
     }, uid, data);
-    setEditorState(null);
-    // Quick-add "Other" flow: after saving, put focus back on the quick-add
-    // input so the user can immediately type another item.
-    if (refocusAfterSaveRef.current) {
-      refocusAfterSaveRef.current = false;
-      setTimeout(() => document.getElementById('counter-quick-add')?.focus(), 0);
-    }
   }, [docId]);
 
   const deleteCounter = useCallback((uid: string) => {
@@ -164,36 +203,6 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
     }
     setEditorState({ uid: uid!, event: event!, isNew });
   }, []);
-
-  // Open the editor for a brand-new item with its title pre-filled (the
-  // quick-add "Other" flow). Flags refocus so saving returns to the input.
-  const openEditorForNew = useCallback((title: string) => {
-    refocusAfterSaveRef.current = true;
-    setEditorState({ uid: generateUid(), event: { '@type': 'Event', title }, isNew: true });
-  }, []);
-
-  const handleQuickAdd = useCallback(() => {
-    const title = quickAddText.trim();
-    if (!title) return;
-    if (quickAddFreq === 'other') {
-      openEditorForNew(title);
-      setQuickAddText('');
-      return;
-    }
-    // 'none' = a schedule-less tally (no start, no rule). daily/weekly/monthly
-    // create a bare recurrence anchored at today so history starts from creation;
-    // the user can refine interval/weekdays later via the editor.
-    const recurrenceRule = quickAddFreq === 'none'
-      ? undefined
-      : { '@type': 'RecurrenceRule' as const, frequency: quickAddFreq };
-    saveCounter(generateUid(), {
-      '@type': 'Event',
-      title,
-      start: recurrenceRule ? now.substring(0, 10) : undefined,
-      recurrenceRule,
-    });
-    setQuickAddText('');
-  }, [quickAddText, quickAddFreq, openEditorForNew, saveCounter, now]);
 
   // Presence + URL reflect the counter open in the editor.
   const focusPath: (string | number)[] | undefined = editorState ? ['events', editorState.uid] : undefined;
@@ -261,7 +270,14 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
   const sorted = sortedCounters(active, now);
   const stats = useMemo(() => metMissedByWeek(active, now), [active, now]);
 
-  let lastSection: CounterStatus | null = null;
+  // Group the sorted entries into contiguous status sections so each section
+  // renders as a header + its own Material list.
+  const sections: { status: CounterStatus; entries: CounterEntry[] }[] = [];
+  for (const entry of sorted) {
+    const last = sections[sections.length - 1];
+    if (last && last.status === entry.status) last.entries.push(entry);
+    else sections.push({ status: entry.status, entries: [entry] });
+  }
 
   return (
     <DocLoader docId={docId}>
@@ -285,107 +301,39 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
         peerTitle={(peer) => `${peerDisplayName(peer.peerId, peer.value?.userGroupId)}${peer.value?.focusedField ? ' (editing)' : ''}`}
         onToggleHistory={history.toggleHistory}
         historyActive={history.active}
+        onUndo={canEdit ? history.undoLastChange : undefined}
         onToggleValidation={() => setShowValidation(v => !v)}
         validationActive={showValidation}
         validationCount={validationErrors.length}
         sourcePath={focusPath}
       />
       <HistorySlider history={history} />
-      <div style={noAccess ? { opacity: 0.4, pointerEvents: 'none' } : undefined}>
+      <div
+        className="max-w-screen-md mx-auto w-full px-2 sm:px-4 pb-28"
+        style={noAccess ? { opacity: 0.4, pointerEvents: 'none' } : undefined}
+      >
       {showValidation && <ValidationPanel errors={validationErrors} docId={docId} />}
 
-      {canEdit && (
-        <div className="flex items-center gap-2 mb-3">
-          <Input
-            id="counter-quick-add"
-            autoFocus
-            placeholder="Add a todo/counter..."
-            value={quickAddText}
-            onInput={(e: any) => setQuickAddText(e.currentTarget.value)}
-            onKeyDown={(e: any) => { if (e.key === 'Enter') handleQuickAdd(); }}
-            className="flex-1"
-          />
-          <Select value={quickAddFreq} onValueChange={(v: string) => setQuickAddFreq((v || 'none') as any)}>
-            <SelectTrigger className="w-36" aria-label="Repeat"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="none">No repeat</SelectItem>
-              <SelectItem value="daily">Daily</SelectItem>
-              <SelectItem value="weekly">Weekly</SelectItem>
-              <SelectItem value="monthly">Monthly</SelectItem>
-              <SelectItem value="other">Other…</SelectItem>
-            </SelectContent>
-          </Select>
-          <Button onClick={handleQuickAdd}>Add</Button>
-        </div>
-      )}
-
-      <div className="flex flex-col" data-testid="counter-list">
-        {sorted.map((entry: CounterEntry) => {
-          const { uid, ev, status } = entry;
-          const header = status !== lastSection ? SECTION_LABELS[status] : null;
-          lastSection = status;
-          const clickCount = Object.keys(ev.completions || {}).length;
-          const schedule = describeSchedule(ev);
-          const iconColor = status === 'done' ? '#2563eb' : status === 'overdue' ? '#e11d48' : undefined;
-          const icon = status === 'done' ? 'check_circle' : status === 'overdue' ? 'error' : status === 'tally' ? 'exposure_plus_1' : 'radio_button_unchecked';
-          return (
-            <>
-              {header && (
-                <h3 key={'h-' + status} className="text-xs font-semibold uppercase text-muted-foreground mt-3 mb-1">{header}</h3>
-              )}
-              <div
-                key={uid}
-                data-status={status}
-                className="flex items-center gap-2 py-2 px-2 border-b border-border rounded-sm"
-                style={{
-                  cursor: canEdit ? 'pointer' : 'default',
-                  opacity: peerEditingEvents[uid] ? 0.5 : status === 'done' ? 0.6 : 1,
-                }}
-                onClick={() => { if (canEdit) openEditor(uid, ev); }}
-                title={canEdit ? 'Click to edit' : undefined}
-              >
-                {/* Icon + title: the completion-recording target (checkbox-style).
-                    stopPropagation so it doesn't also open the editor. */}
-                <div
-                  className="flex items-center gap-2 min-w-0"
-                  onClick={(e: any) => { if (canEdit) { e.stopPropagation(); recordClick(uid); } }}
-                  title={canEdit ? 'Click to record a completion' : undefined}
-                >
-                  <span className="material-symbols-outlined text-lg" style={{ color: iconColor }}>
-                    {icon}
-                  </span>
-                  <span className="text-sm truncate">{ev.title || 'Untitled'}</span>
-                </div>
-                {/* Stretch: clicking here (the rest of the row) opens the editor. */}
-                <div className="flex-1" />
-                {schedule && <Badge variant="secondary">{schedule}</Badge>}
-                {clickCount > 0 && <Badge variant="outline" title={`${clickCount} recorded`}>{clickCount}×</Badge>}
-                {canEdit && (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    aria-label="Edit counter"
-                    onClick={(e: any) => { e.stopPropagation(); openEditor(uid, ev); }}
-                  >
-                    <span className="material-symbols-outlined text-base">edit</span>
-                  </Button>
-                )}
-                {canEdit && ev.recurrenceRule && (
-                  // Wrapper stops the row's click-to-record from also firing.
-                  <span onClick={(e: any) => e.stopPropagation()}>
-                    <DeleteButton
-                      icon="archive"
-                      tooltip="Archive"
-                      confirmMessage={`Archive "${ev.title || 'Untitled'}" habit?`}
-                      onConfirm={() => archiveCounter(uid)}
-                    />
-                  </span>
-                )}
-                <PresenceDot fieldId={uid} peerFocusedFields={peerEditingEvents} />
-              </div>
-            </>
-          );
-        })}
+      <div data-testid="counter-list">
+        {sections.map(({ status, entries }) => (
+          <div key={status}>
+            <h3 className="text-xs font-semibold uppercase text-muted-foreground mt-3 mb-1">{SECTION_LABELS[status]}</h3>
+            <md-list style={{ background: 'transparent' }}>
+              {entries.map(({ uid, ev }) => (
+                <CounterListItem
+                  key={uid}
+                  uid={uid}
+                  ev={ev}
+                  status={status}
+                  canEdit={canEdit}
+                  peerEditingEvents={peerEditingEvents}
+                  onRecord={recordClick}
+                  onEdit={openEditor}
+                />
+              ))}
+            </md-list>
+          </div>
+        ))}
         {sorted.length === 0 && archived.length === 0 && (
           <p className="text-sm text-muted-foreground py-4">Nothing to count yet. Add something you'd like to do regularly.</p>
         )}
@@ -393,29 +341,37 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
         {archived.length > 0 && (
           <>
             <h3 className="text-xs font-semibold uppercase text-muted-foreground mt-3 mb-1">Archived</h3>
-            {archived.map(({ uid, ev, until }) => (
-              <div key={uid} className="flex items-center gap-2 py-2 px-2 border-b border-border rounded-sm" style={{ opacity: 0.6 }}>
-                <span className="material-symbols-outlined text-lg">inventory_2</span>
-                <span className="text-sm flex-1">{ev.title || 'Untitled'}</span>
-                <Badge variant="secondary">archived {until.substring(0, 10)}</Badge>
-                {canEdit && (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    aria-label="Unarchive"
-                    onClick={() => unarchiveCounter(uid)}
-                  >
-                    <span className="material-symbols-outlined text-base">unarchive</span>
-                  </Button>
-                )}
-              </div>
-            ))}
+            <md-list style={{ background: 'transparent' }}>
+              {archived.map(({ uid, ev, until }) => (
+                <md-list-item key={uid} data-testid="archived-row" style={{ opacity: 0.6 }}>
+                  <span slot="start" className="material-symbols-outlined text-lg">inventory_2</span>
+                  <div slot="headline">{ev.title || 'Untitled'}</div>
+                  <span slot="end" className="flex items-center gap-1.5">
+                    <Badge variant="secondary">archived {until.substring(0, 10)}</Badge>
+                    {canEdit && (
+                      <button
+                        aria-label="Unarchive"
+                        title="Unarchive"
+                        className="inline-flex items-center justify-center h-10 w-10 rounded-full state-layer text-muted-foreground"
+                        onClick={() => unarchiveCounter(uid)}
+                      >
+                        <span className="material-symbols-outlined" style={{ fontSize: 20 }}>unarchive</span>
+                      </button>
+                    )}
+                  </span>
+                </md-list-item>
+              ))}
+            </md-list>
           </>
         )}
       </div>
 
       <MetMissedChart stats={stats} />
       </div>
+
+      {canEdit && (
+        <Fab icon="add" aria-label="New counter" onClick={() => openEditor(null, null)} />
+      )}
 
       <CounterEditor
         uid={editorState?.uid || ''}
@@ -427,6 +383,9 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
         onDelete={deleteCounter}
         onDeleteCompletion={deleteCompletion}
         onClose={() => setEditorState(null)}
+        onAddAnother={() => openEditor(null, null)}
+        onArchive={archiveCounter}
+        onUnarchive={unarchiveCounter}
       />
     </>
     </DocLoader>

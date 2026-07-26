@@ -99,12 +99,13 @@ export function EditorTitleBar<P extends PeerLike>({
     });
   }
   // Admins get a dedicated share button on the bar (they manage sharing);
-  // everyone else reaches the members list via the overflow menu.
+  // everyone else reaches the read-only members list via the overflow menu —
+  // labelled "Sharing" since non-admins can view permissions but not share.
   const isAdmin = access === 'admin';
   if (docId && !isAdmin) {
     menuItems.push({
       icon: 'share',
-      label: 'Share',
+      label: 'Sharing',
       title: 'Share & permissions',
       onSelect: () => setShareOpen(true),
     });

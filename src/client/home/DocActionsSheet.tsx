@@ -24,7 +24,9 @@ interface DocActionsSheetProps {
 }
 
 export function DocActionsSheet({ entry, onOpenChange, onShare, onRename, onArchive }: DocActionsSheetProps) {
-  const canShare = entry?.access != null;
+  // Actions stay visible but disabled when the access level doesn't allow them:
+  // sharing is managed by admins; renaming needs edit access.
+  const canShare = entry?.access === 'admin';
   const canRename = entry?.access === 'edit' || entry?.access === 'admin';
 
   // Close the sheet before running the action so follow-up surfaces
@@ -42,18 +44,14 @@ export function DocActionsSheet({ entry, onOpenChange, onShare, onRename, onArch
           <SheetTitle className="truncate pr-8">{entry?.name || 'Untitled'}</SheetTitle>
         </SheetHeader>
         <md-list style={{ background: 'transparent' }} className="mt-2">
-          {canShare && (
-            <md-list-item type="button" onClick={pick(onShare)}>
-              <md-icon slot="start">share</md-icon>
-              <div slot="headline">Share</div>
-            </md-list-item>
-          )}
-          {canRename && (
-            <md-list-item type="button" onClick={pick(onRename)}>
-              <md-icon slot="start">edit</md-icon>
-              <div slot="headline">Rename</div>
-            </md-list-item>
-          )}
+          <md-list-item type="button" disabled={!canShare} onClick={canShare ? pick(onShare) : undefined}>
+            <md-icon slot="start">share</md-icon>
+            <div slot="headline">Share</div>
+          </md-list-item>
+          <md-list-item type="button" disabled={!canRename} onClick={canRename ? pick(onRename) : undefined}>
+            <md-icon slot="start">edit</md-icon>
+            <div slot="headline">Rename</div>
+          </md-list-item>
           <md-list-item type="button" onClick={pick(onArchive)}>
             <md-icon slot="start">archive</md-icon>
             <div slot="headline">Archive</div>

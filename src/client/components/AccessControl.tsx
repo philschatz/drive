@@ -181,7 +181,7 @@ export function AccessControlSheet({ docId, access: accessProp, open, onOpenChan
     <Sheet open={open} onOpenChange={onOpenChange}>
         <SheetContent side="bottom" className="max-h-[85vh]">
           <SheetHeader>
-            <SheetTitle>Share & Permissions</SheetTitle>
+            <SheetTitle>Sharing & Permissions</SheetTitle>
           </SheetHeader>
 
           {error && (
