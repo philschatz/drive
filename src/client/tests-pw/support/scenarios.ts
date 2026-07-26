@@ -13,12 +13,14 @@ export interface SharedDocSetup {
  * Build the common starting state for the sharing/revocation specs:
  *   - two separate identities (alice, bob), each with a personal user-group
  *   - they add each other as friends (exchange contact cards)
- *   - alice creates a TaskList doc and shares it with bob's group at `role`
+ *   - alice creates a doc (default: a TaskList) and shares it with bob's group
+ *     at `role`
  *   - waits until bob's peer actually has `role` access (eventual sync)
  */
 export async function setupSharedDoc(
   browser: Browser,
-  role: 'read' | 'edit' | 'admin' = 'edit'
+  role: 'read' | 'edit' | 'admin' = 'edit',
+  initialDoc?: Record<string, unknown>,
 ): Promise<SharedDocSetup> {
   const alice = await newPeer(browser, 'alice');
   const bob = await newPeer(browser, 'bob');
@@ -34,7 +36,7 @@ export async function setupSharedDoc(
   await alice.call('receiveContactCard', bobCard, { userGroupId: bobGroup });
   await bob.call('receiveContactCard', aliceCard, { userGroupId: aliceGroup });
 
-  const { docId } = await alice.call('createDoc', {
+  const { docId } = await alice.call('createDoc', initialDoc ?? {
     '@type': 'TaskList',
     name: 'Shared list',
     tasks: {},

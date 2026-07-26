@@ -12,6 +12,7 @@ import { calendarPlugin } from './calendar/plugin';
 import { taskListPlugin } from './tasks/plugin';
 import { dataGridPlugin } from './datagrid/plugin';
 import { countersPlugin } from './counters/plugin';
+import { sentencesPlugin } from './sentences/plugin';
 
 export type { DocTypePlugin, DocViewProps } from './types';
 
@@ -20,6 +21,7 @@ export const DOC_PLUGINS: DocTypePlugin[] = [
   taskListPlugin,
   dataGridPlugin,
   countersPlugin,
+  sentencesPlugin,
 ];
 
 /** Look up the plugin for a document `@type`; undefined for unknown/missing types

@@ -18,10 +18,22 @@ import { generateDefaultDeviceName } from './lib/device-name';
 import type { ArchiveDocResult } from './shared/keyhive-types';
 import { startWebRTCBridge } from './webrtc-bridge';
 import { WorkerClient } from './worker-client';
+import type { RichTextOp, RichTextSpan } from '../shared/rich-text-ops';
 
 // Re-export for convenience
 export { deepAssign };
 export type { ValidationError };
+export type { RichTextOp, RichTextSpan };
+
+/**
+ * Worker-substituted rich-text bridge: pass this ref as an updateDoc arg and the
+ * worker swaps in its own `applyRichTextOps` (bound to the worker's Automerge —
+ * Peritext functions can't run on the main thread, the doc lives in the worker):
+ *
+ *   updateDoc(docId, (d, richText, ops) => richText(d, ['content'], ops), richText, ops);
+ */
+export const richText: (d: any, path: (string | number)[], ops: RichTextOp[]) => void =
+  () => { throw new Error('richText runs inside the worker — pass it as an updateDoc argument'); };
 
 // ── Doc list (the worker's IDB doc-id list is the single source of truth) ─────
 
@@ -104,7 +116,7 @@ export function archiveDoc(docId: string): Promise<{ status: ArchiveDocResult['s
 
 // Functions that the worker provides its own copy of. Callers pass the real ref;
 // updateDoc detects it by identity and sends a marker the worker substitutes.
-const WORKER_FNS = new Map<unknown, string>([[deepAssign, 'deepAssign']]);
+const WORKER_FNS = new Map<unknown, string>([[deepAssign, 'deepAssign'], [richText, 'richText']]);
 
 // ── Worker setup ────────────────────────────────────────────────────────────
 
@@ -629,6 +641,31 @@ export function updateDoc(
   return request('update-doc', { docId, fnSource: fn.toString(), args: serializedArgs });
 }
 
+// ── Rich-text cursors ───────────────────────────────────────────────────────
+
+/**
+ * Automerge Cursors for flat-text positions in a Peritext field. Presence
+ * shares carets as cursors (Peritext convention — a cursor keeps pointing at
+ * the same character across concurrent edits); the doc lives in the worker,
+ * so both conversions are worker requests.
+ */
+export function getTextCursors(
+  docId: string,
+  path: (string | number)[],
+  positions: number[],
+): Promise<string[]> {
+  return request('text-cursors', { docId, path, positions });
+}
+
+/** Resolve peers' cursors back to positions; null for unresolvable cursors. */
+export function getTextCursorPositions(
+  docId: string,
+  path: (string | number)[],
+  cursors: string[],
+): Promise<(number | null)[]> {
+  return request('text-cursor-positions', { docId, path, cursors });
+}
+
 // ── Query subscriptions ─────────────────────────────────────────────────────
 
 /**
@@ -643,9 +680,9 @@ export function updateDoc(
 export function subscribeQuery(
   docId: string,
   filter: string,
-  onResult: (result: any, heads: string[], lastModified?: number) => void,
+  onResult: (result: any, heads: string[], lastModified?: number, spans?: RichTextSpan[]) => void,
   onError?: (error: string) => void,
-  opts?: { peek?: boolean; meta?: boolean },
+  opts?: { peek?: boolean; meta?: boolean; spansPath?: (string | number)[] },
 ): () => void {
   return client.subscribeQuery(docId, filter, onResult, onError, opts);
 }

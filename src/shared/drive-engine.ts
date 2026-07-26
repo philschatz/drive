@@ -27,6 +27,15 @@ import { createKeyhiveRepo } from './keyhive-repo';
 import { RELAY_PEER_ID } from './relay-identity';
 import type { EngineHost } from './engine-host';
 import type { MainToWorker, WorkerToMain } from './worker-protocol';
+import { applyRichTextOps, richTextAwareStringSync, type RichTextOp } from './rich-text-ops';
+
+/** JSON with recursively sorted object keys — for value comparisons where the
+ * producer's key order is nondeterministic (e.g. Automerge span block values). */
+function stableJson(v: any): string {
+  if (v === null || typeof v !== 'object') return JSON.stringify(v) ?? 'null';
+  if (Array.isArray(v)) return '[' + v.map(stableJson).join(',') + ']';
+  return '{' + Object.keys(v).sort().map(k => JSON.stringify(k) + ':' + stableJson(v[k])).join(',') + '}';
+}
 
 type StoredDocEntry = { id: string; type?: string; name?: string; sharingGroupId?: string;[k: string]: any };
 /** KEYS.archivedDocIds value: archived automerge docId → re-share-detection baseline. */
@@ -40,6 +49,11 @@ interface SubInfo {
   // changes but this jq projection does not (Home's relative-time). Off for the
   // editor, HyperFormula bridge, and source-viewer subs.
   meta?: boolean;
+  // Peritext field whose rich-text spans (marks + block markers) ride along
+  // with every result. Mark-only edits don't change the jq projection, so a
+  // spans sub also posts whenever the serialized spans change.
+  spansPath?: (string | number)[];
+  lastSpansJson?: string;
 }
 
 interface DocEntry {
@@ -1030,10 +1044,12 @@ export class DriveEngine {
   }
 
   /** Subscribe to a jq query, routing results to the given poster. */
-  async subscribeQuery(docId: string, subId: number, filter: string, post: (m: any) => void, peek?: boolean, meta?: boolean): Promise<void> {
+  async subscribeQuery(docId: string, subId: number, filter: string, post: (m: any) => void, peek?: boolean, meta?: boolean, spansPath?: (string | number)[]): Promise<void> {
     this.subIdToDocId.set(subId, docId);
 
-    if (!this.debugEnabled) {
+    // The query cache stores only the jq projection; a spans sub must wait for
+    // a real push (a cached result without spans would look like an empty doc).
+    if (!this.debugEnabled && !spansPath) {
       const cacheKey = queryCacheKey(docId, filter);
       const memoryCached = this.queryResultCache.get(cacheKey);
       if (memoryCached) {
@@ -1049,14 +1065,14 @@ export class DriveEngine {
 
     const entry = this.docRegistry.get(docId);
     if (entry) {
-      entry.subscriptions.set(subId, { filter, post, peek, meta });
+      entry.subscriptions.set(subId, { filter, post, peek, meta, spansPath });
       // A non-peek sub on an already-loaded doc = the user started viewing it.
       this.refreshSeenState(docId);
       await this.pushToSubscriptions(docId);
     } else {
       let pending = this.pendingSubs.get(docId);
       if (!pending) { pending = new Map(); this.pendingSubs.set(docId, pending); }
-      pending.set(subId, { filter, post, peek, meta });
+      pending.set(subId, { filter, post, peek, meta, spansPath });
       if (OPEN_DOCS_IN_BACKGROUND) {
         this.getOrLoadHandle(docId)
           .then(handle => this.getOrCreateEntry(docId, handle))
@@ -1111,10 +1127,25 @@ export class DriveEngine {
       activeHashes.add(hashStr(sub.filter));
       try {
         const { result, changed } = await this.runCachedQuery(docId, sub.filter, activeDoc, heads, lastModified);
+        // Rich-text subs also carry the Peritext spans of their field. Marks
+        // and block attributes are invisible to the jq projection, so "did it
+        // change?" must consider the serialized spans too. The comparison MUST
+        // be key-order-canonical: Automerge materializes block values from a
+        // Rust hash map, so plain JSON.stringify flips between calls and would
+        // count every change twice (once per push path), derailing the undo
+        // cursor, which counts deliveries.
+        let spans: any;
+        let spansChanged = false;
+        if (sub.spansPath) {
+          spans = this.Automerge.spans(activeDoc, sub.spansPath);
+          const spansJson = stableJson(spans);
+          spansChanged = spansJson !== sub.lastSpansJson;
+          sub.lastSpansJson = spansJson;
+        }
         // meta subs still get the post so their heads/lastModified stay fresh even
         // when the jq projection is byte-identical (Home's relative-time).
-        if (!changed && !sub.meta) continue;
-        sub.post({ type: 'query-result', subId, result, heads, lastModified });
+        if (!changed && !spansChanged && !sub.meta) continue;
+        sub.post({ type: 'query-result', subId, result, heads, lastModified, ...(sub.spansPath ? { spans } : {}) });
       } catch (err: any) {
         sub.post({ type: 'query-result', subId, result: null, heads, error: errMsg(err) });
       }
@@ -1917,7 +1948,7 @@ export class DriveEngine {
 
     if (msg.type === 'subscribe-query') {
       try {
-        await this.subscribeQuery(msg.docId, msg.subId, msg.filter, (m) => emit(m), msg.peek, msg.meta);
+        await this.subscribeQuery(msg.docId, msg.subId, msg.filter, (m) => emit(m), msg.peek, msg.meta, msg.spansPath);
       } catch (err: any) {
         emit({ type: 'query-result', subId: msg.subId, result: null, heads: [], error: errMsg(err) });
       }
@@ -1970,7 +2001,13 @@ export class DriveEngine {
     if (msg.type === 'update-doc') {
       try {
         const handle = await this.getOrLoadHandle(msg.docId);
-        const workerFns: Record<string, any> = { deepAssign };
+        const workerFns: Record<string, any> = {
+          deepAssign,
+          // Rich-text editors send plain-JSON Peritext ops (see rich-text-ops.ts);
+          // this bridges them to the engine's own Automerge module.
+          richText: (d: any, path: (string | number)[], ops: RichTextOp[]) =>
+            applyRichTextOps(this.Automerge, d, path, ops),
+        };
         const argVals = (msg.args as any[]).map((a: any) =>
           a && typeof a === 'object' && '__workerFn__' in a ? workerFns[a.__workerFn__] : a
         );
@@ -2032,7 +2069,7 @@ export class DriveEngine {
         const handle = await this.getOrLoadHandle(msg.docId);
         const targetDoc = handle.view(msg.heads as any).doc();
         if (!targetDoc) throw new Error('Could not view document at heads');
-        handle.change((d: any) => syncToTarget(d, targetDoc));
+        handle.change((d: any) => syncToTarget(d, targetDoc, richTextAwareStringSync(this.Automerge, targetDoc)));
         const entry = this.docRegistry.get(msg.docId);
         if (entry) entry.pinnedVersion = null;
         await this.pushToSubscriptions(msg.docId);
@@ -2049,11 +2086,40 @@ export class DriveEngine {
         const history = this.Automerge.getHistory(handle.doc());
         const snap = history[msg.version]?.snapshot;
         if (!snap) throw new Error(`Version ${msg.version} not found`);
-        handle.change((d: any) => syncToTarget(d, snap));
+        handle.change((d: any) => syncToTarget(d, snap, richTextAwareStringSync(this.Automerge, snap)));
         const entry = this.docRegistry.get(msg.docId);
         if (entry) entry.pinnedVersion = null;
         await this.pushToSubscriptions(msg.docId);
         emit({ type: 'result', id: msg.id, result: null });
+      } catch (err: any) {
+        emit({ type: 'result', id: msg.id, error: errMsg(err) });
+      }
+      return;
+    }
+
+    if (msg.type === 'text-cursors') {
+      try {
+        const handle = await this.getOrLoadHandle(msg.docId);
+        const doc = handle.doc();
+        if (!doc) throw new Error('Document not ready');
+        const result = msg.positions.map((p: number) => this.Automerge.getCursor(doc, msg.path, p));
+        emit({ type: 'result', id: msg.id, result });
+      } catch (err: any) {
+        emit({ type: 'result', id: msg.id, error: errMsg(err) });
+      }
+      return;
+    }
+
+    if (msg.type === 'text-cursor-positions') {
+      try {
+        const handle = await this.getOrLoadHandle(msg.docId);
+        const doc = handle.doc();
+        if (!doc) throw new Error('Document not ready');
+        // A malformed/foreign cursor resolves to null rather than failing the batch.
+        const result = msg.cursors.map((c: string) => {
+          try { return this.Automerge.getCursorPosition(doc, msg.path, c); } catch { return null; }
+        });
+        emit({ type: 'result', id: msg.id, result });
       } catch (err: any) {
         emit({ type: 'result', id: msg.id, error: errMsg(err) });
       }

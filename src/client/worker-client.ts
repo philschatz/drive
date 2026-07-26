@@ -19,7 +19,7 @@ export interface WorkerLike {
   postMessage(message: any, transfer?: Transferable[]): void;
 }
 
-type QueryResultCb = (result: any, heads: string[], lastModified?: number) => void;
+type QueryResultCb = (result: any, heads: string[], lastModified?: number, spans?: any[]) => void;
 type QueryErrorCb = (error: string) => void;
 type PresenceCb = (peers: Record<string, PeerState<PresenceState>>) => void;
 type ValidationCb = (errors: ValidationError[]) => void;
@@ -231,7 +231,7 @@ export class WorkerClient {
             if (cb.onError) cb.onError(msg.error);
             else console.warn('[worker-api] query-result error subId=%d:', msg.subId, msg.error);
           } else {
-            cb.onResult(msg.result, msg.heads, msg.lastModified);
+            cb.onResult(msg.result, msg.heads, msg.lastModified, msg.spans);
           }
         }
         return true;
@@ -362,11 +362,11 @@ export class WorkerClient {
     filter: string,
     onResult: QueryResultCb,
     onError?: QueryErrorCb,
-    opts?: { peek?: boolean; meta?: boolean },
+    opts?: { peek?: boolean; meta?: boolean; spansPath?: (string | number)[] },
   ): () => void {
     const subId = ++this.nextSubId;
     this.queryCallbacks.set(subId, { onResult, onError });
-    this.fire('subscribe-query', { subId, docId, filter, peek: opts?.peek, meta: opts?.meta });
+    this.fire('subscribe-query', { subId, docId, filter, peek: opts?.peek, meta: opts?.meta, spansPath: opts?.spansPath });
     return () => {
       this.queryCallbacks.delete(subId);
       this.fire('unsubscribe-query', { subId });

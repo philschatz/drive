@@ -5,6 +5,7 @@
  * worker shell, and the main-thread client all share one contract.
  */
 import type { RendezvousStatus } from './rendezvous-protocol';
+import type { RichTextSpan } from './rich-text-ops';
 
 export type MainToWorker =
   | { type: 'init' }
@@ -30,7 +31,10 @@ export type MainToWorker =
   // New worker-owned doc API
   | { type: 'create-doc'; id: number; initialJson: any; metadata?: Record<string, any> }
   | { type: 'update-doc'; id: number; docId: string; fnSource: string; args: unknown[] }
-  | { type: 'subscribe-query'; subId: number; docId: string; filter: string; peek?: boolean; meta?: boolean }
+  // `spansPath` = also deliver the rich-text spans (marks + block markers) of
+  // the Peritext field at that path with every result — the jq projection only
+  // carries the flat text, so rich-text editors need this side channel.
+  | { type: 'subscribe-query'; subId: number; docId: string; filter: string; peek?: boolean; meta?: boolean; spansPath?: (string | number)[] }
   | { type: 'unsubscribe-query'; subId: number }
   | { type: 'set-doc-version'; docId: string; version: number | null }
   | { type: 'get-doc-history'; id: number; docId: string }
@@ -75,6 +79,11 @@ export type MainToWorker =
   | { type: 'kh-rdv-link-create'; id: number; deviceName?: string }
   | { type: 'kh-rdv-link-join'; id: number; rendezvousId: string; key: string; deviceName?: string }
   | { type: 'kh-rdv-cancel'; rendezvousId: string }
+  // Automerge Cursors ↔ flat-text positions for a Peritext field. Presence
+  // shares carets as cursors (stable across concurrent edits, per Peritext
+  // convention); the doc lives in the worker, so conversion happens here.
+  | { type: 'text-cursors'; id: number; docId: string; path: (string | number)[]; positions: number[] }
+  | { type: 'text-cursor-positions'; id: number; docId: string; path: (string | number)[]; cursors: string[] }
   | { type: 'open-doc'; id: number; docId: string }
   | { type: 'subscribe-validation'; docId: string }
   | { type: 'unsubscribe-validation'; docId: string }
@@ -101,7 +110,7 @@ export type WorkerToMain =
   | { type: 'p2p-status'; peerId: string; transport: 'direct' | 'relay' }
   // New worker-owned doc API responses
   | { type: 'result'; id: number; result?: any; error?: string }
-  | { type: 'query-result'; subId: number; result: any; heads: string[]; lastModified?: number; error?: string }
+  | { type: 'query-result'; subId: number; result: any; heads: string[]; lastModified?: number; error?: string; spans?: RichTextSpan[] }
   | { type: 'update-presence'; docId: string; peers: Record<string, any> }
   // Document loading progress
   | { type: 'open-doc-progress'; id: number; pct: number; message: string }

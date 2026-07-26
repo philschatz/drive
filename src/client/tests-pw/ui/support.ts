@@ -94,14 +94,8 @@ export async function openApp(
   };
 }
 
-/** Every document type lands on the consolidated `#/d/<docId>` route after creation;
- * the keys are the Home Create-sheet item labels. */
-const URL_FRAGMENT = {
-  Calendar: /#\/d\//,
-  'Task list': /#\/d\//,
-  Spreadsheet: /#\/d\//,
-  'Habit Tracker': /#\/d\//,
-} as const;
+/** Home Create-sheet item labels. */
+type CreateLabel = 'Calendar' | 'Task list' | 'Spreadsheet' | 'Habit Tracker' | 'Sentences';
 
 /**
  * Create a document through the home page FAB → Create sheet. Docs are created
@@ -110,7 +104,7 @@ const URL_FRAGMENT = {
  */
 export async function createDocViaUI(
   app: App,
-  type: keyof typeof URL_FRAGMENT,
+  type: CreateLabel,
   name: string
 ): Promise<void> {
   await app.page.getByRole('button', { name: 'New document' }).click();
@@ -122,7 +116,8 @@ export async function createDocViaUI(
     .getByTestId('create-doc-sheet')
     .locator('md-list-item', { hasText: type })
     .click();
-  await expect(app.page).toHaveURL(URL_FRAGMENT[type], { timeout: 15_000 });
+  // Every document type lands on the consolidated `#/d/<docId>` route.
+  await expect(app.page).toHaveURL(/#\/d\//, { timeout: 15_000 });
 
   // Rename in place via the title-bar input.
   const title = app.page.getByTestId('doc-title-input');
