@@ -1,7 +1,7 @@
 import Router from 'preact-router';
 import { DocRoute } from './DocRoute';
 import { Home } from './home/Home';
-import { AllCalendars } from './calendar/AllCalendars';
+import { AllCalendars } from './doc-plugins/calendar/AllCalendars';
 import { SourceViewer } from './source/SourceViewer';
 import { Settings } from './settings/Settings';
 import { SettingsSection } from './settings/SettingsSection';

@@ -36,7 +36,7 @@ npx jest tests/parser.test.ts
 ### Directory Layout
 
 - `src/backend/` — Express server, CalDAV handler, ICS↔JMAP parser/serializer, REST routes
-- `src/client/` — Preact SPA with feature directories: `calendar/`, `tasks/`, `datagrid/`, `source/`, `home/`
+- `src/client/` — Preact SPA. Document-type plugins live under `src/client/doc-plugins/` (`calendar/`, `tasks/`, `datagrid/`, `counters/`, alongside the registry `index.ts` + `types.ts`); other feature directories are `home/`, `source/`, `contacts/`, `settings/`, `shared/`
 - `src/shared/` — Code shared between client features: automerge repo setup, presence system, schema validation, deep-assign utility
 - `tests/` — Jest tests (backend + shared logic)
 - `src/client/tests-pw/` — Playwright E2E tests (editor UI specs + two-peer sync harness)
@@ -102,7 +102,7 @@ The backend implements CalDAV (RFC 4791) at `/dav/`. `src/backend/parser.ts` con
 
 **Playwright is reserved for tests that need two browsers/tabs (or a genuinely browser-only runtime); single-browser tests belong in Jest (jsdom).**
 
-- **Jest** (`jest.config.js`; `*.test.ts` = node project, `*.test.tsx` = jsdom `ui` project): unit + UI component/container tests. Editor containers (Tasks, Counters, …) run in jsdom via `jest.mock('../worker-api')`, which picks up `src/client/__mocks__/worker-api.ts` — it backs `subscribeQuery`/`updateDoc` with an in-memory doc projected through the real jq engine (`src/shared/jq.ts`) and stubs the rest. Seed with `__setDoc(id, doc)`; assert store state with `__getDoc(id)`; reset in `beforeEach` with `__reset()`. It projects against a **clone** so each result has fresh refs (else `setState` bails on `Object.is` and nothing re-renders). `shared/keyhive-api` re-exports worker-api, so this one mock also covers access/presence. Components that read `Temporal` need `import 'temporal-polyfill/global'` first; the Radix `Select` popover can't be opened in jsdom, so seed variety via `__setDoc` rather than driving it.
+- **Jest** (`jest.config.js`; `*.test.ts` = node project, `*.test.tsx` = jsdom `ui` project): unit + UI component/container tests. Editor containers (Tasks, Counters, …) run in jsdom via `jest.mock('../../worker-api')` (two levels up from a `doc-plugins/<type>/` dir), which picks up `src/client/__mocks__/worker-api.ts` — it backs `subscribeQuery`/`updateDoc` with an in-memory doc projected through the real jq engine (`src/shared/jq.ts`) and stubs the rest. Seed with `__setDoc(id, doc)`; assert store state with `__getDoc(id)`; reset in `beforeEach` with `__reset()`. It projects against a **clone** so each result has fresh refs (else `setState` bails on `Object.is` and nothing re-renders). `shared/keyhive-api` re-exports worker-api, so this one mock also covers access/presence. Components that read `Temporal` need `import 'temporal-polyfill/global'` first; the Radix `Select` popover can't be opened in jsdom, so seed variety via `__setDoc` rather than driving it.
 - **Playwright** (`src/client/tests-pw/`): two-peer sync (`support/peer.ts`, `window.__drive`), multi-tab (Web Locks), real-worker/IndexedDB behavior, and heavy browser-only rendering (schedule-x calendar, HyperFormula datagrid).
 
 ## Key Conventions

@@ -20,10 +20,10 @@ export type {
 export { validateNode } from './core';
 
 import { type ValidationError, type DocSchemaPlugin, validateNode } from './core';
-import { calendarSchemaPlugin } from '../../client/calendar/schema';
-import { taskListSchemaPlugin } from '../../client/tasks/schema';
-import { dataGridSchemaPlugin } from '../../client/datagrid/schema';
-import { countersSchemaPlugin } from '../../client/counters/schema';
+import { calendarSchemaPlugin } from '../../client/doc-plugins/calendar/schema';
+import { taskListSchemaPlugin } from '../../client/doc-plugins/tasks/schema';
+import { dataGridSchemaPlugin } from '../../client/doc-plugins/datagrid/schema';
+import { countersSchemaPlugin } from '../../client/doc-plugins/counters/schema';
 import { driveSettingsSchemaPlugin } from '../../client/settings/schema';
 
 /** Every known document type's validation core. Adding a document type means

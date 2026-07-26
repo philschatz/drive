@@ -8,10 +8,10 @@
  * automerge worker.
  */
 import type { DocTypePlugin } from './types';
-import { calendarPlugin } from '../calendar/plugin';
-import { taskListPlugin } from '../tasks/plugin';
-import { dataGridPlugin } from '../datagrid/plugin';
-import { countersPlugin } from '../counters/plugin';
+import { calendarPlugin } from './calendar/plugin';
+import { taskListPlugin } from './tasks/plugin';
+import { dataGridPlugin } from './datagrid/plugin';
+import { countersPlugin } from './counters/plugin';
 
 export type { DocTypePlugin, DocViewProps } from './types';
 

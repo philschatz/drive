@@ -18,7 +18,7 @@ import dayjs from 'dayjs';
 import relativeTimePlugin from 'dayjs/plugin/relativeTime';
 
 dayjs.extend(relativeTimePlugin);
-import { a1ToInternal } from '@/datagrid/helpers';
+import { a1ToInternal } from '@/doc-plugins/datagrid/helpers';
 import { iconForType, docTypeLabel, type DocTypePlugin } from '@/doc-plugins';
 import { docUrl } from '@/shared/doc-urls';
 import { relativeTime } from '../../shared/relative-time';
@@ -745,7 +745,7 @@ export function Home({ path }: { path?: string }) {
       const text = await file.text();
       setImportStatus({ label: 'Parsing events...', progress: 30 });
       await new Promise(r => setTimeout(r, 0));
-      const { icsToEvent } = await import('../calendar/ics-parser');
+      const { icsToEvent } = await import('../doc-plugins/calendar/ics-parser');
       const parsed = icsToEvent(text);
       setImportStatus({ label: 'Saving calendar...', progress: 80 });
       await new Promise(r => setTimeout(r, 0));
