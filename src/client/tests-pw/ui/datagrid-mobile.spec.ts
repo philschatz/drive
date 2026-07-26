@@ -173,9 +173,8 @@ test.describe('DataGrid mobile', () => {
     await tabsBar.locator('[data-sheet-tab]', { hasText: 'Sheet 2' }).click();
     const options = page.getByTestId('sheet-options-sheet');
     await expect(options).toBeVisible();
-    const nameInput = page.getByTestId('sheet-name-input');
-    await nameInput.fill('Budget');
-    await nameInput.press('Enter');
+    app.setPromptAnswer('Budget');
+    await options.locator('md-list-item', { hasText: 'Rename sheet' }).click();
     await expect(tabsBar.locator('[data-sheet-tab]', { hasText: 'Budget' })).toBeVisible();
 
     // Move left swaps the tab order. Unavailable actions are omitted, not

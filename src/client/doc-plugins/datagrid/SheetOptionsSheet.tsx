@@ -1,7 +1,4 @@
-import { useEffect, useState } from 'preact/hooks';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
 
 /** Number stepper row: down/up buttons disable at the given bounds. */
 function Stepper({
@@ -85,17 +82,8 @@ export function SheetOptionsSheet({
   maxFrozenCols: number;
   onSetFrozen: (kind: 'row' | 'col', count: number) => void;
 }) {
-  const [name, setName] = useState(sheetName);
-  // Re-sync the draft when the sheet (or its synced name) changes
-  useEffect(() => setName(sheetName), [sheetId, sheetName]);
-
-  const commitName = () => {
-    const trimmed = name.trim();
-    if (trimmed && trimmed !== sheetName) onRename(sheetId, trimmed);
-  };
-
   return (
-    <Sheet open={open} onOpenChange={o => { if (!o) commitName(); onOpenChange(o); }}>
+    <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent side="bottom" className="max-h-[85vh] p-4">
         {/* SheetContent doesn't forward extra props — testid goes on a wrapper */}
         <div data-testid="sheet-options-sheet">
@@ -103,21 +91,23 @@ export function SheetOptionsSheet({
           <SheetTitle>Sheet options</SheetTitle>
         </SheetHeader>
 
-        <div className="mt-2 flex flex-col gap-1">
-          <Label htmlFor="sheet-name-input">Name</Label>
-          <Input
-            id="sheet-name-input"
-            data-testid="sheet-name-input"
-            value={name}
-            onInput={(e: any) => setName(e.currentTarget.value)}
-            onBlur={commitName}
-            onKeyDown={(e: any) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
-          />
-        </div>
-
         {/* Unavailable actions are omitted rather than shown disabled — a lone
             sheet has nowhere to move and can't be hidden or deleted. */}
         <md-list style={{ background: 'transparent' }} className="mt-2">
+          <md-list-item
+            type="button"
+            data-testid="rename-sheet-item"
+            onClick={() => {
+              const next = prompt('Rename', sheetName);
+              if (next === null) return;
+              const trimmed = next.trim();
+              if (!trimmed) return;
+              onRename(sheetId, trimmed);
+            }}
+          >
+            <md-icon slot="start">edit</md-icon>
+            <div slot="headline">Rename sheet</div>
+          </md-list-item>
           {canMoveLeft && (
             <md-list-item type="button" onClick={() => onMove(sheetId, -1)}>
               <md-icon slot="start">chevron_left</md-icon>

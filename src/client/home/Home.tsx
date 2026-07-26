@@ -1,10 +1,9 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'preact/hooks';
 import { Suspense } from 'preact/compat';
-import { usePeerList, usePeerTransports } from '../shared/automerge';
+import { usePeerList } from '../shared/automerge';
 import { ConnectionStatus } from '../shared/ConnectionStatus';
 import { createDoc, updateDoc, subscribeQuery, fetchDocList, archiveDoc, onDocListUpdated, onUnseenChangesUpdated, getUnseenChanges, HOME_SUMMARY_QUERY } from '../worker-api';
 import { getMyAccess, onKeyhiveStateChanged } from '../shared/keyhive-api';
-import { PeerDot } from '../shared/presence';
 import { Button } from '@/components/ui/button';
 import { Alert } from '@/components/ui/alert';
 import { Progress } from '@/components/ui/progress';
@@ -123,7 +122,6 @@ export function Home({ path }: { path?: string }) {
   const [actionsEntry, setActionsEntry] = useState<DocEntry | null>(null);
   const [shareEntry, setShareEntry] = useState<DocActionsTarget | null>(null);
   const repoPeers = usePeerList();
-  const transports = usePeerTransports();
 
   useEffect(() => { document.title = 'Automerge Documents'; }, []);
 
@@ -375,10 +373,7 @@ export function Home({ path }: { path?: string }) {
       {/* Top app bar */}
       <div className="flex items-center gap-2 min-h-14 pl-2">
         <h1 className="md-title-large font-bold flex-1 min-w-0 truncate">Documents</h1>
-        <ConnectionStatus showDot peers={repoPeers.map(peerId => ({ peerId }))} />
-        {repoPeers.map(peerId => (
-          <PeerDot key={peerId} peerId={peerId} direct={transports[peerId] === 'direct'} />
-        ))}
+        <ConnectionStatus peers={repoPeers.map(peerId => ({ peerId }))} />
         <OverflowMenu aria-label="Menu" items={homeMenuItems} />
       </div>
 

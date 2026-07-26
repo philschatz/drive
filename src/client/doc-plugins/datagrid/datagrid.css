@@ -364,6 +364,24 @@
   z-index: 1;
 }
 
+/* Peer name tag sitting on the highlighted cell's top edge (cf. .rt-peer-tip
+   in sentences.css). May sit under sticky headers on the first visible row —
+   accepted; the border highlight + title tooltip still identify the peer. */
+.datagrid-peer-tip {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform: translateY(-100%);
+  font-size: 10px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 3px 3px 3px 0;
+  color: #fff;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 2;
+}
+
 /* Formula cell styling */
 .datagrid-formula {
   color: var(--md-sys-color-on-surface-variant);

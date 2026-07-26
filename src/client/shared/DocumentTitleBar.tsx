@@ -1,9 +1,7 @@
 import type { ComponentChildren } from 'preact';
 import { useEffect, useRef, useState } from 'preact/hooks';
-import { usePeerTransports, getWorkerPeerId } from './automerge';
 import { ConnectionStatus } from './ConnectionStatus';
-import { getWorkerUserGroupId } from '../worker-api';
-import { dedupePeers, peerDisplayName, peerIdentityKey, PeerDot, type PresenceState } from './presence';
+import { type PresenceState } from './presence';
 import { AccessControlSheet } from '../components/AccessControl';
 import { useAccess } from './useAccess';
 import { sourceUrl } from './doc-urls';
@@ -177,7 +175,6 @@ export function DocumentTitleBar<P extends PeerLike>({
   sticky?: boolean;
   children?: ComponentChildren;
 }) {
-  const transports = usePeerTransports();
   const { access } = useAccess(docId);
   const [shareOpen, setShareOpen] = useState(false);
   const titleInputRef = useRef<HTMLInputElement>(null);
@@ -325,22 +322,6 @@ export function DocumentTitleBar<P extends PeerLike>({
             active={historyActive}
           />
         )}
-
-        {/* Peer dots — clipped to ~4 dots on narrow screens. Devices of the same user
-            collapse to a single dot (keyed by user-group id); all of the local user's
-            own devices are hidden, not just the current one. */}
-        <div className="flex items-center gap-1 max-w-[72px] sm:max-w-none overflow-hidden">
-          {dedupePeers(peers, getWorkerPeerId(), getWorkerUserGroupId()).map(peer => (
-            <PeerDot
-              key={peerIdentityKey(peer.peerId, peer.value?.userGroupId)}
-              peerId={peer.peerId}
-              userGroupId={peer.value?.userGroupId}
-              direct={transports[peer.peerId] === 'direct'}
-              label={peerTitle ? peerTitle(peer) : peerDisplayName(peer.peerId, peer.value?.userGroupId)}
-              sizeClass="w-3 h-3"
-            />
-          ))}
-        </div>
 
         <ConnectionStatus peers={peers} peerTitle={peerTitle} />
 

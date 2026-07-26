@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'preact/hooks';
-import { subscribeQuery, updateDoc } from '../../worker-api';
+import { subscribeQuery, updateDoc, getWorkerPeerId, getWorkerUserGroupId } from '../../worker-api';
 import { peerColor, usePresence } from '../../shared/presence';
 import { DocumentTitleBar } from '../../shared/DocumentTitleBar';
 import { peerDisplayName, type PeerFieldInfo } from '../../shared/presence';
@@ -1110,10 +1110,15 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
   }, []);
 
 
-  // Peer presence cell map — keyed by "col:row", first peer wins
+  // Peer presence cell map — keyed by "col:row", first peer wins. Skips the
+  // local user's own devices (same convention as Sentences' remote cursors).
   const peerCellMap = useMemo(() => {
     const map: Record<string, PeerFieldInfo> = {};
+    const myPeerId = getWorkerPeerId();
+    const myGroup = getWorkerUserGroupId();
     for (const peer of Object.values(peers)) {
+      if (myPeerId && peer.peerId === myPeerId) continue;
+      if (myGroup && peer.value?.userGroupId === myGroup) continue;
       const pf = peer.value?.focusedField;
       if (!pf || pf.length < 4 || pf[0] !== 'sheets' || pf[1] !== currentSheetId || pf[2] !== 'cells') continue;
       const cellKey = String(pf[3]);
@@ -1926,6 +1931,11 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
                             )}
                             {refInfo && refInfo.bottom && refInfo.right && (
                               <div className="selection-handle handle-br" style={{ background: refInfo.color }} />
+                            )}
+                            {peers && (
+                              <div className="datagrid-peer-tip" style={{ background: peers.color }}>
+                                {peerDisplayName(peers.peerId, peers.userGroupId)}
+                              </div>
                             )}
                           </td>
                         );

@@ -2,7 +2,7 @@ import { useState } from 'preact/hooks';
 import { useWsStatus, usePeerTransports, getWorkerPeerId } from './automerge';
 import { getWorkerUserGroupId } from '../worker-api';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
-import { dedupePeers, peerDisplayName, PeerDot, type PresenceState } from './presence';
+import { dedupePeers, peerDisplayName, peerIdentityKey, PeerDot, type PresenceState } from './presence';
 
 interface PeerLike {
   peerId: string;
@@ -14,15 +14,13 @@ interface PeerLike {
  * the peers on this document and whether each is connected directly (P2P) or
  * via the relay. (The connection-debug page is reachable from Settings.)
  *
- * Reused by Home (with a colored status dot) and the DocumentTitleBar (label only).
+ * Reused by Home and the DocumentTitleBar.
  */
 export function ConnectionStatus<P extends PeerLike>({
-  showDot = false,
   className = '',
   peers = [],
   peerTitle,
 }: {
-  showDot?: boolean;
   className?: string;
   /** Presence peers to list in the sheet (deduped to other users). */
   peers?: P[];
@@ -36,8 +34,9 @@ export function ConnectionStatus<P extends PeerLike>({
 
   return (
     <>
-      {/* Icon-only status (the label was pure noise on a narrow bar); the
-          accessible name still reads "Connected"/"Disconnected". */}
+      {/* One button: peer dots + status icon — tapping either opens the sheet.
+          (The text label was pure noise on a narrow bar; the accessible name
+          still reads "Connected"/"Disconnected".) */}
       <button
         aria-label={connected ? 'Connected' : 'Disconnected'}
         className={`inline-flex items-center gap-2 cursor-pointer hover:opacity-80 ${className}`}
@@ -46,11 +45,23 @@ export function ConnectionStatus<P extends PeerLike>({
           : 'Not connected to relay. Tap for peer details.'}
         onClick={() => setOpen(true)}
       >
-        {showDot && (
-          <div
-            className="w-2 h-2 rounded-full shrink-0"
-            style={{ backgroundColor: connected ? '#4caf50' : '#f44336' }}
-          />
+        {/* Peer dots — clipped to ~4 dots on narrow screens. Devices of the same user
+            collapse to a single dot (keyed by user-group id); all of the local user's
+            own devices are hidden, not just the current one. (Omitted when empty so
+            the button's gap doesn't leave a hole before the icon.) */}
+        {visible.length > 0 && (
+          <div className="flex items-center gap-1 max-w-[72px] sm:max-w-none overflow-hidden">
+            {visible.map(peer => (
+              <PeerDot
+                key={peerIdentityKey(peer.peerId, peer.value?.userGroupId)}
+                peerId={peer.peerId}
+                userGroupId={peer.value?.userGroupId}
+                direct={transports[peer.peerId] === 'direct'}
+                label={peerTitle ? peerTitle(peer) : peerDisplayName(peer.peerId, peer.value?.userGroupId)}
+                sizeClass="w-3 h-3"
+              />
+            ))}
+          </div>
         )}
         <span
           className={`material-symbols-outlined shrink-0 ${connected ? 'text-on-surface-variant' : 'text-error'}`}

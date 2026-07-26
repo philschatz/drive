@@ -12,17 +12,11 @@ import type { ResolvedEntry } from './commands';
 
 interface CommandContextMenuContentProps {
   entries: ResolvedEntry[];
-  /** Suppress the menu's close-time focus restoration. Needed where a command
-   * focuses an inline input (sheet rename) that the restoration would blur —
-   * blur commits and hides the input. */
-  preventCloseAutoFocus?: boolean;
 }
 
-export function CommandContextMenuContent({ entries, preventCloseAutoFocus }: CommandContextMenuContentProps) {
+export function CommandContextMenuContent({ entries }: CommandContextMenuContentProps) {
   return (
-    <ContextMenuContent
-      onCloseAutoFocus={preventCloseAutoFocus ? (e: Event) => e.preventDefault() : undefined}
-    >
+    <ContextMenuContent>
       {entries.map((entry, i) => {
         if (entry.kind === 'separator') {
           return <ContextMenuSeparator key={`sep-${i}`} />;
