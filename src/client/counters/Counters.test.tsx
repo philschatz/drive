@@ -93,7 +93,7 @@ describe('Counters container', () => {
     confirmSpy.mockRestore();
   });
 
-  it('opens the editor via right-click and Shift+F10 (the long-press paths)', async () => {
+  it('opens the editor via right-click, Shift+F10, and the trailing kebab', async () => {
     mock.__setDoc(DOC, { '@type': 'Calendar+Counters', name: 'C', events: { e1: dailyHabit('Meditate') } });
     render(<Counters docId={DOC} />);
     await waitFor(() => expect(screen.getByText('Meditate')).toBeTruthy());
@@ -104,6 +104,12 @@ describe('Counters container', () => {
 
     fireEvent.keyDown(rowOf('Meditate'), { key: 'F10', shiftKey: true });
     expect(screen.getByText('Edit Counter')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+
+    // The kebab opens the editor and must not record a completion.
+    fireEvent.click(within(rowOf('Meditate')).getByRole('button', { name: 'Edit Meditate' }));
+    expect(screen.getByText('Edit Counter')).toBeTruthy();
+    expect(mock.__getDoc(DOC).events.e1.completions).toBeUndefined();
   });
 
   it('non-recurring tallies keep the lifetime N× badge', async () => {

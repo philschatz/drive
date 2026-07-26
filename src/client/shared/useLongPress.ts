@@ -5,14 +5,15 @@
  * PRIMARY action (`onTap`), and holding the row (~450ms) opens a SECONDARY surface
  * (`onLongPress`) — an edit/actions sheet. Desktop right-click maps to the same
  * secondary surface, and so do the keyboard's context-menu gestures (Shift+F10 or
- * the ContextMenu key) — rows have no trailing kebab, so this is the SR/keyboard path.
+ * the ContextMenu key) and the row's always-visible trailing kebab, so long-press
+ * is never the only way to reach it.
  *
  * Wiring: spread the returned handlers on the row element (e.g. an `md-list-item`).
  * Do NOT also add your own `onClick` — the primary action is `onTap`, invoked from
  * the real click event so keyboard Enter/Space on a focusable row still works. The
  * hook swallows the synthetic click that follows a long-press so nothing double-fires.
- * Presses that start on an interactive child (checkbox, links…) are ignored so
- * those controls keep working.
+ * Presses that start on an interactive child (checkbox, kebab, links…) are ignored
+ * so those controls keep working.
  */
 import { useRef } from 'preact/hooks';
 
@@ -128,9 +129,9 @@ export function useLongPress(opts: UseLongPressOptions): LongPressHandlers {
       suppressClick.current = true;
       cb.current.onLongPress(e);
     },
-    // Keyboard path to the secondary action (rows have no kebab): the standard
-    // "open context actions" keys. Note browsers also fire contextmenu for
-    // these — preventDefault here stops that, so the action fires only once.
+    // Keyboard path to the secondary action: the standard "open context
+    // actions" keys. Note browsers also fire contextmenu for these —
+    // preventDefault here stops that, so the action fires only once.
     onKeyDown(e) {
       const isMenuKey = e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10');
       if (!isMenuKey || interactiveChild(e)) return;

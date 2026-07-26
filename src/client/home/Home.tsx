@@ -50,8 +50,8 @@ function applyQueryResult(prev: DocEntry[], docId: string, result: any, lastModi
 
 /**
  * One document row: a Material two-line list item.
- * Tap opens the doc; long-press / right-click / Shift+F10 opens the per-doc
- * actions sheet (Share / Rename / Archive / View source).
+ * Tap opens the doc; long-press / right-click / Shift+F10 / the trailing kebab
+ * opens the per-doc actions sheet (Share / Rename / Archive / View source).
  */
 function DocListItem({ entry, unseenFlag, onOpen, onActions }: {
   entry: DocEntry;
@@ -92,6 +92,14 @@ function DocListItem({ entry, unseenFlag, onOpen, onActions }: {
         <span className="inline-flex items-center justify-center h-8 w-8 text-muted-foreground">
           <AccessIcon access={entry.access ?? null} style={{ fontSize: 18 }} />
         </span>
+        <button
+          aria-label={`More actions for ${entry.name || 'Untitled'}`}
+          title="More actions"
+          className="inline-flex items-center justify-center h-10 w-10 rounded-full state-layer text-muted-foreground"
+          onClick={(e: MouseEvent) => { e.stopPropagation(); onActions(entry); }}
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: 20 }}>more_vert</span>
+        </button>
       </span>
     </md-list-item>
   );
