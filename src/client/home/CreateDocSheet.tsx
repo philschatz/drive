@@ -9,7 +9,7 @@ import { DOC_PLUGINS, type DocTypePlugin } from '@/doc-plugins';
 const IMPORTS = [
   { kind: 'ics' as const, icon: 'date_range', label: 'Import .ics' },
   { kind: 'xlsx' as const, icon: 'grid_on', label: 'Import .xlsx' },
-  { kind: 'json' as const, icon: 'code', label: 'Import .json' },
+  { kind: 'json' as const, icon: 'code', label: 'Import .json / .md' },
 ];
 
 export type ImportKind = (typeof IMPORTS)[number]['kind'];

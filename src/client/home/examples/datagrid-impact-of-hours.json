@@ -1,0 +1,1212 @@
+{
+  "@type": "DataGrid",
+  "name": "Where My Hours Help Most",
+  "description": "Nine ways to help, scored per hour. Reach, depth, persistence, leverage, replaceability and follow-through are fuzzy estimates (PERT / TRIANGULAR / LOGNORMAL / BETA / UNIFORM), so every impact figure carries a Monte Carlo range — select one to see P5 / P50 / P95.",
+  "sheets": {
+    "compare": {
+      "@type": "Sheet",
+      "name": "Compare",
+      "index": 0,
+      "columns": {
+        "c1": {
+          "index": 0,
+          "width": 300
+        },
+        "c2": {
+          "index": 1,
+          "width": 110
+        },
+        "c3": {
+          "index": 2,
+          "width": 130
+        },
+        "c4": {
+          "index": 3,
+          "width": 140
+        },
+        "c5": {
+          "index": 4,
+          "width": 120
+        },
+        "c6": {
+          "index": 5,
+          "width": 150
+        },
+        "c7": {
+          "index": 6,
+          "width": 160
+        },
+        "c8": {
+          "index": 7,
+          "width": 160
+        },
+        "c9": {
+          "index": 8,
+          "width": 100
+        },
+        "c10": {
+          "index": 9,
+          "width": 140
+        },
+        "c11": {
+          "index": 10,
+          "width": 130
+        },
+        "c12": {
+          "index": 11,
+          "width": 130
+        },
+        "c13": {
+          "index": 12,
+          "width": 130
+        },
+        "c14": {
+          "index": 13,
+          "width": 360
+        }
+      },
+      "rows": {
+        "r1": {
+          "index": 0,
+          "height": 44
+        },
+        "r2": {
+          "index": 1
+        },
+        "r3": {
+          "index": 2
+        },
+        "r4": {
+          "index": 3
+        },
+        "r5": {
+          "index": 4
+        },
+        "r6": {
+          "index": 5
+        },
+        "r7": {
+          "index": 6
+        },
+        "r8": {
+          "index": 7
+        },
+        "r9": {
+          "index": 8
+        },
+        "r10": {
+          "index": 9
+        },
+        "r11": {
+          "index": 10
+        },
+        "r12": {
+          "index": 11
+        },
+        "r13": {
+          "index": 12
+        },
+        "r14": {
+          "index": 13
+        },
+        "r15": {
+          "index": 14
+        },
+        "r16": {
+          "index": 15
+        },
+        "r17": {
+          "index": 16
+        },
+        "r18": {
+          "index": 17
+        },
+        "r19": {
+          "index": 18
+        }
+      },
+      "cells": {
+        "r1:c1": {
+          "value": "Way of helping"
+        },
+        "r1:c2": {
+          "value": "Scope"
+        },
+        "r1:c3": {
+          "value": "Hours per session"
+        },
+        "r1:c4": {
+          "value": "Sessions per month"
+        },
+        "r1:c5": {
+          "value": "Hours per year"
+        },
+        "r1:c6": {
+          "value": "People reached per hour"
+        },
+        "r1:c7": {
+          "value": "Benefit per person-hour"
+        },
+        "r1:c8": {
+          "value": "Years the benefit lasts"
+        },
+        "r1:c9": {
+          "value": "Leverage"
+        },
+        "r1:c10": {
+          "value": "Someone else would"
+        },
+        "r1:c11": {
+          "value": "Odds I keep it up"
+        },
+        "r1:c12": {
+          "value": "Impact per year"
+        },
+        "r1:c13": {
+          "value": "Impact per hour"
+        },
+        "r1:c14": {
+          "value": "Notes"
+        },
+        "r2:c1": {
+          "value": "Tutoring a struggling reader"
+        },
+        "r2:c2": {
+          "value": "Community"
+        },
+        "r2:c3": {
+          "value": "1.5"
+        },
+        "r2:c4": {
+          "value": "4"
+        },
+        "r2:c5": {
+          "value": "={R[r2]C[c3]}*{R[r2]C[c4]}*12"
+        },
+        "r2:c6": {
+          "value": "=TRIANGULAR(0.8,1.5,1)"
+        },
+        "r2:c7": {
+          "value": "=PERT(1.5,3,6)"
+        },
+        "r2:c8": {
+          "value": "=PERT(1,4,10)"
+        },
+        "r2:c9": {
+          "value": "1"
+        },
+        "r2:c10": {
+          "value": "=BETA(2,5)"
+        },
+        "r2:c11": {
+          "value": "=BETA(7,3)"
+        },
+        "r2:c12": {
+          "value": "={R[r2]C[c5]}*{R[r2]C[c6]}*{R[r2]C[c7]}*{R[r2]C[c8]}*{R[r2]C[c9]}*(1-{R[r2]C[c10]})*{R[r2]C[c11]}"
+        },
+        "r2:c13": {
+          "value": "={R[r2]C[c12]}/{R[r2]C[c5]}"
+        },
+        "r2:c14": {
+          "value": "One child, once a week. Select an Impact cell to see P5 / P50 / P95."
+        },
+        "r3:c1": {
+          "value": "Cooking & delivering meals"
+        },
+        "r3:c2": {
+          "value": "Community"
+        },
+        "r3:c3": {
+          "value": "2"
+        },
+        "r3:c4": {
+          "value": "2"
+        },
+        "r3:c5": {
+          "value": "={R[r3]C[c3]}*{R[r3]C[c4]}*12"
+        },
+        "r3:c6": {
+          "value": "=TRIANGULAR(2,8,4)"
+        },
+        "r3:c7": {
+          "value": "=PERT(0.5,1.2,3)"
+        },
+        "r3:c8": {
+          "value": "=UNIFORM(0.05,0.3)"
+        },
+        "r3:c9": {
+          "value": "1"
+        },
+        "r3:c10": {
+          "value": "=BETA(5,3)"
+        },
+        "r3:c11": {
+          "value": "=BETA(8,2)"
+        },
+        "r3:c12": {
+          "value": "={R[r3]C[c5]}*{R[r3]C[c6]}*{R[r3]C[c7]}*{R[r3]C[c8]}*{R[r3]C[c9]}*(1-{R[r3]C[c10]})*{R[r3]C[c11]}"
+        },
+        "r3:c13": {
+          "value": "={R[r3]C[c12]}/{R[r3]C[c5]}"
+        },
+        "r3:c14": {
+          "value": "Warm and welcome, but a meal train fills up without me — high counterfactual, and the benefit lasts days."
+        },
+        "r4:c1": {
+          "value": "Afternoon childcare so parents can work"
+        },
+        "r4:c2": {
+          "value": "Community"
+        },
+        "r4:c3": {
+          "value": "3"
+        },
+        "r4:c4": {
+          "value": "8"
+        },
+        "r4:c5": {
+          "value": "={R[r4]C[c3]}*{R[r4]C[c4]}*12"
+        },
+        "r4:c6": {
+          "value": "=TRIANGULAR(2,6,3)"
+        },
+        "r4:c7": {
+          "value": "=PERT(1,2.5,5)"
+        },
+        "r4:c8": {
+          "value": "=PERT(0.5,2,5)"
+        },
+        "r4:c9": {
+          "value": "1"
+        },
+        "r4:c10": {
+          "value": "=BETA(2,6)"
+        },
+        "r4:c11": {
+          "value": "=BETA(5,5)"
+        },
+        "r4:c12": {
+          "value": "={R[r4]C[c5]}*{R[r4]C[c6]}*{R[r4]C[c7]}*{R[r4]C[c8]}*{R[r4]C[c9]}*(1-{R[r4]C[c10]})*{R[r4]C[c11]}"
+        },
+        "r4:c13": {
+          "value": "={R[r4]C[c12]}/{R[r4]C[c5]}"
+        },
+        "r4:c14": {
+          "value": "Unlocks paid hours for two households at once. Hard to sustain eight afternoons a month."
+        },
+        "r5:c1": {
+          "value": "Building a free app for a local nonprofit"
+        },
+        "r5:c2": {
+          "value": "National"
+        },
+        "r5:c3": {
+          "value": "4"
+        },
+        "r5:c4": {
+          "value": "4"
+        },
+        "r5:c5": {
+          "value": "={R[r5]C[c3]}*{R[r5]C[c4]}*12"
+        },
+        "r5:c6": {
+          "value": "=TRIANGULAR(5,400,60)"
+        },
+        "r5:c7": {
+          "value": "=PERT(0.2,0.8,2.5)"
+        },
+        "r5:c8": {
+          "value": "=PERT(1,3,8)"
+        },
+        "r5:c9": {
+          "value": "=LOGNORMAL(0.6,0.7)"
+        },
+        "r5:c10": {
+          "value": "=BETA(2,8)"
+        },
+        "r5:c11": {
+          "value": "=BETA(4,6)"
+        },
+        "r5:c12": {
+          "value": "={R[r5]C[c5]}*{R[r5]C[c6]}*{R[r5]C[c7]}*{R[r5]C[c8]}*{R[r5]C[c9]}*(1-{R[r5]C[c10]})*{R[r5]C[c11]}"
+        },
+        "r5:c13": {
+          "value": "={R[r5]C[c12]}/{R[r5]C[c5]}"
+        },
+        "r5:c14": {
+          "value": "Wide reach if it ships. The honest risk is that it never quite does."
+        },
+        "r6:c1": {
+          "value": "Making explainer videos"
+        },
+        "r6:c2": {
+          "value": "National"
+        },
+        "r6:c3": {
+          "value": "3"
+        },
+        "r6:c4": {
+          "value": "2"
+        },
+        "r6:c5": {
+          "value": "={R[r6]C[c3]}*{R[r6]C[c4]}*12"
+        },
+        "r6:c6": {
+          "value": "=LOGNORMAL(4.2,1.4)"
+        },
+        "r6:c7": {
+          "value": "=PERT(0.05,0.3,1.2)"
+        },
+        "r6:c8": {
+          "value": "=PERT(0.5,2,6)"
+        },
+        "r6:c9": {
+          "value": "=LOGNORMAL(1.1,1)"
+        },
+        "r6:c10": {
+          "value": "=BETA(4,4)"
+        },
+        "r6:c11": {
+          "value": "=BETA(3,7)"
+        },
+        "r6:c12": {
+          "value": "={R[r6]C[c5]}*{R[r6]C[c6]}*{R[r6]C[c7]}*{R[r6]C[c8]}*{R[r6]C[c9]}*(1-{R[r6]C[c10]})*{R[r6]C[c11]}"
+        },
+        "r6:c13": {
+          "value": "={R[r6]C[c12]}/{R[r6]C[c5]}"
+        },
+        "r6:c14": {
+          "value": "Heavy tail: most reach almost nobody, one reaches thousands. Note how wide P5–P95 is here."
+        },
+        "r7:c1": {
+          "value": "Leading a local nonprofit"
+        },
+        "r7:c2": {
+          "value": "Community"
+        },
+        "r7:c3": {
+          "value": "5"
+        },
+        "r7:c4": {
+          "value": "4"
+        },
+        "r7:c5": {
+          "value": "={R[r7]C[c3]}*{R[r7]C[c4]}*12"
+        },
+        "r7:c6": {
+          "value": "=TRIANGULAR(3,40,12)"
+        },
+        "r7:c7": {
+          "value": "=PERT(0.8,2,5)"
+        },
+        "r7:c8": {
+          "value": "=PERT(2,6,15)"
+        },
+        "r7:c9": {
+          "value": "=LOGNORMAL(0.9,0.6)"
+        },
+        "r7:c10": {
+          "value": "=BETA(2,7)"
+        },
+        "r7:c11": {
+          "value": "=BETA(4,6)"
+        },
+        "r7:c12": {
+          "value": "={R[r7]C[c5]}*{R[r7]C[c6]}*{R[r7]C[c7]}*{R[r7]C[c8]}*{R[r7]C[c9]}*(1-{R[r7]C[c10]})*{R[r7]C[c11]}"
+        },
+        "r7:c13": {
+          "value": "={R[r7]C[c12]}/{R[r7]C[c5]}"
+        },
+        "r7:c14": {
+          "value": "Multiplies what every other volunteer manages — and eats every evening."
+        },
+        "r8:c1": {
+          "value": "Mentoring one teenager"
+        },
+        "r8:c2": {
+          "value": "Community"
+        },
+        "r8:c3": {
+          "value": "2"
+        },
+        "r8:c4": {
+          "value": "2"
+        },
+        "r8:c5": {
+          "value": "={R[r8]C[c3]}*{R[r8]C[c4]}*12"
+        },
+        "r8:c6": {
+          "value": "=TRIANGULAR(0.5,1,1)"
+        },
+        "r8:c7": {
+          "value": "=PERT(2,5,12)"
+        },
+        "r8:c8": {
+          "value": "=PERT(3,10,25)"
+        },
+        "r8:c9": {
+          "value": "1"
+        },
+        "r8:c10": {
+          "value": "=BETA(1,9)"
+        },
+        "r8:c11": {
+          "value": "=BETA(6,4)"
+        },
+        "r8:c12": {
+          "value": "={R[r8]C[c5]}*{R[r8]C[c6]}*{R[r8]C[c7]}*{R[r8]C[c8]}*{R[r8]C[c9]}*(1-{R[r8]C[c10]})*{R[r8]C[c11]}"
+        },
+        "r8:c13": {
+          "value": "={R[r8]C[c12]}/{R[r8]C[c5]}"
+        },
+        "r8:c14": {
+          "value": "One person, for years. Almost nobody else is offering, so the counterfactual is tiny."
+        },
+        "r9:c1": {
+          "value": "Neighbourhood tool library"
+        },
+        "r9:c2": {
+          "value": "Community"
+        },
+        "r9:c3": {
+          "value": "2"
+        },
+        "r9:c4": {
+          "value": "1"
+        },
+        "r9:c5": {
+          "value": "={R[r9]C[c3]}*{R[r9]C[c4]}*12"
+        },
+        "r9:c6": {
+          "value": "=TRIANGULAR(1,15,5)"
+        },
+        "r9:c7": {
+          "value": "=PERT(0.3,0.9,2.5)"
+        },
+        "r9:c8": {
+          "value": "=PERT(1,5,12)"
+        },
+        "r9:c9": {
+          "value": "1"
+        },
+        "r9:c10": {
+          "value": "=BETA(3,5)"
+        },
+        "r9:c11": {
+          "value": "=BETA(5,5)"
+        },
+        "r9:c12": {
+          "value": "={R[r9]C[c5]}*{R[r9]C[c6]}*{R[r9]C[c7]}*{R[r9]C[c8]}*{R[r9]C[c9]}*(1-{R[r9]C[c10]})*{R[r9]C[c11]}"
+        },
+        "r9:c13": {
+          "value": "={R[r9]C[c12]}/{R[r9]C[c5]}"
+        },
+        "r9:c14": {
+          "value": "Cheap to keep running once it exists. Mostly a one-off setup cost."
+        },
+        "r10:c1": {
+          "value": "Earn more and donate instead"
+        },
+        "r10:c2": {
+          "value": "National"
+        },
+        "r10:c3": {
+          "value": "4"
+        },
+        "r10:c4": {
+          "value": "4"
+        },
+        "r10:c5": {
+          "value": "={R[r10]C[c3]}*{R[r10]C[c4]}*12"
+        },
+        "r10:c6": {
+          "value": "=TRIANGULAR(2,60,15)"
+        },
+        "r10:c7": {
+          "value": "=PERT(0.5,1.5,4)"
+        },
+        "r10:c8": {
+          "value": "=PERT(1,3,10)"
+        },
+        "r10:c9": {
+          "value": "1"
+        },
+        "r10:c10": {
+          "value": "=BETA(6,3)"
+        },
+        "r10:c11": {
+          "value": "=BETA(8,2)"
+        },
+        "r10:c12": {
+          "value": "={R[r10]C[c5]}*{R[r10]C[c6]}*{R[r10]C[c7]}*{R[r10]C[c8]}*{R[r10]C[c9]}*(1-{R[r10]C[c10]})*{R[r10]C[c11]}"
+        },
+        "r10:c13": {
+          "value": "={R[r10]C[c12]}/{R[r10]C[c5]}"
+        },
+        "r10:c14": {
+          "value": "The comparator every other row has to beat. Easy to sustain; someone else would likely fund it anyway."
+        },
+        "r12:c1": {
+          "value": "Hours committed per year"
+        },
+        "r12:c2": {
+          "value": "=SUM({R[r2]C[c5]}:{R[r10]C[c5]})"
+        },
+        "r13:c1": {
+          "value": "Hours I can actually give"
+        },
+        "r13:c2": {
+          "value": "={R[r2]C[c2]S{assume}}"
+        },
+        "r14:c1": {
+          "value": "Over-committed by"
+        },
+        "r14:c2": {
+          "value": "=MAX(0,{R[r12]C[c2]}-{R[r13]C[c2]})"
+        },
+        "r15:c1": {
+          "value": "Total impact per year"
+        },
+        "r15:c2": {
+          "value": "=SUM({R[r2]C[c12]}:{R[r10]C[c12]})"
+        },
+        "r16:c1": {
+          "value": "Best impact per hour"
+        },
+        "r16:c2": {
+          "value": "=MAX({R[r2]C[c13]}:{R[r10]C[c13]})"
+        },
+        "r17:c1": {
+          "value": "Best use of my time"
+        },
+        "r17:c2": {
+          "value": "=INDEX({R[r2]C[c1]}:{R[r10]C[c1]},MATCH(MAX({R[r2]C[c13]}:{R[r10]C[c13]}),{R[r2]C[c13]}:{R[r10]C[c13]},0))"
+        },
+        "r18:c1": {
+          "value": "Impact of the next 100 hours there"
+        },
+        "r18:c2": {
+          "value": "=MAX({R[r2]C[c13]}:{R[r10]C[c13]})*100"
+        },
+        "r19:c1": {
+          "value": "Model last reviewed"
+        },
+        "r19:c2": {
+          "value": "={R[r8]C[c2]S{assume}}"
+        }
+      },
+      "frozenRows": 1,
+      "frozenCols": 1,
+      "formats": {
+        "header": {
+          "index": 0,
+          "rangeRowStart": "r1",
+          "rangeRowEnd": "r1",
+          "rangeColStart": "c1",
+          "rangeColEnd": "c14",
+          "format": {
+            "bold": true,
+            "fontSize": 12,
+            "textColor": "#ffffff",
+            "bgColor": "#1a73e8",
+            "hAlign": "center",
+            "vAlign": "middle",
+            "wrapText": true,
+            "borderBottom": {
+              "style": "medium",
+              "color": "#0b57d0"
+            }
+          }
+        },
+        "activity": {
+          "index": 1,
+          "rangeRowStart": "r2",
+          "rangeRowEnd": "r10",
+          "rangeColStart": "c1",
+          "rangeColEnd": "c1",
+          "format": {
+            "bold": true
+          }
+        },
+        "counts": {
+          "index": 2,
+          "rangeRowStart": "r2",
+          "rangeRowEnd": "r10",
+          "rangeColStart": "c3",
+          "rangeColEnd": "c5",
+          "format": {
+            "numFmt": "#,##0.#",
+            "hAlign": "center"
+          }
+        },
+        "estimates": {
+          "index": 3,
+          "rangeRowStart": "r2",
+          "rangeRowEnd": "r10",
+          "rangeColStart": "c6",
+          "rangeColEnd": "c9",
+          "format": {
+            "numFmt": "#,##0.0",
+            "hAlign": "right",
+            "italic": true,
+            "textColor": "#8e24aa"
+          }
+        },
+        "fractions": {
+          "index": 4,
+          "rangeRowStart": "r2",
+          "rangeRowEnd": "r10",
+          "rangeColStart": "c10",
+          "rangeColEnd": "c11",
+          "format": {
+            "numFmt": "0%",
+            "hAlign": "center"
+          }
+        },
+        "impact": {
+          "index": 5,
+          "rangeRowStart": "r2",
+          "rangeRowEnd": "r10",
+          "rangeColStart": "c12",
+          "rangeColEnd": "c13",
+          "format": {
+            "numFmt": "#,##0.0",
+            "hAlign": "right",
+            "bold": true,
+            "fontFamily": "Roboto Mono"
+          }
+        },
+        "notes": {
+          "index": 6,
+          "rangeRowStart": "r2",
+          "rangeRowEnd": "r10",
+          "rangeColStart": "c14",
+          "rangeColEnd": "c14",
+          "format": {
+            "wrapText": true,
+            "fontSize": 11,
+            "textColor": "#5f6368",
+            "vAlign": "top"
+          }
+        },
+        "footerLabels": {
+          "index": 7,
+          "rangeRowStart": "r12",
+          "rangeRowEnd": "r19",
+          "rangeColStart": "c1",
+          "rangeColEnd": "c1",
+          "format": {
+            "bold": true,
+            "hAlign": "right",
+            "bgColor": "#f1f3f4"
+          }
+        },
+        "footerValues": {
+          "index": 8,
+          "rangeRowStart": "r12",
+          "rangeRowEnd": "r19",
+          "rangeColStart": "c2",
+          "rangeColEnd": "c2",
+          "format": {
+            "numFmt": "#,##0.0",
+            "bold": true,
+            "bgColor": "#f1f3f4"
+          }
+        }
+      },
+      "conditionalFormats": {
+        "overCommitted": {
+          "index": 0,
+          "ranges": {
+            "a": {
+              "rangeRowStart": "r14",
+              "rangeRowEnd": "r14",
+              "rangeColStart": "c2",
+              "rangeColEnd": "c2"
+            }
+          },
+          "conditionType": "gt",
+          "conditionValue": "0",
+          "format": {
+            "textColor": "#c5221f",
+            "bgColor": "#fce8e6",
+            "bold": true
+          }
+        },
+        "replaceable": {
+          "index": 1,
+          "ranges": {
+            "a": {
+              "rangeRowStart": "r2",
+              "rangeRowEnd": "r10",
+              "rangeColStart": "c10",
+              "rangeColEnd": "c10"
+            }
+          },
+          "conditionType": "gt",
+          "conditionValue": "0.5",
+          "format": {
+            "textColor": "#c5221f"
+          }
+        },
+        "wontStick": {
+          "index": 2,
+          "ranges": {
+            "a": {
+              "rangeRowStart": "r2",
+              "rangeRowEnd": "r10",
+              "rangeColStart": "c11",
+              "rangeColEnd": "c11"
+            }
+          },
+          "conditionType": "lt",
+          "conditionValue": "0.4",
+          "format": {
+            "textColor": "#e37400",
+            "bgColor": "#fef7e0"
+          }
+        },
+        "nationalScope": {
+          "index": 3,
+          "ranges": {
+            "a": {
+              "rangeRowStart": "r2",
+              "rangeRowEnd": "r10",
+              "rangeColStart": "c2",
+              "rangeColEnd": "c2"
+            }
+          },
+          "conditionType": "textStartsWith",
+          "conditionValue": "National",
+          "format": {
+            "underline": true,
+            "textColor": "#8e24aa"
+          }
+        }
+      }
+    },
+    "rank": {
+      "@type": "Sheet",
+      "name": "Ranking",
+      "index": 1,
+      "columns": {
+        "c1": {
+          "index": 0,
+          "width": 220
+        },
+        "c2": {
+          "index": 1,
+          "width": 150
+        },
+        "c3": {
+          "index": 2,
+          "width": 300
+        },
+        "c4": {
+          "index": 3,
+          "width": 110
+        },
+        "c5": {
+          "index": 4,
+          "width": 150
+        },
+        "c6": {
+          "index": 5,
+          "width": 190
+        }
+      },
+      "rows": {
+        "r1": {
+          "index": 0,
+          "height": 40
+        },
+        "r2": {
+          "index": 1
+        },
+        "r3": {
+          "index": 2
+        },
+        "r4": {
+          "index": 3
+        },
+        "r5": {
+          "index": 4
+        },
+        "r6": {
+          "index": 5
+        },
+        "r7": {
+          "index": 6
+        },
+        "r8": {
+          "index": 7
+        },
+        "r9": {
+          "index": 8
+        },
+        "r10": {
+          "index": 9
+        },
+        "r11": {
+          "index": 10
+        }
+      },
+      "cells": {
+        "r1:c1": {
+          "value": "Rank"
+        },
+        "r1:c2": {
+          "value": "Impact per hour"
+        },
+        "r1:c3": {
+          "value": "Way of helping"
+        },
+        "r1:c4": {
+          "value": "Scope"
+        },
+        "r1:c5": {
+          "value": "Hours to give it"
+        },
+        "r1:c6": {
+          "value": "Impact from those hours"
+        },
+        "r2:c1": {
+          "value": "#1"
+        },
+        "r2:c2": {
+          "value": "=LARGE({R[r2]C[c13]S{compare}}:{R[r10]C[c13]S{compare}},1)"
+        },
+        "r2:c3": {
+          "value": "=INDEX({R[r2]C[c1]S{compare}}:{R[r10]C[c1]S{compare}},MATCH({R[r2]C[c2]},{R[r2]C[c13]S{compare}}:{R[r10]C[c13]S{compare}},0))"
+        },
+        "r2:c4": {
+          "value": "=INDEX({R[r2]C[c2]S{compare}}:{R[r10]C[c2]S{compare}},MATCH({R[r2]C[c2]},{R[r2]C[c13]S{compare}}:{R[r10]C[c13]S{compare}},0))"
+        },
+        "r2:c5": {
+          "value": "=ROUND({R{r5}C{c2}S{assume}}*{R{r2}C{c2}S{assume}},0)"
+        },
+        "r2:c6": {
+          "value": "={R[r2]C[c2]}*{R[r2]C[c5]}"
+        },
+        "r3:c1": {
+          "value": "#2"
+        },
+        "r3:c2": {
+          "value": "=LARGE({R[r2]C[c13]S{compare}}:{R[r10]C[c13]S{compare}},2)"
+        },
+        "r3:c3": {
+          "value": "=INDEX({R[r2]C[c1]S{compare}}:{R[r10]C[c1]S{compare}},MATCH({R[r3]C[c2]},{R[r2]C[c13]S{compare}}:{R[r10]C[c13]S{compare}},0))"
+        },
+        "r3:c4": {
+          "value": "=INDEX({R[r2]C[c2]S{compare}}:{R[r10]C[c2]S{compare}},MATCH({R[r3]C[c2]},{R[r2]C[c13]S{compare}}:{R[r10]C[c13]S{compare}},0))"
+        },
+        "r3:c5": {
+          "value": "=ROUND({R{r6}C{c2}S{assume}}*{R{r2}C{c2}S{assume}},0)"
+        },
+        "r3:c6": {
+          "value": "={R[r3]C[c2]}*{R[r3]C[c5]}"
+        },
+        "r4:c1": {
+          "value": "#3"
+        },
+        "r4:c2": {
+          "value": "=LARGE({R[r2]C[c13]S{compare}}:{R[r10]C[c13]S{compare}},3)"
+        },
+        "r4:c3": {
+          "value": "=INDEX({R[r2]C[c1]S{compare}}:{R[r10]C[c1]S{compare}},MATCH({R[r4]C[c2]},{R[r2]C[c13]S{compare}}:{R[r10]C[c13]S{compare}},0))"
+        },
+        "r4:c4": {
+          "value": "=INDEX({R[r2]C[c2]S{compare}}:{R[r10]C[c2]S{compare}},MATCH({R[r4]C[c2]},{R[r2]C[c13]S{compare}}:{R[r10]C[c13]S{compare}},0))"
+        },
+        "r4:c5": {
+          "value": "=ROUND({R{r7}C{c2}S{assume}}*{R{r2}C{c2}S{assume}},0)"
+        },
+        "r4:c6": {
+          "value": "={R[r4]C[c2]}*{R[r4]C[c5]}"
+        },
+        "r5:c1": {
+          "value": "#4"
+        },
+        "r5:c2": {
+          "value": "=LARGE({R[r2]C[c13]S{compare}}:{R[r10]C[c13]S{compare}},4)"
+        },
+        "r5:c3": {
+          "value": "=INDEX({R[r2]C[c1]S{compare}}:{R[r10]C[c1]S{compare}},MATCH({R[r5]C[c2]},{R[r2]C[c13]S{compare}}:{R[r10]C[c13]S{compare}},0))"
+        },
+        "r5:c4": {
+          "value": "=INDEX({R[r2]C[c2]S{compare}}:{R[r10]C[c2]S{compare}},MATCH({R[r5]C[c2]},{R[r2]C[c13]S{compare}}:{R[r10]C[c13]S{compare}},0))"
+        },
+        "r5:c5": {
+          "value": "0"
+        },
+        "r5:c6": {
+          "value": "={R[r5]C[c2]}*{R[r5]C[c5]}"
+        },
+        "r6:c1": {
+          "value": "#5"
+        },
+        "r6:c2": {
+          "value": "=LARGE({R[r2]C[c13]S{compare}}:{R[r10]C[c13]S{compare}},5)"
+        },
+        "r6:c3": {
+          "value": "=INDEX({R[r2]C[c1]S{compare}}:{R[r10]C[c1]S{compare}},MATCH({R[r6]C[c2]},{R[r2]C[c13]S{compare}}:{R[r10]C[c13]S{compare}},0))"
+        },
+        "r6:c4": {
+          "value": "=INDEX({R[r2]C[c2]S{compare}}:{R[r10]C[c2]S{compare}},MATCH({R[r6]C[c2]},{R[r2]C[c13]S{compare}}:{R[r10]C[c13]S{compare}},0))"
+        },
+        "r6:c5": {
+          "value": "0"
+        },
+        "r6:c6": {
+          "value": "={R[r6]C[c2]}*{R[r6]C[c5]}"
+        },
+        "r7:c1": {
+          "value": "Top five"
+        },
+        "r7:c5": {
+          "value": "=SUM({R[r2]C[c5]}:{R[r6]C[c5]})"
+        },
+        "r7:c6": {
+          "value": "=SUM({R[r2]C[c6]}:{R[r6]C[c6]})"
+        },
+        "r9:c1": {
+          "value": "Hours allocated vs available"
+        },
+        "r9:c2": {
+          "value": "={R[r7]C[c5]}/{R[r2]C[c2]S{assume}}"
+        },
+        "r10:c1": {
+          "value": "Focused impact vs the whole list"
+        },
+        "r10:c2": {
+          "value": "={R[r7]C[c6]}/{R[r15]C[c2]S{compare}}"
+        },
+        "r11:c1": {
+          "value": "Impact per hour, best vs comparator"
+        },
+        "r11:c2": {
+          "value": "={R[r2]C[c2]}/{R[r10]C[c13]S{compare}}"
+        }
+      },
+      "frozenRows": 1,
+      "frozenCols": 1,
+      "formats": {
+        "header": {
+          "index": 0,
+          "rangeRowStart": "r1",
+          "rangeRowEnd": "r1",
+          "rangeColStart": "c1",
+          "rangeColEnd": "c6",
+          "format": {
+            "bold": true,
+            "textColor": "#ffffff",
+            "bgColor": "#0b8043",
+            "hAlign": "center",
+            "vAlign": "middle",
+            "wrapText": true
+          }
+        },
+        "rank": {
+          "index": 1,
+          "rangeRowStart": "r2",
+          "rangeRowEnd": "r6",
+          "rangeColStart": "c1",
+          "rangeColEnd": "c1",
+          "format": {
+            "bold": true,
+            "hAlign": "center",
+            "fontSize": 14
+          }
+        },
+        "numbers": {
+          "index": 2,
+          "rangeRowStart": "r2",
+          "rangeRowEnd": "r7",
+          "rangeColStart": "c2",
+          "rangeColEnd": "c2",
+          "format": {
+            "numFmt": "#,##0.0",
+            "hAlign": "right",
+            "fontFamily": "Roboto Mono"
+          }
+        },
+        "hours": {
+          "index": 3,
+          "rangeRowStart": "r2",
+          "rangeRowEnd": "r7",
+          "rangeColStart": "c5",
+          "rangeColEnd": "c6",
+          "format": {
+            "numFmt": "#,##0",
+            "hAlign": "right"
+          }
+        },
+        "totals": {
+          "index": 4,
+          "rangeRowStart": "r7",
+          "rangeRowEnd": "r7",
+          "rangeColStart": "c1",
+          "rangeColEnd": "c6",
+          "format": {
+            "bold": true,
+            "bgColor": "#e6f4ea",
+            "borderTop": {
+              "style": "double",
+              "color": "#0b8043"
+            }
+          }
+        },
+        "footer": {
+          "index": 5,
+          "rangeRowStart": "r9",
+          "rangeRowEnd": "r11",
+          "rangeColStart": "c1",
+          "rangeColEnd": "c1",
+          "format": {
+            "bold": true,
+            "hAlign": "right"
+          }
+        },
+        "footerValues": {
+          "index": 6,
+          "rangeRowStart": "r9",
+          "rangeRowEnd": "r11",
+          "rangeColStart": "c2",
+          "rangeColEnd": "c2",
+          "format": {
+            "numFmt": "0%",
+            "bold": true,
+            "hAlign": "right"
+          }
+        }
+      },
+      "conditionalFormats": {
+        "zeroHours": {
+          "index": 0,
+          "ranges": {
+            "a": {
+              "rangeRowStart": "r2",
+              "rangeRowEnd": "r6",
+              "rangeColStart": "c5",
+              "rangeColEnd": "c5"
+            }
+          },
+          "conditionType": "eq",
+          "conditionValue": "0",
+          "format": {
+            "textColor": "#9e9e9e",
+            "italic": true
+          }
+        },
+        "community": {
+          "index": 1,
+          "ranges": {
+            "a": {
+              "rangeRowStart": "r2",
+              "rangeRowEnd": "r6",
+              "rangeColStart": "c4",
+              "rangeColEnd": "c4"
+            }
+          },
+          "conditionType": "textStartsWith",
+          "conditionValue": "Community",
+          "format": {
+            "textColor": "#0b8043"
+          }
+        }
+      }
+    },
+    "assume": {
+      "@type": "Sheet",
+      "name": "Assumptions",
+      "index": 2,
+      "columns": {
+        "c1": {
+          "index": 0,
+          "width": 250
+        },
+        "c2": {
+          "index": 1,
+          "width": 420
+        }
+      },
+      "rows": {
+        "r1": {
+          "index": 0
+        },
+        "r2": {
+          "index": 1
+        },
+        "r3": {
+          "index": 2
+        },
+        "r4": {
+          "index": 3
+        },
+        "r5": {
+          "index": 4
+        },
+        "r6": {
+          "index": 5
+        },
+        "r7": {
+          "index": 6
+        },
+        "r8": {
+          "index": 7
+        }
+      },
+      "cells": {
+        "r1:c1": {
+          "value": "One \"impact point\" means"
+        },
+        "r1:c2": {
+          "value": "One person-year of meaningfully better life"
+        },
+        "r2:c1": {
+          "value": "Hours I can give per year"
+        },
+        "r2:c2": {
+          "value": "320"
+        },
+        "r3:c1": {
+          "value": "Which is per week"
+        },
+        "r3:c2": {
+          "value": "={R[r2]C[c2]}/52"
+        },
+        "r4:c1": {
+          "value": "How to read the ranges"
+        },
+        "r4:c2": {
+          "value": "Select any Impact cell — the panel above the editor shows P5 / P50 / P95"
+        },
+        "r5:c1": {
+          "value": "Top pick share of hours"
+        },
+        "r5:c2": {
+          "value": "0.5"
+        },
+        "r6:c1": {
+          "value": "Second pick share"
+        },
+        "r6:c2": {
+          "value": "0.3"
+        },
+        "r7:c1": {
+          "value": "Third pick share"
+        },
+        "r7:c2": {
+          "value": "0.2"
+        },
+        "r8:c1": {
+          "value": "Model last reviewed"
+        },
+        "r8:c2": {
+          "value": "{{today}}"
+        }
+      },
+      "hidden": true
+    }
+  }
+}

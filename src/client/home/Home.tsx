@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'preact/hooks';
 import { usePeerList, usePeerTransports } from '../shared/automerge';
 import { ConnectionStatus } from '../shared/ConnectionStatus';
-import { createDoc, updateDoc, subscribeQuery, fetchDocList, archiveDoc, onDocListUpdated, onUnseenChangesUpdated, getUnseenChanges, HOME_SUMMARY_QUERY } from '../worker-api';
+import { createDoc, updateDoc, richText, subscribeQuery, fetchDocList, archiveDoc, onDocListUpdated, onUnseenChangesUpdated, getUnseenChanges, HOME_SUMMARY_QUERY } from '../worker-api';
 import { getMyAccess, onKeyhiveStateChanged } from '../shared/keyhive-api';
 import { PeerDot } from '../shared/presence';
 import { Button } from '@/components/ui/button';
@@ -19,10 +19,27 @@ import relativeTimePlugin from 'dayjs/plugin/relativeTime';
 
 dayjs.extend(relativeTimePlugin);
 import { a1ToInternal } from '@/doc-plugins/datagrid/helpers';
+// Static, not dynamic: SentencesView already imports this, so it is in the main
+// chunk regardless and a dynamic import here only earns a build warning.
+import { markdownToSpans } from '@/doc-plugins/sentences/markdown';
 import { iconForType, docTypeLabel, type DocTypePlugin } from '@/doc-plugins';
 import { docUrl } from '@/shared/doc-urls';
 import { relativeTime } from '../../shared/relative-time';
+import { expandRelativeDates } from '../../shared/relative-dates';
 import { settingSet, settingSetSync } from '../idb-storage';
+
+/**
+ * A pending import. `json` is a whole document; `markdown` becomes a Sentences
+ * document (see `createDocsFromItems`). Also the shape `examples.ts` returns.
+ */
+export type ImportItem =
+  | { kind: 'json'; label: string; read: () => Promise<any> }
+  | { kind: 'markdown'; label: string; read: () => Promise<string> };
+
+/** The first `# ` heading, used as an imported Markdown document's title. */
+function firstHeading(md: string): string | undefined {
+  return /^#[ \t]+(.+?)[ \t]*$/m.exec(md)?.[1];
+}
 
 declare const __APP_VERSION__: string;
 declare const __BUILD_TIME__: string;
@@ -717,15 +734,26 @@ export function Home({ path }: { path?: string }) {
   const jsonInputRef = useRef<HTMLInputElement>(null);
 
   /**
-   * Create one document per JSON payload, sequentially. Shared by the .json
-   * importer and the "create examples" offer on the empty home page.
+   * Create one document per payload, sequentially. Shared by the file importer
+   * and the "create examples" offer on the empty home page.
+   *
+   * Two kinds of payload:
+   *  - `json`     — a whole document, created as-is.
+   *  - `markdown` — a Sentences document. Its structure (headings, lists, marks)
+   *                 lives in Automerge block markers and marks, which JSON can't
+   *                 carry, so the doc is created empty and filled with one
+   *                 `updateSpans` op — the same path SentencesView's own Markdown
+   *                 import uses.
+   *
+   * Every payload passes through `expandRelativeDates` first, so the examples'
+   * `{{today+3d}}` / `{{tu@16:30}}` markup becomes real dates at creation time.
    *
    * Serial rather than parallel: each createDoc is a worker round-trip that
-   * mints a keyhive doc and enables sharing. A payload that fails to parse is
-   * recorded and skipped — it never aborts the rest of the batch.
+   * mints a keyhive doc and enables sharing. A payload that fails is recorded
+   * and skipped — it never aborts the rest of the batch.
    */
-  const createDocsFromJson = useCallback(async (
-    items: { label: string; read: () => Promise<any> }[],
+  const createDocsFromItems = useCallback(async (
+    items: ImportItem[],
     verb: string,
   ): Promise<{ created: string[]; failures: string[] }> => {
     const created: string[] = [];
@@ -740,12 +768,22 @@ export function Home({ path }: { path?: string }) {
           await new Promise(r => setTimeout(r, 0));
         }
         try {
-          const data = await item.read();
-          if (!data || typeof data !== 'object') throw new Error('Invalid JSON: expected an object');
-          const name = data.name || item.label.replace(/\.json$/i, '') || 'Imported';
-          const type = typeof data['@type'] === 'string' ? data['@type'] : 'unknown';
-          const { docId } = await createDoc(data, { type, name });
-          created.push(docId);
+          if (item.kind === 'markdown') {
+            const md = expandRelativeDates(await item.read());
+            const name = firstHeading(md) || item.label.replace(/\.md$/i, '') || 'Sentences';
+            const { docId } = await createDoc({ '@type': 'Sentences', name, content: '' }, { type: 'Sentences', name });
+            // One updateSpans op → one Automerge change → one undo step.
+            await updateDoc(docId, (d, richText, ops) => { richText(d, ['content'], ops); }, richText,
+              [{ op: 'updateSpans', spans: markdownToSpans(md) }]);
+            created.push(docId);
+          } else {
+            const data = expandRelativeDates(await item.read());
+            if (!data || typeof data !== 'object') throw new Error('Invalid JSON: expected an object');
+            const name = data.name || item.label.replace(/\.json$/i, '') || 'Imported';
+            const type = typeof data['@type'] === 'string' ? data['@type'] : 'unknown';
+            const { docId } = await createDoc(data, { type, name });
+            created.push(docId);
+          }
         } catch (err: any) {
           failures.push(`${item.label}: ${err?.message ?? err}`);
         }
@@ -756,8 +794,9 @@ export function Home({ path }: { path?: string }) {
     return { created, failures };
   }, []);
 
-  /** Import one .json per document. The picker allows multiple files (see
-   *  `multiple` on the input below), so a folder can be loaded in one go. */
+  /** Import one document per file — `.json` documents and `.md` as Sentences.
+   *  The picker allows multiple files (see `multiple` on the input below), so a
+   *  folder can be loaded in one go. */
   const handleImportJson = useCallback(async (e: Event) => {
     const files = Array.from((e.target as HTMLInputElement).files ?? []);
     if (files.length === 0) return;
@@ -765,8 +804,10 @@ export function Home({ path }: { path?: string }) {
     setError('');
     setMessage('');
 
-    const { created, failures } = await createDocsFromJson(
-      files.map(f => ({ label: f.name, read: () => f.text().then(JSON.parse) })),
+    const { created, failures } = await createDocsFromItems(
+      files.map(f => /\.md$/i.test(f.name)
+        ? { kind: 'markdown' as const, label: f.name, read: () => f.text() }
+        : { kind: 'json' as const, label: f.name, read: () => f.text().then(JSON.parse) }),
       'Importing',
     );
 
@@ -780,9 +821,9 @@ export function Home({ path }: { path?: string }) {
     } else if (created.length) {
       setMessage(`Imported ${created.length} document${created.length === 1 ? '' : 's'}`);
     }
-  }, [createDocsFromJson]);
+  }, [createDocsFromItems]);
 
-  /** Offered when the document list is empty — creates the bundled examples/*.json. */
+  /** Offered when the document list is empty — creates the bundled examples/. */
   const [creatingExamples, setCreatingExamples] = useState(false);
   const handleCreateExamples = useCallback(async () => {
     setError('');
@@ -790,10 +831,7 @@ export function Home({ path }: { path?: string }) {
     setCreatingExamples(true);
     try {
       const { exampleDocs } = await import('./examples');
-      const { created, failures } = await createDocsFromJson(
-        exampleDocs().map(ex => ({ label: ex.fileName, read: ex.load })),
-        'Creating',
-      );
+      const { created, failures } = await createDocsFromItems(exampleDocs(), 'Creating');
       if (failures.length) setError(`Some examples couldn't be created — ${failures.join('; ')}`);
       if (created.length) setMessage(`Created ${created.length} example document${created.length === 1 ? '' : 's'}`);
     } catch (err: any) {
@@ -801,7 +839,7 @@ export function Home({ path }: { path?: string }) {
     } finally {
       setCreatingExamples(false);
     }
-  }, [createDocsFromJson]);
+  }, [createDocsFromItems]);
 
   const icsInputRef = useRef<HTMLInputElement>(null);
 
@@ -951,7 +989,7 @@ export function Home({ path }: { path?: string }) {
       {/* Hidden import inputs (targets of the Create sheet's import rows) */}
       <input type="file" ref={icsInputRef} accept=".ics,text/calendar" style={{ display: 'none' }} onChange={handleImportIcs as any} />
       <input type="file" ref={xlsInputRef} accept=".xls,.xlsx,.csv" style={{ display: 'none' }} onChange={handleImportXlsx as any} />
-      <input type="file" multiple ref={jsonInputRef} accept=".json,application/json" style={{ display: 'none' }} onChange={handleImportJson as any} />
+      <input type="file" multiple ref={jsonInputRef} accept=".json,.md,application/json,text/markdown" style={{ display: 'none' }} onChange={handleImportJson as any} />
 
       <div className="flex items-center gap-2 mb-2">
         {installPrompt ? (

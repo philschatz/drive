@@ -1586,15 +1586,6 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
             </div>
           )}
 
-          {/* Distribution stats panel */}
-          {(() => {
-            if (!mcResults || !selectedCell) return null;
-            const cellKey = `${effectiveSheetId}:${visibleRowIds[selectedCell[1]]}:${visibleColIds[selectedCell[0]]}`;
-            const stats = mcResults.cells.get(cellKey);
-            if (!stats) return null;
-            return <DistributionPanel stats={stats} isSource={mcResults.sources.has(cellKey)} />;
-          })()}
-
           {/* Grid table + sheet tabs wrapper */}
           <div className="datagrid-wrapper">
           <ContextMenu modal={false} onOpenChange={(open: boolean) => { if (!open) setContextMenu(null); }}>
@@ -1791,7 +1782,15 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
                         const isSpillTarget = spillTargetsRef.current.has(`${effectiveSheetId}:${rowId}:${colId}`);
                         if (isFrozenCol || isFrozenRow) {
                           cellStyle.position = 'sticky';
-                          if (!cellStyle.background && !isSpillTarget) cellStyle.background = 'var(--md-sys-color-surface)';
+                          // Frozen cells need an opaque backdrop so scrolled content
+                          // doesn't show through — but only when nothing has already
+                          // painted one. `formatToCss` writes the `backgroundColor`
+                          // longhand, so testing only the `background` shorthand here
+                          // missed it and then clobbered it (the shorthand resets
+                          // background-color), leaving formatted frozen cells white.
+                          if (!cellStyle.background && !cellStyle.backgroundColor && !isSpillTarget) {
+                            cellStyle.backgroundColor = 'var(--md-sys-color-surface)';
+                          }
                           if (isFrozenCol) {
                             cellStyle.left = `${frozenColOffsets[ci]}px`;
                           }
@@ -1989,6 +1988,17 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
       />
       </div>
 
+      {/* Monte Carlo stats for the selected cell — a strip at the bottom of the
+          page, directly above the formula editor. Deliberately not gated on
+          focusMode: in overview mode it sits flush at the page bottom instead. */}
+      {(() => {
+        if (!mcResults || !selectedCell) return null;
+        const cellKey = `${effectiveSheetId}:${visibleRowIds[selectedCell[1]]}:${visibleColIds[selectedCell[0]]}`;
+        const stats = mcResults.cells.get(cellKey);
+        if (!stats) return null;
+        return <DistributionPanel stats={stats} isSource={mcResults.sources.has(cellKey)} />;
+      })()}
+
       {/* Focus-mode bottom bar: the (single) cell editor + quick actions.
           Mounted only while a cell is selected so CodeMirror never loads at
           page-load time (avoids the OOM crash — see FormulaEditor). */}
@@ -2095,6 +2105,7 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
           applyFormatToSelection(commandCtxRef.current,
             target === 'fill' ? { bgColor: color } : { textColor: color });
         }}
+        onOpenConditional={() => setCondFormatOpen(true)}
       />
       <SheetListSheet
         open={sheetListOpen}

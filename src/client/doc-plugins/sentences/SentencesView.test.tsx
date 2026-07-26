@@ -56,7 +56,7 @@ describe('SentencesView container', () => {
     expect(editor().getAttribute('contenteditable')).toBe('true');
 
     // Done returns to the read-only view.
-    fireEvent.click(screen.getByLabelText('Done editing'));
+    fireEvent.click(screen.getByLabelText('Done'));
     await waitFor(() => expect(screen.queryByTestId('format-bar')).toBeNull());
     expect(editor().getAttribute('contenteditable')).not.toBe('true');
   });

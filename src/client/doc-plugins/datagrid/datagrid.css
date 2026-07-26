@@ -487,16 +487,18 @@
 }
 
 /* Distribution panel below formula bar */
+/* A strip at the bottom of the page, directly above the formula editor. It is a
+   flex sibling of .datagrid-body, so flex-shrink keeps it at its natural height
+   and the grid (flex: 1) gives up the space instead. */
 .dist-panel {
   display: flex;
   align-items: flex-end;
   gap: 12px;
   padding: 4px 8px;
-  border: 1px solid var(--md-sys-color-outline-variant);
-  border-radius: 4px;
-  margin-bottom: 4px;
+  border-top: 1px solid var(--md-sys-color-outline-variant);
   background: var(--md-sys-color-surface-container-low);
   min-height: 40px;
+  flex-shrink: 0;
 }
 
 .dist-histogram {

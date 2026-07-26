@@ -7,32 +7,43 @@
   "events": {
     "farmers-market": {
       "@type": "Event",
-      "created": "2026-04-02T16:00:00Z",
+      "created": "{{th-16w@16:00Z}}",
       "title": "Harbour Farmers Market",
-      "start": "2026-05-02T09:00:00",
+      "start": "{{sa-12w@09:00}}",
       "duration": "PT4H",
       "description": "Forty stalls along the quay. Cash and cards. Dogs welcome on the north side only.",
       "location": "Harbour Quay, Port Amity",
       "status": "confirmed",
       "freeBusyStatus": "free",
       "privacy": "public",
-      "categories": { "market": true, "weekly": true },
-      "keywords": { "food": true, "makers": true },
+      "categories": {
+        "market": true,
+        "weekly": true
+      },
+      "keywords": {
+        "food": true,
+        "makers": true
+      },
       "recurrenceRule": {
         "@type": "RecurrenceRule",
         "frequency": "weekly",
         "interval": 1,
         "firstDayOfWeek": "mo",
-        "byDay": [{ "@type": "NDay", "day": "sa" }],
-        "until": "2026-10-31T09:00:00"
+        "byDay": [
+          {
+            "@type": "NDay",
+            "day": "sa"
+          }
+        ],
+        "until": "{{sa+14w@09:00}}"
       },
       "recurrenceOverrides": {
-        "2026-07-04T09:00:00": {
-          "title": "Harbour Farmers Market — Independence Day early close",
+        "{{sa-3w@09:00}}": {
+          "title": "Harbour Farmers Market — early close for the parade",
           "duration": "PT2H",
           "description": "Packing down at 11 so the parade can set up."
         },
-        "2026-09-05T09:00:00": {
+        "{{sa+6w@09:00}}": {
           "excluded": true,
           "description": "Cancelled — king tide flooded the quay."
         }
@@ -50,41 +61,55 @@
     "brewery-live-music": {
       "@type": "Event",
       "title": "Live music at Fog Bank Brewing",
-      "start": "2026-07-03T20:00:00",
+      "start": "{{fr-3w@20:00}}",
       "duration": "PT3H",
       "description": "Local acts, no cover. 21+ after 9pm.",
       "location": "Fog Bank Brewing, 14 Cannery Row",
       "status": "confirmed",
       "freeBusyStatus": "free",
       "privacy": "public",
-      "categories": { "music": true, "nightlife": true },
+      "categories": {
+        "music": true,
+        "nightlife": true
+      },
       "recurrenceRule": {
         "frequency": "weekly",
-        "byDay": [{ "day": "fr" }]
+        "byDay": [
+          {
+            "day": "fr"
+          }
+        ]
       }
     },
     "open-mic": {
       "@type": "Event",
       "title": "Open mic — poetry and song",
-      "start": "2026-07-08T19:00:00",
+      "start": "{{we-2w@19:00}}",
       "duration": "PT2H30M",
       "description": "Sign-up sheet goes up at 6:30. Five minutes each, be kind.",
       "location": "The Sandpiper Café",
       "status": "confirmed",
       "freeBusyStatus": "free",
       "privacy": "public",
-      "categories": { "music": true, "community": true },
+      "categories": {
+        "music": true,
+        "community": true
+      },
       "recurrenceRule": {
         "frequency": "weekly",
         "interval": 2,
-        "byDay": [{ "day": "we" }],
+        "byDay": [
+          {
+            "day": "we"
+          }
+        ],
         "count": 20
       }
     },
     "tide-pool-walk": {
       "@type": "Event",
       "title": "Guided tide pool walk",
-      "start": "2026-07-12T06:30:00",
+      "start": "{{today-14d@06:30}}",
       "duration": "PT2H",
       "description": "Timed to the month's lowest morning tide. Wellies essential, the rocks are slick.",
       "location": "Gull Point, north end of Amity Beach",
@@ -92,11 +117,20 @@
       "freeBusyStatus": "busy",
       "privacy": "public",
       "priority": 3,
-      "categories": { "nature": true, "family-friendly": true },
+      "categories": {
+        "nature": true,
+        "family-friendly": true
+      },
       "recurrenceRule": {
         "frequency": "monthly",
         "interval": 1,
-        "byDay": [{ "@type": "NDay", "day": "su", "nthOfPeriod": 2 }]
+        "byDay": [
+          {
+            "@type": "NDay",
+            "day": "su",
+            "nthOfPeriod": 2
+          }
+        ]
       },
       "virtualLocations": {
         "tide-table": {
@@ -104,7 +138,9 @@
           "name": "Live tide table",
           "description": "Check before you set off — the walk moves with the tide.",
           "uri": "https://example.com/portamity/tides",
-          "features": { "chat": false }
+          "features": {
+            "chat": false
+          }
         }
       },
       "participants": {
@@ -113,7 +149,10 @@
           "name": "Rin Takahashi",
           "email": "rin@example.com",
           "kind": "individual",
-          "roles": { "chair": true, "attendee": true },
+          "roles": {
+            "chair": true,
+            "attendee": true
+          },
           "locationId": "tide-table",
           "participationStatus": "accepted",
           "description": "Marine naturalist, leads the walk."
@@ -123,7 +162,10 @@
           "name": "Amity Visitor Centre",
           "email": "visit@example.com",
           "kind": "group",
-          "roles": { "attendee": true, "optional": true },
+          "roles": {
+            "attendee": true,
+            "optional": true
+          },
           "participationStatus": "accepted"
         }
       },
@@ -131,36 +173,52 @@
         "night-before": {
           "@type": "Alert",
           "action": "display",
-          "trigger": { "@type": "OffsetTrigger", "offset": "-PT12H", "relativeTo": "start" }
+          "trigger": {
+            "@type": "OffsetTrigger",
+            "offset": "-PT12H",
+            "relativeTo": "start"
+          }
         }
       }
     },
     "beach-cleanup": {
       "@type": "Event",
       "title": "Beach cleanup",
-      "start": "2026-07-04T08:00:00",
+      "start": "{{today-22d@08:00}}",
       "duration": "PT3H",
       "description": "Bags, gloves and grabbers provided at the car park. Coffee after at the Sandpiper.",
       "location": "Amity Beach main car park",
       "status": "confirmed",
       "freeBusyStatus": "busy",
       "privacy": "public",
-      "categories": { "volunteering": true, "nature": true },
+      "categories": {
+        "volunteering": true,
+        "nature": true
+      },
       "recurrenceRule": {
         "frequency": "monthly",
-        "byDay": [{ "day": "sa", "nthOfPeriod": 1 }]
+        "byDay": [
+          {
+            "day": "sa",
+            "nthOfPeriod": 1
+          }
+        ]
       },
       "alerts": {
         "reminder": {
-          "trigger": { "@type": "OffsetTrigger", "offset": "-P2D", "relativeTo": "start" },
+          "trigger": {
+            "@type": "OffsetTrigger",
+            "offset": "-P2D",
+            "relativeTo": "start"
+          },
           "action": "email"
         }
       }
     },
-    "fourth-fireworks": {
+    "harbour-fireworks": {
       "@type": "Event",
       "title": "Fireworks over the bay",
-      "start": "2026-07-04T21:30:00",
+      "start": "{{today-22d@21:30}}",
       "duration": "PT30M",
       "description": "Best viewing from the breakwater or the bluff trail. Harbour road closes at 8.",
       "location": "Port Amity harbour",
@@ -169,13 +227,18 @@
       "privacy": "public",
       "priority": 0,
       "color": "#c5221f",
-      "categories": { "festival": true },
-      "keywords": { "fireworks": true, "free": true }
+      "categories": {
+        "festival": true
+      },
+      "keywords": {
+        "fireworks": true,
+        "free": true
+      }
     },
     "street-fair": {
       "@type": "Event",
       "title": "Cannery Row Street Fair",
-      "start": "2026-08-15",
+      "start": "{{today+20d}}",
       "duration": "P2D",
       "description": "Two blocks closed to cars. Craft stalls, chowder cook-off, three music stages.",
       "location": "Cannery Row, Port Amity",
@@ -183,8 +246,15 @@
       "freeBusyStatus": "busy",
       "privacy": "public",
       "priority": 1,
-      "categories": { "festival": true, "market": true },
-      "keywords": { "food": true, "music": true, "makers": true },
+      "categories": {
+        "festival": true,
+        "market": true
+      },
+      "keywords": {
+        "food": true,
+        "music": true,
+        "makers": true
+      },
       "links": {
         "lineup": {
           "@type": "Link",
@@ -212,12 +282,14 @@
           "title": "Vendor application"
         }
       },
-      "replyTo": { "imip": "mailto:fair@example.com" }
+      "replyTo": {
+        "imip": "mailto:fair@example.com"
+      }
     },
     "whale-season": {
       "@type": "Event",
       "title": "Grey whale migration season opens",
-      "start": "2026-12-12",
+      "start": "{{today+139d}}",
       "duration": "P1D",
       "description": "Volunteer spotters wanted at the bluff station. Training on the morning of.",
       "location": "Bluff Trail whale watch station",
@@ -225,14 +297,17 @@
       "freeBusyStatus": "busy-tentative",
       "privacy": "public",
       "locale": "en-US",
-      "categories": { "nature": true, "volunteering": true },
+      "categories": {
+        "nature": true,
+        "volunteering": true
+      },
       "progress": "needs-action",
       "percentComplete": 0
     },
     "winter-lights": {
       "@type": "Event",
       "title": "Harbour Winter Lights",
-      "start": "2026-12-18",
+      "start": "{{today+145d}}",
       "duration": "P3D",
       "description": "Boats lit up in the harbour, hot cider on the quay, carols at seven each night.",
       "location": "Harbour Quay, Port Amity",
@@ -241,12 +316,14 @@
       "privacy": "public",
       "priority": 2,
       "color": "#8e24aa",
-      "categories": { "festival": true }
+      "categories": {
+        "festival": true
+      }
     },
     "movie-in-the-park-cancelled": {
       "@type": "Event",
       "title": "Movie in the park (cancelled)",
-      "start": "2026-08-22T20:30:00",
+      "start": "{{today+27d@20:30}}",
       "duration": "PT2H",
       "location": "Bluff Park lawn",
       "status": "cancelled",

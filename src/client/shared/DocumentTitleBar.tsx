@@ -131,6 +131,7 @@ export function DocumentTitleBar<P extends PeerLike>({
   canUndo,
   canRedo,
   hasValidationErrors = false,
+  onDone,
   action,
   overflow = [],
   historyPlacement = 'menu',
@@ -160,6 +161,9 @@ export function DocumentTitleBar<P extends PeerLike>({
   canRedo?: boolean;
   /** Show the warning button linking to the source editor. */
   hasValidationErrors?: boolean;
+  /** Set while the editor is in edit mode: the leading button becomes a
+   *  checkmark that commits and leaves edit mode, instead of the back link. */
+  onDone?: () => void;
   /** The document's own bar button, shown right after undo/redo. */
   action?: BarAction;
   /** Document-specific items shown behind the kebab. */
@@ -242,14 +246,19 @@ export function DocumentTitleBar<P extends PeerLike>({
         (hidden ? ' -translate-y-full' : '')
       }
     >
-      {/* Left side */}
-      <a
-        href="#/"
-        aria-label="Back"
-        className="inline-flex items-center justify-center h-10 w-10 rounded-full state-layer shrink-0"
-      >
-        <span className="material-symbols-outlined" style={{ fontSize: 24 }}>arrow_back</span>
-      </a>
+      {/* Left side — a checkmark that leaves edit mode when the editor is in it
+          (matching DataGrid's focus bar), otherwise the back link to Home. */}
+      {onDone ? (
+        <BarIconButton icon="check" label="Done" onClick={onDone} size={24} />
+      ) : (
+        <a
+          href="#/"
+          aria-label="Back"
+          className="inline-flex items-center justify-center h-10 w-10 rounded-full state-layer shrink-0"
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: 24 }}>arrow_back</span>
+        </a>
+      )}
 
       <span className="material-symbols-outlined text-muted-foreground shrink-0" style={{ fontSize: 20 }}>
         {icon}

@@ -215,6 +215,9 @@ export function SentencesView({ docId, readOnly }: { docId?: string; rest?: stri
         onRedo={editMode ? redo : undefined}
         canUndo={canUndo}
         canRedo={canRedo}
+        // In edit mode the leading button becomes a checkmark that leaves edit
+        // mode, the same affordance DataGrid's focus bar uses.
+        onDone={editMode ? () => setEditing(false) : undefined}
         hidden={hidden && !editMode}
         hasValidationErrors={validationErrors.length > 0}
         sourcePath={['content']}
@@ -265,16 +268,10 @@ export function SentencesView({ docId, readOnly }: { docId?: string; rest?: stri
       {canEdit && !editMode && (
         <Fab icon="edit" aria-label="Edit sentences" onClick={startEditing} />
       )}
+      {/* Leaving edit mode is the title bar's checkmark (see onDone above), so
+          the only thing edit mode adds down here is the formatting bar. */}
       {editMode && (
-        <>
-          <Fab
-            icon="done"
-            aria-label="Done editing"
-            onClick={() => setEditing(false)}
-            style={{ bottom: `calc(4.5rem + env(safe-area-inset-bottom) + ${keyboardInset}px)` }}
-          />
-          <BottomFormatBar state={selState} apiRef={editorApiRef} keyboardInset={keyboardInset} />
-        </>
+        <BottomFormatBar state={selState} apiRef={editorApiRef} keyboardInset={keyboardInset} />
       )}
     </DocLoader>
   );

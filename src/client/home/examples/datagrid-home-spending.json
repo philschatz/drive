@@ -123,7 +123,7 @@
           "value": "Period"
         },
         "r2:c2": {
-          "value": "2026-06-27 to 2026-07-26"
+          "value": "{{today-29d}} to {{today}}"
         },
         "r3:c1": {
           "value": "Total spent"
@@ -743,7 +743,7 @@
           "value": "Account"
         },
         "r2:c1": {
-          "value": "2026-06-27"
+          "value": "{{today-29d}}"
         },
         "r2:c2": {
           "value": "Big weekly shop — Sprouts"
@@ -758,7 +758,7 @@
           "value": "Joint debit"
         },
         "r3:c1": {
-          "value": "2026-06-27"
+          "value": "{{today-29d}}"
         },
         "r3:c2": {
           "value": "Gas — Shell on Colfax"
@@ -773,7 +773,7 @@
           "value": "Joint debit"
         },
         "r4:c1": {
-          "value": "2026-06-28"
+          "value": "{{today-28d}}"
         },
         "r4:c2": {
           "value": "Brunch, the four of us"
@@ -788,10 +788,10 @@
           "value": "Visa"
         },
         "r5:c1": {
-          "value": "2026-06-29"
+          "value": "{{today-27d}}"
         },
         "r5:c2": {
-          "value": "Maya swim club — July dues"
+          "value": "Maya swim club — monthly dues"
         },
         "r5:c3": {
           "value": "Kids"
@@ -803,7 +803,7 @@
           "value": "Joint debit"
         },
         "r6:c1": {
-          "value": "2026-06-30"
+          "value": "{{today-26d}}"
         },
         "r6:c2": {
           "value": "Electric bill"
@@ -818,7 +818,7 @@
           "value": "Joint debit"
         },
         "r7:c1": {
-          "value": "2026-06-30"
+          "value": "{{today-26d}}"
         },
         "r7:c2": {
           "value": "Internet"
@@ -833,7 +833,7 @@
           "value": "Joint debit"
         },
         "r8:c1": {
-          "value": "2026-07-01"
+          "value": "{{today-25d}}"
         },
         "r8:c2": {
           "value": "Mortgage"
@@ -848,7 +848,7 @@
           "value": "Joint debit"
         },
         "r9:c1": {
-          "value": "2026-07-01"
+          "value": "{{today-25d}}"
         },
         "r9:c2": {
           "value": "Pharmacy — Theo inhaler refill"
@@ -863,7 +863,7 @@
           "value": "Visa"
         },
         "r10:c1": {
-          "value": "2026-07-02"
+          "value": "{{today-24d}}"
         },
         "r10:c2": {
           "value": "Corner market top-up"
@@ -878,7 +878,7 @@
           "value": "Visa"
         },
         "r11:c1": {
-          "value": "2026-07-03"
+          "value": "{{today-23d}}"
         },
         "r11:c2": {
           "value": "Date night — dinner"
@@ -893,7 +893,7 @@
           "value": "Visa"
         },
         "r12:c1": {
-          "value": "2026-07-03"
+          "value": "{{today-23d}}"
         },
         "r12:c2": {
           "value": "Babysitter"
@@ -908,7 +908,7 @@
           "value": "Cash"
         },
         "r13:c1": {
-          "value": "2026-07-04"
+          "value": "{{today-22d}}"
         },
         "r13:c2": {
           "value": "Fireworks + snacks on the bluff"
@@ -923,7 +923,7 @@
           "value": "Visa"
         },
         "r14:c1": {
-          "value": "2026-07-05"
+          "value": "{{today-21d}}"
         },
         "r14:c2": {
           "value": "Weekly shop — Sprouts"
@@ -938,7 +938,7 @@
           "value": "Joint debit"
         },
         "r15:c1": {
-          "value": "2026-07-06"
+          "value": "{{today-20d}}"
         },
         "r15:c2": {
           "value": "Theo soccer registration"
@@ -953,7 +953,7 @@
           "value": "Joint debit"
         },
         "r16:c1": {
-          "value": "2026-07-07"
+          "value": "{{today-19d}}"
         },
         "r16:c2": {
           "value": "Gas"
@@ -968,7 +968,7 @@
           "value": "Joint debit"
         },
         "r17:c1": {
-          "value": "2026-07-08"
+          "value": "{{today-18d}}"
         },
         "r17:c2": {
           "value": "Water & sewer"
@@ -983,7 +983,7 @@
           "value": "Joint debit"
         },
         "r18:c1": {
-          "value": "2026-07-09"
+          "value": "{{today-17d}}"
         },
         "r18:c2": {
           "value": "Hardware store — hose repair"
@@ -998,7 +998,7 @@
           "value": "Visa"
         },
         "r19:c1": {
-          "value": "2026-07-10"
+          "value": "{{today-16d}}"
         },
         "r19:c2": {
           "value": "Pizza night"
@@ -1013,7 +1013,7 @@
           "value": "Visa"
         },
         "r20:c1": {
-          "value": "2026-07-11"
+          "value": "{{today-15d}}"
         },
         "r20:c2": {
           "value": "Farmers market"
@@ -1028,7 +1028,7 @@
           "value": "Cash"
         },
         "r21:c1": {
-          "value": "2026-07-12"
+          "value": "{{today-14d}}"
         },
         "r21:c2": {
           "value": "Dentist — Maya cleaning"
@@ -1043,7 +1043,7 @@
           "value": "Visa"
         },
         "r22:c1": {
-          "value": "2026-07-13"
+          "value": "{{today-13d}}"
         },
         "r22:c2": {
           "value": "Weekly shop — Costco run"
@@ -1058,7 +1058,7 @@
           "value": "Joint debit"
         },
         "r23:c1": {
-          "value": "2026-07-14"
+          "value": "{{today-12d}}"
         },
         "r23:c2": {
           "value": "Car insurance"
@@ -1073,7 +1073,7 @@
           "value": "Joint debit"
         },
         "r24:c1": {
-          "value": "2026-07-15"
+          "value": "{{today-11d}}"
         },
         "r24:c2": {
           "value": "Cinema, all four"
@@ -1088,7 +1088,7 @@
           "value": "Visa"
         },
         "r25:c1": {
-          "value": "2026-07-16"
+          "value": "{{today-10d}}"
         },
         "r25:c2": {
           "value": "New sneakers for Theo"
@@ -1103,7 +1103,7 @@
           "value": "Visa"
         },
         "r26:c1": {
-          "value": "2026-07-18"
+          "value": "{{today-8d}}"
         },
         "r26:c2": {
           "value": "Gas"
@@ -1118,7 +1118,7 @@
           "value": "Joint debit"
         },
         "r27:c1": {
-          "value": "2026-07-19"
+          "value": "{{today-7d}}"
         },
         "r27:c2": {
           "value": "Weekly shop — Sprouts"
@@ -1133,7 +1133,7 @@
           "value": "Joint debit"
         },
         "r28:c1": {
-          "value": "2026-07-20"
+          "value": "{{today-6d}}"
         },
         "r28:c2": {
           "value": "Lightbulbs, filters, batteries"
@@ -1148,7 +1148,7 @@
           "value": "Visa"
         },
         "r29:c1": {
-          "value": "2026-07-21"
+          "value": "{{today-5d}}"
         },
         "r29:c2": {
           "value": "Tahoe cabin — balance due"
@@ -1163,7 +1163,7 @@
           "value": "Visa"
         },
         "r30:c1": {
-          "value": "2026-07-23"
+          "value": "{{today-3d}}"
         },
         "r30:c2": {
           "value": "Takeaway Thai"
@@ -1178,7 +1178,7 @@
           "value": "Visa"
         },
         "r31:c1": {
-          "value": "2026-07-25"
+          "value": "{{today-1d}}"
         },
         "r31:c2": {
           "value": "Sunscreen + trip sundries"

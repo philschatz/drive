@@ -66,6 +66,7 @@ export function ColorSheet({
   textColor,
   bgColor,
   onApply,
+  onOpenConditional,
 }: {
   /** Which colour is being edited; null closes the sheet. */
   target: ColorTarget | null;
@@ -73,6 +74,9 @@ export function ColorSheet({
   textColor?: string;
   bgColor?: string;
   onApply: (target: ColorTarget, color: string | undefined) => void;
+  /** Open the conditional-formatting sheet — the "colour it by a rule instead"
+   *  escape hatch, offered right after the swatches. */
+  onOpenConditional?: () => void;
 }) {
   const isFill = target === 'fill';
   return (
@@ -91,6 +95,16 @@ export function ColorSheet({
               resetLabel={isFill ? 'No fill' : 'Default'}
             />
           </div>
+          {onOpenConditional && (
+            <button
+              className="w-full text-left md-body-medium px-2 py-2 mt-3 pt-3 rounded state-layer flex items-center gap-2 border-t border-outline-variant"
+              data-testid="open-conditional-format"
+              onClick={() => { onOpenChange(false); onOpenConditional(); }}
+            >
+              <span className="material-symbols-outlined" style={{ fontSize: 20 }}>rule</span>
+              Conditional formatting…
+            </button>
+          )}
         </div>
       </SheetContent>
     </Sheet>

@@ -14,12 +14,12 @@
         "interval": 1
       },
       "completions": {
-        "2026-07-20T06:52:00": "PT51M",
-        "2026-07-21T06:48:00": "PT1H12M",
-        "2026-07-22T07:10:00": "PT38M",
-        "2026-07-24T06:05:00": "PT1H35M",
-        "2026-07-25T06:40:00": "",
-        "2026-07-26T06:15:00": "PT1H4M"
+        "{{today-6d@06:52}}": "PT51M",
+        "{{today-5d@06:48}}": "PT1H12M",
+        "{{today-4d@07:10}}": "PT38M",
+        "{{today-2d@06:05}}": "PT1H35M",
+        "{{today-1d@06:40}}": "",
+        "{{today@06:15}}": "PT1H4M"
       }
     },
     "morning-pages": {
@@ -31,11 +31,11 @@
         "frequency": "daily"
       },
       "completions": {
-        "2026-07-20T05:58:00": "PT18M",
-        "2026-07-21T05:52:00": "PT12M",
-        "2026-07-23T06:02:00": "PT22M",
-        "2026-07-24T05:45:00": "",
-        "2026-07-26T05:50:00": "PT21M"
+        "{{today-6d@05:58}}": "PT18M",
+        "{{today-5d@05:52}}": "PT12M",
+        "{{today-3d@06:02}}": "PT22M",
+        "{{today-2d@05:45}}": "",
+        "{{today@05:50}}": "PT21M"
       }
     },
     "write-somewhere-new": {
@@ -46,13 +46,18 @@
       "recurrenceRule": {
         "frequency": "weekly",
         "interval": 1,
-        "byDay": [{ "@type": "NDay", "day": "we" }]
+        "byDay": [
+          {
+            "@type": "NDay",
+            "day": "we"
+          }
+        ]
       },
       "completions": {
-        "2026-07-01T14:20:00": "PT2H10M",
-        "2026-07-08T14:05:00": "PT1H45M",
-        "2026-07-15T15:00:00": "PT1H5M",
-        "2026-07-22T14:00:00": "PT2H30M"
+        "{{we-3w@14:20}}": "PT2H10M",
+        "{{we-2w@14:05}}": "PT1H45M",
+        "{{we-1w@15:00}}": "PT1H5M",
+        "{{we@14:00}}": "PT2H30M"
       }
     },
     "research-the-harbour": {
@@ -63,12 +68,16 @@
       "recurrenceRule": {
         "frequency": "weekly",
         "interval": 2,
-        "byDay": [{ "day": "sa" }]
+        "byDay": [
+          {
+            "day": "sa"
+          }
+        ]
       },
       "completions": {
-        "2026-06-27T10:15:00": "PT3H40M",
-        "2026-07-11T10:05:00": "PT2H50M",
-        "2026-07-25T10:30:00": "PT4H15M"
+        "{{sa-4w@10:15}}": "PT3H40M",
+        "{{sa-2w@10:05}}": "PT2H50M",
+        "{{sa@10:30}}": "PT4H15M"
       }
     },
     "walk-the-setting": {
@@ -79,13 +88,17 @@
       "recurrenceRule": {
         "frequency": "weekly",
         "byDay": [
-          { "day": "tu" },
-          { "day": "fr" }
+          {
+            "day": "tu"
+          },
+          {
+            "day": "fr"
+          }
         ]
       },
       "completions": {
-        "2026-07-21T17:42:00": "PT55M",
-        "2026-07-24T17:30:00": "PT1H20M"
+        "{{tu@17:42}}": "PT55M",
+        "{{fr@17:30}}": "PT1H20M"
       }
     },
     "read-in-genre": {
@@ -97,11 +110,11 @@
         "frequency": "daily"
       },
       "completions": {
-        "2026-07-20T21:50:00": "PT45M",
-        "2026-07-22T22:00:00": "PT30M",
-        "2026-07-23T21:35:00": "",
-        "2026-07-25T21:40:00": "PT1H5M",
-        "2026-07-26T21:32:00": "PT38M"
+        "{{today-6d@21:50}}": "PT45M",
+        "{{today-4d@22:00}}": "PT30M",
+        "{{today-3d@21:35}}": "",
+        "{{today-1d@21:40}}": "PT1H5M",
+        "{{today@21:32}}": "PT38M"
       }
     },
     "overheard-line": {
@@ -112,11 +125,11 @@
         "frequency": "daily"
       },
       "completions": {
-        "2026-07-20T13:14:00": "",
-        "2026-07-21T11:40:00": "",
-        "2026-07-22T16:22:00": "",
-        "2026-07-24T13:05:00": "",
-        "2026-07-26T12:10:00": ""
+        "{{today-6d@13:14}}": "",
+        "{{today-5d@11:40}}": "",
+        "{{today-4d@16:22}}": "",
+        "{{today-2d@13:05}}": "",
+        "{{today@12:10}}": ""
       }
     },
     "revise-a-scene": {
@@ -126,12 +139,16 @@
       "duration": "PT90M",
       "recurrenceRule": {
         "frequency": "weekly",
-        "byDay": [{ "day": "su" }]
+        "byDay": [
+          {
+            "day": "su"
+          }
+        ]
       },
       "completions": {
-        "2026-07-12T19:20:00": "PT1H50M",
-        "2026-07-19T19:05:00": "PT1H25M",
-        "2026-07-26T19:00:00": ""
+        "{{su-2w@19:20}}": "PT1H50M",
+        "{{su-1w@19:05}}": "PT1H25M",
+        "{{su@19:00}}": ""
       }
     },
     "character-interview": {
@@ -142,12 +159,16 @@
       "recurrenceRule": {
         "frequency": "weekly",
         "interval": 2,
-        "byDay": [{ "day": "th" }],
+        "byDay": [
+          {
+            "day": "th"
+          }
+        ],
         "count": 24
       },
       "completions": {
-        "2026-07-09T20:12:00": "PT52M",
-        "2026-07-23T20:00:00": "PT40M"
+        "{{th-2w@20:12}}": "PT52M",
+        "{{th@20:00}}": "PT40M"
       }
     },
     "outline-check": {
@@ -157,10 +178,16 @@
       "duration": "PT20M",
       "recurrenceRule": {
         "frequency": "monthly",
-        "byDay": [{ "@type": "NDay", "day": "mo", "nthOfPeriod": 1 }]
+        "byDay": [
+          {
+            "@type": "NDay",
+            "day": "mo",
+            "nthOfPeriod": 1
+          }
+        ]
       },
       "completions": {
-        "2026-07-06T08:44:00": "PT25M"
+        "{{today-20d@08:44}}": "PT25M"
       }
     },
     "writing-group": {
@@ -171,17 +198,19 @@
       "recurrenceRule": {
         "frequency": "monthly",
         "interval": 1,
-        "byMonthDay": [15]
+        "byMonthDay": [
+          15
+        ]
       },
       "completions": {
-        "2026-06-15T18:50:00": "PT2H15M",
-        "2026-07-15T18:45:00": "PT1H55M"
+        "{{today-41d@18:50}}": "PT2H15M",
+        "{{today-11d@18:45}}": "PT1H55M"
       }
     },
     "finish-the-draft": {
       "@type": "Event",
       "title": "Finish the first draft",
-      "start": "2026-12-20T12:00:00",
+      "start": "{{today+147d@12:00}}",
       "duration": "PT1H",
       "completions": {}
     }

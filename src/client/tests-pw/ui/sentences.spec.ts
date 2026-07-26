@@ -131,7 +131,7 @@ test('divider inserts and undo (Ctrl+Z) restores', async () => {
 });
 
 test('Done returns to the viewer; content survives a reload', async () => {
-  await app.page.getByLabel('Done editing').click();
+  await app.page.getByLabel('Done').click();
   await expect(app.page.getByTestId('format-bar')).toHaveCount(0);
   await expect(editor()).not.toHaveAttribute('contenteditable', 'true');
   // View mode keeps real links.
@@ -154,7 +154,7 @@ test('double-clicking the viewed text starts editing at that word', async () => 
   await app.page.keyboard.type('Howdy');
   await expect(editor().locator('h1')).toContainText('Howdy');
 
-  await app.page.getByLabel('Done editing').click();
+  await app.page.getByLabel('Done').click();
   await expect(app.page.getByTestId('format-bar')).toHaveCount(0);
 });
 

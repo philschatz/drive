@@ -9,14 +9,18 @@
       "@type": "Task",
       "title": "Maya — 13th birthday",
       "description": "She's been hinting at a proper film camera. Budget $120. Grandma is covering the film.",
-      "start": "2026-08-01",
-      "due": "2026-08-19",
+      "start": "{{today+6d}}",
+      "due": "{{today+24d}}",
       "estimatedDuration": "PT2H",
       "progress": "in-process",
       "percentComplete": 60,
       "priority": 0,
-      "categories": { "family": true },
-      "keywords": { "big-one": true },
+      "categories": {
+        "family": true
+      },
+      "keywords": {
+        "big-one": true
+      },
       "links": {
         "shortlist": {
           "@type": "Link",
@@ -27,146 +31,189 @@
       },
       "recurrenceRule": {
         "frequency": "yearly",
-        "byMonth": ["8"],
-        "byMonthDay": [19]
+        "byMonth": [
+          "{{month:today+24d}}"
+        ],
+        "byMonthDay": [
+          "{{dayOfMonth:today+24d}}"
+        ]
       }
     },
     "theo-9": {
       "@type": "Task",
       "title": "Theo — 9th birthday",
       "description": "Dinosaur phase is holding. Budget $60. Ask the school who to invite.",
-      "start": "2026-11-01",
-      "due": "2026-11-22",
+      "start": "{{today+98d}}",
+      "due": "{{today+119d}}",
       "estimatedDuration": "PT90M",
       "progress": "needs-action",
       "percentComplete": 0,
       "priority": 0,
-      "categories": { "family": true },
+      "categories": {
+        "family": true
+      },
       "recurrenceRule": {
         "frequency": "yearly",
-        "byMonth": ["11"],
-        "byMonthDay": [22]
+        "byMonth": [
+          "{{month:today+119d}}"
+        ],
+        "byMonthDay": [
+          "{{dayOfMonth:today+119d}}"
+        ]
       }
     },
     "miguel": {
       "@type": "Task",
       "title": "Miguel — birthday",
       "description": "The good chef's knife he keeps picking up and putting down. Budget $150.",
-      "start": "2026-09-14",
-      "due": "2026-09-28",
+      "start": "{{today+50d}}",
+      "due": "{{today+64d}}",
       "estimatedDuration": "PT1H",
       "progress": "needs-action",
       "percentComplete": 0,
       "priority": 1,
       "privacy": "private",
-      "categories": { "family": true },
+      "categories": {
+        "family": true
+      },
       "recurrenceRule": {
         "frequency": "yearly",
-        "byMonth": ["9"],
-        "byMonthDay": [28]
+        "byMonth": [
+          "{{month:today+64d}}"
+        ],
+        "byMonthDay": [
+          "{{dayOfMonth:today+64d}}"
+        ]
       }
     },
     "grandma-rosa": {
       "@type": "Task",
       "title": "Grandma Rosa — 78th",
       "description": "Photo book of the Tahoe trip. Order by the 10th to arrive in time.",
-      "start": "2026-09-20",
-      "due": "2026-10-10",
+      "start": "{{today+56d}}",
+      "due": "{{today+76d}}",
       "estimatedDuration": "PT3H",
       "progress": "needs-action",
       "priority": 1,
-      "categories": { "family": true },
-      "keywords": { "handmade": true, "ships-slowly": true }
+      "categories": {
+        "family": true
+      },
+      "keywords": {
+        "handmade": true,
+        "ships-slowly": true
+      }
     },
     "uncle-dev": {
       "@type": "Task",
       "title": "Uncle Dev — birthday",
       "description": "Hot sauce sampler again. He genuinely loves it. Budget $35.",
-      "start": "2026-07-15",
-      "due": "2026-07-29",
+      "start": "{{today-11d}}",
+      "due": "{{today+3d}}",
       "estimatedDuration": "PT30M",
       "progress": "completed",
       "percentComplete": 100,
       "priority": 5,
-      "categories": { "family": true },
+      "categories": {
+        "family": true
+      },
       "recurrenceRule": {
         "frequency": "yearly",
-        "byMonth": ["7"],
-        "byMonthDay": [29]
+        "byMonth": [
+          "{{month:today+3d}}"
+        ],
+        "byMonthDay": [
+          "{{dayOfMonth:today+3d}}"
+        ]
       }
     },
     "priya-next-door": {
       "@type": "Task",
       "title": "Priya (next door) — birthday",
       "description": "She babysits constantly and won't take money. Plant from the good nursery, ~$40.",
-      "start": "2026-07-20",
-      "due": "2026-08-02",
+      "start": "{{today-6d}}",
+      "due": "{{today+7d}}",
       "estimatedDuration": "PT45M",
       "progress": "in-process",
       "percentComplete": 25,
       "priority": 2,
-      "categories": { "friends": true }
+      "categories": {
+        "friends": true
+      }
     },
     "jonas": {
       "@type": "Task",
       "title": "Jonas — birthday",
       "description": "Records. Check what he already has before buying anything.",
-      "start": "2026-10-01",
-      "due": "2026-10-17",
+      "start": "{{today+67d}}",
+      "due": "{{today+83d}}",
       "estimatedDuration": "PT1H",
       "progress": "needs-action",
       "percentComplete": 0,
       "priority": 4,
-      "categories": { "friends": true }
+      "categories": {
+        "friends": true
+      }
     },
     "amara": {
       "@type": "Task",
       "title": "Amara — birthday",
       "description": "She asked for nothing. Getting her a long lunch out instead. Book two weeks ahead.",
-      "start": "2026-12-01",
-      "due": "2026-12-14",
+      "start": "{{today+128d}}",
+      "due": "{{today+141d}}",
       "estimatedDuration": "PT30M",
       "progress": "needs-action",
       "priority": 5,
       "freeBusyStatus": "free",
-      "categories": { "friends": true }
+      "categories": {
+        "friends": true
+      }
     },
     "wei": {
       "@type": "Task",
       "title": "Wei — birthday",
       "description": "Missed it last year. Set the reminder earlier this time.",
-      "start": "2026-08-05",
-      "due": "2026-08-12",
+      "start": "{{today+10d}}",
+      "due": "{{today+17d}}",
       "progress": "failed",
       "priority": 7,
-      "categories": { "friends": true },
-      "keywords": { "do-better": true }
+      "categories": {
+        "friends": true
+      },
+      "keywords": {
+        "do-better": true
+      }
     },
     "restock-cards": {
       "@type": "Task",
       "title": "Restock birthday cards and wrapping paper",
       "description": "Down to one card and a bag with a rip. Check the shelf in the hall closet.",
-      "start": "2026-07-06T10:00:00",
-      "due": "2026-07-06T11:00:00",
+      "start": "{{today-20d@10:00}}",
+      "due": "{{today-20d@11:00}}",
       "estimatedDuration": "PT1H",
       "progress": "needs-action",
       "percentComplete": 0,
       "priority": 3,
-      "categories": { "household": true },
+      "categories": {
+        "household": true
+      },
       "recurrenceRule": {
         "frequency": "monthly",
         "interval": 3,
-        "byMonthDay": [6],
+        "byMonthDay": [
+          6
+        ],
         "count": 8
       }
     },
     "old-list-entry": {
       "@type": "Task",
       "title": "Cousin's wedding gift — handled by Mum instead",
-      "start": "2026-06-14",
+      "start": "{{today-42d}}",
       "excluded": true,
       "progress": "cancelled",
-      "categories": { "family": true }
+      "categories": {
+        "family": true
+      }
     }
   }
 }
