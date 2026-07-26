@@ -362,7 +362,18 @@ test.describe('DataGrid mobile', () => {
     const page = app.page;
     await page.locator('.datagrid-container').evaluate(el => { el.scrollTop = 0; });
 
-    // B2 (value 10 from the aggregates test)
+    // Seed B2=10 / B3=20 (earlier tests in this file rewrite these rows) so the
+    // conditional rule at the end has exactly one matching cell.
+    const editor = page.locator('.bottom-editor-cm .cm-content');
+    for (const [row, value] of [[1, '10'], [2, '20']] as const) {
+      await cell(1, row).click();
+      await editor.click();
+      await editor.press('ControlOrMeta+a');
+      await editor.pressSequentially(value, { delay: 20 });
+      await editor.press('Enter');
+    }
+
+    // B2 is the cell we format
     const b2 = (await cell(1, 1).boundingBox())!;
     await page.touchscreen.tap(b2.x + 5, b2.y + 5);
     await expect(page.getByTestId('focus-top-bar')).toBeVisible();
@@ -384,6 +395,33 @@ test.describe('DataGrid mobile', () => {
     await sheet.locator('md-list-item', { hasText: 'Clear formatting' }).click();
     await expect(cell(1, 1)).toHaveCSS('font-weight', '400');
     await expect(cell(1, 1)).toContainText('10');
+
+
+    // The colour buttons open the colour-only picker (not the whole sheet)
+    await sheet.getByRole('button', { name: 'Text color' }).click();
+    const colorSheet = page.getByTestId('color-sheet');
+    await expect(colorSheet).toBeVisible();
+    await expect(colorSheet).toContainText('Text color');
+    await colorSheet.getByRole('button', { name: '#ff0000' }).click();
+    await expect(cell(1, 1)).toHaveCSS('color', 'rgb(255, 0, 0)');
+    await page.keyboard.press('Escape'); // closes only the colour sheet
+    await expect(colorSheet).not.toBeVisible();
+    await expect(sheet).toBeVisible();
+
+    // The bottom bar's colour button opens the same picker directly
+    await page.keyboard.press('Escape');
+    await expect(sheet).not.toBeVisible();
+    await page.getByTestId('quick-format_color_fill').click();
+    await expect(colorSheet).toBeVisible();
+    await expect(colorSheet).toContainText('Fill color');
+    // Green, so it can't be confused with the conditional rule's yellow below
+    await colorSheet.getByRole('button', { name: '#00ff00' }).click();
+    await expect(cell(1, 1)).toHaveCSS('background-color', 'rgb(0, 255, 0)');
+    await page.keyboard.press('Escape');
+
+    // Reopen the formatting sheet for the conditional-format hand-off
+    await page.getByRole('button', { name: 'Text formatting' }).click();
+    await expect(sheet).toBeVisible();
 
     // Conditional formatting swaps to its own sheet
     await sheet.locator('md-list-item', { hasText: 'Conditional formatting' }).click();

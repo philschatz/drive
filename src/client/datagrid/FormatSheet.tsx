@@ -1,62 +1,10 @@
-import { useEffect, useState } from 'preact/hooks';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import {
   Select, SelectTrigger, SelectValue, SelectContent, SelectItem,
 } from '@/components/ui/select';
-import { FONT_FAMILIES, FONT_SIZES, NUMBER_FORMATS, PRESET_COLORS } from './format-presets';
+import { FONT_FAMILIES, FONT_SIZES, NUMBER_FORMATS } from './format-presets';
 import type { DataGridCellFormat } from './schema';
-
-/**
- * Swatch grid + custom color input (port of the old toolbar's
- * ColorPickerContent, Radix-free).
- */
-function ColorGrid({
-  value,
-  onChange,
-  onReset,
-  resetLabel,
-}: {
-  value?: string;
-  onChange: (color: string) => void;
-  onReset: () => void;
-  resetLabel: string;
-}) {
-  return (
-    <div>
-      <button
-        className="w-full text-left md-body-medium px-2 py-1 mb-2 rounded state-layer flex items-center gap-1"
-        onClick={onReset}
-      >
-        <span className="material-symbols-outlined" style={{ fontSize: 18 }}>format_color_reset</span>
-        {resetLabel}
-      </button>
-      <div className="grid grid-cols-10 gap-1 mb-2">
-        {PRESET_COLORS.map(color => (
-          <button
-            key={color}
-            aria-label={color}
-            className={
-              'aspect-square w-full rounded-sm border border-outline-variant cursor-pointer' +
-              (value === color ? ' ring-2 ring-primary ring-offset-1' : '')
-            }
-            style={{ background: color }}
-            title={color}
-            onClick={() => onChange(color)}
-          />
-        ))}
-      </div>
-      <div className="flex items-center gap-2 mt-1 pt-1 border-t border-outline-variant">
-        <span className="md-body-medium text-on-surface-variant">Custom:</span>
-        <input
-          type="color"
-          value={value || '#000000'}
-          onChange={(e) => onChange((e.target as HTMLInputElement).value)}
-          className="w-8 h-8 cursor-pointer border-0 p-0"
-        />
-      </div>
-    </div>
-  );
-}
+import type { ColorTarget } from './ColorSheet';
 
 function ToggleButton({
   icon,
@@ -137,6 +85,7 @@ export function FormatSheet({
   onApply,
   onClear,
   onOpenConditional,
+  onOpenColor,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -146,15 +95,12 @@ export function FormatSheet({
   onApply: (patch: Partial<DataGridCellFormat>) => void;
   onClear: () => void;
   onOpenConditional: () => void;
+  /** Open the colour-only sheet for text or fill. */
+  onOpenColor: (target: ColorTarget) => void;
 }) {
   const fontSize = currentFormat?.fontSize ?? 11;
   const smaller = FONT_SIZES.filter(s => s < fontSize);
   const larger = FONT_SIZES.filter(s => s > fontSize);
-  // Which colour subsheet is layered on top of this one, if any.
-  const [colorTarget, setColorTarget] = useState<'text' | 'fill' | null>(null);
-
-  // Don't leave a subsheet open behind a dismissed parent.
-  useEffect(() => { if (!open) setColorTarget(null); }, [open]);
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -189,14 +135,14 @@ export function FormatSheet({
             label="Text color"
             color={currentFormat?.textColor}
             fallback="var(--md-sys-color-on-surface)"
-            onClick={() => setColorTarget('text')}
+            onClick={() => onOpenColor('text')}
           />
           <ColorButton
             icon="format_color_fill"
             label="Fill color"
             color={currentFormat?.bgColor}
             fallback="transparent"
-            onClick={() => setColorTarget('fill')}
+            onClick={() => onOpenColor('fill')}
           />
         </div>
 
@@ -272,25 +218,6 @@ export function FormatSheet({
         </div>
       </SheetContent>
 
-      {/* Colour subsheet, layered over the format sheet so dismissing it
-          returns here rather than closing everything. */}
-      <Sheet open={colorTarget !== null} onOpenChange={(o) => { if (!o) setColorTarget(null); }}>
-        <SheetContent side="bottom" className="max-h-[70vh] p-4">
-          <div data-testid="color-sheet">
-            <SheetHeader>
-              <SheetTitle>{colorTarget === 'fill' ? 'Fill color' : 'Text color'}</SheetTitle>
-            </SheetHeader>
-            <div className="mt-2">
-              <ColorGrid
-                value={colorTarget === 'fill' ? currentFormat?.bgColor : currentFormat?.textColor}
-                onChange={(c) => onApply(colorTarget === 'fill' ? { bgColor: c } : { textColor: c })}
-                onReset={() => onApply(colorTarget === 'fill' ? { bgColor: undefined } : { textColor: undefined })}
-                resetLabel={colorTarget === 'fill' ? 'No fill' : 'Default'}
-              />
-            </div>
-          </div>
-        </SheetContent>
-      </Sheet>
     </Sheet>
   );
 }

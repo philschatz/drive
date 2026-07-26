@@ -180,10 +180,9 @@ export function SourceViewer({ docId, rest, readOnly }: { docId?: string; rest?:
   const [historyMeta, setHistoryMeta] = useState<Array<{ version: number; time: number }>>([]);
   const [changeCount, setChangeCount] = useState(0);
   const [version, setVersion] = useState(0);
-  // The version-history sheet auto-opens on the source viewer (deliberate:
-  // inspecting a doc usually means inspecting its changes) but stays closable —
-  // reopen via the title-bar History menu item.
-  const [historyOpen, setHistoryOpen] = useState(true);
+  // The version-history sheet starts closed (it covered the document you came
+  // here to read); open it from the title-bar History menu item.
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [versionPatches, setVersionPatches] = useState<any[]>([]);
   const [docName, setDocName] = useState('Document');
   // Presence starts only once the doc handle is loaded — the engine's
@@ -444,6 +443,8 @@ export function SourceViewer({ docId, rest, readOnly }: { docId?: string; rest?:
         showSourceLink={false}
         onToggleHistory={historyAdapter.toggleHistory}
         historyActive={historyAdapter.active}
+        // Inspecting changes is the point of this view, so History sits on the bar.
+        historyPlacement="bar"
         overflow={snapshot ? [{ icon: 'download', label: 'Download JSON', onSelect: handleDownloadJson }] : []}
       />
 

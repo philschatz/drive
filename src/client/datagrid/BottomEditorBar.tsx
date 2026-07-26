@@ -1,6 +1,7 @@
 import { useRef, useState } from 'preact/hooks';
 import { FormulaEditor, type FormulaEditorApi, type FormulaHighlight } from './FormulaEditor';
 import type { ResolvedEntry } from './commands';
+import type { DataGridCellFormat } from './schema';
 import { useKeyboardInset } from '../shared/useKeyboardInset';
 
 /** Characters that are awkward to reach on mobile keyboards — shown as an
@@ -11,6 +12,44 @@ const FORMULA_CHARS = ['=', '(', ')', ':', '-', '/', '*', ',', '+', '$'];
 export interface AggregateChip {
   label: string;
   value: string;
+}
+
+/**
+ * Colour quick action: the icon's own underline bar is covered by a swatch of
+ * the current colour, so the button previews what it will apply. Tapping opens
+ * the colour picker alone (not the whole formatting sheet).
+ */
+function ColorQuickButton({
+  icon,
+  label,
+  color,
+  fallback,
+  onClick,
+}: {
+  icon: string;
+  label: string;
+  color: string | undefined;
+  fallback: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      aria-label={label}
+      title={label}
+      onClick={onClick}
+      data-testid={`quick-${icon}`}
+      className="relative inline-flex items-center justify-center h-10 w-10 rounded-full state-layer shrink-0"
+    >
+      <span className="material-symbols-outlined" style={{ fontSize: 22 }}>{icon}</span>
+      {/* Sits over the glyph's baseline bar (which is ~4px above the glyph box
+          bottom), so the swatch reads as that bar rather than a stray line. */}
+      <span
+        aria-hidden="true"
+        className="absolute left-2 right-2 h-[3px] rounded-sm"
+        style={{ bottom: 11, background: color ?? fallback }}
+      />
+    </button>
+  );
 }
 
 function QuickActionButton({
@@ -57,7 +96,8 @@ export function BottomEditorBar({
   apiRef,
   previewValue,
   resolveCommand,
-  onOpenFormat,
+  onOpenColor,
+  currentFormat,
   onInsertFormula,
   aggregates,
   multiSelect,
@@ -79,8 +119,10 @@ export function BottomEditorBar({
   previewValue?: string;
   /** Resolve a command id into an executable entry (from useGridCommands). */
   resolveCommand: (id: string) => ResolvedEntry & { kind: 'command' };
-  /** Open the text-formatting sheet (absent while it isn't wired up). */
-  onOpenFormat?: () => void;
+  /** Open the colour picker for text or fill (absent when read-only). */
+  onOpenColor?: (target: 'text' | 'fill') => void;
+  /** Resolved format of the selected cell — drives the toggle/colour previews. */
+  currentFormat?: DataGridCellFormat;
   onInsertFormula: () => void;
   aggregates: AggregateChip[] | null;
   /** Multi-cell selection: the (single-cell) editor is hidden — row 1 shows
@@ -176,15 +218,14 @@ export function BottomEditorBar({
         <div className="flex items-center gap-0.5 px-1 overflow-x-auto border-t border-outline-variant" data-testid="quick-actions-row">
           <QuickActionButton entry={resolveCommand('toggle-bold')} />
           <QuickActionButton entry={resolveCommand('toggle-strikethrough')} />
-          {onOpenFormat && (
-            <button
-              aria-label="Text color"
-              title="Text color"
-              className="inline-flex items-center justify-center h-10 w-10 rounded-full state-layer shrink-0"
-              onClick={onOpenFormat}
-            >
-              <span className="material-symbols-outlined" style={{ fontSize: 22 }}>format_color_text</span>
-            </button>
+          {onOpenColor && (
+            <ColorQuickButton
+              icon="format_color_text"
+              label="Text color"
+              color={currentFormat?.textColor}
+              fallback="var(--md-sys-color-on-surface)"
+              onClick={() => onOpenColor('text')}
+            />
           )}
           {/* Alignment dropdown — shows the current alignment's icon */}
           <button
@@ -213,15 +254,14 @@ export function BottomEditorBar({
               );
             })}
           </md-menu>
-          {onOpenFormat && (
-            <button
-              aria-label="Fill color"
-              title="Fill color"
-              className="inline-flex items-center justify-center h-10 w-10 rounded-full state-layer shrink-0"
-              onClick={onOpenFormat}
-            >
-              <span className="material-symbols-outlined" style={{ fontSize: 22 }}>format_color_fill</span>
-            </button>
+          {onOpenColor && (
+            <ColorQuickButton
+              icon="format_color_fill"
+              label="Fill color"
+              color={currentFormat?.bgColor}
+              fallback="transparent"
+              onClick={() => onOpenColor('fill')}
+            />
           )}
           <QuickActionButton entry={resolveCommand('insert-row-below')} overrideIcon="add_row_below" />
           <QuickActionButton entry={resolveCommand('insert-col-right')} overrideIcon="add_column_right" />

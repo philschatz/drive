@@ -19,7 +19,6 @@ import { EventEditor } from './EventEditor';
 import { CalendarSettings } from './CalendarSettings';
 import { Fab } from '@/components/ui/fab';
 import { useDocumentValidation } from '../shared/useDocumentValidation';
-import { ValidationPanel } from '../shared/ValidationPanel';
 import { DocLoader } from '../shared/useDocument';
 import { calendarQuery, expandRange } from './calendar-query';
 import { useCalendarEditor } from './useCalendarEditor';
@@ -48,7 +47,6 @@ function CalendarInner({ docId, readOnly, initialEventId }: { docId: string; rea
   const [calName, setCalName] = useState('Calendar');
   const [calDesc, setCalDesc] = useState('');
   const [calColor, setCalColor] = useState('#039be5');
-  const [showValidation, setShowValidation] = useState(false);
   const [calSettingsOpen, setCalSettingsOpen] = useState(false);
   const history = useDocumentHistory(docId);
   // Feeds both the version slider and the undo cursor; ref-routed inside the
@@ -211,9 +209,7 @@ function CalendarInner({ docId, readOnly, initialEventId }: { docId: string; rea
         canUndo={canUndo}
         canRedo={canRedo}
         hidden={hidden}
-        onToggleValidation={() => setShowValidation(v => !v)}
-        validationActive={showValidation}
-        validationCount={validationErrors.length}
+        hasValidationErrors={validationErrors.length > 0}
         sourcePath={focusPath}
         overflow={canEdit
           ? [{ icon: 'palette', label: 'Calendar settings', onSelect: () => setCalSettingsOpen(true) }]
@@ -221,7 +217,6 @@ function CalendarInner({ docId, readOnly, initialEventId }: { docId: string; rea
       />
       <HistorySlider history={history} />
       <div style={noAccess ? { opacity: 0.4, pointerEvents: 'none' } : undefined}>
-      {showValidation && <ValidationPanel errors={validationErrors} docId={docId} />}
       <div id="sx-cal" />
       {/* Name / color / description live in the Calendar-settings sheet (overflow menu). */}
       <CalendarSettings

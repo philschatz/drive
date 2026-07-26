@@ -161,10 +161,20 @@ describe('EditorTitleBar', () => {
     expect(screen.queryByTitle('Edit Source')).toBeNull();
   });
 
-  it('renders history button when onToggleHistory is provided', () => {
+  it('offers History in the kebab by default', () => {
     const onToggle = jest.fn();
     render(<EditorTitleBar icon="grid" title="Test" onToggleHistory={onToggle} />);
-    const btn = screen.getByTitle('Browse history');
+    const item = screen.getByTitle('History');
+    expect(item.tagName.toLowerCase()).toBe('md-menu-item');
+    fireEvent.click(item);
+    expect(onToggle).toHaveBeenCalledTimes(1);
+  });
+
+  it('puts History on the bar with historyPlacement="bar"', () => {
+    const onToggle = jest.fn();
+    render(<EditorTitleBar icon="grid" title="Test" onToggleHistory={onToggle} historyPlacement="bar" />);
+    const btn = screen.getByLabelText('History');
+    expect(btn.tagName).toBe('BUTTON');
     fireEvent.click(btn);
     expect(onToggle).toHaveBeenCalledTimes(1);
   });
@@ -172,12 +182,34 @@ describe('EditorTitleBar', () => {
   it('does not render history button when onToggleHistory is not provided', () => {
     render(<EditorTitleBar icon="grid" title="Test" />);
     expect(screen.queryByTitle('Browse history')).toBeNull();
-    expect(screen.queryByTitle('Close history')).toBeNull();
+    expect(screen.queryByTitle('History')).toBeNull();
   });
 
-  it('shows "Close history" title when historyActive', () => {
-    render(<EditorTitleBar icon="grid" title="Test" onToggleHistory={() => {}} historyActive />);
-    expect(screen.getByTitle('Close history')).toBeDefined();
+  it('renders the document action on the bar', () => {
+    const onSelect = jest.fn();
+    render(
+      <EditorTitleBar
+        icon="grid"
+        title="Test"
+        action={{ icon: 'bar_chart', label: 'Chart', onSelect }}
+      />
+    );
+    const btn = screen.getByLabelText('Chart');
+    expect(btn.tagName).toBe('BUTTON');
+    fireEvent.click(btn);
+    expect(onSelect).toHaveBeenCalledTimes(1);
+  });
+
+  it('links validation errors to the source editor', () => {
+    render(<EditorTitleBar icon="grid" title="Test" docId="doc-123" hasValidationErrors />);
+    const link = screen.getByLabelText('Validation errors');
+    expect(link.tagName).toBe('A');
+    expect(link.getAttribute('href')).toContain('doc-123');
+  });
+
+  it('omits the validation warning when there are no errors', () => {
+    render(<EditorTitleBar icon="grid" title="Test" docId="doc-123" />);
+    expect(screen.queryByLabelText('Validation errors')).toBeNull();
   });
 
   it('renders children in the middle', () => {

@@ -76,12 +76,22 @@ describe('Tasks container CRUD', () => {
     closeSheet();
     expect(screen.getByText('Walk the dog in the park')).toBeTruthy();
 
-    // "Delete completed" (title-bar overflow) removes the finished task,
-    // keeps the active one. The md-menu is inert in jsdom, so its items are
-    // reachable directly.
+    // "Delete completed" (a title-bar action) is guarded by a confirmation:
+    // declining leaves everything alone …
+    expect(screen.getByTitle('Delete completed')).toBeTruthy();
+    const confirmSpy = jest.spyOn(window, 'confirm').mockReturnValue(false);
+    fireEvent.click(screen.getByTitle('Delete completed'));
+    expect(confirmSpy).toHaveBeenCalled();
+    expect(screen.getByText('Buy milk')).toBeTruthy();
+
+    // … accepting removes the finished task and keeps the active one.
+    confirmSpy.mockReturnValue(true);
     fireEvent.click(screen.getByTitle('Delete completed'));
     expect(screen.queryByText('Buy milk')).toBeNull();
     expect(screen.getByText('Walk the dog in the park')).toBeTruthy();
+    // Nothing completed left, so the action is no longer offered.
+    expect(screen.queryByTitle('Delete completed')).toBeNull();
+    confirmSpy.mockRestore();
   });
 
   it('shows the empty state with no tasks', async () => {

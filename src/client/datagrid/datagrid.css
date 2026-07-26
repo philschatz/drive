@@ -64,7 +64,9 @@
 .datagrid-table {
   border-collapse: collapse;
   table-layout: fixed;
-  font-size: 0.85rem;
+  /* Just under the app bar's body text (md-body-large, 1rem) — readable on a
+     phone without forcing taller rows. */
+  font-size: 0.9375rem;
   /* Cell text is never selected directly (copy works off the cell selection,
      editing happens in the bottom bar) — so a mouse drag across cells extends
      the selection rectangle instead of smearing a text selection over it. */
@@ -103,7 +105,7 @@
   font-weight: 600;
   text-align: center;
   padding: 4px 8px;
-  font-size: 0.8rem;
+  font-size: 0.8125rem;
   user-select: none;
   cursor: grab;
   position: sticky;
@@ -137,7 +139,7 @@
   width: 3rem;
   min-width: 3rem;
   max-width: 3rem;
-  font-size: 0.75rem;
+  font-size: 0.8125rem;
   user-select: none;
   cursor: grab;
   padding: 2px 4px;

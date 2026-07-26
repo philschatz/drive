@@ -691,8 +691,10 @@ const clipboardPlugin: GridPlugin = {
 
 /**
  * Autofill a whole row/column selection by continuing the pattern of the
- * neighbour just before it (the row above / column to the left) — the same
- * result as dragging that neighbour's fill handle across the selection.
+ * neighbours before it — the same result as dragging the fill handle of the
+ * filled block immediately above (rows) or to the left (columns) across the
+ * selection. The source is that block's contiguous non-empty run, so
+ * `5, 10` continues as `15` while a lone value is copied.
  */
 function autofillFromNeighbour(
   s: GridCommandState,
@@ -707,9 +709,23 @@ function autofillFromNeighbour(
   const lastCol = ctx.visibleColIds.length - 1;
   const lastRow = ctx.visibleRowIds.length - 1;
   if (lastCol < 0 || lastRow < 0) return;
+
+  // Walk back over the filled run that precedes the selection.
+  const cells = ctx.sheet?.cells ?? {};
+  const hasContent = (i: number) => {
+    if (kind === 'row') {
+      const rowId = ctx.visibleRowIds[i];
+      return ctx.visibleColIds.some(colId => (cells[`${rowId}:${colId}`]?.value ?? '') !== '');
+    }
+    const colId = ctx.visibleColIds[i];
+    return ctx.visibleRowIds.some(rowId => (cells[`${rowId}:${colId}`]?.value ?? '') !== '');
+  };
+  let sourceStart = start - 1;
+  while (sourceStart > 0 && hasContent(sourceStart - 1)) sourceStart--;
+
   const source = kind === 'row'
-    ? { minCol: 0, maxCol: lastCol, minRow: start - 1, maxRow: start - 1 }
-    : { minCol: start - 1, maxCol: start - 1, minRow: 0, maxRow: lastRow };
+    ? { minCol: 0, maxCol: lastCol, minRow: sourceStart, maxRow: start - 1 }
+    : { minCol: sourceStart, maxCol: start - 1, minRow: 0, maxRow: lastRow };
   const fill = kind === 'row'
     ? { minCol: 0, maxCol: lastCol, minRow: start, maxRow: end }
     : { minCol: start, maxCol: end, minRow: 0, maxRow: lastRow };

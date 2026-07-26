@@ -13,7 +13,6 @@ import { useLongPress } from '../shared/useLongPress';
 import type { TaskDocument, Task } from './schema';
 import { TaskEditor } from './TaskEditor';
 import { useDocumentValidation } from '../shared/useDocumentValidation';
-import { ValidationPanel } from '../shared/ValidationPanel';
 import { DocLoader } from '../shared/useDocument';
 import { Badge } from '@/components/ui/badge';
 import { Fab } from '@/components/ui/fab';
@@ -132,7 +131,6 @@ export function Tasks({ docId, rest, readOnly }: { docId?: string; rest?: string
   const [listName, setListName] = useState('Tasks');
   const [tasks, setTasks] = useState<Record<string, Task>>({});
   const [editorState, setEditorState] = useState<EditorState | null>(null);
-  const [showValidation, setShowValidation] = useState(false);
 
   const history = useDocumentHistory(docId!);
   // Feeds both the version slider and the undo cursor; ref-routed inside the
@@ -178,6 +176,10 @@ export function Tasks({ docId, rest, readOnly }: { docId?: string; rest?: string
     }
     setEditorState({ uid: uid!, task: task!, isNew });
   }, []);
+
+  const hasCompleted = Object.values(tasks).some(
+    t => t.progress === 'completed' || t.progress === 'cancelled',
+  );
 
   const deleteCompleted = useCallback(() => {
     if (!canEditRef.current || !docId) return;
@@ -312,18 +314,24 @@ export function Tasks({ docId, rest, readOnly }: { docId?: string; rest?: string
         canUndo={canUndo}
         canRedo={canRedo}
         hidden={hidden}
-        onToggleValidation={() => setShowValidation(v => !v)}
-        validationActive={showValidation}
-        validationCount={validationErrors.length}
+        hasValidationErrors={validationErrors.length > 0}
         sourcePath={focusPath}
-        overflow={canEdit ? [{ icon: 'delete_sweep', label: 'Delete completed', onSelect: deleteCompleted }] : []}
+        // Only offered when there's something finished to clear out.
+        action={canEdit && hasCompleted ? {
+          icon: 'delete_sweep',
+          label: 'Delete completed',
+          onSelect: () => {
+            // Bulk destructive action — confirm before wiping.
+            if (!window.confirm('Delete all completed tasks?')) return;
+            deleteCompleted();
+          },
+        } : undefined}
       />
       <HistorySlider history={history} />
       <div
         className="max-w-screen-md mx-auto w-full px-2 sm:px-4 pb-28"
         style={noAccess ? { opacity: 0.4, pointerEvents: 'none' } : undefined}
       >
-      {showValidation && <ValidationPanel errors={validationErrors} docId={docId} />}
 
       <md-list style={{ background: 'transparent' }}>
         {sorted.map(({ uid, task }) => (

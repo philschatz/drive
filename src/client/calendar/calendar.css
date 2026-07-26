@@ -3,8 +3,15 @@
 .calendar-page {
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  height: 100dvh;
   overflow: hidden;
+  /* schedule-x ships z-index 100–102 for its sticky week header and popups,
+     which would paint over the app bar (z-20) and any menu anchored in it.
+     Those are custom properties, so scope them down to what the calendar
+     actually needs internally: above its events (1–3), below app chrome. */
+  --sx-z-index-week-header: 5;
+  --sx-z-index-event-modal: 6;
+  --sx-calendar-header-popup-z-index: 6;
 }
 
 #sx-cal {

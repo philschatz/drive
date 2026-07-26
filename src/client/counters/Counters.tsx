@@ -10,7 +10,6 @@ import { useFocusPathSync } from '../shared/useFocusPathSync';
 import { HistorySlider } from '../shared/HistorySlider';
 import { useLongPress } from '../shared/useLongPress';
 import { useDocumentValidation } from '../shared/useDocumentValidation';
-import { ValidationPanel } from '../shared/ValidationPanel';
 import { DocLoader } from '../shared/useDocument';
 import { Badge } from '@/components/ui/badge';
 import { Fab } from '@/components/ui/fab';
@@ -174,7 +173,6 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
   const [listName, setListName] = useState('Counters');
   const [events, setEvents] = useState<Record<string, CounterEvent>>({});
   const [editorState, setEditorState] = useState<EditorState | null>(null);
-  const [showValidation, setShowValidation] = useState(false);
   const [chartOpen, setChartOpen] = useState(false);
   // Re-derive "today" when the clock is read; a minute tick keeps statuses fresh
   // across midnight without re-rendering on every click.
@@ -387,18 +385,15 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
         canUndo={canUndo}
         canRedo={canRedo}
         hidden={hidden}
-        onToggleValidation={() => setShowValidation(v => !v)}
-        validationActive={showValidation}
-        validationCount={validationErrors.length}
+        hasValidationErrors={validationErrors.length > 0}
         sourcePath={focusPath}
-        overflow={[{ icon: 'bar_chart', label: 'Chart', onSelect: () => setChartOpen(true) }]}
+        action={{ icon: 'bar_chart', label: 'Chart', onSelect: () => setChartOpen(true) }}
       />
       <HistorySlider history={history} />
       <div
         className="max-w-screen-md mx-auto w-full px-2 sm:px-4 pb-28"
         style={noAccess ? { opacity: 0.4, pointerEvents: 'none' } : undefined}
       >
-      {showValidation && <ValidationPanel errors={validationErrors} docId={docId} />}
 
       <div data-testid="counter-list">
         {sections.map(({ status, entries }) => (

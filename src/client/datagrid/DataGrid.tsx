@@ -8,6 +8,7 @@ import { CommandContextMenuContent } from './CommandBar';
 import { FocusTopBar } from './FocusTopBar';
 import { ConditionalFormatSheet } from './ConditionalFormatSheet';
 import { FormatSheet } from './FormatSheet';
+import { ColorSheet, type ColorTarget } from './ColorSheet';
 import { ContextMenu, ContextMenuTrigger } from '@/components/ui/context-menu';
 import {
   sortedEntries, colIndexToLetter, shortId,
@@ -35,7 +36,6 @@ import { pushDocHash } from '../shared/doc-urls';
 import { useFocusPathSync } from '../shared/useFocusPathSync';
 import { HistorySlider } from '../shared/HistorySlider';
 import { useDocumentValidation } from '../shared/useDocumentValidation';
-import { ValidationPanel } from '../shared/ValidationPanel';
 import { DocLoader } from '../shared/useDocument';
 import { createHfBridge, type HfBridge, type MCResults, type CondFormatResults } from './hf-bridge';
 import { sendHfPort } from '../worker-api';
@@ -162,6 +162,8 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
   const [sheetListOpen, setSheetListOpen] = useState(false);
   const [sheetOptionsOpen, setSheetOptionsOpen] = useState(false);
   const [formatSheetOpen, setFormatSheetOpen] = useState(false);
+  /** Which colour the colour-only sheet is editing (null = closed). */
+  const [colorTarget, setColorTarget] = useState<ColorTarget | null>(null);
   /** Anchored row/column header menu (long-press or right-click). */
   const [headerMenu, setHeaderMenu] = useState<{ kind: 'row' | 'col'; anchor: HTMLElement; page: HeaderMenuPage } | null>(null);
   const [resizeKind, setResizeKind] = useState<'row' | 'col' | null>(null);
@@ -175,7 +177,6 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
 
   const [mcResults, setMcResults] = useState<MCResults | null>(null);
   const condFormatResultsRef = useRef<CondFormatResults | null>(null);
-  const [showValidation, setShowValidation] = useState(false);
 
   const [currentSheetId, setCurrentSheetId] = useState<string | null>(null);
 
@@ -207,6 +208,12 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
     if (!currentSheet?.rows) return [];
     return sortedRowIds.filter(id => !currentSheet.rows[id]?.hidden);
   }, [currentSheet?.rows, sortedRowIds]);
+
+  // Mirrors for the identity-stable header menu / long-press handlers.
+  const visibleColIdsRef = useRef(visibleColIds);
+  visibleColIdsRef.current = visibleColIds;
+  const visibleRowIdsRef = useRef(visibleRowIds);
+  visibleRowIdsRef.current = visibleRowIds;
 
   // Maps visible index → original (full sorted) index for label computation
   const visibleColOriginalIndices = useMemo(() => {
@@ -805,6 +812,8 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
    * Both triggers pass the header element so the menu can anchor to it.
    */
   const openHeaderMenu = useCallback((kind: 'row' | 'col', index: number, anchor: HTMLElement) => {
+    const lastCol = visibleColIdsRef.current.length - 1;
+    const lastRow = visibleRowIdsRef.current.length - 1;
     if (kind === 'row') {
       const indices = selectedRowsRef.current.has(index)
         ? [...selectedRowsRef.current].sort((a, b) => a - b)
@@ -812,9 +821,12 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
       if (!selectedRowsRef.current.has(index)) {
         setSelectedRows(new Set([index]));
         setSelectedCols(new Set());
-        setSelectedCell(null);
         lastClickedRowRef.current = index;
       }
+      // Span the rows as a cell range too, so the range-based commands
+      // (Cut / Copy / Clear / formatting) act on the whole row.
+      setSelectionAnchor([0, indices[0]]);
+      setSelectedCell([Math.max(0, lastCol), indices[indices.length - 1]]);
       setContextMenu({ type: 'row', indices });
     } else {
       const indices = selectedColsRef.current.has(index)
@@ -823,9 +835,10 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
       if (!selectedColsRef.current.has(index)) {
         setSelectedCols(new Set([index]));
         setSelectedRows(new Set());
-        setSelectedCell(null);
         lastClickedColRef.current = index;
       }
+      setSelectionAnchor([indices[0], 0]);
+      setSelectedCell([indices[indices.length - 1], Math.max(0, lastRow)]);
       setContextMenu({ type: 'col', indices });
     }
     setHeaderMenu({ kind, anchor, page: 'main' });
@@ -1549,9 +1562,7 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
         peers={peerList}
         onToggleHistory={history.toggleHistory}
         historyActive={history.active}
-        onToggleValidation={() => setShowValidation(v => !v)}
-        validationActive={showValidation}
-        validationCount={validationErrors.length}
+        hasValidationErrors={validationErrors.length > 0}
         sourcePath={focusPath}
         onUndo={canEdit ? undo : undefined}
         onRedo={canEdit ? redo : undefined}
@@ -1566,7 +1577,6 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
       <HistorySlider history={history} />
       <div className="datagrid-body">
       <div className="datagrid-main" style={noAccess ? { opacity: 0.4, pointerEvents: 'none' as const } : undefined}>
-      {showValidation && <ValidationPanel errors={validationErrors} docId={docId} />}
 
       {columnDefs.length > 0 && doc2 && (
         <>
@@ -2028,7 +2038,8 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
           apiRef={formulaApiRef}
           previewValue={editorPreviewValue}
           resolveCommand={commands.resolveById}
-          onOpenFormat={canEdit ? () => setFormatSheetOpen(true) : undefined}
+          onOpenColor={canEdit ? setColorTarget : undefined}
+          currentFormat={currentCellFormat}
           onInsertFormula={() => setFormulaInsertOpen(true)}
           aggregates={aggregateChips}
           multiSelect={isMultiSelect && !editingCell}
@@ -2071,6 +2082,19 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
         }}
         onClear={() => commands.resolveById('clear-formatting').execute()}
         onOpenConditional={() => setCondFormatOpen(true)}
+        onOpenColor={setColorTarget}
+      />
+      {/* Colour-only picker, shared by the bottom bar and the format sheet. */}
+      <ColorSheet
+        target={colorTarget}
+        onOpenChange={(o) => { if (!o) setColorTarget(null); }}
+        textColor={currentCellFormat?.textColor}
+        bgColor={currentCellFormat?.bgColor}
+        onApply={(target, color) => {
+          if (!commandCtxRef.current) return;
+          applyFormatToSelection(commandCtxRef.current,
+            target === 'fill' ? { bgColor: color } : { textColor: color });
+        }}
       />
       <SheetListSheet
         open={sheetListOpen}

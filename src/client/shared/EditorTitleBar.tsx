@@ -1,5 +1,5 @@
 import type { ComponentChildren } from 'preact';
-import { useRef, useState } from 'preact/hooks';
+import { useEffect, useRef, useState } from 'preact/hooks';
 import { usePeerTransports, getWorkerPeerId } from './automerge';
 import { ConnectionStatus } from './ConnectionStatus';
 import { getWorkerUserGroupId } from '../worker-api';
@@ -8,6 +8,7 @@ import { AccessControlSheet } from '../components/AccessControl';
 import { useAccess } from './useAccess';
 import { sourceUrl } from './doc-urls';
 import { OverflowMenu, type OverflowMenuItem } from './OverflowMenu';
+import { MATERIAL_ORANGE } from './categorical-colors';
 
 interface PeerLike {
   peerId: string;
@@ -24,31 +25,76 @@ export interface OverflowItem {
   disabled?: boolean;
 }
 
-/** Circular 40px icon button matching the app bar's metrics. */
+/** Document-specific button placed directly on the bar (after undo/redo). */
+export interface BarAction extends OverflowItem {
+  /** Render in the selected/toggled state. */
+  active?: boolean;
+  /** Optional colour role for the icon (e.g. 'error' for validation). */
+  tone?: 'error';
+  /** Long-press (or right-click) alternative — e.g. undo → browse history. */
+  onLongPress?: () => void;
+}
+
+/**
+ * Circular 40px icon button matching the app bar's metrics. `onLongPress`
+ * adds a secondary gesture (hold on touch, right-click with a mouse).
+ */
 export function BarIconButton({
   icon,
   label,
   onClick,
+  onLongPress,
   disabled,
   active,
+  tone,
   size = 22,
 }: {
   icon: string;
   label: string;
   onClick?: () => void;
+  onLongPress?: () => void;
   disabled?: boolean;
   active?: boolean;
+  tone?: 'error';
   size?: number;
 }) {
+  const pressRef = useRef<{ timer: number; fired: boolean } | null>(null);
+  const longPress = onLongPress && !disabled
+    ? {
+      onPointerDown: (e: any) => {
+        if (e.pointerType === 'mouse') return; // mouse uses right-click below
+        const timer = window.setTimeout(() => {
+          if (pressRef.current) pressRef.current.fired = true;
+          onLongPress();
+        }, 450);
+        pressRef.current = { timer, fired: false };
+      },
+      onPointerUp: () => {
+        if (pressRef.current) clearTimeout(pressRef.current.timer);
+      },
+      onPointerCancel: () => {
+        if (pressRef.current) clearTimeout(pressRef.current.timer);
+        pressRef.current = null;
+      },
+      onContextMenu: (e: any) => { e.preventDefault(); onLongPress(); },
+    }
+    : {};
+
   return (
     <button
       aria-label={label}
       title={label}
       disabled={disabled}
-      onClick={onClick}
+      onClick={() => {
+        // Swallow the click that follows a long-press.
+        if (pressRef.current?.fired) { pressRef.current = null; return; }
+        onClick?.();
+      }}
+      {...longPress}
       className={
         'inline-flex items-center justify-center h-10 w-10 rounded-full state-layer shrink-0 disabled:opacity-30' +
-        (active ? ' bg-secondary-container text-on-secondary-container' : '')
+        (active ? ' bg-secondary-container text-on-secondary-container' : '') +
+        (tone === 'error' ? ' text-error' : '')
       }
     >
       <span className="material-symbols-outlined" style={{ fontSize: size }}>{icon}</span>
@@ -84,10 +130,10 @@ export function EditorTitleBar<P extends PeerLike>({
   onRedo,
   canUndo,
   canRedo,
-  onToggleValidation,
-  validationActive = false,
-  validationCount = 0,
+  hasValidationErrors = false,
+  action,
   overflow = [],
+  historyPlacement = 'menu',
   hidden = false,
   sticky = true,
   children,
@@ -112,11 +158,14 @@ export function EditorTitleBar<P extends PeerLike>({
   onRedo?: () => void;
   canUndo?: boolean;
   canRedo?: boolean;
-  onToggleValidation?: () => void;
-  validationActive?: boolean;
-  validationCount?: number;
-  /** Editor-specific extra overflow-menu actions (e.g. "Delete completed"). */
+  /** Show the warning button linking to the source editor. */
+  hasValidationErrors?: boolean;
+  /** The document's own bar button, shown right after undo/redo. */
+  action?: BarAction;
+  /** Document-specific items shown behind the kebab. */
   overflow?: OverflowItem[];
+  /** Put History on the bar (as a document action) instead of in the kebab. */
+  historyPlacement?: 'menu' | 'bar';
   /** Slide the bar out of view (see useHideOnScroll). */
   hidden?: boolean;
   /** Set false when the bar sits in a fixed-height flex layout that positions
@@ -129,8 +178,21 @@ export function EditorTitleBar<P extends PeerLike>({
   const [shareOpen, setShareOpen] = useState(false);
   const titleInputRef = useRef<HTMLInputElement>(null);
 
-  // Assemble the overflow entries. `title` mirrors the old inline-button
-  // tooltips (also keeps existing tests/locators working).
+  // Bar layout is declared, not measured: undo/redo first, then the document's
+  // own actions, then the connection/share cluster, validation, and the kebab.
+  // Each editor decides what belongs on the bar (`actions`) and what belongs
+  // behind the kebab (`overflow`).
+  const isAdmin = access === 'admin';
+
+  const historyItem = onToggleHistory && {
+    icon: 'history',
+    label: 'History',
+    title: 'History',
+    onSelect: onToggleHistory,
+  };
+
+  // Kebab: rename, sharing (non-admins), history (unless the editor pulls it
+  // onto the bar), the editor's own overflow items, then Edit source.
   const menuItems: OverflowMenuItem[] = [];
   if (titleEditable) {
     menuItems.push({
@@ -151,7 +213,6 @@ export function EditorTitleBar<P extends PeerLike>({
   // Admins get a dedicated share button on the bar (they manage sharing);
   // everyone else reaches the read-only members list via the overflow menu —
   // labelled "Sharing" since non-admins can view permissions but not share.
-  const isAdmin = access === 'admin';
   if (docId && !isAdmin) {
     menuItems.push({
       icon: 'share',
@@ -160,22 +221,7 @@ export function EditorTitleBar<P extends PeerLike>({
       onSelect: () => setShareOpen(true),
     });
   }
-  if (onToggleHistory) {
-    menuItems.push({
-      icon: 'history',
-      label: historyActive ? 'Close history' : 'History',
-      title: historyActive ? 'Close history' : 'Browse history',
-      onSelect: onToggleHistory,
-    });
-  }
-  if (onToggleValidation && validationCount! > 0) {
-    menuItems.push({
-      icon: 'warning',
-      label: `${validationActive ? 'Hide' : 'Show'} validation errors (${validationCount! > 99 ? '99+' : validationCount})`,
-      title: validationActive ? 'Hide validation errors' : `${validationCount} validation error${validationCount !== 1 ? 's' : ''}`,
-      onSelect: onToggleValidation,
-    });
-  }
+  if (historyItem && historyPlacement === 'menu') menuItems.push(historyItem);
   menuItems.push(...overflow.map(item => ({ ...item, title: item.label })));
   if (showSourceLink && docId) {
     menuItems.push({
@@ -191,7 +237,7 @@ export function EditorTitleBar<P extends PeerLike>({
   return (
     <div
       className={
-        'flex items-center gap-1.5 pl-1 pr-2 min-h-14 w-full bg-surface transition-transform duration-200' +
+        'flex items-center gap-1 pl-1 pr-1 min-h-14 w-full bg-surface transition-transform duration-200' +
         (sticky ? ' sticky top-0 z-20' : '') +
         (hidden ? ' -translate-y-full' : '')
       }
@@ -213,7 +259,7 @@ export function EditorTitleBar<P extends PeerLike>({
         <input
           ref={titleInputRef}
           data-testid="doc-title-input"
-          className="border-0 bg-transparent md-title-large font-bold outline-none flex-1 min-w-0"
+          className="border-0 bg-transparent md-title-large font-bold outline-none flex-1 min-w-12"
           value={title}
           onFocus={() => onTitleFocus?.()}
           onInput={(e: any) => onTitleChange?.(e.currentTarget.value)}
@@ -221,21 +267,56 @@ export function EditorTitleBar<P extends PeerLike>({
           onKeyDown={(e: any) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
         />
       ) : (
-        <span className="md-title-large font-bold truncate flex-1 min-w-0">{title}</span>
+        <span className="md-title-large font-bold truncate flex-1 min-w-12">{title}</span>
       )}
 
       {children}
 
-      {/* Right side */}
-      <div className="flex items-center gap-1 sm:gap-1.5 ml-auto shrink-0">
-        {/* Undo / redo — every doc type restores through the shared version
-            history (see useUndoRedo), so both live on the bar, not the menu. */}
+      {/* Right side, in a fixed order: undo/redo, the document's own actions,
+          peers + connection, share, validation, kebab. */}
+      <div className="flex items-center gap-0.5 sm:gap-1.5 ml-auto shrink-0">
+        {/* Undo/redo — long-press (or right-click) browses the version history,
+            which is the same restore mechanism they drive. */}
         {onUndo && (
-          <BarIconButton icon="undo" label="Undo" onClick={onUndo} disabled={canUndo === false} />
+          <BarIconButton
+            icon="undo"
+            label="Undo"
+            onClick={onUndo}
+            onLongPress={onToggleHistory}
+            disabled={canUndo === false}
+          />
         )}
         {onRedo && (
-          <BarIconButton icon="redo" label="Redo" onClick={onRedo} disabled={canRedo === false} />
+          <BarIconButton
+            icon="redo"
+            label="Redo"
+            onClick={onRedo}
+            onLongPress={onToggleHistory}
+            disabled={canRedo === false}
+          />
         )}
+
+        {/* The document's own action */}
+        {action && (
+          <BarIconButton
+            icon={action.icon}
+            label={action.label}
+            onClick={action.onSelect}
+            onLongPress={action.onLongPress}
+            disabled={action.disabled}
+            active={action.active}
+            tone={action.tone}
+          />
+        )}
+        {historyPlacement === 'bar' && historyItem && (
+          <BarIconButton
+            icon={historyItem.icon}
+            label={historyItem.label}
+            onClick={historyItem.onSelect}
+            active={historyActive}
+          />
+        )}
+
         {/* Peer dots — clipped to ~4 dots on narrow screens. Devices of the same user
             collapse to a single dot (keyed by user-group id); all of the local user's
             own devices are hidden, not just the current one. */}
@@ -267,9 +348,27 @@ export function EditorTitleBar<P extends PeerLike>({
           </button>
         )}
 
-        {/* Overflow (kebab) menu — Rename / Share / History / Validation /
-            editor-specific items / Edit source. */}
-        <OverflowMenu items={menuItems} />
+        {/* Validation errors: a warning that takes you to the source editor,
+            where the offending fields can actually be inspected and fixed. */}
+        {hasValidationErrors && docId && (
+          <a
+            href={sourceUrl(docId, sourcePath)}
+            aria-label="Validation errors"
+            title="Validation errors — open the source editor"
+            className="inline-flex items-center justify-center h-10 w-10 rounded-full state-layer shrink-0"
+          >
+            <span
+              className="material-symbols-outlined"
+              style={{ fontSize: 22, color: MATERIAL_ORANGE }}
+            >
+              warning
+            </span>
+          </a>
+        )}
+
+        {/* Kebab — only the actions that didn't fit on the bar (plus Sharing
+            for non-admins). Hidden entirely when everything fits. */}
+        {menuItems.length > 0 && <OverflowMenu items={menuItems} />}
       </div>
 
       {/* Share & Permissions sheet — opened from the overflow menu. */}
