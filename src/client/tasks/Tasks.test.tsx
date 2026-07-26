@@ -59,9 +59,9 @@ describe('Tasks container CRUD', () => {
     expect(doc.tasks[milkUid].progress).toBe('completed');
     expect(rowOf('Buy milk').getAttribute('data-checked')).toBe('true');
 
-    // Open the editor via the row's trailing kebab, retitle — auto-save
-    // commits on blur, no Save button.
-    fireEvent.click(screen.getByRole('button', { name: 'Edit Walk the dog' }));
+    // Open the editor via right-click (the long-press path — rows have no
+    // kebab), retitle — auto-save commits on blur, no Save button.
+    fireEvent.contextMenu(rowOf('Walk the dog'));
     expect(screen.getByText('Edit Task')).toBeTruthy();
     const titleInput = screen.getByDisplayValue('Walk the dog');
     fireEvent.input(titleInput, { target: { value: 'Walk the dog in the park' } });

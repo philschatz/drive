@@ -1,6 +1,6 @@
 import 'temporal-polyfill/global';
 import {
-  expectedOccurrences, metInPeriod, windowEnd, currentStatus, sortedCounters, metMissedByWeek, isArchived,
+  expectedOccurrences, metInPeriod, windowEnd, currentStatus, currentStreak, sortedCounters, metMissedByWeek, isArchived,
 } from './occurrences';
 import type { CounterEvent } from './schema';
 
@@ -102,6 +102,44 @@ describe('currentStatus', () => {
 
   it('no rule and no start → free tally', () => {
     expect(currentStatus({ '@type': 'Event', title: 'pushups' }, NOW).status).toBe('tally');
+  });
+});
+
+describe('currentStreak', () => {
+  it('counts consecutive met days including today', () => {
+    const ev = daily({ completions: { '2026-07-19T09:00:00': '', '2026-07-20T09:00:00': '', '2026-07-21T09:00:00': '' } });
+    expect(currentStreak(ev, NOW)).toBe(3);
+  });
+
+  it('the current unmet-but-open period does not reset the streak', () => {
+    const ev = daily({ completions: { '2026-07-19T09:00:00': '', '2026-07-20T09:00:00': '' } });
+    expect(currentStreak(ev, NOW)).toBe(2);
+  });
+
+  it('resets once a missed occurrence is decided', () => {
+    // 18 + 19 met, 20 missed (decided — the 21st has begun), 21 met → streak 1.
+    const ev = daily({ completions: { '2026-07-18T09:00:00': '', '2026-07-19T09:00:00': '', '2026-07-21T09:00:00': '' } });
+    expect(currentStreak(ev, NOW)).toBe(1);
+  });
+
+  it('a closed window today does not reset while a late completion still counts', () => {
+    // Timed habit: today's 08–09 window has passed unmet, but the credit period
+    // runs until tomorrow's occurrence — yesterday's streak survives.
+    const ev = daily({ startTime: '08:00:00', duration: 'PT1H', completions: { '2026-07-20T08:30:00': '' } });
+    expect(currentStreak(ev, NOW)).toBe(1);
+  });
+
+  it('counts weekly periods', () => {
+    const ev = daily({
+      recurrenceRule: { '@type': 'RecurrenceRule', frequency: 'weekly', byDay: [{ '@type': 'NDay', day: 'mo' }] },
+      completions: { '2026-07-13T09:00:00': '', '2026-07-20T10:00:00': '' },
+    });
+    expect(currentStreak(ev, NOW)).toBe(2);
+  });
+
+  it('non-recurring events have no streak', () => {
+    expect(currentStreak({ '@type': 'Event', start: '2026-07-20', completions: { '2026-07-20T10:00:00': '' } }, NOW)).toBe(0);
+    expect(currentStreak({ '@type': 'Event', completions: { '2026-07-20T10:00:00': '' } }, NOW)).toBe(0);
   });
 });
 

@@ -56,9 +56,9 @@ function sortedTasks(tasks: Record<string, Task>): { uid: string; task: Task }[]
 }
 
 /**
- * One task row: tap toggles completion, long-press / right-click / trailing
- * kebab opens the editor. The row itself carries the checkbox semantics
- * (role/aria-checked); the leading md-checkbox is purely visual.
+ * One task row: tap toggles completion, long-press / right-click / Shift+F10 /
+ * the trailing kebab opens the editor. The row itself carries the checkbox
+ * semantics (role/aria-checked); the leading md-checkbox is purely visual.
  */
 function TaskListItem({ uid, task, canEdit, peerEditingTasks, onToggle, onEdit }: {
   uid: string;

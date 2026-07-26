@@ -22,7 +22,7 @@ const dailyHabit = (title: string, start = '2026-07-01') => ({
 describe('Counters container', () => {
   beforeEach(() => { mock.__reset(); });
 
-  it('adds a daily habit via the FAB and records a completion by tapping it', async () => {
+  it('adds a daily habit via the FAB and records a completion via the icon/title buttons', async () => {
     mock.__setDoc(DOC, { '@type': 'Calendar+Counters', name: 'Test Counters', events: {} });
     render(<Counters docId={DOC} />);
     await waitFor(() => expect(document.querySelector('md-fab')).toBeTruthy());
@@ -49,18 +49,28 @@ describe('Counters container', () => {
     expect(screen.getByRole('heading', { name: 'To do' })).toBeTruthy();
     expect(rowOf('Stretch').getAttribute('data-status')).toBe('pending');
 
-    // Tapping the row records a completion → moves to "Done" with a 1× badge.
-    fireEvent.click(rowOf('Stretch'));
+    // Clicking the leading icon records a completion → moves to "Done" with a
+    // 1-day flame streak badge (recurring items show streak, not a total).
+    fireEvent.click(within(rowOf('Stretch')).getByRole('button', { name: 'Record completion for Stretch' }));
     expect(rowOf('Stretch').getAttribute('data-status')).toBe('done');
     expect(screen.getByRole('heading', { name: 'Done' })).toBeTruthy();
-    expect(within(rowOf('Stretch')).getByText('1×')).toBeTruthy();
+    expect(within(rowOf('Stretch')).getByTitle('1-day streak')).toBeTruthy();
 
-    // The trailing kebab opens the editor — it must NOT record another
-    // completion (the kebab stops propagation; the hook ignores control clicks).
-    fireEvent.click(within(rowOf('Stretch')).getByRole('button', { name: 'Edit Stretch' }));
+    // The title text is a record button too — a second click adds another
+    // completion (streak stays 1: same day) without opening the editor.
+    fireEvent.click(within(rowOf('Stretch')).getByRole('button', { name: 'Stretch' }));
+    expect(screen.queryByText('Edit Counter')).toBeNull();
+    const events = mock.__getDoc(DOC).events as Record<string, any>;
+    const uid = Object.keys(events).find(k => events[k].title === 'Stretch')!;
+    expect(Object.keys(events[uid].completions).length).toBe(2);
+    expect(within(rowOf('Stretch')).getByTitle('1-day streak')).toBeTruthy();
+
+    // Clicking the row itself (outside icon/title) opens the editor — and must
+    // NOT record another completion.
+    fireEvent.click(rowOf('Stretch'));
     expect(screen.getByText('Edit Counter')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
-    expect(within(rowOf('Stretch')).getByText('1×')).toBeTruthy();
+    expect(Object.keys(mock.__getDoc(DOC).events[uid].completions).length).toBe(2);
   });
 
   it('archives (via the editor) and unarchives a recurring habit', async () => {
@@ -69,8 +79,8 @@ describe('Counters container', () => {
     render(<Counters docId={DOC} />);
     await waitFor(() => expect(screen.getByText('Meditate')).toBeTruthy());
 
-    // Archive now lives in the editor: open via the kebab, then Archive.
-    fireEvent.click(within(rowOf('Meditate')).getByRole('button', { name: 'Edit Meditate' }));
+    // Archive lives in the editor: open it by clicking the row, then Archive.
+    fireEvent.click(rowOf('Meditate'));
     fireEvent.click(screen.getByRole('button', { name: 'Archive' }));
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
     expect(screen.getByRole('heading', { name: 'Archived' })).toBeTruthy();
@@ -83,12 +93,28 @@ describe('Counters container', () => {
     confirmSpy.mockRestore();
   });
 
-  it('opens the editor via the row kebab', async () => {
+  it('opens the editor via right-click and Shift+F10 (the long-press paths)', async () => {
     mock.__setDoc(DOC, { '@type': 'Calendar+Counters', name: 'C', events: { e1: dailyHabit('Meditate') } });
     render(<Counters docId={DOC} />);
     await waitFor(() => expect(screen.getByText('Meditate')).toBeTruthy());
 
-    fireEvent.click(within(rowOf('Meditate')).getByRole('button', { name: 'Edit Meditate' }));
+    fireEvent.contextMenu(rowOf('Meditate'));
     expect(screen.getByText('Edit Counter')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+
+    fireEvent.keyDown(rowOf('Meditate'), { key: 'F10', shiftKey: true });
+    expect(screen.getByText('Edit Counter')).toBeTruthy();
+  });
+
+  it('non-recurring tallies keep the lifetime N× badge', async () => {
+    mock.__setDoc(DOC, {
+      '@type': 'Calendar+Counters', name: 'C',
+      events: {
+        e1: { '@type': 'Event', title: 'Pushups', completions: { '2026-07-19T09:00:00': '', '2026-07-20T09:00:00': '' } },
+      },
+    });
+    render(<Counters docId={DOC} />);
+    await waitFor(() => expect(screen.getByText('Pushups')).toBeTruthy());
+    expect(within(rowOf('Pushups')).getByText('2×')).toBeTruthy();
   });
 });

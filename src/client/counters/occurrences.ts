@@ -90,6 +90,36 @@ export function metInPeriod(ev: CounterEvent, occStart: string, nextStart?: stri
 }
 
 /**
+ * Consecutive met occurrences ending at `now`, for the row's streak badge.
+ * An unmet occurrence only breaks the streak once it is decided (its credit
+ * period elapsed — same rule as metMissedByWeek), so the current still-open
+ * period never resets it. Capped by the LOOKBACK_DAYS expansion window.
+ * Non-recurring events have no streak (0).
+ */
+export function currentStreak(ev: CounterEvent, now: string): number {
+  if (!ev.recurrenceRule) return 0;
+  const today = dateOf(now);
+  const from = Temporal.PlainDate.from(today).subtract({ days: LOOKBACK_DAYS }).toString();
+  // Expand past `now` too, so the current occurrence's `next` (and with it the
+  // end of its credit period) is known.
+  const to = Temporal.PlainDate.from(today).add({ days: LOOKBACK_DAYS }).toString();
+  const occs = expectedOccurrences(ev, from, to);
+  let streak = 0;
+  for (let i = 0; i < occs.length; i++) {
+    const occ = occs[i];
+    if (toDateTime(occ) > now) break;
+    const next = occs[i + 1];
+    if (metInPeriod(ev, occ, next)) {
+      streak++;
+      continue;
+    }
+    const decided = next ? toDateTime(next) <= now : windowEnd(ev, occ) <= now;
+    if (decided) streak = 0;
+  }
+  return streak;
+}
+
+/**
  * Status of a counter's current period, used for sectioning/sorting:
  *   'tally'    — no schedule at all: a free-running counter, always clickable
  *   'upcoming' — its first occurrence is still in the future

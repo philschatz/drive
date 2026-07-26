@@ -1,6 +1,6 @@
 /**
  * Per-document actions bottom sheet — opened by long-pressing (or right-clicking,
- * or the trailing kebab of) a Home list row. Offers Share / Rename / Archive /
+ * or Shift+F10 on) a Home list row. Offers Share / Rename / Archive /
  * View source; availability follows the user's access level.
  */
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';

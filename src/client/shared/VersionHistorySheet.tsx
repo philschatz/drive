@@ -39,13 +39,13 @@ export function VersionHistorySheet({ open, onOpenChange, history }: VersionHist
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent side="bottom" className="max-h-[70vh] flex flex-col">
         <SheetHeader>
-          <SheetTitle>Version history</SheetTitle>
+          <SheetTitle>Version history ({changeCount})</SheetTitle>
         </SheetHeader>
 
         {/* Scrub through versions. Dragging the slider and clicking a row below
             both drive the same `version`, so the two stay in sync. */}
         {changeCount > 1 && (
-          <div className="mt-3 flex items-center gap-3">
+          <div className="mt-3 flex items-center">
             <input
               type="range"
               className="flex-1 min-w-0 h-1 accent-primary"
@@ -54,9 +54,6 @@ export function VersionHistorySheet({ open, onOpenChange, history }: VersionHist
               value={version}
               onInput={(e: any) => onSliderChange(parseInt(e.target.value))}
             />
-            <span className="text-xs text-muted-foreground tabular-nums whitespace-nowrap">
-              {version + 1}
-            </span>
           </div>
         )}
 

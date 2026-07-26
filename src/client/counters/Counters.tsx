@@ -14,7 +14,8 @@ import { Badge } from '@/components/ui/badge';
 import { Fab } from '@/components/ui/fab';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import type { CounterEvent } from './schema';
-import { sortedCounters, metMissedByWeek, isArchived, type CounterEntry, type CounterStatus } from './occurrences';
+import { MATERIAL_ORANGE } from '../shared/categorical-colors';
+import { sortedCounters, metMissedByWeek, isArchived, currentStreak, type CounterEntry, type CounterStatus } from './occurrences';
 import { MetMissedChart } from './Chart';
 import { CounterEditor } from './CounterEditor';
 
@@ -69,29 +70,42 @@ function describeSchedule(ev: CounterEvent): string | null {
   return every + freq + days + at;
 }
 
+/** Streak tooltip, e.g. "5-day streak" (unit follows the recurrence frequency). */
+function streakTitle(streak: number, frequency?: string): string {
+  const unit = { daily: 'day', weekly: 'week', monthly: 'month', yearly: 'year' }[frequency || ''];
+  return unit ? `${streak}-${unit} streak` : `${streak} in a row`;
+}
+
 /**
- * One counter row: tap records a completion, long-press / right-click / trailing
- * kebab opens the editor (which also holds Archive and Delete).
+ * One counter row: tap opens the editor (which also holds Archive and Delete);
+ * clicking the leading icon or the title records a completion. Long-press /
+ * right-click / Shift+F10 / the trailing kebab open the editor too.
  */
-function CounterListItem({ uid, ev, status, canEdit, peerEditingEvents, onRecord, onEdit }: {
+function CounterListItem({ uid, ev, status, now, canEdit, peerEditingEvents, onRecord, onEdit }: {
   uid: string;
   ev: CounterEvent;
   status: CounterStatus;
+  now: string;
   canEdit: boolean;
   peerEditingEvents: Record<string, PeerFieldInfo>;
   onRecord: (uid: string) => void;
   onEdit: (uid: string, ev: CounterEvent) => void;
 }) {
   const clickCount = Object.keys(ev.completions || {}).length;
+  const streak = ev.recurrenceRule ? currentStreak(ev, now) : 0;
   const schedule = describeSchedule(ev);
+  const title = ev.title || 'Untitled';
   const iconColor = status === 'done'
     ? 'var(--md-sys-color-primary)'
     : status === 'overdue' ? 'var(--md-sys-color-error)' : undefined;
   const icon = status === 'done' ? 'check_circle' : status === 'overdue' ? 'error' : status === 'tally' ? 'exposure_plus_1' : 'radio_button_unchecked';
   const lp = useLongPress({
-    onTap: () => { if (canEdit) onRecord(uid); },
+    onTap: () => { if (canEdit) onEdit(uid, ev); },
     onLongPress: () => { if (canEdit) onEdit(uid, ev); },
   });
+  // Real <button>s so useLongPress ignores presses on them (interactive child)
+  // and keyboard users can tab to the record action.
+  const record = (e: MouseEvent) => { e.stopPropagation(); onRecord(uid); };
 
   return (
     <md-list-item
@@ -101,17 +115,46 @@ function CounterListItem({ uid, ev, status, canEdit, peerEditingEvents, onRecord
       style={{ opacity: peerEditingEvents[uid] ? 0.5 : status === 'done' ? 0.6 : 1 }}
       {...lp}
     >
-      <span slot="start" className="material-symbols-outlined text-lg" style={{ color: iconColor }}>
-        {icon}
-      </span>
-      <div slot="headline">{ev.title || 'Untitled'}</div>
+      {canEdit ? (
+        <button
+          slot="start"
+          aria-label={`Record completion for ${title}`}
+          className="material-symbols-outlined text-lg state-layer rounded-full"
+          style={{ color: iconColor }}
+          onClick={record}
+        >
+          {icon}
+        </button>
+      ) : (
+        <span slot="start" className="material-symbols-outlined text-lg" style={{ color: iconColor }}>
+          {icon}
+        </span>
+      )}
+      <div slot="headline">
+        {canEdit ? (
+          <button className="text-left" onClick={record}>{title}</button>
+        ) : (
+          title
+        )}
+      </div>
       <span slot="end" className="flex items-center gap-1.5">
         {schedule && <Badge variant="secondary">{schedule}</Badge>}
-        {clickCount > 0 && <Badge variant="outline" title={`${clickCount} recorded`}>{clickCount}×</Badge>}
+        {ev.recurrenceRule
+          ? streak > 0 && (
+              <Badge
+                variant="default"
+                title={streakTitle(streak, ev.recurrenceRule.frequency)}
+                style={{ background: MATERIAL_ORANGE, color: '#000' }}
+              >
+                <span className="material-symbols-outlined" style={{ fontSize: 14 }}>local_fire_department</span>
+                {streak}
+              </Badge>
+            )
+          : clickCount > 0 && <Badge variant="outline" title={`${clickCount} recorded`}>{clickCount}×</Badge>}
         <PresenceDot fieldId={uid} peerFocusedFields={peerEditingEvents} />
         {canEdit && (
           <button
-            aria-label={`Edit ${ev.title || 'Untitled'}`}
+            aria-label={`Edit ${title}`}
             title="Edit"
             className="inline-flex items-center justify-center h-10 w-10 rounded-full state-layer text-muted-foreground"
             onClick={(e: MouseEvent) => { e.stopPropagation(); onEdit(uid, ev); }}
@@ -362,6 +405,7 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
                   uid={uid}
                   ev={ev}
                   status={status}
+                  now={now}
                   canEdit={canEdit}
                   peerEditingEvents={peerEditingEvents}
                   onRecord={recordClick}

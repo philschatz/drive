@@ -4,14 +4,14 @@
  * Interaction model for the mobile-first redesign: a whole-row press performs the
  * PRIMARY action (`onTap`), and holding the row (~450ms) opens a SECONDARY surface
  * (`onLongPress`) — an edit/actions sheet. Desktop right-click maps to the same
- * secondary surface, and an always-visible trailing kebab is the keyboard/SR path,
- * so long-press is never the only way to reach edit.
+ * secondary surface, and so do the keyboard's context-menu gestures (Shift+F10 or
+ * the ContextMenu key) — rows have no trailing kebab, so this is the SR/keyboard path.
  *
  * Wiring: spread the returned handlers on the row element (e.g. an `md-list-item`).
  * Do NOT also add your own `onClick` — the primary action is `onTap`, invoked from
  * the real click event so keyboard Enter/Space on a focusable row still works. The
  * hook swallows the synthetic click that follows a long-press so nothing double-fires.
- * Presses that start on an interactive child (checkbox, kebab, links…) are ignored so
+ * Presses that start on an interactive child (checkbox, links…) are ignored so
  * those controls keep working.
  */
 import { useRef } from 'preact/hooks';
@@ -22,8 +22,8 @@ const INTERACTIVE_SELECTOR =
   '[data-no-longpress],md-checkbox,md-switch,md-icon-button,md-menu,md-fab';
 
 export interface UseLongPressOptions {
-  /** Secondary action — fired after a hold, or on right-click. */
-  onLongPress: (e: PointerEvent | MouseEvent) => void;
+  /** Secondary action — fired after a hold, on right-click, or on Shift+F10. */
+  onLongPress: (e: PointerEvent | MouseEvent | KeyboardEvent) => void;
   /** Primary action — fired on a normal tap/click (and keyboard activation). */
   onTap?: (e: MouseEvent) => void;
   /** Hold duration in ms before long-press fires (default 450). */
@@ -41,6 +41,7 @@ export interface LongPressHandlers {
   onPointerCancel: (e: PointerEvent) => void;
   onClick: (e: MouseEvent) => void;
   onContextMenu: (e: MouseEvent) => void;
+  onKeyDown: (e: KeyboardEvent) => void;
 }
 
 export function useLongPress(opts: UseLongPressOptions): LongPressHandlers {
@@ -125,6 +126,15 @@ export function useLongPress(opts: UseLongPressOptions): LongPressHandlers {
       if (!contextMenuAsLongPress) return;
       e.preventDefault();
       suppressClick.current = true;
+      cb.current.onLongPress(e);
+    },
+    // Keyboard path to the secondary action (rows have no kebab): the standard
+    // "open context actions" keys. Note browsers also fire contextmenu for
+    // these — preventDefault here stops that, so the action fires only once.
+    onKeyDown(e) {
+      const isMenuKey = e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10');
+      if (!isMenuKey || interactiveChild(e)) return;
+      e.preventDefault();
       cb.current.onLongPress(e);
     },
   };
