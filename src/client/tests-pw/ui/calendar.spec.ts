@@ -105,7 +105,10 @@ test.describe('Calendar', () => {
     // Overlay click closes panel
     await page.getByText('Brand New Event').first().click({ force: true });
     await expect(page.locator('.panel')).toBeVisible();
-    await page.locator('.overlay').click({ force: true });
+    // Click near the top of the overlay — the editor is a bottom sheet now, so
+    // the overlay's center is covered by sheet content (a force-click there
+    // would land on the sheet and not dismiss).
+    await page.locator('.overlay').click({ force: true, position: { x: 10, y: 10 } });
     await expect(page.locator('.panel')).toHaveCount(0);
 
     // Edit the title -> "Updated Title"

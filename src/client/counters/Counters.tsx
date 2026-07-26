@@ -4,7 +4,7 @@ import { peerColor, peerDisplayName, usePresence, PresenceDot, type PeerFieldInf
 import { EditorTitleBar } from '../shared/EditorTitleBar';
 import { useDocumentHistory } from '../shared/useDocumentHistory';
 import { useCanEdit } from '../shared/useCanEdit';
-import { replaceDocHash, encodeRestPath } from '../shared/doc-urls';
+import { useFocusPathSync } from '../shared/useFocusPathSync';
 import { HistorySlider } from '../shared/HistorySlider';
 import { useLongPress } from '../shared/useLongPress';
 import { useDocumentValidation } from '../shared/useDocumentValidation';
@@ -223,19 +223,9 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
     setFocusedPath(path);
   }, []);
 
-  // Sync selection → presence broadcast + URL (all derived from focusPath).
-  // focusPath is rebuilt every render, so dedupe by value — otherwise every
-  // render (e.g. each incoming peer-presence update) re-sends set-presence,
-  // and two open editors ping-pong broadcasts at each other forever.
-  const lastBroadcastRef = useRef<string | null>('');
-  useEffect(() => {
-    if (!editorState) setFocusedPath(null);
-    const key = focusPath ? JSON.stringify(focusPath) : null;
-    if (lastBroadcastRef.current === key) return;
-    lastBroadcastRef.current = key;
-    broadcast('focusedField', focusPath ?? null);
-    if (docId) replaceDocHash(docId, focusPath ? encodeRestPath(focusPath) : undefined);
-  }, [editorState, focusPath, docId, broadcast]);
+  // Clear a stale field focus when the editor closes; sync presence + URL.
+  useEffect(() => { if (!editorState) setFocusedPath(null); }, [editorState]);
+  useFocusPathSync(docId, focusPath, broadcast);
 
   useEffect(() => {
     if (!docId) return;
