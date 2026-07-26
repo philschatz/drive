@@ -1,0 +1,1264 @@
+{
+  "@type": "DataGrid",
+  "name": "Home Spending",
+  "description": "Two sheets: a month of transactions, and a summary with per-category totals, shares and the top five expenses (LARGE + INDEX/MATCH).",
+  "sheets": {
+    "sum": {
+      "@type": "Sheet",
+      "name": "Summary",
+      "index": 0,
+      "columns": {
+        "c1": {
+          "index": 0,
+          "width": 230
+        },
+        "c2": {
+          "index": 1,
+          "width": 130
+        },
+        "c3": {
+          "index": 2,
+          "width": 280
+        },
+        "c4": {
+          "index": 3,
+          "width": 130
+        }
+      },
+      "rows": {
+        "r1": {
+          "index": 0,
+          "height": 36
+        },
+        "r2": {
+          "index": 1
+        },
+        "r3": {
+          "index": 2
+        },
+        "r4": {
+          "index": 3
+        },
+        "r5": {
+          "index": 4
+        },
+        "r6": {
+          "index": 5
+        },
+        "r7": {
+          "index": 6
+        },
+        "r8": {
+          "index": 7
+        },
+        "r9": {
+          "index": 8
+        },
+        "r10": {
+          "index": 9
+        },
+        "r11": {
+          "index": 10
+        },
+        "r12": {
+          "index": 11
+        },
+        "r13": {
+          "index": 12
+        },
+        "r14": {
+          "index": 13
+        },
+        "r15": {
+          "index": 14
+        },
+        "r16": {
+          "index": 15
+        },
+        "r17": {
+          "index": 16
+        },
+        "r18": {
+          "index": 17
+        },
+        "r19": {
+          "index": 18
+        },
+        "r20": {
+          "index": 19
+        },
+        "r21": {
+          "index": 20
+        },
+        "r22": {
+          "index": 21
+        },
+        "r23": {
+          "index": 22
+        },
+        "r24": {
+          "index": 23
+        },
+        "r25": {
+          "index": 24
+        },
+        "r26": {
+          "index": 25
+        },
+        "r27": {
+          "index": 26
+        },
+        "r28": {
+          "index": 27
+        },
+        "r29": {
+          "index": 28
+        }
+      },
+      "cells": {
+        "r1:c1": {
+          "value": "Home spending — last 30 days"
+        },
+        "r2:c1": {
+          "value": "Period"
+        },
+        "r2:c2": {
+          "value": "2026-06-27 to 2026-07-26"
+        },
+        "r3:c1": {
+          "value": "Total spent"
+        },
+        "r3:c2": {
+          "value": "=SUM({R[r2]C[c4]S{tx}}:{R[r31]C[c4]S{tx}})"
+        },
+        "r4:c1": {
+          "value": "Transactions"
+        },
+        "r4:c2": {
+          "value": "=COUNT({R[r2]C[c4]S{tx}}:{R[r31]C[c4]S{tx}})"
+        },
+        "r5:c1": {
+          "value": "Average transaction"
+        },
+        "r5:c2": {
+          "value": "=AVERAGE({R[r2]C[c4]S{tx}}:{R[r31]C[c4]S{tx}})"
+        },
+        "r6:c1": {
+          "value": "Largest single charge"
+        },
+        "r6:c2": {
+          "value": "=MAX({R[r2]C[c4]S{tx}}:{R[r31]C[c4]S{tx}})"
+        },
+        "r7:c1": {
+          "value": "Smallest single charge"
+        },
+        "r7:c2": {
+          "value": "=MIN({R[r2]C[c4]S{tx}}:{R[r31]C[c4]S{tx}})"
+        },
+        "r8:c1": {
+          "value": "Average per day"
+        },
+        "r8:c2": {
+          "value": "={R[r3]C[c2]}/30"
+        },
+        "r9:c1": {
+          "value": "Non-housing spend"
+        },
+        "r9:c2": {
+          "value": "={R[r3]C[c2]}-{R[r11]C[c2]}"
+        },
+        "r11:c1": {
+          "value": "Housing"
+        },
+        "r11:c2": {
+          "value": "=SUMIF({R[r2]C[c3]S{tx}}:{R[r31]C[c3]S{tx}},{R[r11]C[c1]},{R[r2]C[c4]S{tx}}:{R[r31]C[c4]S{tx}})"
+        },
+        "r11:c3": {
+          "value": "=COUNTIF({R[r2]C[c3]S{tx}}:{R[r31]C[c3]S{tx}},{R[r11]C[c1]})"
+        },
+        "r11:c4": {
+          "value": "={R[r11]C[c2]}/{R{r3}C{c2}}"
+        },
+        "r12:c1": {
+          "value": "Groceries"
+        },
+        "r12:c2": {
+          "value": "=SUMIF({R[r2]C[c3]S{tx}}:{R[r31]C[c3]S{tx}},{R[r12]C[c1]},{R[r2]C[c4]S{tx}}:{R[r31]C[c4]S{tx}})"
+        },
+        "r12:c3": {
+          "value": "=COUNTIF({R[r2]C[c3]S{tx}}:{R[r31]C[c3]S{tx}},{R[r12]C[c1]})"
+        },
+        "r12:c4": {
+          "value": "={R[r12]C[c2]}/{R{r3}C{c2}}"
+        },
+        "r13:c1": {
+          "value": "Dining out"
+        },
+        "r13:c2": {
+          "value": "=SUMIF({R[r2]C[c3]S{tx}}:{R[r31]C[c3]S{tx}},{R[r13]C[c1]},{R[r2]C[c4]S{tx}}:{R[r31]C[c4]S{tx}})"
+        },
+        "r13:c3": {
+          "value": "=COUNTIF({R[r2]C[c3]S{tx}}:{R[r31]C[c3]S{tx}},{R[r13]C[c1]})"
+        },
+        "r13:c4": {
+          "value": "={R[r13]C[c2]}/{R{r3}C{c2}}"
+        },
+        "r14:c1": {
+          "value": "Transport"
+        },
+        "r14:c2": {
+          "value": "=SUMIF({R[r2]C[c3]S{tx}}:{R[r31]C[c3]S{tx}},{R[r14]C[c1]},{R[r2]C[c4]S{tx}}:{R[r31]C[c4]S{tx}})"
+        },
+        "r14:c3": {
+          "value": "=COUNTIF({R[r2]C[c3]S{tx}}:{R[r31]C[c3]S{tx}},{R[r14]C[c1]})"
+        },
+        "r14:c4": {
+          "value": "={R[r14]C[c2]}/{R{r3}C{c2}}"
+        },
+        "r15:c1": {
+          "value": "Utilities"
+        },
+        "r15:c2": {
+          "value": "=SUMIF({R[r2]C[c3]S{tx}}:{R[r31]C[c3]S{tx}},{R[r15]C[c1]},{R[r2]C[c4]S{tx}}:{R[r31]C[c4]S{tx}})"
+        },
+        "r15:c3": {
+          "value": "=COUNTIF({R[r2]C[c3]S{tx}}:{R[r31]C[c3]S{tx}},{R[r15]C[c1]})"
+        },
+        "r15:c4": {
+          "value": "={R[r15]C[c2]}/{R{r3}C{c2}}"
+        },
+        "r16:c1": {
+          "value": "Kids"
+        },
+        "r16:c2": {
+          "value": "=SUMIF({R[r2]C[c3]S{tx}}:{R[r31]C[c3]S{tx}},{R[r16]C[c1]},{R[r2]C[c4]S{tx}}:{R[r31]C[c4]S{tx}})"
+        },
+        "r16:c3": {
+          "value": "=COUNTIF({R[r2]C[c3]S{tx}}:{R[r31]C[c3]S{tx}},{R[r16]C[c1]})"
+        },
+        "r16:c4": {
+          "value": "={R[r16]C[c2]}/{R{r3}C{c2}}"
+        },
+        "r17:c1": {
+          "value": "Health"
+        },
+        "r17:c2": {
+          "value": "=SUMIF({R[r2]C[c3]S{tx}}:{R[r31]C[c3]S{tx}},{R[r17]C[c1]},{R[r2]C[c4]S{tx}}:{R[r31]C[c4]S{tx}})"
+        },
+        "r17:c3": {
+          "value": "=COUNTIF({R[r2]C[c3]S{tx}}:{R[r31]C[c3]S{tx}},{R[r17]C[c1]})"
+        },
+        "r17:c4": {
+          "value": "={R[r17]C[c2]}/{R{r3}C{c2}}"
+        },
+        "r18:c1": {
+          "value": "Household"
+        },
+        "r18:c2": {
+          "value": "=SUMIF({R[r2]C[c3]S{tx}}:{R[r31]C[c3]S{tx}},{R[r18]C[c1]},{R[r2]C[c4]S{tx}}:{R[r31]C[c4]S{tx}})"
+        },
+        "r18:c3": {
+          "value": "=COUNTIF({R[r2]C[c3]S{tx}}:{R[r31]C[c3]S{tx}},{R[r18]C[c1]})"
+        },
+        "r18:c4": {
+          "value": "={R[r18]C[c2]}/{R{r3}C{c2}}"
+        },
+        "r19:c1": {
+          "value": "Travel"
+        },
+        "r19:c2": {
+          "value": "=SUMIF({R[r2]C[c3]S{tx}}:{R[r31]C[c3]S{tx}},{R[r19]C[c1]},{R[r2]C[c4]S{tx}}:{R[r31]C[c4]S{tx}})"
+        },
+        "r19:c3": {
+          "value": "=COUNTIF({R[r2]C[c3]S{tx}}:{R[r31]C[c3]S{tx}},{R[r19]C[c1]})"
+        },
+        "r19:c4": {
+          "value": "={R[r19]C[c2]}/{R{r3}C{c2}}"
+        },
+        "r20:c1": {
+          "value": "Fun"
+        },
+        "r20:c2": {
+          "value": "=SUMIF({R[r2]C[c3]S{tx}}:{R[r31]C[c3]S{tx}},{R[r20]C[c1]},{R[r2]C[c4]S{tx}}:{R[r31]C[c4]S{tx}})"
+        },
+        "r20:c3": {
+          "value": "=COUNTIF({R[r2]C[c3]S{tx}}:{R[r31]C[c3]S{tx}},{R[r20]C[c1]})"
+        },
+        "r20:c4": {
+          "value": "={R[r20]C[c2]}/{R{r3}C{c2}}"
+        },
+        "r21:c1": {
+          "value": "All categories"
+        },
+        "r21:c2": {
+          "value": "=SUM({R[r11]C[c2]}:{R[r20]C[c2]})"
+        },
+        "r21:c3": {
+          "value": "=SUM({R[r11]C[c3]}:{R[r20]C[c3]})"
+        },
+        "r21:c4": {
+          "value": "=SUM({R[r11]C[c4]}:{R[r20]C[c4]})"
+        },
+        "r23:c1": {
+          "value": "Top expenses this month"
+        },
+        "r23:c2": {
+          "value": "Amount"
+        },
+        "r23:c3": {
+          "value": "What"
+        },
+        "r23:c4": {
+          "value": "Category"
+        },
+        "r24:c1": {
+          "value": "#1"
+        },
+        "r24:c2": {
+          "value": "=LARGE({R[r2]C[c4]S{tx}}:{R[r31]C[c4]S{tx}},1)"
+        },
+        "r24:c3": {
+          "value": "=INDEX({R[r2]C[c2]S{tx}}:{R[r31]C[c2]S{tx}},MATCH({R[r24]C[c2]},{R[r2]C[c4]S{tx}}:{R[r31]C[c4]S{tx}},0))"
+        },
+        "r24:c4": {
+          "value": "=INDEX({R[r2]C[c3]S{tx}}:{R[r31]C[c3]S{tx}},MATCH({R[r24]C[c2]},{R[r2]C[c4]S{tx}}:{R[r31]C[c4]S{tx}},0))"
+        },
+        "r25:c1": {
+          "value": "#2"
+        },
+        "r25:c2": {
+          "value": "=LARGE({R[r2]C[c4]S{tx}}:{R[r31]C[c4]S{tx}},2)"
+        },
+        "r25:c3": {
+          "value": "=INDEX({R[r2]C[c2]S{tx}}:{R[r31]C[c2]S{tx}},MATCH({R[r25]C[c2]},{R[r2]C[c4]S{tx}}:{R[r31]C[c4]S{tx}},0))"
+        },
+        "r25:c4": {
+          "value": "=INDEX({R[r2]C[c3]S{tx}}:{R[r31]C[c3]S{tx}},MATCH({R[r25]C[c2]},{R[r2]C[c4]S{tx}}:{R[r31]C[c4]S{tx}},0))"
+        },
+        "r26:c1": {
+          "value": "#3"
+        },
+        "r26:c2": {
+          "value": "=LARGE({R[r2]C[c4]S{tx}}:{R[r31]C[c4]S{tx}},3)"
+        },
+        "r26:c3": {
+          "value": "=INDEX({R[r2]C[c2]S{tx}}:{R[r31]C[c2]S{tx}},MATCH({R[r26]C[c2]},{R[r2]C[c4]S{tx}}:{R[r31]C[c4]S{tx}},0))"
+        },
+        "r26:c4": {
+          "value": "=INDEX({R[r2]C[c3]S{tx}}:{R[r31]C[c3]S{tx}},MATCH({R[r26]C[c2]},{R[r2]C[c4]S{tx}}:{R[r31]C[c4]S{tx}},0))"
+        },
+        "r27:c1": {
+          "value": "#4"
+        },
+        "r27:c2": {
+          "value": "=LARGE({R[r2]C[c4]S{tx}}:{R[r31]C[c4]S{tx}},4)"
+        },
+        "r27:c3": {
+          "value": "=INDEX({R[r2]C[c2]S{tx}}:{R[r31]C[c2]S{tx}},MATCH({R[r27]C[c2]},{R[r2]C[c4]S{tx}}:{R[r31]C[c4]S{tx}},0))"
+        },
+        "r27:c4": {
+          "value": "=INDEX({R[r2]C[c3]S{tx}}:{R[r31]C[c3]S{tx}},MATCH({R[r27]C[c2]},{R[r2]C[c4]S{tx}}:{R[r31]C[c4]S{tx}},0))"
+        },
+        "r28:c1": {
+          "value": "#5"
+        },
+        "r28:c2": {
+          "value": "=LARGE({R[r2]C[c4]S{tx}}:{R[r31]C[c4]S{tx}},5)"
+        },
+        "r28:c3": {
+          "value": "=INDEX({R[r2]C[c2]S{tx}}:{R[r31]C[c2]S{tx}},MATCH({R[r28]C[c2]},{R[r2]C[c4]S{tx}}:{R[r31]C[c4]S{tx}},0))"
+        },
+        "r28:c4": {
+          "value": "=INDEX({R[r2]C[c3]S{tx}}:{R[r31]C[c3]S{tx}},MATCH({R[r28]C[c2]},{R[r2]C[c4]S{tx}}:{R[r31]C[c4]S{tx}},0))"
+        },
+        "r29:c1": {
+          "value": "Top 5 as a share of total"
+        },
+        "r29:c2": {
+          "value": "=SUM({R[r24]C[c2]}:{R[r28]C[c2]})/{R[r3]C[c2]}"
+        }
+      },
+      "frozenCols": 1,
+      "formats": {
+        "title": {
+          "index": 0,
+          "rangeRowStart": "r1",
+          "rangeRowEnd": "r1",
+          "rangeColStart": "c1",
+          "rangeColEnd": "c4",
+          "format": {
+            "bold": true,
+            "fontSize": 16,
+            "textColor": "#1a73e8",
+            "vAlign": "middle"
+          }
+        },
+        "headlineLabels": {
+          "index": 1,
+          "rangeRowStart": "r2",
+          "rangeRowEnd": "r9",
+          "rangeColStart": "c1",
+          "rangeColEnd": "c1",
+          "format": {
+            "textColor": "#5f6368"
+          }
+        },
+        "headlineValues": {
+          "index": 2,
+          "rangeRowStart": "r3",
+          "rangeRowEnd": "r9",
+          "rangeColStart": "c2",
+          "rangeColEnd": "c2",
+          "format": {
+            "bold": true,
+            "numFmt": "$#,##0.00",
+            "hAlign": "right"
+          }
+        },
+        "txCount": {
+          "index": 3,
+          "rangeRowStart": "r4",
+          "rangeRowEnd": "r4",
+          "rangeColStart": "c2",
+          "rangeColEnd": "c2",
+          "format": {
+            "numFmt": "#,##0",
+            "hAlign": "right",
+            "bold": true
+          }
+        },
+        "categoryHeader": {
+          "index": 4,
+          "rangeRowStart": "r11",
+          "rangeRowEnd": "r21",
+          "rangeColStart": "c1",
+          "rangeColEnd": "c1",
+          "format": {
+            "bold": true
+          }
+        },
+        "categoryMoney": {
+          "index": 5,
+          "rangeRowStart": "r11",
+          "rangeRowEnd": "r21",
+          "rangeColStart": "c2",
+          "rangeColEnd": "c2",
+          "format": {
+            "numFmt": "$#,##0.00",
+            "hAlign": "right"
+          }
+        },
+        "categoryCount": {
+          "index": 6,
+          "rangeRowStart": "r11",
+          "rangeRowEnd": "r21",
+          "rangeColStart": "c3",
+          "rangeColEnd": "c3",
+          "format": {
+            "numFmt": "#,##0",
+            "hAlign": "center",
+            "textColor": "#5f6368"
+          }
+        },
+        "categoryShare": {
+          "index": 7,
+          "rangeRowStart": "r11",
+          "rangeRowEnd": "r21",
+          "rangeColStart": "c4",
+          "rangeColEnd": "c4",
+          "format": {
+            "numFmt": "0.0%",
+            "hAlign": "right",
+            "italic": true
+          }
+        },
+        "categoryTotals": {
+          "index": 8,
+          "rangeRowStart": "r21",
+          "rangeRowEnd": "r21",
+          "rangeColStart": "c1",
+          "rangeColEnd": "c4",
+          "format": {
+            "bold": true,
+            "bgColor": "#f1f3f4",
+            "borderTop": {
+              "style": "double",
+              "color": "#3c4043"
+            }
+          }
+        },
+        "topHeading": {
+          "index": 9,
+          "rangeRowStart": "r23",
+          "rangeRowEnd": "r23",
+          "rangeColStart": "c1",
+          "rangeColEnd": "c4",
+          "format": {
+            "bold": true,
+            "textColor": "#ffffff",
+            "bgColor": "#1a73e8",
+            "hAlign": "left",
+            "borderBottom": {
+              "style": "medium",
+              "color": "#0b57d0"
+            }
+          }
+        },
+        "topAmounts": {
+          "index": 10,
+          "rangeRowStart": "r24",
+          "rangeRowEnd": "r28",
+          "rangeColStart": "c2",
+          "rangeColEnd": "c2",
+          "format": {
+            "numFmt": "$#,##0.00",
+            "hAlign": "right",
+            "fontFamily": "Roboto Mono"
+          }
+        },
+        "topShare": {
+          "index": 11,
+          "rangeRowStart": "r29",
+          "rangeRowEnd": "r29",
+          "rangeColStart": "c2",
+          "rangeColEnd": "c2",
+          "format": {
+            "numFmt": "0.0%",
+            "hAlign": "right",
+            "italic": true,
+            "bold": true
+          }
+        }
+      },
+      "conditionalFormats": {
+        "bigCategory": {
+          "index": 0,
+          "ranges": {
+            "a": {
+              "rangeRowStart": "r11",
+              "rangeRowEnd": "r20",
+              "rangeColStart": "c2",
+              "rangeColEnd": "c2"
+            }
+          },
+          "conditionType": "gt",
+          "conditionValue": "500",
+          "format": {
+            "textColor": "#c5221f",
+            "bold": true
+          }
+        },
+        "tinyCategory": {
+          "index": 1,
+          "ranges": {
+            "a": {
+              "rangeRowStart": "r11",
+              "rangeRowEnd": "r20",
+              "rangeColStart": "c2",
+              "rangeColEnd": "c2"
+            }
+          },
+          "conditionType": "lt",
+          "conditionValue": "100",
+          "format": {
+            "textColor": "#9e9e9e"
+          }
+        },
+        "unusedCategory": {
+          "index": 2,
+          "ranges": {
+            "a": {
+              "rangeRowStart": "r11",
+              "rangeRowEnd": "r20",
+              "rangeColStart": "c3",
+              "rangeColEnd": "c3"
+            }
+          },
+          "conditionType": "eq",
+          "conditionValue": "0",
+          "format": {
+            "strikethrough": true,
+            "textColor": "#9e9e9e"
+          }
+        },
+        "diningWatch": {
+          "index": 3,
+          "ranges": {
+            "a": {
+              "rangeRowStart": "r11",
+              "rangeRowEnd": "r20",
+              "rangeColStart": "c1",
+              "rangeColEnd": "c1"
+            }
+          },
+          "conditionType": "textStartsWith",
+          "conditionValue": "Dining",
+          "format": {
+            "underline": true,
+            "textColor": "#e37400"
+          }
+        }
+      }
+    },
+    "tx": {
+      "@type": "Sheet",
+      "name": "Transactions",
+      "index": 1,
+      "columns": {
+        "c1": {
+          "index": 0,
+          "name": "Date",
+          "width": 110
+        },
+        "c2": {
+          "index": 1,
+          "name": "Description",
+          "width": 280
+        },
+        "c3": {
+          "index": 2,
+          "name": "Category",
+          "width": 120
+        },
+        "c4": {
+          "index": 3,
+          "name": "Amount",
+          "width": 110
+        },
+        "c5": {
+          "index": 4,
+          "name": "Account",
+          "width": 120
+        }
+      },
+      "rows": {
+        "r1": {
+          "index": 0
+        },
+        "r2": {
+          "index": 1
+        },
+        "r3": {
+          "index": 2
+        },
+        "r4": {
+          "index": 3
+        },
+        "r5": {
+          "index": 4
+        },
+        "r6": {
+          "index": 5
+        },
+        "r7": {
+          "index": 6
+        },
+        "r8": {
+          "index": 7
+        },
+        "r9": {
+          "index": 8
+        },
+        "r10": {
+          "index": 9
+        },
+        "r11": {
+          "index": 10
+        },
+        "r12": {
+          "index": 11
+        },
+        "r13": {
+          "index": 12
+        },
+        "r14": {
+          "index": 13
+        },
+        "r15": {
+          "index": 14
+        },
+        "r16": {
+          "index": 15
+        },
+        "r17": {
+          "index": 16
+        },
+        "r18": {
+          "index": 17
+        },
+        "r19": {
+          "index": 18
+        },
+        "r20": {
+          "index": 19
+        },
+        "r21": {
+          "index": 20
+        },
+        "r22": {
+          "index": 21
+        },
+        "r23": {
+          "index": 22
+        },
+        "r24": {
+          "index": 23
+        },
+        "r25": {
+          "index": 24
+        },
+        "r26": {
+          "index": 25
+        },
+        "r27": {
+          "index": 26
+        },
+        "r28": {
+          "index": 27
+        },
+        "r29": {
+          "index": 28
+        },
+        "r30": {
+          "index": 29
+        },
+        "r31": {
+          "index": 30
+        }
+      },
+      "cells": {
+        "r1:c1": {
+          "value": "Date"
+        },
+        "r1:c2": {
+          "value": "Description"
+        },
+        "r1:c3": {
+          "value": "Category"
+        },
+        "r1:c4": {
+          "value": "Amount"
+        },
+        "r1:c5": {
+          "value": "Account"
+        },
+        "r2:c1": {
+          "value": "2026-06-27"
+        },
+        "r2:c2": {
+          "value": "Big weekly shop — Sprouts"
+        },
+        "r2:c3": {
+          "value": "Groceries"
+        },
+        "r2:c4": {
+          "value": "184.62"
+        },
+        "r2:c5": {
+          "value": "Joint debit"
+        },
+        "r3:c1": {
+          "value": "2026-06-27"
+        },
+        "r3:c2": {
+          "value": "Gas — Shell on Colfax"
+        },
+        "r3:c3": {
+          "value": "Transport"
+        },
+        "r3:c4": {
+          "value": "52.1"
+        },
+        "r3:c5": {
+          "value": "Joint debit"
+        },
+        "r4:c1": {
+          "value": "2026-06-28"
+        },
+        "r4:c2": {
+          "value": "Brunch, the four of us"
+        },
+        "r4:c3": {
+          "value": "Dining out"
+        },
+        "r4:c4": {
+          "value": "76.4"
+        },
+        "r4:c5": {
+          "value": "Visa"
+        },
+        "r5:c1": {
+          "value": "2026-06-29"
+        },
+        "r5:c2": {
+          "value": "Maya swim club — July dues"
+        },
+        "r5:c3": {
+          "value": "Kids"
+        },
+        "r5:c4": {
+          "value": "145"
+        },
+        "r5:c5": {
+          "value": "Joint debit"
+        },
+        "r6:c1": {
+          "value": "2026-06-30"
+        },
+        "r6:c2": {
+          "value": "Electric bill"
+        },
+        "r6:c3": {
+          "value": "Utilities"
+        },
+        "r6:c4": {
+          "value": "138.77"
+        },
+        "r6:c5": {
+          "value": "Joint debit"
+        },
+        "r7:c1": {
+          "value": "2026-06-30"
+        },
+        "r7:c2": {
+          "value": "Internet"
+        },
+        "r7:c3": {
+          "value": "Utilities"
+        },
+        "r7:c4": {
+          "value": "79.99"
+        },
+        "r7:c5": {
+          "value": "Joint debit"
+        },
+        "r8:c1": {
+          "value": "2026-07-01"
+        },
+        "r8:c2": {
+          "value": "Mortgage"
+        },
+        "r8:c3": {
+          "value": "Housing"
+        },
+        "r8:c4": {
+          "value": "2145"
+        },
+        "r8:c5": {
+          "value": "Joint debit"
+        },
+        "r9:c1": {
+          "value": "2026-07-01"
+        },
+        "r9:c2": {
+          "value": "Pharmacy — Theo inhaler refill"
+        },
+        "r9:c3": {
+          "value": "Health"
+        },
+        "r9:c4": {
+          "value": "42.35"
+        },
+        "r9:c5": {
+          "value": "Visa"
+        },
+        "r10:c1": {
+          "value": "2026-07-02"
+        },
+        "r10:c2": {
+          "value": "Corner market top-up"
+        },
+        "r10:c3": {
+          "value": "Groceries"
+        },
+        "r10:c4": {
+          "value": "31.18"
+        },
+        "r10:c5": {
+          "value": "Visa"
+        },
+        "r11:c1": {
+          "value": "2026-07-03"
+        },
+        "r11:c2": {
+          "value": "Date night — dinner"
+        },
+        "r11:c3": {
+          "value": "Dining out"
+        },
+        "r11:c4": {
+          "value": "112.85"
+        },
+        "r11:c5": {
+          "value": "Visa"
+        },
+        "r12:c1": {
+          "value": "2026-07-03"
+        },
+        "r12:c2": {
+          "value": "Babysitter"
+        },
+        "r12:c3": {
+          "value": "Kids"
+        },
+        "r12:c4": {
+          "value": "60"
+        },
+        "r12:c5": {
+          "value": "Cash"
+        },
+        "r13:c1": {
+          "value": "2026-07-04"
+        },
+        "r13:c2": {
+          "value": "Fireworks + snacks on the bluff"
+        },
+        "r13:c3": {
+          "value": "Fun"
+        },
+        "r13:c4": {
+          "value": "38.9"
+        },
+        "r13:c5": {
+          "value": "Visa"
+        },
+        "r14:c1": {
+          "value": "2026-07-05"
+        },
+        "r14:c2": {
+          "value": "Weekly shop — Sprouts"
+        },
+        "r14:c3": {
+          "value": "Groceries"
+        },
+        "r14:c4": {
+          "value": "167.43"
+        },
+        "r14:c5": {
+          "value": "Joint debit"
+        },
+        "r15:c1": {
+          "value": "2026-07-06"
+        },
+        "r15:c2": {
+          "value": "Theo soccer registration"
+        },
+        "r15:c3": {
+          "value": "Kids"
+        },
+        "r15:c4": {
+          "value": "95"
+        },
+        "r15:c5": {
+          "value": "Joint debit"
+        },
+        "r16:c1": {
+          "value": "2026-07-07"
+        },
+        "r16:c2": {
+          "value": "Gas"
+        },
+        "r16:c3": {
+          "value": "Transport"
+        },
+        "r16:c4": {
+          "value": "48.72"
+        },
+        "r16:c5": {
+          "value": "Joint debit"
+        },
+        "r17:c1": {
+          "value": "2026-07-08"
+        },
+        "r17:c2": {
+          "value": "Water & sewer"
+        },
+        "r17:c3": {
+          "value": "Utilities"
+        },
+        "r17:c4": {
+          "value": "64.2"
+        },
+        "r17:c5": {
+          "value": "Joint debit"
+        },
+        "r18:c1": {
+          "value": "2026-07-09"
+        },
+        "r18:c2": {
+          "value": "Hardware store — hose repair"
+        },
+        "r18:c3": {
+          "value": "Household"
+        },
+        "r18:c4": {
+          "value": "27.55"
+        },
+        "r18:c5": {
+          "value": "Visa"
+        },
+        "r19:c1": {
+          "value": "2026-07-10"
+        },
+        "r19:c2": {
+          "value": "Pizza night"
+        },
+        "r19:c3": {
+          "value": "Dining out"
+        },
+        "r19:c4": {
+          "value": "43.6"
+        },
+        "r19:c5": {
+          "value": "Visa"
+        },
+        "r20:c1": {
+          "value": "2026-07-11"
+        },
+        "r20:c2": {
+          "value": "Farmers market"
+        },
+        "r20:c3": {
+          "value": "Groceries"
+        },
+        "r20:c4": {
+          "value": "58.25"
+        },
+        "r20:c5": {
+          "value": "Cash"
+        },
+        "r21:c1": {
+          "value": "2026-07-12"
+        },
+        "r21:c2": {
+          "value": "Dentist — Maya cleaning"
+        },
+        "r21:c3": {
+          "value": "Health"
+        },
+        "r21:c4": {
+          "value": "210"
+        },
+        "r21:c5": {
+          "value": "Visa"
+        },
+        "r22:c1": {
+          "value": "2026-07-13"
+        },
+        "r22:c2": {
+          "value": "Weekly shop — Costco run"
+        },
+        "r22:c3": {
+          "value": "Groceries"
+        },
+        "r22:c4": {
+          "value": "312.94"
+        },
+        "r22:c5": {
+          "value": "Joint debit"
+        },
+        "r23:c1": {
+          "value": "2026-07-14"
+        },
+        "r23:c2": {
+          "value": "Car insurance"
+        },
+        "r23:c3": {
+          "value": "Transport"
+        },
+        "r23:c4": {
+          "value": "187.5"
+        },
+        "r23:c5": {
+          "value": "Joint debit"
+        },
+        "r24:c1": {
+          "value": "2026-07-15"
+        },
+        "r24:c2": {
+          "value": "Cinema, all four"
+        },
+        "r24:c3": {
+          "value": "Fun"
+        },
+        "r24:c4": {
+          "value": "62"
+        },
+        "r24:c5": {
+          "value": "Visa"
+        },
+        "r25:c1": {
+          "value": "2026-07-16"
+        },
+        "r25:c2": {
+          "value": "New sneakers for Theo"
+        },
+        "r25:c3": {
+          "value": "Kids"
+        },
+        "r25:c4": {
+          "value": "74.99"
+        },
+        "r25:c5": {
+          "value": "Visa"
+        },
+        "r26:c1": {
+          "value": "2026-07-18"
+        },
+        "r26:c2": {
+          "value": "Gas"
+        },
+        "r26:c3": {
+          "value": "Transport"
+        },
+        "r26:c4": {
+          "value": "46.88"
+        },
+        "r26:c5": {
+          "value": "Joint debit"
+        },
+        "r27:c1": {
+          "value": "2026-07-19"
+        },
+        "r27:c2": {
+          "value": "Weekly shop — Sprouts"
+        },
+        "r27:c3": {
+          "value": "Groceries"
+        },
+        "r27:c4": {
+          "value": "158.07"
+        },
+        "r27:c5": {
+          "value": "Joint debit"
+        },
+        "r28:c1": {
+          "value": "2026-07-20"
+        },
+        "r28:c2": {
+          "value": "Lightbulbs, filters, batteries"
+        },
+        "r28:c3": {
+          "value": "Household"
+        },
+        "r28:c4": {
+          "value": "54.31"
+        },
+        "r28:c5": {
+          "value": "Visa"
+        },
+        "r29:c1": {
+          "value": "2026-07-21"
+        },
+        "r29:c2": {
+          "value": "Tahoe cabin — balance due"
+        },
+        "r29:c3": {
+          "value": "Travel"
+        },
+        "r29:c4": {
+          "value": "1180"
+        },
+        "r29:c5": {
+          "value": "Visa"
+        },
+        "r30:c1": {
+          "value": "2026-07-23"
+        },
+        "r30:c2": {
+          "value": "Takeaway Thai"
+        },
+        "r30:c3": {
+          "value": "Dining out"
+        },
+        "r30:c4": {
+          "value": "55.75"
+        },
+        "r30:c5": {
+          "value": "Visa"
+        },
+        "r31:c1": {
+          "value": "2026-07-25"
+        },
+        "r31:c2": {
+          "value": "Sunscreen + trip sundries"
+        },
+        "r31:c3": {
+          "value": "Travel"
+        },
+        "r31:c4": {
+          "value": "88.16"
+        },
+        "r31:c5": {
+          "value": "Visa"
+        }
+      },
+      "frozenRows": 1,
+      "conditionalFormats": {
+        "bigCharge": {
+          "index": 0,
+          "ranges": {
+            "a": {
+              "rangeRowStart": "r2",
+              "rangeRowEnd": "r31",
+              "rangeColStart": "c4",
+              "rangeColEnd": "c4"
+            }
+          },
+          "conditionType": "gt",
+          "conditionValue": "200",
+          "format": {
+            "bold": true,
+            "bgColor": "#fce8e6",
+            "textColor": "#c5221f"
+          }
+        },
+        "cashOnly": {
+          "index": 1,
+          "ranges": {
+            "a": {
+              "rangeRowStart": "r2",
+              "rangeRowEnd": "r31",
+              "rangeColStart": "c5",
+              "rangeColEnd": "c5"
+            }
+          },
+          "conditionType": "textContains",
+          "conditionValue": "Cash",
+          "format": {
+            "italic": true,
+            "textColor": "#5f6368"
+          }
+        }
+      },
+      "formats": {
+        "header": {
+          "index": 0,
+          "rangeRowStart": "r1",
+          "rangeRowEnd": "r1",
+          "rangeColStart": "c1",
+          "rangeColEnd": "c5",
+          "format": {
+            "bold": true,
+            "bgColor": "#e6f4ea",
+            "borderBottom": {
+              "style": "thin",
+              "color": "#0b8043"
+            }
+          }
+        },
+        "amounts": {
+          "index": 1,
+          "rangeRowStart": "r2",
+          "rangeRowEnd": "r31",
+          "rangeColStart": "c4",
+          "rangeColEnd": "c4",
+          "format": {
+            "numFmt": "$#,##0.00",
+            "hAlign": "right"
+          }
+        }
+      }
+    }
+  }
+}

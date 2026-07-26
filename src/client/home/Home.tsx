@@ -716,23 +716,92 @@ export function Home({ path }: { path?: string }) {
 
   const jsonInputRef = useRef<HTMLInputElement>(null);
 
-  const handleImportJson = useCallback(async (e: Event) => {
-    const file = (e.target as HTMLInputElement).files?.[0];
-    if (!file) return;
-    if (jsonInputRef.current) jsonInputRef.current.value = '';
+  /**
+   * Create one document per JSON payload, sequentially. Shared by the .json
+   * importer and the "create examples" offer on the empty home page.
+   *
+   * Serial rather than parallel: each createDoc is a worker round-trip that
+   * mints a keyhive doc and enables sharing. A payload that fails to parse is
+   * recorded and skipped — it never aborts the rest of the batch.
+   */
+  const createDocsFromJson = useCallback(async (
+    items: { label: string; read: () => Promise<any> }[],
+    verb: string,
+  ): Promise<{ created: string[]; failures: string[] }> => {
+    const created: string[] = [];
+    const failures: string[] = [];
+    const many = items.length > 1;
     try {
-      const text = await file.text();
-      const data = JSON.parse(text);
-      if (!data || typeof data !== 'object') throw new Error('Invalid JSON: expected an object');
-      const name = data.name || file.name.replace(/\.json$/i, '') || 'Imported';
-      const type = typeof data['@type'] === 'string' ? data['@type'] : 'unknown';
-      const { docId } = await createDoc(data, { type, name });
-      // Types with no registered plugin resolve to the source inspector via DocRoute.
-      window.location.hash = docUrl(docId);
-    } catch (err: any) {
-      setError('Import failed: ' + err.message);
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        if (many) {
+          // Same progress banner the .ics/.xlsx importers use. The yield lets it paint.
+          setImportStatus({ label: `${verb} ${i + 1}/${items.length}: ${item.label}`, progress: Math.round((i / items.length) * 100) });
+          await new Promise(r => setTimeout(r, 0));
+        }
+        try {
+          const data = await item.read();
+          if (!data || typeof data !== 'object') throw new Error('Invalid JSON: expected an object');
+          const name = data.name || item.label.replace(/\.json$/i, '') || 'Imported';
+          const type = typeof data['@type'] === 'string' ? data['@type'] : 'unknown';
+          const { docId } = await createDoc(data, { type, name });
+          created.push(docId);
+        } catch (err: any) {
+          failures.push(`${item.label}: ${err?.message ?? err}`);
+        }
+      }
+    } finally {
+      setImportStatus(null);
     }
+    return { created, failures };
   }, []);
+
+  /** Import one .json per document. The picker allows multiple files (see
+   *  `multiple` on the input below), so a folder can be loaded in one go. */
+  const handleImportJson = useCallback(async (e: Event) => {
+    const files = Array.from((e.target as HTMLInputElement).files ?? []);
+    if (files.length === 0) return;
+    if (jsonInputRef.current) jsonInputRef.current.value = '';
+    setError('');
+    setMessage('');
+
+    const { created, failures } = await createDocsFromJson(
+      files.map(f => ({ label: f.name, read: () => f.text().then(JSON.parse) })),
+      'Importing',
+    );
+
+    if (failures.length) {
+      setError(`Import failed — ${failures.join('; ')}`);
+    }
+    if (created.length === 1 && !failures.length) {
+      // Single document: open it, as before. Types with no registered plugin
+      // resolve to the source inspector via DocRoute.
+      window.location.hash = docUrl(created[0]);
+    } else if (created.length) {
+      setMessage(`Imported ${created.length} document${created.length === 1 ? '' : 's'}`);
+    }
+  }, [createDocsFromJson]);
+
+  /** Offered when the document list is empty — creates the bundled examples/*.json. */
+  const [creatingExamples, setCreatingExamples] = useState(false);
+  const handleCreateExamples = useCallback(async () => {
+    setError('');
+    setMessage('');
+    setCreatingExamples(true);
+    try {
+      const { exampleDocs } = await import('./examples');
+      const { created, failures } = await createDocsFromJson(
+        exampleDocs().map(ex => ({ label: ex.fileName, read: ex.load })),
+        'Creating',
+      );
+      if (failures.length) setError(`Some examples couldn't be created — ${failures.join('; ')}`);
+      if (created.length) setMessage(`Created ${created.length} example document${created.length === 1 ? '' : 's'}`);
+    } catch (err: any) {
+      setError(`Couldn't load the examples: ${err?.message ?? err}`);
+    } finally {
+      setCreatingExamples(false);
+    }
+  }, [createDocsFromJson]);
 
   const icsInputRef = useRef<HTMLInputElement>(null);
 
@@ -863,15 +932,26 @@ export function Home({ path }: { path?: string }) {
         ))}
       </md-list>
       {entries.length === 0 && (
-        <p className="text-sm text-muted-foreground py-4">
-          {listLoading ? 'Loading documents…' : 'No documents yet.'}
-        </p>
+        listLoading ? (
+          <p className="text-sm text-muted-foreground py-4">Loading documents…</p>
+        ) : (
+          <div className="py-6 text-center" data-testid="empty-home">
+            <p className="md-body-medium text-muted-foreground mb-1">No documents yet.</p>
+            <p className="md-body-medium text-muted-foreground mb-4">
+              Would you like a few example documents to look through?
+            </p>
+            <Button variant="outline" onClick={handleCreateExamples} disabled={creatingExamples} data-testid="create-examples">
+              <span className="material-symbols-outlined">auto_awesome</span>
+              {creatingExamples ? 'Creating examples…' : 'Yes, create examples'}
+            </Button>
+          </div>
+        )
       )}
 
       {/* Hidden import inputs (targets of the Create sheet's import rows) */}
       <input type="file" ref={icsInputRef} accept=".ics,text/calendar" style={{ display: 'none' }} onChange={handleImportIcs as any} />
       <input type="file" ref={xlsInputRef} accept=".xls,.xlsx,.csv" style={{ display: 'none' }} onChange={handleImportXlsx as any} />
-      <input type="file" ref={jsonInputRef} accept=".json,application/json" style={{ display: 'none' }} onChange={handleImportJson as any} />
+      <input type="file" multiple ref={jsonInputRef} accept=".json,application/json" style={{ display: 'none' }} onChange={handleImportJson as any} />
 
       <div className="flex items-center gap-2 mb-2">
         {installPrompt ? (

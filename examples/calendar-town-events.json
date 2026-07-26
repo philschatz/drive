@@ -1,0 +1,257 @@
+{
+  "@type": "Calendar",
+  "name": "Port Amity — What's On",
+  "description": "Public social calendar for a small Oregon coast town: markets, music, festivals and beach days.",
+  "color": "#0b8043",
+  "timeZone": "America/Los_Angeles",
+  "events": {
+    "farmers-market": {
+      "@type": "Event",
+      "created": "2026-04-02T16:00:00Z",
+      "title": "Harbour Farmers Market",
+      "start": "2026-05-02T09:00:00",
+      "duration": "PT4H",
+      "description": "Forty stalls along the quay. Cash and cards. Dogs welcome on the north side only.",
+      "location": "Harbour Quay, Port Amity",
+      "status": "confirmed",
+      "freeBusyStatus": "free",
+      "privacy": "public",
+      "categories": { "market": true, "weekly": true },
+      "keywords": { "food": true, "makers": true },
+      "recurrenceRule": {
+        "@type": "RecurrenceRule",
+        "frequency": "weekly",
+        "interval": 1,
+        "firstDayOfWeek": "mo",
+        "byDay": [{ "@type": "NDay", "day": "sa" }],
+        "until": "2026-10-31T09:00:00"
+      },
+      "recurrenceOverrides": {
+        "2026-07-04T09:00:00": {
+          "title": "Harbour Farmers Market — Independence Day early close",
+          "duration": "PT2H",
+          "description": "Packing down at 11 so the parade can set up."
+        },
+        "2026-09-05T09:00:00": {
+          "excluded": true,
+          "description": "Cancelled — king tide flooded the quay."
+        }
+      },
+      "links": {
+        "stallholders": {
+          "@type": "Link",
+          "href": "https://example.com/portamity/market/stalls",
+          "rel": "alternate",
+          "contentType": "text/html",
+          "title": "This week's stallholders"
+        }
+      }
+    },
+    "brewery-live-music": {
+      "@type": "Event",
+      "title": "Live music at Fog Bank Brewing",
+      "start": "2026-07-03T20:00:00",
+      "duration": "PT3H",
+      "description": "Local acts, no cover. 21+ after 9pm.",
+      "location": "Fog Bank Brewing, 14 Cannery Row",
+      "status": "confirmed",
+      "freeBusyStatus": "free",
+      "privacy": "public",
+      "categories": { "music": true, "nightlife": true },
+      "recurrenceRule": {
+        "frequency": "weekly",
+        "byDay": [{ "day": "fr" }]
+      }
+    },
+    "open-mic": {
+      "@type": "Event",
+      "title": "Open mic — poetry and song",
+      "start": "2026-07-08T19:00:00",
+      "duration": "PT2H30M",
+      "description": "Sign-up sheet goes up at 6:30. Five minutes each, be kind.",
+      "location": "The Sandpiper Café",
+      "status": "confirmed",
+      "freeBusyStatus": "free",
+      "privacy": "public",
+      "categories": { "music": true, "community": true },
+      "recurrenceRule": {
+        "frequency": "weekly",
+        "interval": 2,
+        "byDay": [{ "day": "we" }],
+        "count": 20
+      }
+    },
+    "tide-pool-walk": {
+      "@type": "Event",
+      "title": "Guided tide pool walk",
+      "start": "2026-07-12T06:30:00",
+      "duration": "PT2H",
+      "description": "Timed to the month's lowest morning tide. Wellies essential, the rocks are slick.",
+      "location": "Gull Point, north end of Amity Beach",
+      "status": "confirmed",
+      "freeBusyStatus": "busy",
+      "privacy": "public",
+      "priority": 3,
+      "categories": { "nature": true, "family-friendly": true },
+      "recurrenceRule": {
+        "frequency": "monthly",
+        "interval": 1,
+        "byDay": [{ "@type": "NDay", "day": "su", "nthOfPeriod": 2 }]
+      },
+      "virtualLocations": {
+        "tide-table": {
+          "@type": "VirtualLocation",
+          "name": "Live tide table",
+          "description": "Check before you set off — the walk moves with the tide.",
+          "uri": "https://example.com/portamity/tides",
+          "features": { "chat": false }
+        }
+      },
+      "participants": {
+        "naturalist": {
+          "@type": "Participant",
+          "name": "Rin Takahashi",
+          "email": "rin@example.com",
+          "kind": "individual",
+          "roles": { "chair": true, "attendee": true },
+          "locationId": "tide-table",
+          "participationStatus": "accepted",
+          "description": "Marine naturalist, leads the walk."
+        },
+        "visitor-centre": {
+          "@type": "Participant",
+          "name": "Amity Visitor Centre",
+          "email": "visit@example.com",
+          "kind": "group",
+          "roles": { "attendee": true, "optional": true },
+          "participationStatus": "accepted"
+        }
+      },
+      "alerts": {
+        "night-before": {
+          "@type": "Alert",
+          "action": "display",
+          "trigger": { "@type": "OffsetTrigger", "offset": "-PT12H", "relativeTo": "start" }
+        }
+      }
+    },
+    "beach-cleanup": {
+      "@type": "Event",
+      "title": "Beach cleanup",
+      "start": "2026-07-04T08:00:00",
+      "duration": "PT3H",
+      "description": "Bags, gloves and grabbers provided at the car park. Coffee after at the Sandpiper.",
+      "location": "Amity Beach main car park",
+      "status": "confirmed",
+      "freeBusyStatus": "busy",
+      "privacy": "public",
+      "categories": { "volunteering": true, "nature": true },
+      "recurrenceRule": {
+        "frequency": "monthly",
+        "byDay": [{ "day": "sa", "nthOfPeriod": 1 }]
+      },
+      "alerts": {
+        "reminder": {
+          "trigger": { "@type": "OffsetTrigger", "offset": "-P2D", "relativeTo": "start" },
+          "action": "email"
+        }
+      }
+    },
+    "fourth-fireworks": {
+      "@type": "Event",
+      "title": "Fireworks over the bay",
+      "start": "2026-07-04T21:30:00",
+      "duration": "PT30M",
+      "description": "Best viewing from the breakwater or the bluff trail. Harbour road closes at 8.",
+      "location": "Port Amity harbour",
+      "status": "confirmed",
+      "freeBusyStatus": "free",
+      "privacy": "public",
+      "priority": 0,
+      "color": "#c5221f",
+      "categories": { "festival": true },
+      "keywords": { "fireworks": true, "free": true }
+    },
+    "street-fair": {
+      "@type": "Event",
+      "title": "Cannery Row Street Fair",
+      "start": "2026-08-15",
+      "duration": "P2D",
+      "description": "Two blocks closed to cars. Craft stalls, chowder cook-off, three music stages.",
+      "location": "Cannery Row, Port Amity",
+      "status": "confirmed",
+      "freeBusyStatus": "busy",
+      "privacy": "public",
+      "priority": 1,
+      "categories": { "festival": true, "market": true },
+      "keywords": { "food": true, "music": true, "makers": true },
+      "links": {
+        "lineup": {
+          "@type": "Link",
+          "href": "https://example.com/portamity/street-fair",
+          "rel": "alternate",
+          "contentType": "text/html",
+          "title": "Stage times and stall map"
+        },
+        "poster": {
+          "@type": "Link",
+          "href": "https://example.com/portamity/street-fair/poster.png",
+          "contentType": "image/png",
+          "display": "graphic",
+          "size": 442368,
+          "title": "This year's poster"
+        }
+      },
+      "attachments": {
+        "vendor-form": {
+          "@type": "Link",
+          "href": "https://example.com/portamity/street-fair/vendor-application.pdf",
+          "contentType": "application/pdf",
+          "size": 118784,
+          "rel": "enclosure",
+          "title": "Vendor application"
+        }
+      },
+      "replyTo": { "imip": "mailto:fair@example.com" }
+    },
+    "whale-season": {
+      "@type": "Event",
+      "title": "Grey whale migration season opens",
+      "start": "2026-12-12",
+      "duration": "P1D",
+      "description": "Volunteer spotters wanted at the bluff station. Training on the morning of.",
+      "location": "Bluff Trail whale watch station",
+      "status": "tentative",
+      "freeBusyStatus": "busy-tentative",
+      "privacy": "public",
+      "locale": "en-US",
+      "categories": { "nature": true, "volunteering": true },
+      "progress": "needs-action",
+      "percentComplete": 0
+    },
+    "winter-lights": {
+      "@type": "Event",
+      "title": "Harbour Winter Lights",
+      "start": "2026-12-18",
+      "duration": "P3D",
+      "description": "Boats lit up in the harbour, hot cider on the quay, carols at seven each night.",
+      "location": "Harbour Quay, Port Amity",
+      "status": "confirmed",
+      "freeBusyStatus": "free",
+      "privacy": "public",
+      "priority": 2,
+      "color": "#8e24aa",
+      "categories": { "festival": true }
+    },
+    "movie-in-the-park-cancelled": {
+      "@type": "Event",
+      "title": "Movie in the park (cancelled)",
+      "start": "2026-08-22T20:30:00",
+      "duration": "PT2H",
+      "location": "Bluff Park lawn",
+      "status": "cancelled",
+      "freeBusyStatus": "free",
+      "description": "Projector failed. Rescheduling for September — watch the noticeboard."
+    }
+  }
+}

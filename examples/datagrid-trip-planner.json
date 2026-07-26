@@ -1,0 +1,737 @@
+{
+  "@type": "DataGrid",
+  "name": "Vacation Trip Planner",
+  "description": "Four destinations compared: per-traveller flights on their own sheet, plus lodging, spending, transport and insurance estimated with PERT/TRIANGULAR/UNIFORM/NORMAL so Monte Carlo shows the ranges.",
+  "sheets": {
+    "plan": {
+      "@type": "Sheet",
+      "name": "Trip Plan",
+      "index": 0,
+      "columns": {
+        "c1": {
+          "index": 0,
+          "width": 250
+        },
+        "c2": {
+          "index": 1,
+          "width": 130
+        },
+        "c3": {
+          "index": 2,
+          "width": 130
+        },
+        "c4": {
+          "index": 3,
+          "width": 130
+        },
+        "c5": {
+          "index": 4,
+          "width": 140
+        }
+      },
+      "rows": {
+        "r1": {
+          "index": 0,
+          "height": 34
+        },
+        "r2": {
+          "index": 1
+        },
+        "r3": {
+          "index": 2
+        },
+        "r4": {
+          "index": 3
+        },
+        "r5": {
+          "index": 4
+        },
+        "r6": {
+          "index": 5
+        },
+        "r7": {
+          "index": 6
+        },
+        "r8": {
+          "index": 7
+        },
+        "r9": {
+          "index": 8
+        },
+        "r10": {
+          "index": 9
+        },
+        "r11": {
+          "index": 10
+        },
+        "r12": {
+          "index": 11
+        },
+        "r13": {
+          "index": 12
+        },
+        "r14": {
+          "index": 13
+        },
+        "r15": {
+          "index": 14
+        },
+        "r16": {
+          "index": 15
+        },
+        "r17": {
+          "index": 16
+        },
+        "r18": {
+          "index": 17
+        },
+        "r19": {
+          "index": 18
+        },
+        "r20": {
+          "index": 19
+        },
+        "r21": {
+          "index": 20
+        }
+      },
+      "cells": {
+        "r1:c1": {
+          "value": "Estimate"
+        },
+        "r1:c2": {
+          "value": "Portugal"
+        },
+        "r1:c3": {
+          "value": "Japan"
+        },
+        "r1:c4": {
+          "value": "Costa Rica"
+        },
+        "r1:c5": {
+          "value": "New Zealand"
+        },
+        "r2:c1": {
+          "value": "Nights"
+        },
+        "r2:c2": {
+          "value": "10"
+        },
+        "r2:c3": {
+          "value": "12"
+        },
+        "r2:c4": {
+          "value": "8"
+        },
+        "r2:c5": {
+          "value": "14"
+        },
+        "r3:c1": {
+          "value": "Travellers"
+        },
+        "r3:c2": {
+          "value": "4"
+        },
+        "r3:c3": {
+          "value": "4"
+        },
+        "r3:c4": {
+          "value": "4"
+        },
+        "r3:c5": {
+          "value": "4"
+        },
+        "r4:c1": {
+          "value": "Flights (all four)"
+        },
+        "r4:c2": {
+          "value": "={R[r6]C[c2]S{fl}}"
+        },
+        "r4:c3": {
+          "value": "={R[r6]C[c3]S{fl}}"
+        },
+        "r4:c4": {
+          "value": "={R[r6]C[c4]S{fl}}"
+        },
+        "r4:c5": {
+          "value": "={R[r6]C[c5]S{fl}}"
+        },
+        "r5:c1": {
+          "value": "Lodging per night"
+        },
+        "r5:c2": {
+          "value": "=PERT(105,140,215)"
+        },
+        "r5:c3": {
+          "value": "=PERT(135,185,290)"
+        },
+        "r5:c4": {
+          "value": "=PERT(85,120,190)"
+        },
+        "r5:c5": {
+          "value": "=PERT(115,155,240)"
+        },
+        "r6:c1": {
+          "value": "Lodging total"
+        },
+        "r6:c2": {
+          "value": "={R[r2]C[c2]}*{R[r5]C[c2]}"
+        },
+        "r6:c3": {
+          "value": "={R[r2]C[c3]}*{R[r5]C[c3]}"
+        },
+        "r6:c4": {
+          "value": "={R[r2]C[c4]}*{R[r5]C[c4]}"
+        },
+        "r6:c5": {
+          "value": "={R[r2]C[c5]}*{R[r5]C[c5]}"
+        },
+        "r7:c1": {
+          "value": "Food & fun, per person per day"
+        },
+        "r7:c2": {
+          "value": "=TRIANGULAR(38,115,62)"
+        },
+        "r7:c3": {
+          "value": "=TRIANGULAR(45,140,78)"
+        },
+        "r7:c4": {
+          "value": "=TRIANGULAR(30,95,48)"
+        },
+        "r7:c5": {
+          "value": "=TRIANGULAR(42,130,70)"
+        },
+        "r8:c1": {
+          "value": "Spending total"
+        },
+        "r8:c2": {
+          "value": "={R[r2]C[c2]}*{R[r3]C[c2]}*{R[r7]C[c2]}"
+        },
+        "r8:c3": {
+          "value": "={R[r2]C[c3]}*{R[r3]C[c3]}*{R[r7]C[c3]}"
+        },
+        "r8:c4": {
+          "value": "={R[r2]C[c4]}*{R[r3]C[c4]}*{R[r7]C[c4]}"
+        },
+        "r8:c5": {
+          "value": "={R[r2]C[c5]}*{R[r3]C[c5]}*{R[r7]C[c5]}"
+        },
+        "r9:c1": {
+          "value": "Local transport & tours"
+        },
+        "r9:c2": {
+          "value": "=UNIFORM(180,520)"
+        },
+        "r9:c3": {
+          "value": "=UNIFORM(320,780)"
+        },
+        "r9:c4": {
+          "value": "=UNIFORM(240,640)"
+        },
+        "r9:c5": {
+          "value": "=UNIFORM(380,910)"
+        },
+        "r10:c1": {
+          "value": "Travel insurance"
+        },
+        "r10:c2": {
+          "value": "=NORMAL(210,35)"
+        },
+        "r10:c3": {
+          "value": "=NORMAL(255,45)"
+        },
+        "r10:c4": {
+          "value": "=NORMAL(190,30)"
+        },
+        "r10:c5": {
+          "value": "=NORMAL(280,50)"
+        },
+        "r11:c1": {
+          "value": "Grand total"
+        },
+        "r11:c2": {
+          "value": "={R[r4]C[c2]}+{R[r6]C[c2]}+{R[r8]C[c2]}+{R[r9]C[c2]}+{R[r10]C[c2]}"
+        },
+        "r11:c3": {
+          "value": "={R[r4]C[c3]}+{R[r6]C[c3]}+{R[r8]C[c3]}+{R[r9]C[c3]}+{R[r10]C[c3]}"
+        },
+        "r11:c4": {
+          "value": "={R[r4]C[c4]}+{R[r6]C[c4]}+{R[r8]C[c4]}+{R[r9]C[c4]}+{R[r10]C[c4]}"
+        },
+        "r11:c5": {
+          "value": "={R[r4]C[c5]}+{R[r6]C[c5]}+{R[r8]C[c5]}+{R[r9]C[c5]}+{R[r10]C[c5]}"
+        },
+        "r12:c1": {
+          "value": "Per person"
+        },
+        "r12:c2": {
+          "value": "={R[r11]C[c2]}/{R[r3]C[c2]}"
+        },
+        "r12:c3": {
+          "value": "={R[r11]C[c3]}/{R[r3]C[c3]}"
+        },
+        "r12:c4": {
+          "value": "={R[r11]C[c4]}/{R[r3]C[c4]}"
+        },
+        "r12:c5": {
+          "value": "={R[r11]C[c5]}/{R[r3]C[c5]}"
+        },
+        "r13:c1": {
+          "value": "Per night"
+        },
+        "r13:c2": {
+          "value": "={R[r11]C[c2]}/{R[r2]C[c2]}"
+        },
+        "r13:c3": {
+          "value": "={R[r11]C[c3]}/{R[r2]C[c3]}"
+        },
+        "r13:c4": {
+          "value": "={R[r11]C[c4]}/{R[r2]C[c4]}"
+        },
+        "r13:c5": {
+          "value": "={R[r11]C[c5]}/{R[r2]C[c5]}"
+        },
+        "r15:c1": {
+          "value": "Budget"
+        },
+        "r15:c2": {
+          "value": "9500"
+        },
+        "r16:c1": {
+          "value": "Over budget by"
+        },
+        "r16:c2": {
+          "value": "=MAX(0,{R[r11]C[c2]}-{R{r15}C{c2}})"
+        },
+        "r16:c3": {
+          "value": "=MAX(0,{R[r11]C[c3]}-{R{r15}C{c2}})"
+        },
+        "r16:c4": {
+          "value": "=MAX(0,{R[r11]C[c4]}-{R{r15}C{c2}})"
+        },
+        "r16:c5": {
+          "value": "=MAX(0,{R[r11]C[c5]}-{R{r15}C{c2}})"
+        },
+        "r17:c1": {
+          "value": "Fits the budget?"
+        },
+        "r17:c2": {
+          "value": "=IF({R[r11]C[c2]}<={R{r15}C{c2}},\"yes\",\"no\")"
+        },
+        "r17:c3": {
+          "value": "=IF({R[r11]C[c3]}<={R{r15}C{c2}},\"yes\",\"no\")"
+        },
+        "r17:c4": {
+          "value": "=IF({R[r11]C[c4]}<={R{r15}C{c2}},\"yes\",\"no\")"
+        },
+        "r17:c5": {
+          "value": "=IF({R[r11]C[c5]}<={R{r15}C{c2}},\"yes\",\"no\")"
+        },
+        "r19:c1": {
+          "value": "Cheapest option"
+        },
+        "r19:c2": {
+          "value": "=INDEX({R[r1]C[c2]}:{R[r1]C[c5]},MATCH(MIN({R[r11]C[c2]}:{R[r11]C[c5]}),{R[r11]C[c2]}:{R[r11]C[c5]},0))"
+        },
+        "r20:c1": {
+          "value": "Cheapest grand total"
+        },
+        "r20:c2": {
+          "value": "=MIN({R[r11]C[c2]}:{R[r11]C[c5]})"
+        },
+        "r21:c1": {
+          "value": "Spread, cheapest to dearest"
+        },
+        "r21:c2": {
+          "value": "=MAX({R[r11]C[c2]}:{R[r11]C[c5]})-MIN({R[r11]C[c2]}:{R[r11]C[c5]})"
+        }
+      },
+      "frozenRows": 1,
+      "frozenCols": 1,
+      "formats": {
+        "header": {
+          "index": 0,
+          "rangeRowStart": "r1",
+          "rangeRowEnd": "r1",
+          "rangeColStart": "c1",
+          "rangeColEnd": "c5",
+          "format": {
+            "bold": true,
+            "fontSize": 14,
+            "textColor": "#ffffff",
+            "bgColor": "#1a73e8",
+            "hAlign": "center",
+            "vAlign": "middle",
+            "borderBottom": {
+              "style": "medium",
+              "color": "#0b57d0"
+            }
+          }
+        },
+        "labels": {
+          "index": 1,
+          "rangeRowStart": "r2",
+          "rangeRowEnd": "r21",
+          "rangeColStart": "c1",
+          "rangeColEnd": "c1",
+          "format": {
+            "textColor": "#3c4043"
+          }
+        },
+        "counts": {
+          "index": 2,
+          "rangeRowStart": "r2",
+          "rangeRowEnd": "r3",
+          "rangeColStart": "c2",
+          "rangeColEnd": "c5",
+          "format": {
+            "numFmt": "#,##0",
+            "hAlign": "center"
+          }
+        },
+        "money": {
+          "index": 3,
+          "rangeRowStart": "r4",
+          "rangeRowEnd": "r13",
+          "rangeColStart": "c2",
+          "rangeColEnd": "c5",
+          "format": {
+            "numFmt": "$#,##0",
+            "hAlign": "right"
+          }
+        },
+        "estimated": {
+          "index": 4,
+          "rangeRowStart": "r5",
+          "rangeRowEnd": "r5",
+          "rangeColStart": "c2",
+          "rangeColEnd": "c5",
+          "format": {
+            "italic": true,
+            "textColor": "#8e24aa"
+          }
+        },
+        "estimated2": {
+          "index": 5,
+          "rangeRowStart": "r7",
+          "rangeRowEnd": "r7",
+          "rangeColStart": "c2",
+          "rangeColEnd": "c5",
+          "format": {
+            "italic": true,
+            "textColor": "#8e24aa"
+          }
+        },
+        "grandTotal": {
+          "index": 6,
+          "rangeRowStart": "r11",
+          "rangeRowEnd": "r11",
+          "rangeColStart": "c1",
+          "rangeColEnd": "c5",
+          "format": {
+            "bold": true,
+            "fontSize": 13,
+            "bgColor": "#f1f3f4",
+            "borderTop": {
+              "style": "double",
+              "color": "#3c4043"
+            }
+          }
+        },
+        "budget": {
+          "index": 7,
+          "rangeRowStart": "r15",
+          "rangeRowEnd": "r17",
+          "rangeColStart": "c2",
+          "rangeColEnd": "c5",
+          "format": {
+            "numFmt": "$#,##0",
+            "hAlign": "right",
+            "bold": true
+          }
+        },
+        "footer": {
+          "index": 8,
+          "rangeRowStart": "r19",
+          "rangeRowEnd": "r21",
+          "rangeColStart": "c1",
+          "rangeColEnd": "c2",
+          "format": {
+            "bold": true,
+            "bgColor": "#e8f0fe"
+          }
+        }
+      },
+      "conditionalFormats": {
+        "overBudget": {
+          "index": 0,
+          "ranges": {
+            "a": {
+              "rangeRowStart": "r16",
+              "rangeRowEnd": "r16",
+              "rangeColStart": "c2",
+              "rangeColEnd": "c5"
+            }
+          },
+          "conditionType": "gt",
+          "conditionValue": "0",
+          "format": {
+            "textColor": "#c5221f",
+            "bgColor": "#fce8e6",
+            "bold": true
+          }
+        },
+        "withinBudget": {
+          "index": 1,
+          "ranges": {
+            "a": {
+              "rangeRowStart": "r17",
+              "rangeRowEnd": "r17",
+              "rangeColStart": "c2",
+              "rangeColEnd": "c5"
+            }
+          },
+          "conditionType": "textStartsWith",
+          "conditionValue": "yes",
+          "format": {
+            "textColor": "#0b8043",
+            "bgColor": "#e6f4ea",
+            "bold": true
+          }
+        },
+        "blownBudget": {
+          "index": 2,
+          "ranges": {
+            "a": {
+              "rangeRowStart": "r17",
+              "rangeRowEnd": "r17",
+              "rangeColStart": "c2",
+              "rangeColEnd": "c5"
+            }
+          },
+          "conditionType": "textStartsWith",
+          "conditionValue": "no",
+          "format": {
+            "textColor": "#c5221f"
+          }
+        },
+        "expensiveTotal": {
+          "index": 3,
+          "ranges": {
+            "a": {
+              "rangeRowStart": "r11",
+              "rangeRowEnd": "r11",
+              "rangeColStart": "c2",
+              "rangeColEnd": "c5"
+            }
+          },
+          "conditionType": "gt",
+          "conditionValue": "12000",
+          "format": {
+            "textColor": "#e37400"
+          }
+        }
+      }
+    },
+    "fl": {
+      "@type": "Sheet",
+      "name": "Flights",
+      "index": 1,
+      "columns": {
+        "c1": {
+          "index": 0,
+          "width": 190
+        },
+        "c2": {
+          "index": 1,
+          "width": 130
+        },
+        "c3": {
+          "index": 2,
+          "width": 130
+        },
+        "c4": {
+          "index": 3,
+          "width": 130
+        },
+        "c5": {
+          "index": 4,
+          "width": 140
+        }
+      },
+      "rows": {
+        "r1": {
+          "index": 0
+        },
+        "r2": {
+          "index": 1
+        },
+        "r3": {
+          "index": 2
+        },
+        "r4": {
+          "index": 3
+        },
+        "r5": {
+          "index": 4
+        },
+        "r6": {
+          "index": 5
+        },
+        "r7": {
+          "index": 6
+        },
+        "r8": {
+          "index": 7
+        }
+      },
+      "cells": {
+        "r1:c1": {
+          "value": "Traveller"
+        },
+        "r1:c2": {
+          "value": "Portugal"
+        },
+        "r1:c3": {
+          "value": "Japan"
+        },
+        "r1:c4": {
+          "value": "Costa Rica"
+        },
+        "r1:c5": {
+          "value": "New Zealand"
+        },
+        "r2:c1": {
+          "value": "Ana (adult)"
+        },
+        "r2:c2": {
+          "value": "=PERT(680,860,1300)"
+        },
+        "r2:c3": {
+          "value": "=PERT(980,1290,1980)"
+        },
+        "r2:c4": {
+          "value": "=PERT(420,545,830)"
+        },
+        "r2:c5": {
+          "value": "=PERT(1180,1520,2300)"
+        },
+        "r3:c1": {
+          "value": "Miguel (adult)"
+        },
+        "r3:c2": {
+          "value": "=PERT(680,860,1300)"
+        },
+        "r3:c3": {
+          "value": "=PERT(980,1290,1980)"
+        },
+        "r3:c4": {
+          "value": "=PERT(420,545,830)"
+        },
+        "r3:c5": {
+          "value": "=PERT(1180,1520,2300)"
+        },
+        "r4:c1": {
+          "value": "Maya (13)"
+        },
+        "r4:c2": {
+          "value": "=PERT(680,860,1300)"
+        },
+        "r4:c3": {
+          "value": "=PERT(980,1290,1980)"
+        },
+        "r4:c4": {
+          "value": "=PERT(420,545,830)"
+        },
+        "r4:c5": {
+          "value": "=PERT(1180,1520,2300)"
+        },
+        "r5:c1": {
+          "value": "Theo (9)"
+        },
+        "r5:c2": {
+          "value": "=PERT(510,650,980)"
+        },
+        "r5:c3": {
+          "value": "=PERT(735,970,1490)"
+        },
+        "r5:c4": {
+          "value": "=PERT(315,410,625)"
+        },
+        "r5:c5": {
+          "value": "=PERT(885,1140,1725)"
+        },
+        "r6:c1": {
+          "value": "Flights, all four"
+        },
+        "r6:c2": {
+          "value": "=SUM({R[r2]C[c2]}:{R[r5]C[c2]})"
+        },
+        "r6:c3": {
+          "value": "=SUM({R[r2]C[c3]}:{R[r5]C[c3]})"
+        },
+        "r6:c4": {
+          "value": "=SUM({R[r2]C[c4]}:{R[r5]C[c4]})"
+        },
+        "r6:c5": {
+          "value": "=SUM({R[r2]C[c5]}:{R[r5]C[c5]})"
+        },
+        "r7:c1": {
+          "value": "Cheapest flights"
+        },
+        "r7:c2": {
+          "value": "=MIN({R[r6]C[c2]}:{R[r6]C[c5]})"
+        },
+        "r8:c1": {
+          "value": "Most expensive flights"
+        },
+        "r8:c2": {
+          "value": "=MAX({R[r6]C[c2]}:{R[r6]C[c5]})"
+        }
+      },
+      "frozenRows": 1,
+      "frozenCols": 1,
+      "formats": {
+        "header": {
+          "index": 0,
+          "rangeRowStart": "r1",
+          "rangeRowEnd": "r1",
+          "rangeColStart": "c1",
+          "rangeColEnd": "c5",
+          "format": {
+            "bold": true,
+            "textColor": "#ffffff",
+            "bgColor": "#8e24aa",
+            "hAlign": "center"
+          }
+        },
+        "money": {
+          "index": 1,
+          "rangeRowStart": "r2",
+          "rangeRowEnd": "r8",
+          "rangeColStart": "c2",
+          "rangeColEnd": "c5",
+          "format": {
+            "numFmt": "$#,##0",
+            "hAlign": "right"
+          }
+        },
+        "totals": {
+          "index": 2,
+          "rangeRowStart": "r6",
+          "rangeRowEnd": "r6",
+          "rangeColStart": "c1",
+          "rangeColEnd": "c5",
+          "format": {
+            "bold": true,
+            "bgColor": "#f3e5f5",
+            "borderTop": {
+              "style": "thin",
+              "color": "#8e24aa"
+            }
+          }
+        }
+      }
+    }
+  }
+}

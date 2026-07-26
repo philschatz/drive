@@ -1,0 +1,121 @@
+{
+  "@type": "TaskList",
+  "name": "Family Groceries",
+  "description": "The weekly shop — one list both parents add to, in mixed states of done.",
+  "color": "#0b8043",
+  "timeZone": "America/Denver",
+  "tasks": {
+    "milk": {
+      "@type": "Task",
+      "title": "Milk — 2 gallons (one whole, one 2%)",
+      "progress": "completed",
+      "percentComplete": 100,
+      "keywords": { "dairy": true }
+    },
+    "eggs": {
+      "@type": "Task",
+      "title": "Eggs — two dozen",
+      "progress": "completed",
+      "percentComplete": 100,
+      "keywords": { "dairy": true }
+    },
+    "bread": {
+      "@type": "Task",
+      "title": "Sandwich bread ×2 + bagels for Theo",
+      "description": "He'll only eat the plain ones. Check the date, last loaf went mouldy fast.",
+      "progress": "in-process",
+      "percentComplete": 50,
+      "keywords": { "bakery": true }
+    },
+    "bananas": {
+      "@type": "Task",
+      "title": "Bananas — a big bunch, slightly green",
+      "progress": "needs-action",
+      "percentComplete": 0,
+      "categories": { "produce": true }
+    },
+    "salad-kit": {
+      "@type": "Task",
+      "title": "Two bagged salad kits",
+      "progress": "needs-action",
+      "categories": { "produce": true },
+      "priority": 4
+    },
+    "berries": {
+      "@type": "Task",
+      "title": "Blueberries and strawberries (lunchboxes)",
+      "progress": "needs-action",
+      "percentComplete": 0,
+      "priority": 2,
+      "categories": { "produce": true },
+      "keywords": { "school-lunch": true }
+    },
+    "chicken": {
+      "@type": "Task",
+      "title": "Chicken thighs — 3 lb",
+      "description": "For Thursday's traybake. Bone-in if they have it.",
+      "progress": "needs-action",
+      "categories": { "meat": true },
+      "priority": 3
+    },
+    "pasta": {
+      "@type": "Task",
+      "title": "Pasta ×3 boxes + a jar of sauce",
+      "progress": "completed",
+      "percentComplete": 100,
+      "categories": { "pantry": true }
+    },
+    "coffee": {
+      "@type": "Task",
+      "title": "Coffee beans — whole, medium roast",
+      "progress": "in-process",
+      "percentComplete": 50,
+      "priority": 1,
+      "categories": { "pantry": true }
+    },
+    "olive-oil": {
+      "@type": "Task",
+      "title": "Olive oil (the big tin)",
+      "progress": "needs-action",
+      "categories": { "pantry": true }
+    },
+    "cilantro": {
+      "@type": "Task",
+      "title": "Cilantro",
+      "description": "Not in stock — try the corner market on the way home.",
+      "progress": "failed",
+      "categories": { "produce": true }
+    },
+    "ice-cream": {
+      "@type": "Task",
+      "title": "Ice cream (Maya's pick this week)",
+      "progress": "cancelled",
+      "description": "Skipping it — there's most of a tub in the freezer.",
+      "color": "#9e9e9e"
+    },
+    "dish-soap": {
+      "@type": "Task",
+      "title": "Dish soap + dishwasher tablets",
+      "progress": "needs-action",
+      "percentComplete": 0,
+      "categories": { "household": true }
+    },
+    "sunscreen": {
+      "@type": "Task",
+      "title": "Sunscreen for the Tahoe trip",
+      "description": "SPF 50, two bottles. The mineral one — Theo reacts to the other kind.",
+      "progress": "needs-action",
+      "percentComplete": 0,
+      "priority": 0,
+      "keywords": { "trip": true },
+      "color": "#e37400"
+    },
+    "birthday-candles": {
+      "@type": "Task",
+      "title": "Birthday candles",
+      "progress": "needs-action",
+      "categories": { "household": true },
+      "priority": 6
+    }
+  }
+}

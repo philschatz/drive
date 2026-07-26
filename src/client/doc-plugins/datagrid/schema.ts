@@ -390,7 +390,7 @@ function validateRangeIds(
 }
 
 /** Worker-safe plugin core — registered in src/shared/schemas (validation) and
- * spread into the full data-grid plugin (src/client/datagrid/plugin.tsx). */
+ * spread into the full data-grid plugin (src/client/doc-plugins/datagrid/plugin.tsx). */
 export const dataGridSchemaPlugin: DocSchemaPlugin = {
   type: 'DataGrid',
   schema: dataGridDocumentSchema,

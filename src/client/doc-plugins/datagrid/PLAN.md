@@ -389,7 +389,7 @@ Three flavors: `cell-ctx`, `row-ctx`, `col-ctx` — determined by which element 
 ## 19. File Map
 
 ```
-src/client/datagrid/
+src/client/doc-plugins/datagrid/
   DataGrid.tsx        Main component — state, events, JSX rendering
   commands.ts         Plugin registry, useGridCommands hook, commitReorder
   CommandBar.tsx      CommandMenuBar, CommandToolbar, CommandContextMenu renderers

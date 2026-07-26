@@ -1,0 +1,189 @@
+{
+  "@type": "Calendar+Counters",
+  "name": "Novel — Gothic Mystery",
+  "description": "Habits for drafting a gothic mystery set in a fog-bound harbour town: words down, research trips, new places to sit and write, and permission to write nonsense.",
+  "events": {
+    "write-500-words": {
+      "@type": "Event",
+      "title": "500 words on the draft",
+      "startTime": "06:00",
+      "duration": "PT1H",
+      "recurrenceRule": {
+        "@type": "RecurrenceRule",
+        "frequency": "daily",
+        "interval": 1
+      },
+      "completions": {
+        "2026-07-20T06:52:00": "PT51M",
+        "2026-07-21T06:48:00": "PT1H12M",
+        "2026-07-22T07:10:00": "PT38M",
+        "2026-07-24T06:05:00": "PT1H35M",
+        "2026-07-25T06:40:00": "",
+        "2026-07-26T06:15:00": "PT1H4M"
+      }
+    },
+    "morning-pages": {
+      "@type": "Event",
+      "title": "Morning pages — write anything, badly",
+      "startTime": "05:40",
+      "duration": "PT20M",
+      "recurrenceRule": {
+        "frequency": "daily"
+      },
+      "completions": {
+        "2026-07-20T05:58:00": "PT18M",
+        "2026-07-21T05:52:00": "PT12M",
+        "2026-07-23T06:02:00": "PT22M",
+        "2026-07-24T05:45:00": "",
+        "2026-07-26T05:50:00": "PT21M"
+      }
+    },
+    "write-somewhere-new": {
+      "@type": "Event",
+      "title": "Write somewhere new in town",
+      "startTime": "14:00",
+      "duration": "PT2H",
+      "recurrenceRule": {
+        "frequency": "weekly",
+        "interval": 1,
+        "byDay": [{ "@type": "NDay", "day": "we" }]
+      },
+      "completions": {
+        "2026-07-01T14:20:00": "PT2H10M",
+        "2026-07-08T14:05:00": "PT1H45M",
+        "2026-07-15T15:00:00": "PT1H5M",
+        "2026-07-22T14:00:00": "PT2H30M"
+      }
+    },
+    "research-the-harbour": {
+      "@type": "Event",
+      "title": "Research trip — harbour records, lighthouse, tide charts",
+      "startTime": "10:00",
+      "duration": "PT3H",
+      "recurrenceRule": {
+        "frequency": "weekly",
+        "interval": 2,
+        "byDay": [{ "day": "sa" }]
+      },
+      "completions": {
+        "2026-06-27T10:15:00": "PT3H40M",
+        "2026-07-11T10:05:00": "PT2H50M",
+        "2026-07-25T10:30:00": "PT4H15M"
+      }
+    },
+    "walk-the-setting": {
+      "@type": "Event",
+      "title": "Walk the setting and take notes",
+      "startTime": "17:30",
+      "duration": "PT1H",
+      "recurrenceRule": {
+        "frequency": "weekly",
+        "byDay": [
+          { "day": "tu" },
+          { "day": "fr" }
+        ]
+      },
+      "completions": {
+        "2026-07-21T17:42:00": "PT55M",
+        "2026-07-24T17:30:00": "PT1H20M"
+      }
+    },
+    "read-in-genre": {
+      "@type": "Event",
+      "title": "Read in genre",
+      "startTime": "21:30",
+      "duration": "PT40M",
+      "recurrenceRule": {
+        "frequency": "daily"
+      },
+      "completions": {
+        "2026-07-20T21:50:00": "PT45M",
+        "2026-07-22T22:00:00": "PT30M",
+        "2026-07-23T21:35:00": "",
+        "2026-07-25T21:40:00": "PT1H5M",
+        "2026-07-26T21:32:00": "PT38M"
+      }
+    },
+    "overheard-line": {
+      "@type": "Event",
+      "title": "Write down one overheard line",
+      "startTime": "13:00",
+      "recurrenceRule": {
+        "frequency": "daily"
+      },
+      "completions": {
+        "2026-07-20T13:14:00": "",
+        "2026-07-21T11:40:00": "",
+        "2026-07-22T16:22:00": "",
+        "2026-07-24T13:05:00": "",
+        "2026-07-26T12:10:00": ""
+      }
+    },
+    "revise-a-scene": {
+      "@type": "Event",
+      "title": "Revise one scene",
+      "startTime": "19:00",
+      "duration": "PT90M",
+      "recurrenceRule": {
+        "frequency": "weekly",
+        "byDay": [{ "day": "su" }]
+      },
+      "completions": {
+        "2026-07-12T19:20:00": "PT1H50M",
+        "2026-07-19T19:05:00": "PT1H25M",
+        "2026-07-26T19:00:00": ""
+      }
+    },
+    "character-interview": {
+      "@type": "Event",
+      "title": "Interview a character on the page",
+      "startTime": "20:00",
+      "duration": "PT45M",
+      "recurrenceRule": {
+        "frequency": "weekly",
+        "interval": 2,
+        "byDay": [{ "day": "th" }],
+        "count": 24
+      },
+      "completions": {
+        "2026-07-09T20:12:00": "PT52M",
+        "2026-07-23T20:00:00": "PT40M"
+      }
+    },
+    "outline-check": {
+      "@type": "Event",
+      "title": "Reread the outline, move one card",
+      "startTime": "08:30",
+      "duration": "PT20M",
+      "recurrenceRule": {
+        "frequency": "monthly",
+        "byDay": [{ "@type": "NDay", "day": "mo", "nthOfPeriod": 1 }]
+      },
+      "completions": {
+        "2026-07-06T08:44:00": "PT25M"
+      }
+    },
+    "writing-group": {
+      "@type": "Event",
+      "title": "Bring pages to the writing group",
+      "startTime": "18:45",
+      "duration": "PT2H",
+      "recurrenceRule": {
+        "frequency": "monthly",
+        "interval": 1,
+        "byMonthDay": [15]
+      },
+      "completions": {
+        "2026-06-15T18:50:00": "PT2H15M",
+        "2026-07-15T18:45:00": "PT1H55M"
+      }
+    },
+    "finish-the-draft": {
+      "@type": "Event",
+      "title": "Finish the first draft",
+      "start": "2026-12-20T12:00:00",
+      "duration": "PT1H",
+      "completions": {}
+    }
+  }
+}

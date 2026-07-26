@@ -83,7 +83,7 @@ export function validateCounterEvent(event: unknown): ValidationError[] {
 }
 
 /** Worker-safe plugin core — registered in src/shared/schemas (validation) and
- * spread into the full counters plugin (src/client/counters/plugin.tsx). */
+ * spread into the full counters plugin (src/client/doc-plugins/counters/plugin.tsx). */
 export const countersSchemaPlugin: DocSchemaPlugin = {
   type: 'Calendar+Counters',
   schema: counterDocumentSchema,

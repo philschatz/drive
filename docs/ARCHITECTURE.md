@@ -26,7 +26,7 @@ Three source trees, two TypeScript projects:
 
 ## 2. Document Model (JSCalendar / RFC 8984-derived)
 
-Schemas live with their feature: `src/client/calendar/schema.ts`, `tasks/schema.ts`, `datagrid/schema.ts`.
+Schemas live with their plugin under `src/client/doc-plugins/`: `calendar/schema.ts`, `tasks/schema.ts`, `datagrid/schema.ts`, `counters/schema.ts`.
 
 ### Calendar
 ```ts

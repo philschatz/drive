@@ -81,7 +81,7 @@ export interface CalendarDocument {
 }
 
 /** Field nodes shared by every Event-shaped item — Calendar events and
- * Calendar+Counters items (src/client/counters/schema.ts) both spread these. */
+ * Calendar+Counters items (src/client/doc-plugins/counters/schema.ts) both spread these. */
 export const baseEventFields: Record<string, SchemaNode> = {
   title: str({ optional: true }),
   // `start` is a local date ("YYYY-MM-DD") or local datetime ("YYYY-MM-DDTHH:mm:ss"),
@@ -251,7 +251,7 @@ export function validateCalendarEvent(event: unknown): ValidationError[] {
 }
 
 /** Worker-safe plugin core — registered in src/shared/schemas (validation) and
- * spread into the full calendar plugin (src/client/calendar/plugin.tsx). */
+ * spread into the full calendar plugin (src/client/doc-plugins/calendar/plugin.tsx). */
 export const calendarSchemaPlugin: DocSchemaPlugin = {
   type: 'Calendar',
   schema: calendarDocumentSchema,

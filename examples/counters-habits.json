@@ -1,0 +1,243 @@
+{
+  "@type": "Calendar+Counters",
+  "name": "Habit Tracker",
+  "description": "Food, movement and downtime — each tap logs a completion, optionally with how long it took.",
+  "events": {
+    "veg-at-lunch": {
+      "@type": "Event",
+      "title": "Vegetables at lunch",
+      "startTime": "12:30",
+      "recurrenceRule": {
+        "@type": "RecurrenceRule",
+        "frequency": "daily"
+      },
+      "completions": {
+        "2026-07-20T12:41:00": "",
+        "2026-07-21T12:35:00": "",
+        "2026-07-22T13:02:00": "",
+        "2026-07-24T12:30:00": "",
+        "2026-07-25T12:48:00": "",
+        "2026-07-26T12:33:00": ""
+      }
+    },
+    "water": {
+      "@type": "Event",
+      "title": "Two litres of water",
+      "startTime": "08:00",
+      "recurrenceRule": {
+        "frequency": "daily"
+      },
+      "completions": {
+        "2026-07-20T19:10:00": "",
+        "2026-07-21T18:40:00": "",
+        "2026-07-22T20:15:00": "",
+        "2026-07-23T17:55:00": "",
+        "2026-07-25T21:30:00": ""
+      }
+    },
+    "cook-from-scratch": {
+      "@type": "Event",
+      "title": "Cook dinner from scratch",
+      "startTime": "18:00",
+      "duration": "PT1H",
+      "recurrenceRule": {
+        "frequency": "weekly",
+        "byDay": [
+          { "day": "mo" },
+          { "day": "tu" },
+          { "day": "we" },
+          { "day": "th" }
+        ]
+      },
+      "completions": {
+        "2026-07-20T18:22:00": "PT55M",
+        "2026-07-21T18:10:00": "PT1H15M",
+        "2026-07-23T18:40:00": "PT40M"
+      }
+    },
+    "no-sugar-after-dinner": {
+      "@type": "Event",
+      "title": "No sugar after dinner",
+      "startTime": "20:00",
+      "recurrenceRule": {
+        "frequency": "daily"
+      },
+      "completions": {
+        "2026-07-20T22:00:00": "",
+        "2026-07-22T22:05:00": "",
+        "2026-07-23T21:50:00": "",
+        "2026-07-26T22:10:00": ""
+      }
+    },
+    "run": {
+      "@type": "Event",
+      "title": "Run",
+      "startTime": "06:45",
+      "duration": "PT45M",
+      "recurrenceRule": {
+        "frequency": "weekly",
+        "interval": 1,
+        "firstDayOfWeek": "mo",
+        "byDay": [
+          { "@type": "NDay", "day": "tu" },
+          { "@type": "NDay", "day": "th" },
+          { "@type": "NDay", "day": "sa" }
+        ]
+      },
+      "completions": {
+        "2026-07-21T06:48:00": "PT38M",
+        "2026-07-23T06:52:00": "PT47M",
+        "2026-07-25T07:10:00": "PT1H2M",
+        "2026-07-26T06:45:00": ""
+      }
+    },
+    "yoga": {
+      "@type": "Event",
+      "title": "Yoga",
+      "startTime": "07:30",
+      "duration": "PT30M",
+      "recurrenceRule": {
+        "frequency": "weekly",
+        "byDay": [
+          { "day": "mo" },
+          { "day": "we" }
+        ]
+      },
+      "completions": {
+        "2026-07-20T07:34:00": "PT28M",
+        "2026-07-22T07:31:00": "PT35M"
+      }
+    },
+    "lift-weights": {
+      "@type": "Event",
+      "title": "Lift weights",
+      "startTime": "17:30",
+      "duration": "PT50M",
+      "recurrenceRule": {
+        "frequency": "weekly",
+        "byDay": [
+          { "day": "mo" },
+          { "day": "th" }
+        ],
+        "until": "2026-12-31T17:30:00"
+      },
+      "completions": {
+        "2026-07-20T17:38:00": "PT52M",
+        "2026-07-23T17:30:00": "PT44M"
+      }
+    },
+    "walk-8k-steps": {
+      "@type": "Event",
+      "title": "Walk 8,000 steps",
+      "startTime": "09:00",
+      "recurrenceRule": {
+        "frequency": "daily",
+        "count": 180
+      },
+      "completions": {
+        "2026-07-20T20:30:00": "",
+        "2026-07-21T21:00:00": "",
+        "2026-07-22T19:45:00": "",
+        "2026-07-23T20:10:00": "",
+        "2026-07-24T22:00:00": "",
+        "2026-07-26T18:20:00": ""
+      }
+    },
+    "stretch-before-bed": {
+      "@type": "Event",
+      "title": "Stretch before bed",
+      "startTime": "22:00",
+      "duration": "PT10M",
+      "recurrenceRule": {
+        "frequency": "daily"
+      },
+      "completions": {
+        "2026-07-21T22:04:00": "PT9M",
+        "2026-07-24T22:12:00": "PT14M",
+        "2026-07-25T22:00:00": ""
+      }
+    },
+    "read-a-chapter": {
+      "@type": "Event",
+      "title": "Read a chapter (paper book)",
+      "startTime": "21:15",
+      "duration": "PT30M",
+      "recurrenceRule": {
+        "frequency": "daily"
+      },
+      "completions": {
+        "2026-07-20T21:44:00": "PT35M",
+        "2026-07-21T22:02:00": "PT22M",
+        "2026-07-23T21:35:00": "",
+        "2026-07-25T21:20:00": "PT41M",
+        "2026-07-26T21:38:00": ""
+      }
+    },
+    "games-one-session": {
+      "@type": "Event",
+      "title": "Games — one session, then stop",
+      "startTime": "20:30",
+      "duration": "PT1H30M",
+      "recurrenceRule": {
+        "frequency": "weekly",
+        "byDay": [
+          { "day": "fr" },
+          { "day": "sa" }
+        ]
+      },
+      "completions": {
+        "2026-07-24T20:35:00": "PT1H25M",
+        "2026-07-25T20:40:00": "PT2H50M"
+      }
+    },
+    "film-night": {
+      "@type": "Event",
+      "title": "Film night",
+      "startTime": "20:00",
+      "duration": "PT2H",
+      "recurrenceRule": {
+        "frequency": "weekly",
+        "byDay": [{ "day": "sa" }]
+      },
+      "completions": {
+        "2026-07-11T20:10:00": "PT2H8M",
+        "2026-07-18T20:05:00": "PT1H52M",
+        "2026-07-25T20:20:00": "PT2H14M"
+      }
+    },
+    "phone-in-a-drawer": {
+      "@type": "Event",
+      "title": "Phone in a drawer for an hour",
+      "startTime": "19:00",
+      "duration": "PT1H",
+      "recurrenceRule": {
+        "frequency": "daily"
+      },
+      "completions": {
+        "2026-07-21T20:00:00": "PT1H",
+        "2026-07-22T20:00:00": "PT1H",
+        "2026-07-24T19:42:00": "PT42M"
+      }
+    },
+    "call-a-friend": {
+      "@type": "Event",
+      "title": "Call a friend",
+      "startTime": "18:30",
+      "duration": "PT30M",
+      "recurrenceRule": {
+        "frequency": "weekly",
+        "byDay": [{ "day": "su" }]
+      },
+      "completions": {
+        "2026-07-19T18:45:00": "PT1H10M",
+        "2026-07-26T18:30:00": ""
+      }
+    },
+    "sourdough-feed": {
+      "@type": "Event",
+      "title": "Feed the sourdough starter",
+      "start": "2026-07-27T08:00:00",
+      "duration": "PT5M"
+    }
+  }
+}

@@ -1,0 +1,266 @@
+{
+  "@type": "Calendar",
+  "name": "Hale Family",
+  "description": "The shared household calendar — kids' activities, trips, and the things both parents need to see.",
+  "color": "#1a73e8",
+  "timeZone": "America/Denver",
+  "events": {
+    "school-term-starts": {
+      "@type": "Event",
+      "created": "2026-06-30T14:05:00Z",
+      "title": "School term starts (both kids)",
+      "start": "2026-08-24",
+      "duration": "P1D",
+      "description": "Maya: 7th grade, room 214. Theo: 3rd grade, room 6. Drop-off 8:10.",
+      "location": "Cedar Ridge Elementary / Cedar Ridge Middle",
+      "status": "confirmed",
+      "freeBusyStatus": "busy",
+      "categories": { "school": true },
+      "color": "#0b8043"
+    },
+    "swim-practice": {
+      "@type": "Event",
+      "title": "Maya — swim practice",
+      "start": "2026-07-07T16:30:00",
+      "duration": "PT90M",
+      "description": "Whoever's free drives. Goggles and the yellow towel live in her bag.",
+      "location": "Northside Rec Center pool",
+      "status": "confirmed",
+      "freeBusyStatus": "busy",
+      "categories": { "kids": true, "sports": true },
+      "recurrenceRule": {
+        "@type": "RecurrenceRule",
+        "frequency": "weekly",
+        "interval": 1,
+        "firstDayOfWeek": "mo",
+        "byDay": [
+          { "@type": "NDay", "day": "tu" },
+          { "@type": "NDay", "day": "th" }
+        ],
+        "until": "2026-11-19T16:30:00"
+      },
+      "recurrenceOverrides": {
+        "2026-08-06T16:30:00": {
+          "excluded": true,
+          "description": "Pool closed for maintenance."
+        },
+        "2026-09-15T16:30:00": {
+          "title": "Maya — swim meet (not practice)",
+          "duration": "PT4H",
+          "location": "Aurora aquatic center",
+          "priority": 1
+        }
+      },
+      "participants": {
+        "ana": {
+          "@type": "Participant",
+          "name": "Ana Hale",
+          "email": "ana@example.com",
+          "kind": "individual",
+          "roles": { "owner": true, "attendee": true },
+          "participationStatus": "accepted",
+          "expectReply": false
+        },
+        "miguel": {
+          "@type": "Participant",
+          "name": "Miguel Hale",
+          "email": "miguel@example.com",
+          "kind": "individual",
+          "roles": { "attendee": true, "optional": true },
+          "participationStatus": "tentative",
+          "participationComment": "Can do Thursdays, Tuesdays are tight."
+        }
+      },
+      "alerts": {
+        "leave-now": {
+          "@type": "Alert",
+          "action": "display",
+          "trigger": { "@type": "OffsetTrigger", "offset": "-PT25M", "relativeTo": "start" }
+        }
+      }
+    },
+    "soccer-games": {
+      "@type": "Event",
+      "title": "Theo — soccer game",
+      "start": "2026-09-05T09:00:00",
+      "duration": "PT90M",
+      "description": "Bring the folding chairs and the orange slices when it's our week.",
+      "location": "Bluff Park, field 3",
+      "status": "confirmed",
+      "categories": { "kids": true, "sports": true },
+      "recurrenceRule": {
+        "frequency": "weekly",
+        "byDay": [{ "day": "sa" }],
+        "count": 10
+      },
+      "recurrenceOverrides": {
+        "2026-09-26T09:00:00": {
+          "excluded": true,
+          "description": "Rained out — no makeup scheduled."
+        }
+      }
+    },
+    "parent-teacher": {
+      "@type": "Event",
+      "title": "Parent–teacher conferences",
+      "start": "2026-10-08T16:00:00",
+      "duration": "PT45M",
+      "description": "Both of us should be there. Fifteen minutes per teacher, three teachers.",
+      "location": "Cedar Ridge Middle, library",
+      "status": "confirmed",
+      "freeBusyStatus": "busy",
+      "priority": 1,
+      "virtualLocations": {
+        "vc-conference": {
+          "@type": "VirtualLocation",
+          "name": "Video option",
+          "description": "The school offers a video slot if travel doesn't work.",
+          "uri": "https://meet.example.com/cedar-ridge-conferences",
+          "features": { "audio": true, "video": true }
+        }
+      },
+      "participants": {
+        "ana": {
+          "@type": "Participant",
+          "name": "Ana Hale",
+          "email": "ana@example.com",
+          "kind": "individual",
+          "roles": { "attendee": true },
+          "locationId": "vc-conference",
+          "participationStatus": "accepted"
+        },
+        "miguel": {
+          "@type": "Participant",
+          "name": "Miguel Hale",
+          "email": "miguel@example.com",
+          "kind": "individual",
+          "roles": { "attendee": true },
+          "participationStatus": "needs-action",
+          "expectReply": true
+        }
+      },
+      "alerts": {
+        "week-before": {
+          "trigger": { "@type": "OffsetTrigger", "offset": "-P7D", "relativeTo": "start" },
+          "action": "email"
+        },
+        "hour-before": {
+          "trigger": { "@type": "OffsetTrigger", "offset": "-PT1H", "relativeTo": "start" },
+          "action": "display"
+        }
+      }
+    },
+    "miguel-conference-trip": {
+      "@type": "Event",
+      "created": "2026-05-11T17:00:00Z",
+      "title": "Miguel away — teaching conference in Chicago",
+      "start": "2026-10-19",
+      "duration": "P4D",
+      "description": "Ana solo on drop-offs and pickups all week. Flight home lands late Thursday.",
+      "location": "Chicago, IL",
+      "status": "confirmed",
+      "freeBusyStatus": "busy-unavailable",
+      "privacy": "private",
+      "priority": 2,
+      "categories": { "travel": true, "work": true },
+      "keywords": { "solo-parenting-week": true },
+      "links": {
+        "itinerary": {
+          "@type": "Link",
+          "href": "https://example.com/trips/chicago-oct-2026",
+          "rel": "alternate",
+          "contentType": "text/html",
+          "title": "Flights and hotel"
+        }
+      },
+      "attachments": {
+        "boarding-passes": {
+          "@type": "Link",
+          "href": "https://example.com/trips/chicago-oct-2026/boarding.pdf",
+          "contentType": "application/pdf",
+          "size": 214400,
+          "rel": "enclosure",
+          "title": "Boarding passes"
+        }
+      },
+      "replyTo": { "imip": "mailto:miguel@example.com" }
+    },
+    "tahoe-trip": {
+      "@type": "Event",
+      "title": "Family trip — Lake Tahoe",
+      "start": "2026-07-30",
+      "duration": "P5D",
+      "description": "Cabin sleeps six. Grandma is meeting us there on the Friday.",
+      "location": "South Lake Tahoe, CA",
+      "status": "confirmed",
+      "freeBusyStatus": "busy-unavailable",
+      "privacy": "public",
+      "priority": 0,
+      "color": "#e37400",
+      "categories": { "travel": true, "family": true },
+      "keywords": { "vacation": true },
+      "links": {
+        "cabin": {
+          "@type": "Link",
+          "href": "https://example.com/rentals/tahoe-pinecrest",
+          "rel": "related",
+          "title": "Cabin listing and door code"
+        },
+        "packing-list": {
+          "@type": "Link",
+          "href": "https://example.com/trips/tahoe/packing.png",
+          "contentType": "image/png",
+          "display": "thumbnail",
+          "size": 96256,
+          "title": "Packing list photo"
+        }
+      }
+    },
+    "grandma-visit": {
+      "@type": "Event",
+      "title": "Grandma staying with us",
+      "start": "2026-11-25",
+      "duration": "P6D",
+      "description": "Guest room. She takes the early school run on Wednesday and Friday.",
+      "location": "Home",
+      "status": "tentative",
+      "freeBusyStatus": "busy-tentative",
+      "categories": { "family": true }
+    },
+    "date-night": {
+      "@type": "Event",
+      "title": "Date night",
+      "start": "2026-07-03T19:00:00",
+      "duration": "PT3H",
+      "description": "First Friday. Sitter booked separately — check with Priya next door.",
+      "status": "confirmed",
+      "freeBusyStatus": "busy",
+      "privacy": "private",
+      "recurrenceRule": {
+        "frequency": "monthly",
+        "interval": 1,
+        "byDay": [{ "@type": "NDay", "day": "fr", "nthOfPeriod": 1 }]
+      },
+      "alerts": {
+        "book-sitter": {
+          "trigger": { "@type": "OffsetTrigger", "offset": "-P5D", "relativeTo": "start" },
+          "action": "email",
+          "acknowledged": "2026-06-28T19:00:00Z"
+        }
+      }
+    },
+    "theo-dentist": {
+      "@type": "Event",
+      "title": "Theo — dentist (moved from the 14th)",
+      "start": "2026-09-15T10:30:00",
+      "duration": "PT45M",
+      "description": "A detached occurrence: recurrenceId points at the slot it replaces.",
+      "location": "Bright Smiles Pediatric Dentistry",
+      "recurrenceId": "2026-09-14T10:30:00",
+      "recurrenceIdTimeZone": "America/Denver",
+      "status": "confirmed",
+      "progress": "needs-action",
+      "percentComplete": 0
+    }
+  }
+}

@@ -142,7 +142,7 @@ export function validateTask(task: unknown): ValidationError[] {
 }
 
 /** Worker-safe plugin core — registered in src/shared/schemas (validation) and
- * spread into the full task-list plugin (src/client/tasks/plugin.tsx). */
+ * spread into the full task-list plugin (src/client/doc-plugins/tasks/plugin.tsx). */
 export const taskListSchemaPlugin: DocSchemaPlugin = {
   type: 'TaskList',
   schema: taskDocumentSchema,
