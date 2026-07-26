@@ -4,6 +4,7 @@ import { Home } from './home/Home';
 import { AllCalendars } from './calendar/AllCalendars';
 import { SourceViewer } from './source/SourceViewer';
 import { Settings } from './settings/Settings';
+import { SettingsSection } from './settings/SettingsSection';
 import { Contacts } from './contacts/Contacts';
 import { LinkDevicePage } from './settings/LinkDevicePage';
 import { AddFriendPage } from './settings/AddFriendPage';
@@ -19,6 +20,7 @@ export function App() {
     <Router history={hashHistory}>
       <Home path="/" />
       <Settings path="/settings" />
+      <SettingsSection path="/settings/:section" />
       <ConnectionDebug path="/connection" />
       <Contacts path="/contacts" />
       <LinkDevicePage path="/link-device/:cardData" />

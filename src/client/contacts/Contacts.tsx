@@ -149,19 +149,20 @@ export function Contacts({ path }: { path?: string }) {
   const COLLAPSED_LIMIT = 3;
 
   return (
-    <div className="max-w-screen-md mx-auto p-4">
-      <div className="flex items-center gap-2 mb-4">
+    <div className="max-w-screen-md mx-auto px-2 sm:px-4 pb-8">
+      <div className="flex items-center gap-1.5 pl-1 min-h-14">
         <a
           href="#/"
-          className="inline-flex items-center justify-center h-9 w-9 rounded-md hover:bg-accent hover:text-accent-foreground"
+          aria-label="Back"
+          className="inline-flex items-center justify-center h-10 w-10 rounded-full state-layer shrink-0"
         >
-          <span className="material-symbols-outlined">arrow_back</span>
+          <span className="material-symbols-outlined" style={{ fontSize: 24 }}>arrow_back</span>
         </a>
-        <h1 className="text-2xl font-bold">Contacts</h1>
+        <h1 className="md-title-large font-bold flex-1 min-w-0 truncate">Contacts</h1>
         <Button variant="outline" size="sm" onClick={refresh} disabled={loading} title="Refresh">
           <span className="material-symbols-outlined" style={{ fontSize: 16 }}>refresh</span>
         </Button>
-        <ScanQrButton className="ml-auto" onError={setError} />
+        <ScanQrButton onError={setError} />
         <Button variant="outline" size="sm" onClick={() => setAddFriendOpen(true)}>
           <span className="material-symbols-outlined mr-1" style={{ fontSize: 16 }}>person_add</span>
           Add Friend
