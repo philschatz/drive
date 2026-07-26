@@ -12,6 +12,7 @@ import { ValidationPanel } from '../shared/ValidationPanel';
 import { DocLoader } from '../shared/useDocument';
 import { Badge } from '@/components/ui/badge';
 import { Fab } from '@/components/ui/fab';
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import type { CounterEvent } from './schema';
 import { sortedCounters, metMissedByWeek, isArchived, type CounterEntry, type CounterStatus } from './occurrences';
 import { MetMissedChart } from './Chart';
@@ -31,6 +32,15 @@ const SECTION_LABELS: Record<CounterStatus, string> = {
   upcoming: 'Upcoming',
   done: 'Done',
   tally: 'No schedule',
+};
+
+/** Which editor inputs highlight when a peer focuses a given event property.
+ * The recurrence-rule cluster (freq/interval/weekdays) shares one doc path. */
+const PATH_PROP_TO_FIELDS: Record<string, string[]> = {
+  title: ['ced-title'],
+  startTime: ['ced-time'],
+  duration: ['ced-duration'],
+  recurrenceRule: ['ced-freq', 'ced-interval', 'ced-bydays'],
 };
 
 function generateUid() {
@@ -120,6 +130,7 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
   const [events, setEvents] = useState<Record<string, CounterEvent>>({});
   const [editorState, setEditorState] = useState<EditorState | null>(null);
   const [showValidation, setShowValidation] = useState(false);
+  const [chartOpen, setChartOpen] = useState(false);
   // Re-derive "today" when the clock is read; a minute tick keeps statuses fresh
   // across midnight without re-rendering on every click.
   const [now, setNow] = useState(nowLocal);
@@ -204,12 +215,27 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
     setEditorState({ uid: uid!, event: event!, isNew });
   }, []);
 
-  // Presence + URL reflect the counter open in the editor.
-  const focusPath: (string | number)[] | undefined = editorState ? ['events', editorState.uid] : undefined;
+  // Automerge path to the focused field (drives presence, URL, and Edit Source link)
+  const [focusedPath, setFocusedPath] = useState<(string | number)[] | null>(null);
+  const focusPath: (string | number)[] | undefined = focusedPath ?? (editorState ? ['events', editorState.uid] : undefined);
+
+  const handleFieldFocus = useCallback((path: (string | number)[] | null) => {
+    setFocusedPath(path);
+  }, []);
+
+  // Sync selection → presence broadcast + URL (all derived from focusPath).
+  // focusPath is rebuilt every render, so dedupe by value — otherwise every
+  // render (e.g. each incoming peer-presence update) re-sends set-presence,
+  // and two open editors ping-pong broadcasts at each other forever.
+  const lastBroadcastRef = useRef<string | null>('');
   useEffect(() => {
+    if (!editorState) setFocusedPath(null);
+    const key = focusPath ? JSON.stringify(focusPath) : null;
+    if (lastBroadcastRef.current === key) return;
+    lastBroadcastRef.current = key;
     broadcast('focusedField', focusPath ?? null);
     if (docId) replaceDocHash(docId, focusPath ? encodeRestPath(focusPath) : undefined);
-  }, [editorState, docId, broadcast]);
+  }, [editorState, focusPath, docId, broadcast]);
 
   useEffect(() => {
     if (!docId) return;
@@ -253,6 +279,26 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
     }
     return result;
   }, [peers]);
+
+  // Per-field presence inside the open editor: map peers' focused doc paths
+  // (['events', uid, prop]) onto the editor's input ids (mirrors Tasks).
+  const peerFocusedFields = useMemo(() => {
+    const result: Record<string, PeerFieldInfo> = {};
+    if (!editorState) return result;
+    for (const peer of Object.values(peers)) {
+      const pf = peer.value?.focusedField;
+      if (!pf || pf.length < 3) continue;
+      if (pf[0] !== 'events' || pf[1] !== editorState.uid) continue;
+      const prop = pf[2] as string;
+      const inputIds = PATH_PROP_TO_FIELDS[prop];
+      if (inputIds) {
+        const userGroupId = peer.value?.userGroupId;
+        const info = { color: peerColor(peer.peerId, userGroupId), peerId: peer.peerId, userGroupId };
+        for (const id of inputIds) result[id] = info;
+      }
+    }
+    return result;
+  }, [peers, editorState]);
 
   // Archived habits (recurrence ended) drop out of the active list, the section
   // counts, and the chart — shown separately at the bottom, newest first.
@@ -306,6 +352,7 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
         validationActive={showValidation}
         validationCount={validationErrors.length}
         sourcePath={focusPath}
+        overflow={[{ icon: 'bar_chart', label: 'Chart', onSelect: () => setChartOpen(true) }]}
       />
       <HistorySlider history={history} />
       <div
@@ -366,8 +413,19 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
         )}
       </div>
 
-      <MetMissedChart stats={stats} />
       </div>
+
+      {/* Met/missed chart — opened from the title-bar overflow menu. */}
+      <Sheet open={chartOpen} onOpenChange={setChartOpen}>
+        <SheetContent side="bottom" className="max-h-[70vh]">
+          <SheetHeader>
+            <SheetTitle>Met vs missed per week</SheetTitle>
+          </SheetHeader>
+          <div className="mt-3">
+            <MetMissedChart stats={stats} />
+          </div>
+        </SheetContent>
+      </Sheet>
 
       {canEdit && (
         <Fab icon="add" aria-label="New counter" onClick={() => openEditor(null, null)} />
@@ -386,6 +444,8 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
         onAddAnother={() => openEditor(null, null)}
         onArchive={archiveCounter}
         onUnarchive={unarchiveCounter}
+        onFieldFocus={handleFieldFocus}
+        peerFocusedFields={peerFocusedFields}
       />
     </>
     </DocLoader>

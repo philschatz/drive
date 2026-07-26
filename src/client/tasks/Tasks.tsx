@@ -204,9 +204,16 @@ export function Tasks({ docId, rest, readOnly }: { docId?: string; rest?: string
     setFocusedPath(path);
   }, []);
 
-  // Sync selection → presence broadcast + URL (all derived from focusPath)
+  // Sync selection → presence broadcast + URL (all derived from focusPath).
+  // focusPath is rebuilt every render, so dedupe by value — otherwise every
+  // render (e.g. each incoming peer-presence update) re-sends set-presence,
+  // and two open editors ping-pong broadcasts at each other forever.
+  const lastBroadcastRef = useRef<string | null>('');
   useEffect(() => {
     if (!editorState) setFocusedPath(null);
+    const key = focusPath ? JSON.stringify(focusPath) : null;
+    if (lastBroadcastRef.current === key) return;
+    lastBroadcastRef.current = key;
     broadcast('focusedField', focusPath ?? null);
     if (docId) replaceDocHash(docId, focusPath ? encodeRestPath(focusPath) : undefined);
   }, [editorState, focusPath, docId, broadcast]);

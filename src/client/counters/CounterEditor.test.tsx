@@ -1,5 +1,11 @@
 import { render, screen, fireEvent } from '@testing-library/preact';
 import dayjs from 'dayjs';
+
+// CounterEditor renders per-field PresenceDots; shared/presence reaches
+// worker-api (import.meta / new Worker), which jsdom can't load — use the
+// standard in-memory mock.
+jest.mock('../worker-api');
+
 import { CounterEditor } from './CounterEditor';
 import type { CounterEvent } from './schema';
 

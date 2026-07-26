@@ -78,9 +78,13 @@ export function initPresence<S extends Record<string, any>>(
   const cleanup = subscribePresence(docId, onPeersChange as any);
 
   // Broadcast initial state
-  setPresence(docId, getInitialState() as any);
+  const state: Record<string, any> = { ...getInitialState() };
+  setPresence(docId, state as any);
 
   const broadcast = (key: keyof S, value: S[keyof S]) => {
+    // Dedupe on the main thread — only forward actual changes to the worker.
+    if (JSON.stringify(state[key as string] ?? null) === JSON.stringify(value ?? null)) return;
+    state[key as string] = value;
     setPresence(docId, { [key]: value } as any);
   };
 
@@ -149,6 +153,10 @@ export function usePresence<S extends Record<string, any> = PresenceState>(
 
   const broadcast = useCallback((key: keyof S, value: S[keyof S]) => {
     if (!docId) return;
+    // Dedupe on the main thread: only send set-presence when the value actually
+    // changed — re-renders and peer-update echoes must not reach the worker.
+    const prev = lastStateRef.current?.[key as string];
+    if (JSON.stringify(prev ?? null) === JSON.stringify(value ?? null)) return;
     if (lastStateRef.current) lastStateRef.current[key as string] = value;
     setPresence(docId, { [key]: value } as any);
   }, [docId]);

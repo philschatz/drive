@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'preact/hooks';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'preact/hooks';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -7,8 +7,20 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
 import { DeleteButton } from '@/components/ui/delete-button';
 import { relativeTime } from '../../shared/relative-time';
+import { PresenceDot, type PeerFieldInfo } from '../shared/presence';
 import type { CounterEvent } from './schema';
 import type { RecurrenceRule, NDay } from '../calendar/schema';
+
+/** Editor input id → Automerge doc path (relative props filled with uid below).
+ * The recurrence cluster (freq/interval/weekdays) maps to the rule itself. */
+const FIELD_TO_PROP: Record<string, string> = {
+  'ced-title': 'title',
+  'ced-freq': 'recurrenceRule',
+  'ced-interval': 'recurrenceRule',
+  'ced-bydays': 'recurrenceRule',
+  'ced-time': 'startTime',
+  'ced-duration': 'duration',
+};
 
 const FREQ_OPTIONS = [
   { value: 'none', label: 'No repeat' },
@@ -40,9 +52,30 @@ interface CounterEditorProps {
   /** End/resume the recurrence (recurring items only). */
   onArchive?: (uid: string) => void;
   onUnarchive?: (uid: string) => void;
+  /** Broadcast which field the local user is editing (per-field presence). */
+  onFieldFocus?: (path: (string | number)[] | null) => void;
+  /** Peers' focused fields keyed by editor input id (see FIELD_TO_PROP). */
+  peerFocusedFields?: Record<string, PeerFieldInfo>;
 }
 
-export function CounterEditor({ uid, event, isNew, opened, canEdit = true, onSave, onDelete, onDeleteCompletion, onClose, onAddAnother, onArchive, onUnarchive }: CounterEditorProps) {
+export function CounterEditor({ uid, event, isNew, opened, canEdit = true, onSave, onDelete, onDeleteCompletion, onClose, onAddAnother, onArchive, onUnarchive, onFieldFocus, peerFocusedFields }: CounterEditorProps) {
+  const fieldToPath = useMemo(() => {
+    const map: Record<string, (string | number)[]> = {};
+    for (const [inputId, prop] of Object.entries(FIELD_TO_PROP)) {
+      map[inputId] = ['events', uid, prop];
+    }
+    return map;
+  }, [uid]);
+
+  const focusField = useCallback((fieldId: string) => {
+    if (onFieldFocus && fieldToPath[fieldId]) onFieldFocus(fieldToPath[fieldId]);
+  }, [onFieldFocus, fieldToPath]);
+  const blurField = useCallback(() => {
+    if (onFieldFocus) onFieldFocus(null);
+  }, [onFieldFocus]);
+
+  const pd = (id: string) => <PresenceDot fieldId={id} peerFocusedFields={peerFocusedFields} />;
+  const peerOpacity = (id: string) => peerFocusedFields?.[id] ? 0.5 : undefined;
   const [title, setTitle] = useState(event.title || '');
   const [startTime, setStartTime] = useState(event.startTime ? event.startTime.substring(0, 5) : '');
   const [duration, setDuration] = useState(event.duration || '');
@@ -154,14 +187,18 @@ export function CounterEditor({ uid, event, isNew, opened, canEdit = true, onSav
           <SheetTitle>{isNew ? 'New Counter' : 'Edit Counter'}</SheetTitle>
         </SheetHeader>
         <div className="flex flex-col gap-3 mt-4">
-          <div>
-            <Label>Title</Label>
+          <div style={{ opacity: peerOpacity('ced-title') }}>
+            <Label className="flex items-center gap-1"><span>Title</span>{pd('ced-title')}</Label>
             <Input
               ref={titleRef}
               data-testid="ced-title"
               value={title}
               onInput={(e: any) => setTitle(e.currentTarget.value)}
-              onBlur={(e: any) => commit({ title: e.currentTarget.value })}
+              onFocus={() => focusField('ced-title')}
+              onBlur={(e: any) => {
+                blurField();
+                commit({ title: e.currentTarget.value });
+              }}
               onKeyDown={(e: any) => {
                 if (e.key !== 'Enter') return;
                 e.preventDefault();
@@ -173,8 +210,8 @@ export function CounterEditor({ uid, event, isNew, opened, canEdit = true, onSav
             />
           </div>
 
-          <div>
-            <Label>Repeat</Label>
+          <div style={{ opacity: peerOpacity('ced-freq') }}>
+            <Label className="flex items-center gap-1"><span>Repeat</span>{pd('ced-freq')}</Label>
             <Select
               value={frequency}
               onValueChange={(v: string) => {
@@ -183,7 +220,12 @@ export function CounterEditor({ uid, event, isNew, opened, canEdit = true, onSav
                 commit({ frequency: next });
               }}
             >
-              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectTrigger
+                onFocus={() => focusField('ced-freq')}
+                onBlur={blurField}
+              >
+                <SelectValue />
+              </SelectTrigger>
               <SelectContent>
                 {FREQ_OPTIONS.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
               </SelectContent>
@@ -191,26 +233,32 @@ export function CounterEditor({ uid, event, isNew, opened, canEdit = true, onSav
           </div>
 
           {frequency !== 'none' && (
-            <div>
-              <Label>Every</Label>
+            <div style={{ opacity: peerOpacity('ced-interval') }}>
+              <Label className="flex items-center gap-1"><span>Every</span>{pd('ced-interval')}</Label>
               <Input
                 type="number"
                 min={1}
                 value={String(interval)}
                 onInput={(e: any) => setInterval(Math.max(1, parseInt(e.currentTarget.value) || 1))}
-                onBlur={(e: any) => commit({ interval: Math.max(1, parseInt(e.currentTarget.value) || 1) })}
+                onFocus={() => focusField('ced-interval')}
+                onBlur={(e: any) => {
+                  blurField();
+                  commit({ interval: Math.max(1, parseInt(e.currentTarget.value) || 1) });
+                }}
               />
             </div>
           )}
 
           {frequency === 'weekly' && (
-            <div>
-              <Label>On days</Label>
+            <div style={{ opacity: peerOpacity('ced-bydays') }}>
+              <Label className="flex items-center gap-1"><span>On days</span>{pd('ced-bydays')}</Label>
               <div className="flex flex-wrap gap-3 mt-1">
                 {WEEKDAYS.map(({ day, label }) => (
                   <label key={day} className="flex items-center gap-1 text-sm">
                     <Checkbox
                       checked={byDay.includes(day)}
+                      onFocus={() => focusField('ced-bydays')}
+                      onBlur={blurField}
                       onCheckedChange={(checked: boolean) => {
                         const next = checked ? [...byDay, day] : byDay.filter(d => d !== day);
                         setByDay(next);
@@ -226,24 +274,32 @@ export function CounterEditor({ uid, event, isNew, opened, canEdit = true, onSav
 
           {recurring && (
             <>
-              <div>
-                <Label>Time of day (optional)</Label>
+              <div style={{ opacity: peerOpacity('ced-time') }}>
+                <Label className="flex items-center gap-1"><span>Time of day (optional)</span>{pd('ced-time')}</Label>
                 <Input
                   type="time"
                   value={startTime}
                   onInput={(e: any) => setStartTime(e.currentTarget.value)}
-                  onBlur={(e: any) => commit({ startTime: e.currentTarget.value })}
+                  onFocus={() => focusField('ced-time')}
+                  onBlur={(e: any) => {
+                    blurField();
+                    commit({ startTime: e.currentTarget.value });
+                  }}
                 />
                 <p className="text-xs text-muted-foreground mt-1">When the window to do this opens each time. Leave blank for all day.</p>
               </div>
 
-              <div>
-                <Label>Duration (optional, e.g. PT30M)</Label>
+              <div style={{ opacity: peerOpacity('ced-duration') }}>
+                <Label className="flex items-center gap-1"><span>Duration (optional, e.g. PT30M)</span>{pd('ced-duration')}</Label>
                 <Input
                   value={duration}
                   placeholder="PT1H"
                   onInput={(e: any) => setDuration(e.currentTarget.value)}
-                  onBlur={(e: any) => commit({ duration: e.currentTarget.value })}
+                  onFocus={() => focusField('ced-duration')}
+                  onBlur={(e: any) => {
+                    blurField();
+                    commit({ duration: e.currentTarget.value });
+                  }}
                 />
                 <p className="text-xs text-muted-foreground mt-1">How long you have to do it before it counts as missed.</p>
               </div>

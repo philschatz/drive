@@ -27,8 +27,13 @@ describe('Counters container', () => {
     render(<Counters docId={DOC} />);
     await waitFor(() => expect(document.querySelector('md-fab')).toBeTruthy());
 
-    // The met/missed chart renders even when empty.
+    // The met/missed chart lives in a sheet behind the title-bar overflow's
+    // "Chart" item (the md-menu is inert in jsdom, so the item is reachable
+    // directly) and renders even when empty.
+    expect(document.querySelector('svg[aria-label="Met vs missed occurrences per week"]')).toBeNull();
+    fireEvent.click(screen.getByTitle('Chart'));
     expect(document.querySelector('svg[aria-label="Met vs missed occurrences per week"]')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
 
     // FAB → New Counter sheet; Enter commits (auto-save) and chains to a fresh
     // blank counter; dismiss the sheet with its Close button.
