@@ -30,7 +30,7 @@ import {
 import { PeerDot, peerDisplayName } from '../common/presence';
 import { EditableDeviceName } from '@/components/EditableDeviceName';
 import { PRODUCTION_RELAY_URL } from '../../../shared/relay-identity';
-import { isDebugEnabled } from '../../idb-storage';
+import { isDebugEnabled } from '../../shared/idb-storage';
 
 /** Mirror of the relay URL chosen in automerge-worker.ts (https → prod, else local ws). */
 function relayUrl(): string {

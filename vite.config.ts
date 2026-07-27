@@ -210,6 +210,7 @@ export default defineConfig(async () => {
     }),
   ],
   root: 'src/client',
+  publicDir: 'assets/public',
   define: {
     __APP_VERSION__: JSON.stringify(getCommitSha()),
     __BUILD_TIME__: JSON.stringify(new Date().toISOString()),

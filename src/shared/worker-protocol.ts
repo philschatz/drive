@@ -6,6 +6,28 @@
  */
 import type { RendezvousStatus } from './rendezvous-protocol';
 import type { RichTextSpan } from './rich-text-ops';
+import type { WebRTCSignal } from './webrtc-signal';
+
+// ── worker ↔ WebRTC bridge (a MessagePort, not the worker's main channel) ────
+// RTCPeerConnection is window-only, so the peer connections live on the main
+// thread (src/client/ui/webrtc-bridge.ts) while the network adapter that drives
+// them lives in the worker (src/client/worker/webrtc-relay-adapter.ts). These
+// two types are that MessagePort's contract; they live here so neither side has
+// to import the other across the ui/worker boundary.
+
+/** Worker → bridge commands. */
+export type WorkerToBridgeMsg =
+  | { kind: 'connect-peer'; peerId: string; initiator: boolean }
+  | { kind: 'disconnect-peer'; peerId: string }
+  | { kind: 'signal-in'; peerId: string; signal: WebRTCSignal }
+  | { kind: 'data-out'; peerId: string; bytes: Uint8Array };
+
+/** Bridge → worker events. */
+export type BridgeToWorkerMsg =
+  | { kind: 'signal-out'; peerId: string; signal: WebRTCSignal }
+  | { kind: 'channel-open'; peerId: string }
+  | { kind: 'channel-closed'; peerId: string }
+  | { kind: 'data-in'; peerId: string; bytes: Uint8Array };
 
 export type MainToWorker =
   | { type: 'init' }

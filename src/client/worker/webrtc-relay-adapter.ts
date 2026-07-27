@@ -22,9 +22,9 @@
  */
 
 import { Encoder, decode } from 'cbor-x';
-import { MAX_MESSAGE_BYTES } from './webrtc-chunk';
-import { WRTC_SIGNAL, type WebRTCSignalFrame } from '../shared/webrtc-signal';
-import type { BridgeToWorkerMsg, WorkerToBridgeMsg } from './ui/webrtc-bridge';
+import { MAX_MESSAGE_BYTES } from '../shared/webrtc-chunk';
+import { WRTC_SIGNAL, type WebRTCSignalFrame } from '../../shared/webrtc-signal';
+import type { BridgeToWorkerMsg, WorkerToBridgeMsg } from '../../shared/worker-protocol';
 import type { Message, NetworkAdapterInterface, PeerId, PeerMetadata } from '@automerge/automerge-repo';
 
 export interface WebRTCRelayAdapterOptions {

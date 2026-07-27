@@ -11,15 +11,15 @@
  * dispatch, and the hf-port / webrtc-port MessagePort handlers.
  */
 import { decode as cborDecode, Encoder } from 'cbor-x';
-import { isRendezvousType } from '../shared/rendezvous-protocol';
-import { isWebRTCSignalType, type WebRTCSignalFrame } from '../shared/webrtc-signal';
+import { isRendezvousType } from '../../shared/rendezvous-protocol';
+import { isWebRTCSignalType, type WebRTCSignalFrame } from '../../shared/webrtc-signal';
 import { makeWebRTCRelayAdapter, type WebRTCRelayAdapter } from './webrtc-relay-adapter';
-import { RELAY_PEER_ID, PRODUCTION_RELAY_URL, isRelayLeaveFrame } from '../shared/relay-identity';
-import { errMsg } from '../shared/keyhive-ops';
+import { RELAY_PEER_ID, PRODUCTION_RELAY_URL, isRelayLeaveFrame } from '../../shared/relay-identity';
+import { errMsg } from '../../shared/keyhive-ops';
 import { idbKvStore } from './idb-kvstore';
-import { DriveEngine } from '../shared/drive-engine';
-import type { EngineHost, EngineNetwork } from '../shared/engine-host';
-import type { MainToWorker, WorkerToMain, ValidationError } from '../shared/worker-protocol';
+import { DriveEngine } from '../../shared/drive-engine';
+import type { EngineHost, EngineNetwork } from '../../shared/engine-host';
+import type { MainToWorker, WorkerToMain, ValidationError } from '../../shared/worker-protocol';
 
 // Re-export the message protocol so existing importers (worker-api.ts) are unaffected.
 export type { MainToWorker, WorkerToMain, ValidationError };

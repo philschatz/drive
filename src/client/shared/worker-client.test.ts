@@ -12,7 +12,7 @@
  *    tell the worker to stop); a query-result error reaches the subscriber.
  */
 import { WorkerClient, type WorkerLike } from './worker-client';
-import type { WorkerToMain } from '../shared/worker-protocol';
+import type { WorkerToMain } from '../../shared/worker-protocol';
 
 class FakeWorker implements WorkerLike {
   sent: any[] = [];

@@ -5,7 +5,7 @@
 import { useState, useEffect, useCallback } from 'preact/hooks';
 import { Button } from '@/components/ui/button';
 import { getIdentity, ensureUserGroup, type IdentityInfo } from '../../common/keyhive-api';
-import { idbGet, KEYS } from '../../../idb-storage';
+import { idbGet, KEYS } from '../../../shared/idb-storage';
 import { getFriendName, setFriendName } from '../../friend-names';
 import { sourceUrl } from '../../common/doc-urls';
 import { AddFriendSheet } from '../AddFriendSheet';

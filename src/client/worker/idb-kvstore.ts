@@ -2,9 +2,9 @@
  * Browser KVStore implementation over idb-storage.ts (IndexedDB `app-storage`).
  * Handed to DriveEngine by the worker shell (automerge-worker.ts).
  */
-import { idbGet, idbSet, idbDel, idbDelPrefix, settingGet, settingSet } from './idb-storage';
-import type { KVStore } from '../shared/engine-host';
-import type { SettingName, SettingsSchema } from '../shared/storage-keys';
+import { idbGet, idbSet, idbDel, idbDelPrefix, settingGet, settingSet } from '../shared/idb-storage';
+import type { KVStore } from '../../shared/engine-host';
+import type { SettingName, SettingsSchema } from '../../shared/storage-keys';
 
 export const idbKvStore: KVStore = {
   get: <T>(key: string) => idbGet<T>(key),

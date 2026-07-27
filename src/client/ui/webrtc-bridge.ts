@@ -20,21 +20,8 @@
  */
 
 import type { WebRTCSignal } from '../../shared/webrtc-signal';
-import { frameMessage, FrameReassembler, FrameOverflowError } from '../webrtc-chunk';
-
-/** Worker → bridge commands. */
-export type WorkerToBridgeMsg =
-  | { kind: 'connect-peer'; peerId: string; initiator: boolean }
-  | { kind: 'disconnect-peer'; peerId: string }
-  | { kind: 'signal-in'; peerId: string; signal: WebRTCSignal }
-  | { kind: 'data-out'; peerId: string; bytes: Uint8Array };
-
-/** Bridge → worker events. */
-export type BridgeToWorkerMsg =
-  | { kind: 'signal-out'; peerId: string; signal: WebRTCSignal }
-  | { kind: 'channel-open'; peerId: string }
-  | { kind: 'channel-closed'; peerId: string }
-  | { kind: 'data-in'; peerId: string; bytes: Uint8Array };
+import { frameMessage, FrameReassembler, FrameOverflowError } from '../shared/webrtc-chunk';
+import type { WorkerToBridgeMsg, BridgeToWorkerMsg } from '../../shared/worker-protocol';
 
 /** Reliable, ordered channel label (TCP-like) for automerge sync messages. */
 const DATA_CHANNEL_LABEL = 'drive-sync';

@@ -1,13 +1,13 @@
 import 'temporal-polyfill/global';
 
-import '../globals.css';
+import '../assets/globals.css';
 // Register the @material/web (MD3) custom elements after globals.css so the
 // `--md-sys-color-*` tokens they read are already defined.
 import './md-elements';
 import { render } from 'preact';
 import { App } from './App';
 import { getHashPath, hashHistory } from './hash-history';
-import { settingGetSync } from '../idb-storage';
+import { settingGetSync } from '../shared/idb-storage';
 
 // Expose the worker API on window.__drive for Playwright peer tests. Included in
 // all builds (not just dev) so the suite can run against a production build too.

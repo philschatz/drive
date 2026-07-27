@@ -5,19 +5,18 @@
  */
 
 import { useState, useEffect, useRef } from 'preact/hooks';
-import type { WorkerToMain } from '../automerge-worker';
-import type { ValidationError } from '../automerge-worker';
+import type { WorkerToMain, ValidationError } from '../../shared/worker-protocol';
 import type { PresenceState, PeerState } from '@automerge/automerge-repo';
 import { deepAssign } from '../../shared/deep-assign';
 import type { RendezvousStatus } from '../../shared/rendezvous-protocol';
 export type { RendezvousStatus } from '../../shared/rendezvous-protocol';
-import { idbDelPrefix, settingGet, settingSetSync, closeDb, CACHE_PREFIX } from '../idb-storage';
+import { idbDelPrefix, settingGet, settingSetSync, closeDb, CACHE_PREFIX } from '../shared/idb-storage';
 import { setFriendNamesDispatch, applyFriendNamesFromWorker } from './friend-names';
 import { setDeviceNamesDispatch, applyDeviceNamesFromWorker } from './device-names';
 import { generateDefaultDeviceName } from './lib/device-name';
 import type { ArchiveDocResult } from '../../shared/keyhive-types';
 import { startWebRTCBridge } from './webrtc-bridge';
-import { WorkerClient } from '../worker-client';
+import { WorkerClient } from '../shared/worker-client';
 import type { RichTextOp, RichTextSpan } from '../../shared/rich-text-ops';
 
 // Re-export for convenience
@@ -121,7 +120,7 @@ const WORKER_FNS = new Map<unknown, string>([[deepAssign, 'deepAssign'], [richTe
 // ── Worker setup ────────────────────────────────────────────────────────────
 
 const worker = new Worker(
-  new URL('../automerge-worker.ts', import.meta.url),
+  new URL('../worker/automerge-worker.ts', import.meta.url),
   { type: 'module' },
 );
 

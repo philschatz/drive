@@ -12,8 +12,8 @@
 
 import { EventEmitter } from 'events';
 import { Encoder, decode } from 'cbor-x';
-import { makeWebRTCRelayAdapter } from '../src/client/webrtc-relay-adapter';
-import { MAX_MESSAGE_BYTES } from '../src/client/webrtc-chunk';
+import { makeWebRTCRelayAdapter } from '../src/client/worker/webrtc-relay-adapter';
+import { MAX_MESSAGE_BYTES } from '../src/client/shared/webrtc-chunk';
 import { WRTC_SIGNAL } from '../src/shared/webrtc-signal';
 import { captureConsole } from './support/console';
 

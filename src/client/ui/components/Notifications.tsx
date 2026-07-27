@@ -2,7 +2,7 @@ import { useEffect } from 'preact/hooks';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import { onWorkerError } from '@/worker-api';
-import { settingSet, settingSetSync } from '@client/idb-storage';
+import { settingSet, settingSetSync } from '@client/shared/idb-storage';
 import { watchTabLeadership } from '@/multi-tab';
 import { useVersionCheck } from '@/common/useVersionCheck';
 import { upsertToast } from './ui/toast';

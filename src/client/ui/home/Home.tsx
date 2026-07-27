@@ -20,7 +20,7 @@ dayjs.extend(relativeTimePlugin);
 import { iconForType, docTypeLabel, type DocTypePlugin } from '@/doc-plugins';
 import { docUrl, shareUrl } from '@/common/doc-urls';
 import { relativeTime } from '../../../shared/relative-time';
-import { settingSet, settingSetSync } from '../../idb-storage';
+import { settingSet, settingSetSync } from '../../shared/idb-storage';
 import type { ImportProgress } from './import-docs';
 import { useInstallNudge } from './install-nudge';
 

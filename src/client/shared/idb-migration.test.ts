@@ -10,7 +10,7 @@
 import 'fake-indexeddb/auto';
 
 import { idbGet, KEYS, closeDb } from './idb-storage';
-import { LEGACY_IDB_KEYS } from '../shared/storage-keys';
+import { LEGACY_IDB_KEYS } from '../../shared/storage-keys';
 
 const DB_NAME = 'app-storage';
 const STORE = 'keyval';

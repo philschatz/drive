@@ -8,6 +8,10 @@
  *  - src/shared/schemas/** is the worker-safe validation half of the doc-type
  *    plugins (see the WORKER BOUNDARY note in schemas/index.ts). It must never
  *    reach a plugin.tsx or anything else that imports Preact.
+ *  - src/client/ui and src/client/worker must not import each other. They run on
+ *    different threads; anything both need belongs in src/client/shared (browser
+ *    APIs) or src/shared (portable). Type-only edges count — they are invisible
+ *    at runtime, so nothing else would ever catch the layering drifting.
  */
 
 import fs from 'node:fs';
@@ -38,6 +42,22 @@ describe('directory layering', () => {
       for (const spec of relativeSpecifiers(file)) {
         const target = path.resolve(path.dirname(file), spec);
         if (target.startsWith(path.join(REPO, 'src/client'))) {
+          offenders.push(`${path.relative(REPO, file)} -> ${spec}`);
+        }
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it.each([
+    ['src/client/ui', 'src/client/worker'],
+    ['src/client/worker', 'src/client/ui'],
+  ])('%s never imports from %s', (fromDir, toDir) => {
+    const offenders: string[] = [];
+    for (const file of walk(path.join(REPO, fromDir))) {
+      for (const spec of relativeSpecifiers(file)) {
+        const target = path.resolve(path.dirname(file), spec);
+        if (target.startsWith(path.join(REPO, toDir))) {
           offenders.push(`${path.relative(REPO, file)} -> ${spec}`);
         }
       }

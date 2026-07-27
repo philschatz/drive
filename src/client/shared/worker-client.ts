@@ -11,7 +11,7 @@
  * to `route()` / `fail()` and re-exports the client's operations verbatim, so the
  * on-the-wire protocol is unchanged.
  */
-import type { WorkerToMain, ValidationError } from '../shared/worker-protocol';
+import type { WorkerToMain, ValidationError } from '../../shared/worker-protocol';
 import type { PresenceState, PeerState } from '@automerge/automerge-repo';
 
 /** Minimal surface of a Worker we depend on (so tests can supply a fake). */

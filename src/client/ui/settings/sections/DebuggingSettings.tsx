@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { setDebugEnabled, clearAllCaches } from '../../worker-api';
-import { isDebugEnabled } from '../../../idb-storage';
+import { isDebugEnabled } from '../../../shared/idb-storage';
 import { useSectionAlerts } from '../SettingsSubScreen';
 
 export function DebuggingSettings() {

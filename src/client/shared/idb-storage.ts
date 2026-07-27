@@ -21,11 +21,11 @@ const STORE_NAME = 'keyval';
 import {
   KEYS, LEGACY_IDB_KEYS, CACHE_PREFIX, queryCacheKey, validationCacheKey, docCachePrefix,
   hashStr, SETTINGS_PREFIX, SETTINGS_DEFAULTS,
-} from '../shared/storage-keys';
-import type { SettingsSchema, SettingName } from '../shared/storage-keys';
+} from '../../shared/storage-keys';
+import type { SettingsSchema, SettingName } from '../../shared/storage-keys';
 
 export { KEYS, CACHE_PREFIX, queryCacheKey, validationCacheKey, docCachePrefix, hashStr };
-export type { QueryCacheEntry } from '../shared/storage-keys';
+export type { QueryCacheEntry } from '../../shared/storage-keys';
 
 // One-time v1→v2 migration: legacy ad-hoc key names → category-prefixed names. Renamed
 // data/auth keys preserve their values; legacy cache (`qc:*`) and the removed device-linking

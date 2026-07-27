@@ -3,7 +3,7 @@
  * Extracted 1:1 from the old single-page Settings.
  */
 import { Button } from '@/components/ui/button';
-import { idbGet, idbSet, KEYS } from '../../../idb-storage';
+import { idbGet, idbSet, KEYS } from '../../../shared/idb-storage';
 import { getAllFriendNames, setFriendName } from '../../friend-names';
 import { getAllDeviceNames, setDeviceName } from '../../device-names';
 import { useSectionAlerts } from '../SettingsSubScreen';

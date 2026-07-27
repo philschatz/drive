@@ -7,7 +7,7 @@ import { useAccess } from './common/useAccess';
 import { sourceUrl } from './common/doc-urls';
 import { buttonVariants } from '@/components/ui/button';
 import { getHashPath, getHashSearch } from './hash-history';
-import { settingSet, settingSetSync } from '../idb-storage';
+import { settingSet, settingSetSync } from '../shared/idb-storage';
 
 /**
  * The single document route: `#/d/:docId[/:rest*]`. Resolves the document's
