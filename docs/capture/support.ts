@@ -2,7 +2,7 @@ import { expect } from '@playwright/test';
 import type { Browser, BrowserContext, Page } from '@playwright/test';
 import { mkdir } from 'fs/promises';
 import path from 'path';
-import type { DriveBridge } from '../../src/client/test-bridge';
+import type { DriveBridge } from '../../src/client/ui/test-bridge';
 import { waitFor } from '../../src/client/tests-pw/support/peer';
 import { VIEWPORT } from './playwright.config';
 import { installCursor } from './cursor';

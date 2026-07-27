@@ -32,14 +32,14 @@ import {
  */
 
 /**
- * Device names for the two-device shots.
+ * The name given to the *second* device in a two-device shot.
  *
- * A device names itself after the browser it is running in, so both panes of a
- * capture would otherwise read "💻 Chrome" — and a slide about *this device* vs
- * *that device* needs them to be visibly different platforms. Same 📱-plus-name
- * shape the app's own generator uses (src/client/lib/device-name.ts).
+ * Only the second one needs naming. A device names itself after the browser it is
+ * running in ("💻 Chrome"), and DeviceList already badges the local row
+ * "This device" — so 💻-plus-badge against 📱 iOS is unambiguous without
+ * relabelling the first. Same 📱-plus-name shape the app's own generator uses
+ * (src/client/ui/lib/device-name.ts).
  */
-const ANDROID = '📱 Android';
 const IOS = '📱 iOS';
 
 /** A TaskList with enough content to look real in a two-peer capture. */
@@ -63,7 +63,7 @@ const SHARED_TASKS = {
  */
 const IMPACT_OF_HOURS = JSON.parse(
   readFileSync(
-    path.resolve(__dirname, '../../src/client/home/examples/datagrid-impact-of-hours.json'),
+    path.resolve(__dirname, '../../src/client/ui/home/examples/datagrid-impact-of-hours.json'),
     'utf8'
   )
 );
@@ -79,15 +79,10 @@ IMPACT_OF_HOURS.sheets.compare.columns.c1.width = 150;
 /**
  * Cells on the *Compare* sheet as `[col, row]` grid indices.
  *
- * Column 0 (`Way of helping`) is frozen, so it stays put while the rest of the
- * sheet pans under it — which is why the interesting columns are off-screen
- * until the grid is scrolled right.
- */
-/**
  * Both peers' cells sit in the same column (`People reached per hour`) on
- * purpose: these columns are 150–160px against ~280px of grid beside the frozen
- * labels, so two of them never share the screen — and a peer's highlight is only
- * worth capturing if the *other* pane is looking at it.
+ * purpose: these columns are 150–160px against ~280px of grid beside the (now
+ * unfrozen, narrowed) label column, so two of them never share the screen — and a
+ * peer's highlight is only worth capturing if the *other* pane is looking at it.
  */
 const SAM_CELL: [number, number] = [5, 1]; // =TRIANGULAR(0.8,1.5,1)
 const PHIL_CELL: [number, number] = [5, 3]; // =TRIANGULAR(2,6,3)
@@ -163,7 +158,7 @@ const SHARED_COUNTERS = {
  */
 const TRIP_PLANNER = JSON.parse(
   readFileSync(
-    path.resolve(__dirname, '../../src/client/home/examples/datagrid-trip-planner.json'),
+    path.resolve(__dirname, '../../src/client/ui/home/examples/datagrid-trip-planner.json'),
     'utf8'
   )
 );
@@ -273,8 +268,10 @@ test('connections.png', async ({ browser }) => {
   const sam = await capturePeer(browser, 'sam');
   await setDisplayName(phil.page, 'Phil');
   await setDisplayName(sam.page, 'Sam');
-  await setDeviceName(phil, ANDROID);
-  const samAgentId = await setDeviceName(sam, IOS);
+  // Only Sam's id is needed here, not a name set on Sam's own device: a friend's
+  // device name never travels (see the relabel below), and this shot is taken on
+  // Phil's page — so naming Sam's device from Sam would change nothing.
+  const { agentId: samAgentId } = await sam.call('getIdentity');
   const { bGroup } = await befriend(phil, sam);
 
   const { docId } = await phil.call('createDoc', SHARED_TASKS);
@@ -402,10 +399,10 @@ test('linking-a-device.gif', async ({ browser }) => {
   const android = await capturePeer(browser, 'android', { video: true });
   const ios = await capturePeer(browser, 'ios', { video: true });
   await setDisplayName(android.page, 'Phil');
-  // Name both before linking: the rendezvous carries each device's name to the
-  // other, so the Devices list at the end of the clip reads 📱 Android / 📱 iOS
-  // instead of two rows of the same browser.
-  await setDeviceName(android, ANDROID);
+  // Name the new device before linking: the rendezvous carries its name to the
+  // first one, so the Devices list at the end of the clip reads 📱 iOS beside the
+  // first device's own row. Naming that first row too would be redundant — it
+  // already carries the "This device" badge.
   const iosAgentId = await setDeviceName(ios, IOS);
   // The point of linking is that the new device inherits the user's documents,
   // so the first device needs a library worth inheriting.
@@ -793,18 +790,17 @@ test('source-presence.gif', async ({ browser }) => {
  * Habit Tracker open on 📱 iOS re-renders on the right with no reload.
  *
  * The demoted device is always the linked one. A founding device's root
- * delegation is permanent in keyhive, so demoting 📱 Android would change the
- * Select and nothing else.
+ * delegation is permanent in keyhive, so demoting the first device would change
+ * the Select and nothing else.
  */
 test('device-permissions.gif', async ({ browser }) => {
-  // A device link plus five role changes, and every one of those is a keyhive
+  // A device link plus four role changes, and every one of those is a keyhive
   // revoke-and-re-add with a key rotation that has to reach the other device.
   // This does not fit the suite-wide 240s.
   test.setTimeout(600_000);
   const android = await capturePeer(browser, 'android', { video: true });
   const ios = await capturePeer(browser, 'ios', { video: true });
   await setDisplayName(android.page, 'Phil');
-  await setDeviceName(android, ANDROID);
   const iosAgentId = await setDeviceName(ios, IOS);
 
   const { docId } = await android.call('createDoc', SHARED_COUNTERS);
@@ -856,7 +852,7 @@ test('device-permissions.gif', async ({ browser }) => {
    */
   const iosRow = (page: Page) => page.getByTitle(iosAgentId).locator('../..');
 
-  /** Change 📱 iOS's role from 📱 Android. No confirm(): that guard is self-only. */
+  /** Change 📱 iOS's role from the first device. No confirm(): that guard is self-only. */
   async function setDeviceRole(page: Page, role: 'Read' | 'Edit' | 'Admin'): Promise<void> {
     const trigger = iosRow(page).getByRole('combobox');
     await tap(page, trigger);
@@ -946,7 +942,7 @@ test('device-permissions.gif', async ({ browser }) => {
     }
   );
 
-  // The longest asset in the set — five key rotations, each of which has to reach
+  // The longest asset in the set — four key rotations, each of which has to reach
   // the other device. 6fps was measured and came out *bigger* than 8 (fewer frames
   // each carrying a larger delta), so this stays at the house rate.
   await hstackGif('device-permissions.gif', clips.left, clips.right, { fps: 8 });

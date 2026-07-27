@@ -114,7 +114,8 @@ test('linking a new device exchanges device names both ways', async ({ browser }
 
     // And the Settings device list renders the learned name in an editable field
     // (deviceA sees "Phone B" as an input value — every device row is editable).
-    await deviceA.page.evaluate(() => { location.hash = '#/settings'; });
+    // The list is its own sub-screen; `#/settings` is only a navigation index.
+    await deviceA.page.evaluate(() => { location.hash = '#/settings/devices'; });
     await expect
       .poll(
         () => deviceA!.page.getByRole('textbox').evaluateAll(
@@ -222,7 +223,7 @@ test('linking a new device via rendezvous converges both onto one user-group', a
     );
 
     // …and the Settings device list renders it: deviceB's row shows "Online".
-    await deviceA.page.evaluate(() => { location.hash = '#/settings'; });
+    await deviceA.page.evaluate(() => { location.hash = '#/settings/devices'; });
     await expect(deviceA.page.getByText(/^Online/).first()).toBeVisible({ timeout: 15_000 });
 
     // Disconnect deviceB entirely: the relay broadcasts a leave, deviceA's

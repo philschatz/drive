@@ -75,10 +75,6 @@ label column (a 300px *sticky* column sits on top of every tap target to its rig
 and `device-permissions.gif` hand-writes its counters document because the bundled example's
 completion keys are `{{today-6d@…}}` templates that only the importer expands.
 
-Anything showing two devices names them `📱 Android` and `📱 iOS` via `setDeviceName`.
-A device otherwise names itself after the browser it is running in, so both panes
-would read the same thing — see the note below about *when* that has to happen.
-
 ## Layout
 
 | File | Role |
@@ -117,9 +113,8 @@ Three things every screencast gets for free, and one to reach for:
   spins up HyperFormula and runs Monte Carlo). Wait for the real thing there and the
   clip opens on a painted screen instead of a skeleton.
 - **`hstackGif(name, l, r, { fps, width })`** — two phone panes is 864px wide and the
-  slides render it in a ~512px column, so `width: 720` on a dense asset is free. Note
-  that dropping `fps` does *not* reliably shrink a busy clip: fewer frames each carry a
-  bigger delta.
+  slides render it in a ~512px column, so `width` looks like free savings. It is not;
+  see *Things that bite* below before reaching for either knob.
 - **`scanFlash(page, qr)`** rests the pointer on a QR code and flashes the frame white.
   Nothing scans locally, so without it the code just vanishes and reads as a glitch.
 
@@ -151,17 +146,24 @@ Three things every screencast gets for free, and one to reach for:
   start from a fresh context.
 - **Direct WebRTC is opportunistic.** `connections.png` prefers a `direct (P2P)` dot
   but falls back to `via relay` with a warning rather than failing.
-- **Do not downscale to save bytes — it costs them.** `hstackGif`'s `width` option
-  makes these *bigger*: lanczos turns crisp UI text into anti-aliased gradients, and
-  a GIF cannot compress those. `add-and-share-with-friend.gif` went 1.3 MB → 2.7 MB
-  at `width: 720`. Lower `fps` instead; that is the lever that works on flat UI.
+- **Neither `width` nor `fps` is a reliable size lever, so measure before believing
+  either.** Downscaling usually *costs* bytes — lanczos turns crisp UI text into
+  anti-aliased gradients and a GIF cannot compress those; `add-and-share-with-friend.gif`
+  went 1.3 MB → 2.7 MB at `width: 720`. Dropping `fps` is no safer on a busy clip, where
+  fewer frames each carry a bigger delta: `device-permissions.gif` at 6fps came out
+  *bigger* than at 8. Three assets still pass `width: 720`
+  (`datagrid-presence`, `validation`, `source-presence`) from before that measurement and
+  have never been re-checked — if you regenerate one, try it without and compare.
 - **`video.path()` is a trap.** Playwright only guarantees a recording is on disk
   once the whole *context* closes, and a capture still has work to do in that
   context. `finishRecording` uses `saveAs()`, which waits; encoding from `path()`
   intermittently fails with "No such file or directory".
 - **Device names must be set before linking.** The link rendezvous carries each side's
   `resolveDeviceName()` to the other, so `setDeviceName` after the handshake labels the
-  device locally and the *other* device never learns it. Set both up front.
+  device locally and the *other* device never learns it. Only the second device needs a
+  name (`📱 iOS`) — the first keeps its browser-derived one and is already marked by the
+  `This device` badge — but it has to be set up front. And a *friend's* name never travels
+  at all, so `connections.png` relabels Sam's row locally on Phil's own page instead.
 - **Roles are per-person on a document, per-device only in Settings.** The Sharing page
   is group-only by construction — adding a friend adds every device they own — so
   `device-permissions.gif` drives Settings → Devices instead. It works on documents anyway:

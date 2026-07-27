@@ -108,9 +108,12 @@ export async function hstackGif(
   const total = Math.max(leftDur, rightDur);
   const pad = Math.ceil(Math.abs(leftDur - rightDur)) + 1;
   // Downscale after the stack, before the palette, so the palette is generated
-  // from the pixels actually being written. Two phone panes is 864px wide, and
-  // the slides render it in a ~512px column — so anything past ~720 is bytes the
-  // viewer never sees.
+  // from the pixels actually being written.
+  //
+  // Do not reach for this to save bytes: it usually costs them. Lanczos turns
+  // crisp UI text into anti-aliased gradients, which a GIF cannot compress —
+  // add-and-share-with-friend.gif measured 1.3 MB → 2.7 MB at width: 720. The
+  // three assets still passing it were never re-measured against that finding.
   const resize = width ? `scale=${width}:-1:flags=lanczos,` : '';
 
   await ffmpeg([
