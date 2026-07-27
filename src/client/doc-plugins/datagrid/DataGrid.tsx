@@ -112,7 +112,6 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
   const spillTargetsRef = useRef<Set<string>>(new Set());
   const activeSheetUnsubRef = useRef<(() => void) | null>(null);
   const [syncing, setSyncing] = useState(false);
-  const titleFocusedRef = useRef(false);
   const editFromBarRef = useRef(false);
   /** Imperative handle on the bottom-bar CodeMirror editor. */
   const formulaApiRef = useRef<FormulaEditorApi | null>(null);
@@ -1169,7 +1168,7 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
 
       setRawDoc(result);
       docMetaRef.current = result;
-      if (!titleFocusedRef.current && result.name) setGridName(result.name);
+      if (result.name) setGridName(result.name);
       document.title = (result.name || 'Spreadsheet') + ' - Spreadsheet';
       history.onNewHeads(heads);
       onHeadsUpdate(heads);
@@ -1490,10 +1489,7 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
         icon="grid_on"
         title={gridName}
         titleEditable={canEdit}
-        onTitleFocus={() => { titleFocusedRef.current = true; }}
-        onTitleChange={setGridName}
-        onTitleBlur={(value) => {
-          titleFocusedRef.current = false;
+        onRename={(value) => {
           const name = value.trim() || 'Spreadsheet';
           setGridName(name);
           if (docId) updateDoc(docId, (d, name) => { d.name = name; }, name);

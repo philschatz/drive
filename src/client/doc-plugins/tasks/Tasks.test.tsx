@@ -60,10 +60,13 @@ describe('Tasks container CRUD', () => {
     expect(rowOf('Buy milk').getAttribute('data-checked')).toBe('true');
 
     // Open the editor via the row's trailing kebab, retitle — auto-save
-    // commits on blur, no Save button.
+    // commits on blur, no Save button. An existing task opens on the property
+    // list (only a NEW one jumps straight into the title), so tap Title first.
     fireEvent.click(screen.getByRole('button', { name: 'Edit Walk the dog' }));
     expect(screen.getByText('Edit Task')).toBeTruthy();
-    const titleInput = screen.getByDisplayValue('Walk the dog');
+    fireEvent.click(screen.getByTestId('ted-title-row'));
+    const titleInput = screen.getByTestId('ted-title');
+    expect((titleInput as HTMLInputElement).value).toBe('Walk the dog');
     fireEvent.input(titleInput, { target: { value: 'Walk the dog in the park' } });
     // preact/compat (loaded via Radix) aliases onBlur to a focusout listener;
     // real browsers fire focusout alongside blur, but in jsdom we must dispatch

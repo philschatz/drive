@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'preact/hooks';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
+import { MdTextField } from '@/components/ui/md-text-field';
 import { SIZE_LIMITS, DEFAULT_ROW_HEIGHT, DEFAULT_COL_WIDTH } from './sheet-actions';
 
 /**
@@ -64,18 +65,20 @@ export function ResizeSheet({
               >
                 <span className="material-symbols-outlined" style={{ fontSize: 22 }}>remove</span>
               </button>
-              <input
+              {/* Kept a bare stepper rather than a PropertySheet: this IS the
+                  focused-field leaf of that pattern, so a list level above it
+                  would only add a tap. Just the field itself is Material now. */}
+              <MdTextField
+                label="px"
                 type="number"
                 data-testid="resize-input"
-                className="w-20 text-center font-mono md-body-large bg-transparent border border-outline-variant rounded px-2 py-1 outline-none focus:border-primary"
-                value={value}
+                className="w-24"
+                value={String(value)}
                 min={limits.min}
                 max={limits.max}
-                onInput={(e: any) => setValue(parseInt(e.currentTarget.value, 10) || 0)}
-                onBlur={() => commit(value)}
-                onKeyDown={(e: any) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                onInput={v => setValue(parseInt(v, 10) || 0)}
+                onCommit={v => commit(parseInt(v, 10) || 0)}
               />
-              <span className="md-body-medium text-on-surface-variant">px</span>
               <button
                 aria-label={`Increase ${label.toLowerCase()}`}
                 disabled={value >= limits.max}

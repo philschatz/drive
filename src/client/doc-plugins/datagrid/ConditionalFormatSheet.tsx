@@ -1,10 +1,8 @@
 import { useState, useCallback } from 'preact/hooks';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import {
-  Select, SelectTrigger, SelectValue, SelectContent, SelectItem,
-} from '@/components/ui/select';
+import { MdTextField } from '@/components/ui/md-text-field';
+import { MdSelect } from '@/components/ui/md-select';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { colIndexToLetter, shortId } from './helpers';
 import type { ConditionalFormatRule, ConditionalFormatRange, DataGridCellFormat } from './schema';
@@ -263,7 +261,13 @@ export function ConditionalFormatSheet({
     CONDITION_TYPES.find(c => c.value === type)?.label ?? type;
 
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
+    <Sheet
+      open={open}
+      onOpenChange={onOpenChange}
+      // Escape backs out of the rule editor first, matching PropertySheet's
+      // detail→list behaviour; only the list level closes the sheet.
+      onEscape={() => { if (!editing) return false; setEditing(null); return true; }}
+    >
       <SheetContent side="bottom" className="max-h-[85vh] p-4">
       <SheetHeader>
         <SheetTitle>Conditional Formatting</SheetTitle>
@@ -274,43 +278,32 @@ export function ConditionalFormatSheet({
         {editing ? (
           // Editor
           <div className="space-y-3">
-            <div>
-              <Label>Ranges (e.g. A1:C10, E1:E20)</Label>
-              <Input
-                value={rangeText}
-                onInput={(e: any) => setRangeText(e.target.value)}
-                placeholder="A1:C10, E1:E20"
-                className="mt-1"
-              />
-            </div>
-            <div>
-              <Label>Condition</Label>
-              <Select value={conditionType} onValueChange={setConditionType}>
-                <SelectTrigger className="mt-1">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {CONDITION_TYPES.map(c => (
-                    <SelectItem key={c.value} value={c.value}>{c.label}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
+            <MdTextField
+              label="Ranges"
+              data-testid="cf-ranges"
+              value={rangeText}
+              onInput={setRangeText}
+              placeholder="A1:C10, E1:E20"
+              supportingText="e.g. A1:C10, E1:E20"
+            />
+            <MdSelect
+              label="Condition"
+              data-testid="cf-condition"
+              value={conditionType}
+              options={CONDITION_TYPES.map(c => ({ value: c.value, label: c.label }))}
+              onValueChange={setConditionType}
+            />
             {!NO_VALUE_CONDITIONS.has(conditionType) && (
-              <div>
-                <Label>{conditionType === 'customFormula' ? 'Formula' : 'Value'}</Label>
-                <Input
-                  value={conditionValue}
-                  onInput={(e: any) => setConditionValue(e.target.value)}
-                  placeholder={conditionType === 'customFormula' ? '=RC>10' : 'Enter value...'}
-                  className="mt-1"
-                />
-                {conditionType === 'customFormula' && (
-                  <p className="text-xs text-muted-foreground mt-1">
-                    R1C1 notation, relative to each cell. <code>RC</code> = this cell, <code>R[-1]C</code> = cell above, <code>R1C1</code> = absolute A1.
-                  </p>
-                )}
-              </div>
+              <MdTextField
+                label={conditionType === 'customFormula' ? 'Formula' : 'Value'}
+                data-testid="cf-value"
+                value={conditionValue}
+                onInput={setConditionValue}
+                placeholder={conditionType === 'customFormula' ? '=RC>10' : 'Enter value...'}
+                supportingText={conditionType === 'customFormula'
+                  ? 'R1C1 notation, relative to each cell. RC = this cell, R[-1]C = cell above, R1C1 = absolute A1.'
+                  : undefined}
+              />
             )}
             <div>
               <Label>Formatting</Label>
@@ -362,73 +355,81 @@ export function ConditionalFormatSheet({
             {sortedRules.length === 0 && (
               <p className="text-sm text-muted-foreground">No conditional formatting rules.</p>
             )}
-            {(() => {
-              const applicable = sortedRules.filter(([, rule]) => ruleAppliesToSelection(rule));
-              const other = sortedRules.filter(([, rule]) => !ruleAppliesToSelection(rule));
-              const combined: ([string, ConditionalFormatRule] | 'divider')[] = [...applicable];
-              if (applicable.length > 0 && other.length > 0) combined.push('divider');
-              combined.push(...other);
-              return combined;
-            })().map((item) => {
-              if (item === 'divider') {
-                return <div key="divider" className="border-t my-1" />;
-              }
-              const [id, rule] = item;
-              const applies = ruleAppliesToSelection(rule);
-              const priorityIdx = sortedRules.findIndex(([rid]) => rid === id);
-              const isFirst = priorityIdx === 0;
-              const isLast = priorityIdx === sortedRules.length - 1;
-              return (
-              <div key={id} className={'flex items-center justify-between border rounded-md p-2 text-sm' + (applies ? '' : ' opacity-40')}>
-                <div className="flex-1 min-w-0">
-                  <div className="font-medium truncate">
+            {/* Material list, matching the app's other option sheets. Tapping a
+                row edits the rule; reorder/delete stay as trailing icon buttons
+                since they act without leaving the list. */}
+            <md-list style={{ background: 'transparent' }}>
+              {(() => {
+                const applicable = sortedRules.filter(([, rule]) => ruleAppliesToSelection(rule));
+                const other = sortedRules.filter(([, rule]) => !ruleAppliesToSelection(rule));
+                const combined: ([string, ConditionalFormatRule] | 'divider')[] = [...applicable];
+                if (applicable.length > 0 && other.length > 0) combined.push('divider');
+                combined.push(...other);
+                return combined;
+              })().map((item) => {
+                if (item === 'divider') {
+                  return <md-divider key="divider" role="separator" />;
+                }
+                const [id, rule] = item;
+                const applies = ruleAppliesToSelection(rule);
+                const priorityIdx = sortedRules.findIndex(([rid]) => rid === id);
+                const isFirst = priorityIdx === 0;
+                const isLast = priorityIdx === sortedRules.length - 1;
+                return (
+                <md-list-item
+                  key={id}
+                  type="button"
+                  data-testid={`cf-rule-${id}`}
+                  style={applies ? undefined : { opacity: 0.4 }}
+                  onClick={() => startEdit(id)}
+                >
+                  <div slot="headline" className="truncate">
                     {rule.conditionType === 'customFormula'
                       ? (rule.conditionValue ?? '')
                       : `${condLabel(rule.conditionType)}${rule.conditionValue ? ` ${rule.conditionValue}` : ''}`}
                   </div>
-                  <div className="text-xs text-muted-foreground">{rangeToA1(rule)}</div>
-                </div>
-                <div
-                  className="w-6 h-6 rounded-sm border mx-2 flex-shrink-0"
-                  style={{
-                    background: rule.format.bgColor || 'transparent',
-                    color: rule.format.textColor || '#000',
-                    fontWeight: rule.format.bold ? 'bold' : 'normal',
-                    fontStyle: rule.format.italic ? 'italic' : 'normal',
-                    fontSize: '0.7rem',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                  }}
-                  title="Format preview"
-                >
-                  Ab
-                </div>
-                <div className="flex gap-1">
-                  {!isFirst && (
-                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => moveRule(id, 'up')} title="Move up (lower priority)">
-                      <span className="material-symbols-outlined" style={{ fontSize: '1rem' }}>arrow_upward</span>
+                  <div slot="supporting-text">{rangeToA1(rule)}</div>
+                  <div slot="end" className="flex items-center gap-1">
+                    <div
+                      className="w-6 h-6 rounded-sm border flex-shrink-0"
+                      style={{
+                        background: rule.format.bgColor || 'transparent',
+                        color: rule.format.textColor || '#000',
+                        fontWeight: rule.format.bold ? 'bold' : 'normal',
+                        fontStyle: rule.format.italic ? 'italic' : 'normal',
+                        fontSize: '0.7rem',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                      }}
+                      title="Format preview"
+                    >
+                      Ab
+                    </div>
+                    {/* stopPropagation — the row itself opens the editor. */}
+                    {!isFirst && (
+                      <Button variant="ghost" size="icon" className="h-7 w-7" onClick={(e: any) => { e.stopPropagation(); moveRule(id, 'up'); }} title="Move up (lower priority)">
+                        <span className="material-symbols-outlined" style={{ fontSize: '1rem' }}>arrow_upward</span>
+                      </Button>
+                    )}
+                    {!isLast && (
+                      <Button variant="ghost" size="icon" className="h-7 w-7" onClick={(e: any) => { e.stopPropagation(); moveRule(id, 'down'); }} title="Move down (higher priority)">
+                        <span className="material-symbols-outlined" style={{ fontSize: '1rem' }}>arrow_downward</span>
+                      </Button>
+                    )}
+                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={(e: any) => { e.stopPropagation(); deleteRule(id); }} title="Delete rule">
+                      <span className="material-symbols-outlined" style={{ fontSize: '1rem', color: 'var(--md-sys-color-error)' }}>delete</span>
                     </Button>
-                  )}
-                  {!isLast && (
-                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => moveRule(id, 'down')} title="Move down (higher priority)">
-                      <span className="material-symbols-outlined" style={{ fontSize: '1rem' }}>arrow_downward</span>
-                    </Button>
-                  )}
-                  <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => startEdit(id)}>
-                    <span className="material-symbols-outlined" style={{ fontSize: '1rem' }}>edit</span>
-                  </Button>
-                  <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={() => deleteRule(id)}>
-                    <span className="material-symbols-outlined" style={{ fontSize: '1rem' }}>delete</span>
-                  </Button>
-                </div>
-              </div>
-              );
-            })}
-            <Button onClick={startNew} size="sm" className="mt-2">
-              <span className="material-symbols-outlined mr-1" style={{ fontSize: '1rem' }}>add</span>
-              Add rule
-            </Button>
+                  </div>
+                </md-list-item>
+                );
+              })}
+              <md-divider role="separator" />
+              <md-list-item type="button" data-testid="cf-add-rule" onClick={startNew}>
+                <md-icon slot="start">add</md-icon>
+                <div slot="headline">Add rule</div>
+              </md-list-item>
+            </md-list>
           </>
         )}
       </div>

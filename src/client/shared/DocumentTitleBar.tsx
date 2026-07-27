@@ -1,6 +1,7 @@
 import type { ComponentChildren } from 'preact';
-import { useEffect, useRef } from 'preact/hooks';
+import { useRef, useState } from 'preact/hooks';
 import { ConnectionStatus } from './ConnectionStatus';
+import { RenameSheet } from './RenameSheet';
 import { type PresenceState } from './presence';
 import { useAccess } from './useAccess';
 import { sourceUrl, sharePath, shareUrl } from './doc-urls';
@@ -113,9 +114,7 @@ export function DocumentTitleBar<P extends PeerLike>({
   icon,
   title,
   titleEditable = false,
-  onTitleChange,
-  onTitleBlur,
-  onTitleFocus,
+  onRename,
   docId,
   peers = [],
   peerTitle,
@@ -138,10 +137,10 @@ export function DocumentTitleBar<P extends PeerLike>({
 }: {
   icon: string;
   title: string;
+  /** Whether the user may rename — gates the kebab's Rename item. */
   titleEditable?: boolean;
-  onTitleChange?: (value: string) => void;
-  onTitleBlur?: (value: string) => void;
-  onTitleFocus?: () => void;
+  /** Commit a new document name (from the kebab's Rename prompt). */
+  onRename?: (value: string) => void;
   docId?: string;
   peers?: P[];
   peerTitle?: (peer: P) => string;
@@ -175,7 +174,7 @@ export function DocumentTitleBar<P extends PeerLike>({
   children?: ComponentChildren;
 }) {
   const { access } = useAccess(docId);
-  const titleInputRef = useRef<HTMLInputElement>(null);
+  const [renaming, setRenaming] = useState(false);
 
   // Bar layout is declared, not measured: undo/redo first, then the document's
   // own actions, then the connection/share cluster, validation, and the kebab.
@@ -198,15 +197,7 @@ export function DocumentTitleBar<P extends PeerLike>({
       icon: 'edit',
       label: 'Rename',
       title: 'Rename',
-      onSelect: () => {
-        const next = prompt('Rename', title);
-        if (next === null) return;
-        const trimmed = next.trim();
-        if (!trimmed) return;
-        // Commit through the same path as the inline title input.
-        onTitleChange?.(trimmed);
-        onTitleBlur?.(trimmed);
-      },
+      onSelect: () => setRenaming(true),
     });
   }
   // Admins get a dedicated share button on the bar (they manage sharing);
@@ -259,20 +250,10 @@ export function DocumentTitleBar<P extends PeerLike>({
         {icon}
       </span>
 
-      {titleEditable ? (
-        <input
-          ref={titleInputRef}
-          data-testid="doc-title-input"
-          className="border-0 bg-transparent md-title-large font-bold outline-none flex-1 min-w-12"
-          value={title}
-          onFocus={() => onTitleFocus?.()}
-          onInput={(e: any) => onTitleChange?.(e.currentTarget.value)}
-          onBlur={(e: any) => onTitleBlur?.(e.currentTarget.value)}
-          onKeyDown={(e: any) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
-        />
-      ) : (
-        <span className="md-title-large font-bold truncate flex-1 min-w-12">{title}</span>
-      )}
+      {/* The title is always static text. Renaming is a deliberate act, reached
+          through the kebab's Rename item (or Home's doc-actions sheet) — an
+          always-live input made accidental renames a tap away. */}
+      <span data-testid="doc-title" className="md-title-large font-bold truncate flex-1 min-w-12">{title}</span>
 
       {children}
 
@@ -358,6 +339,15 @@ export function DocumentTitleBar<P extends PeerLike>({
             for non-admins). Hidden entirely when everything fits. */}
         {menuItems.length > 0 && <OverflowMenu items={menuItems} />}
       </div>
+
+      <RenameSheet
+        open={renaming}
+        title="Rename document"
+        value={title}
+        onRename={(name) => onRename?.(name)}
+        onClose={() => setRenaming(false)}
+        data-testid="doc-rename-sheet"
+      />
     </div>
   );
 }

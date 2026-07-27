@@ -80,8 +80,10 @@ describe('Counters container', () => {
     await waitFor(() => expect(screen.getByText('Meditate')).toBeTruthy());
 
     // Archive lives in the editor: open it by clicking the row, then Archive.
+    // It's an md-list-item, which carries no implicit role while unregistered
+    // under jsdom — address it by testid.
     fireEvent.click(rowOf('Meditate'));
-    fireEvent.click(screen.getByRole('button', { name: 'Archive' }));
+    fireEvent.click(screen.getByTestId('ced-archive'));
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
     expect(screen.getByRole('heading', { name: 'Archived' })).toBeTruthy();
     // It's now in the Archived section — no longer a status row in the active list.
@@ -106,10 +108,18 @@ describe('Counters container', () => {
     expect(screen.getByText('Edit Counter')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
 
-    // The kebab opens the editor and must not record a completion.
-    fireEvent.click(within(rowOf('Meditate')).getByRole('button', { name: 'Edit Meditate' }));
+    // The row kebab is a real menu now (Edit / Completions) — md-menu is
+    // unregistered under jsdom, so its items are always in the DOM. Picking
+    // Edit opens the editor and must not record a completion.
+    fireEvent.click(within(rowOf('Meditate')).getByTitle('Edit Meditate'));
     expect(screen.getByText('Edit Counter')).toBeTruthy();
     expect(mock.__getDoc(DOC).events.e1.completions).toBeUndefined();
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+
+    // …and Completions opens the log in its own sheet.
+    fireEvent.click(within(rowOf('Meditate')).getByTitle('Completions for Meditate'));
+    expect(screen.getByTestId('completions-sheet')).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'Completions (0)' })).toBeTruthy();
   });
 
   it('non-recurring tallies keep the lifetime N× badge', async () => {

@@ -1,12 +1,9 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'preact/hooks';
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Textarea } from '@/components/ui/textarea';
-import { Label } from '@/components/ui/label';
-import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
+import { MdTextField } from '@/components/ui/md-text-field';
+import { MdSelect } from '@/components/ui/md-select';
 import type { Task } from './schema';
-import { PresenceDot } from '../../shared/presence';
+import { PropertySheet, SheetActions, SheetActionItem } from '../../shared/PropertySheet';
+import type { PropertyDef } from '../../shared/PropertySheet';
 import type { PeerFieldInfo } from '../../shared/presence';
 
 interface TaskEditorProps {
@@ -61,15 +58,6 @@ export function TaskEditor({ uid, task, isNew, opened, onSave, onDelete, onClose
   const [progress, setProgress] = useState(task.progress || 'needs-action');
   const [description, setDescription] = useState(task.description || '');
 
-  // Focus the title whenever the editor opens or moves to another task
-  // (including the fresh blank task after Enter-to-add-another). The `autofocus`
-  // attribute is unreliable in dynamically-mounted DOM, and the Sheet focuses
-  // its container only when no child took focus.
-  const titleRef = useRef<HTMLInputElement>(null);
-  useEffect(() => {
-    if (opened) titleRef.current?.focus();
-  }, [opened, uid]);
-
   const prevTaskRef = useRef(task);
   const prevUidRef = useRef(uid);
   useEffect(() => {
@@ -95,12 +83,9 @@ export function TaskEditor({ uid, task, isNew, opened, onSave, onDelete, onClose
     if (prev.description !== task.description) setDescription(task.description || '');
   }, [uid, task]);
 
-  const pd = (id: string) => <PresenceDot fieldId={id} peerFocusedFields={peerFocusedFields} />;
-  const peerOpacity = (id: string) => peerFocusedFields?.[id] ? 0.5 : undefined;
-
   /**
    * Auto-save: commit the full current field set (with optional not-yet-in-state
-   * overrides, e.g. a Select's fresh value). Called on field blur/change — there
+   * overrides, e.g. a select's fresh value). Called on field blur/change — there
    * are no Save/Cancel buttons. A NEW task is only created once it has a title,
    * so dismissing an untouched editor never creates anything.
    */
@@ -123,110 +108,134 @@ export function TaskEditor({ uid, task, isNew, opened, onSave, onDelete, onClose
     onDelete(uid);
   };
 
+  const progressLabel = PROGRESS_OPTIONS.find(o => o.value === progress)?.label ?? '';
+
+  const properties: PropertyDef[] = [
+    {
+      id: 'ted-title',
+      label: 'Title',
+      icon: 'edit',
+      summary: () => title,
+      render: ({ back }) => (
+        <MdTextField
+          label="Title"
+          data-testid="ted-title"
+          value={title}
+          onInput={setTitle}
+          onFocus={() => focusField('ted-title')}
+          onBlur={blurField}
+          onCommit={v => commit({ title: v })}
+          onEnter={() => {
+            if (!title.trim()) return; // no accidental empty tasks
+            commit();
+            // Rapid entry: keep the sheet open on a fresh blank task, still in
+            // this pane. Editing an existing task instead returns to the list.
+            if (isNew) onAddAnother?.();
+            else back();
+          }}
+        />
+      ),
+    },
+    {
+      id: 'ted-due',
+      label: 'Due date',
+      icon: 'event',
+      summary: () => due,
+      render: () => (
+        <MdTextField
+          label="Due date"
+          type="date"
+          data-testid="ted-due"
+          value={due}
+          onInput={setDue}
+          onFocus={() => focusField('ted-due')}
+          onBlur={blurField}
+          onCommit={v => commit({ due: v })}
+        />
+      ),
+    },
+    {
+      id: 'ted-priority',
+      label: 'Priority',
+      icon: 'flag',
+      summary: () => (priority ? String(priority) : ''),
+      render: () => (
+        <MdTextField
+          label="Priority"
+          type="number"
+          min={0}
+          max={9}
+          data-testid="ted-priority"
+          value={String(priority)}
+          supportingText="0 = none"
+          onInput={v => setPriority(parseInt(v) || 0)}
+          onFocus={() => focusField('ted-priority')}
+          onBlur={blurField}
+          onCommit={v => commit({ priority: parseInt(v) || 0 })}
+        />
+      ),
+    },
+    {
+      id: 'ted-progress',
+      label: 'Progress',
+      icon: 'donut_large',
+      summary: () => progressLabel,
+      render: ({ back }) => (
+        <MdSelect
+          label="Progress"
+          data-testid="ted-progress"
+          value={progress}
+          options={PROGRESS_OPTIONS}
+          // No commit-on-blur: opening the menu blurs the host (see md-select).
+          onFocus={() => focusField('ted-progress')}
+          onValueChange={v => {
+            const next = (v || 'needs-action') as NonNullable<Task['progress']>;
+            setProgress(next);
+            commit({ progress: next });
+            blurField();
+            back();
+          }}
+        />
+      ),
+    },
+    {
+      id: 'ted-desc',
+      label: 'Description',
+      icon: 'notes',
+      summary: () => description,
+      render: () => (
+        <MdTextField
+          label="Description"
+          type="textarea"
+          rows={4}
+          data-testid="ted-desc"
+          value={description}
+          onInput={setDescription}
+          onFocus={() => focusField('ted-desc')}
+          onBlur={blurField}
+          onCommit={v => commit({ description: v })}
+        />
+      ),
+    },
+  ];
+
   return (
-    <Sheet open={opened} onOpenChange={(open: boolean) => { if (!open) onClose(); }}>
-      <SheetContent side="bottom" className="max-h-[85vh]">
-        <SheetHeader>
-          <SheetTitle>{isNew ? 'New Task' : 'Edit Task'}</SheetTitle>
-        </SheetHeader>
-        <div className="flex flex-col gap-3 mt-4">
-          <div style={{ opacity: peerOpacity('ted-title') }}>
-            <Label className="flex items-center gap-1"><span>Title</span>{pd('ted-title')}</Label>
-            <Input
-              ref={titleRef}
-              data-testid="ted-title"
-              value={title}
-              onInput={(e: any) => setTitle(e.currentTarget.value)}
-              onFocus={() => focusField('ted-title')}
-              onBlur={(e: any) => {
-                blurField();
-                commit({ title: e.currentTarget.value });
-              }}
-              onKeyDown={(e: any) => {
-                if (e.key !== 'Enter') return;
-                e.preventDefault();
-                if (!title.trim()) return; // no accidental empty tasks
-                commit();
-                // Rapid entry: keep the sheet open on a fresh blank task.
-                if (isNew) onAddAnother?.();
-              }}
-            />
-          </div>
-
-          <div style={{ opacity: peerOpacity('ted-due') }}>
-            <Label className="flex items-center gap-1"><span>Due date</span>{pd('ted-due')}</Label>
-            <Input
-              type="date"
-              value={due}
-              onInput={(e: any) => setDue(e.currentTarget.value)}
-              onChange={(e: any) => commit({ due: e.currentTarget.value })}
-              onFocus={() => focusField('ted-due')}
-              onBlur={blurField}
-            />
-          </div>
-
-          <div style={{ opacity: peerOpacity('ted-priority') }}>
-            <Label className="flex items-center gap-1"><span>Priority (0 = none)</span>{pd('ted-priority')}</Label>
-            <Input
-              type="number"
-              min={0}
-              max={9}
-              value={String(priority)}
-              onInput={(e: any) => setPriority(parseInt(e.currentTarget.value) || 0)}
-              onFocus={() => focusField('ted-priority')}
-              onBlur={(e: any) => {
-                blurField();
-                commit({ priority: parseInt(e.currentTarget.value) || 0 });
-              }}
-            />
-          </div>
-
-          <div style={{ opacity: peerOpacity('ted-progress') }}>
-            <Label className="flex items-center gap-1"><span>Progress</span>{pd('ted-progress')}</Label>
-            <Select
-              value={progress}
-              onValueChange={(v: string) => {
-                const next = (v || 'needs-action') as NonNullable<Task['progress']>;
-                setProgress(next);
-                commit({ progress: next });
-              }}
-            >
-              <SelectTrigger
-                onFocus={() => focusField('ted-progress')}
-                onBlur={blurField}
-              >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {PROGRESS_OPTIONS.map(o => (
-                  <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div style={{ opacity: peerOpacity('ted-desc') }}>
-            <Label className="flex items-center gap-1"><span>Description</span>{pd('ted-desc')}</Label>
-            <Textarea
-              value={description}
-              onInput={(e: any) => setDescription(e.currentTarget.value)}
-              onFocus={() => focusField('ted-desc')}
-              onBlur={(e: any) => {
-                blurField();
-                commit({ description: e.currentTarget.value });
-              }}
-              rows={3}
-            />
-          </div>
-
-          {/* Auto-save: fields commit on blur/change — no Save/Cancel. */}
-          {!isNew && (
-            <div className="flex items-center justify-end mt-4">
-              <Button variant="ghost" className="text-destructive hover:text-destructive" onClick={handleDelete}>Delete</Button>
-            </div>
-          )}
-        </div>
-      </SheetContent>
-    </Sheet>
+    <PropertySheet
+      open={opened}
+      title={isNew ? 'New Task' : 'Edit Task'}
+      data-testid="task-editor"
+      properties={properties}
+      peerFocusedFields={peerFocusedFields}
+      // A blank task has nothing to list, so start in the title field — which is
+      // also what makes Enter-to-add-another a continuous flow.
+      initialDetailId={isNew ? 'ted-title' : null}
+      onClose={onClose}
+      flushOnClose
+      footer={!isNew ? (
+        <SheetActions>
+          <SheetActionItem icon="delete" label="Delete" destructive data-testid="ted-delete" onClick={handleDelete} />
+        </SheetActions>
+      ) : undefined}
+    />
   );
 }

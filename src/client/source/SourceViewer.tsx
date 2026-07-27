@@ -91,7 +91,6 @@ export function SourceViewer({ docId, rest, readOnly }: { docId?: string; rest?:
   // subscribe-presence silently gives up if keyhive isn't ready yet.
   const [docLoaded, setDocLoaded] = useState(false);
   const atLatest = useRef(true);
-  const titleFocusedRef = useRef(false);
 
   const { peers, peerList, broadcast } = usePresence(docLoaded ? docId : undefined);
 
@@ -163,7 +162,7 @@ export function SourceViewer({ docId, rest, readOnly }: { docId?: string; rest?:
         if (!mounted) return;
         setCurrentDoc(result);
         if (result.name) {
-          if (!titleFocusedRef.current) setDocName(result.name);
+          setDocName(result.name);
           document.title = result.name + ' - Source Editor';
         }
         setStatus('');
@@ -319,10 +318,7 @@ export function SourceViewer({ docId, rest, readOnly }: { docId?: string; rest?:
         icon="code"
         title={docName}
         titleEditable={editable}
-        onTitleFocus={() => { titleFocusedRef.current = true; }}
-        onTitleChange={setDocName}
-        onTitleBlur={(value) => {
-          titleFocusedRef.current = false;
+        onRename={(value) => {
           if (!docId || !editable) return;
           const name = value.trim() || 'Document';
           setDocName(name);

@@ -99,8 +99,9 @@ type CreateLabel = 'Calendar' | 'Task list' | 'Spreadsheet' | 'Habit Tracker' | 
 
 /**
  * Create a document through the home page FAB → Create sheet. Docs are created
- * as "Untitled" (no prompt anymore), so the requested name is applied through
- * the editor's inline title input afterwards.
+ * as "Untitled", so the requested name is applied afterwards through the
+ * editor's kebab → Rename → rename sheet (the title bar is plain text now, and
+ * renaming is deliberate).
  */
 export async function createDocViaUI(
   app: App,
@@ -119,12 +120,19 @@ export async function createDocViaUI(
   // Every document type lands on the consolidated `#/d/<docId>` route.
   await expect(app.page).toHaveURL(/#\/d\//, { timeout: 15_000 });
 
-  // Rename in place via the title-bar input.
-  const title = app.page.getByTestId('doc-title-input');
-  await expect(title).toBeVisible({ timeout: 15_000 });
-  await title.fill(name);
-  await title.press('Enter');
-  await expect(title).toHaveValue(name);
+  await expect(app.page.getByTestId('doc-title')).toBeVisible({ timeout: 15_000 });
+  await renameDocViaUI(app, name);
+}
+
+/** Editor kebab → Rename → type → Save. */
+export async function renameDocViaUI(app: App, name: string): Promise<void> {
+  const page = app.page;
+  await page.getByRole('button', { name: 'More actions' }).click();
+  await page.getByTitle('Rename').click();
+  await expect(page.getByTestId('doc-rename-sheet')).toBeVisible({ timeout: 10_000 });
+  await mdField(page, 'rename-input').fill(name);
+  await page.getByTestId('rename-save').click();
+  await expect(page.getByTestId('doc-title')).toHaveText(name, { timeout: 10_000 });
 }
 
 /** Select a value from a Radix UI Select by trigger id (ports cypress radixSelect). */
@@ -132,4 +140,41 @@ export async function radixSelect(page: Page, triggerId: string, label: string):
   await page.locator(`#${triggerId}`).click();
   await expect(page.locator('[role="listbox"]')).toBeVisible();
   await page.locator('[role="option"]', { hasText: label }).click();
+}
+
+/**
+ * The `md-outlined-select` twin of `radixSelect`. The menu renders in the top
+ * layer (menuPositioning: 'popover'), so the options are not nested inside the
+ * select — query them page-wide. Substring match, since shadow-DOM innerText
+ * carries a trailing newline that defeats an anchored regex.
+ */
+export async function mdSelect(page: Page, selectId: string, label: string): Promise<void> {
+  await page.locator(`#${selectId}`).click();
+  const option = page.locator('md-select-option', { hasText: label }).first();
+  await expect(option).toBeVisible();
+  await option.click();
+  // The menu animates out; waiting avoids the next click landing on it.
+  await expect(option).toBeHidden();
+}
+
+/**
+ * Open a PropertySheet property's detail pane. Editors show a property list
+ * first, so a field is only in the DOM once its row has been tapped.
+ */
+export async function openProperty(page: Page, rowId: string): Promise<void> {
+  await page.getByTestId(`${rowId}-row`).click();
+}
+
+/** Return to a PropertySheet's property list from a detail pane. */
+export async function backToProperties(page: Page): Promise<void> {
+  await page.getByRole('button', { name: 'Back' }).click();
+}
+
+/**
+ * Fill an MdTextField. In the browser it renders `md-outlined-text-field`, whose
+ * host `.fill()` would throw — Playwright's CSS engine pierces the open shadow
+ * root, so target the inner control instead.
+ */
+export function mdField(page: Page, id: string) {
+  return page.locator(`#${id} input, #${id} textarea`);
 }

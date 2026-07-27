@@ -13,6 +13,26 @@ export function isAllDay(ev: CalendarEvent): boolean {
   return !!ev.start && ev.start.length <= 10;
 }
 
+/**
+ * A recurrence rule as a short human phrase — "every 2 weeks on mo, we at 09:00".
+ * Returns '' when there is no rule.
+ *
+ * Shared by the Counters list rows and by both editors' collapsed "Repeat"
+ * property row, which is the only summary of a rule the user sees until they
+ * open the pane.
+ */
+export function describeRecurrence(rule?: { frequency?: string; interval?: number; byDay?: { day: string }[] } | null, startTime?: string): string {
+  if (!rule?.frequency) return '';
+  const every = rule.interval && rule.interval > 1 ? `every ${rule.interval} ` : '';
+  const base = every
+    ? { daily: 'days', weekly: 'weeks', monthly: 'months', yearly: 'years' }
+    : { daily: 'daily', weekly: 'weekly', monthly: 'monthly', yearly: 'yearly' };
+  const freq = (base as any)[rule.frequency] || rule.frequency;
+  const days = rule.byDay?.length ? ' on ' + rule.byDay.map(d => d.day).join(', ') : '';
+  const at = startTime ? ' at ' + startTime.substring(0, 5) : '';
+  return every + freq + days + at;
+}
+
 export function toDateStr(d: any): string {
   if (d instanceof Temporal.PlainDate || d instanceof Temporal.PlainDateTime) return d.toString().substring(0, 10);
   return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');

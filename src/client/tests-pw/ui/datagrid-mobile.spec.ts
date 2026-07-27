@@ -173,8 +173,10 @@ test.describe('DataGrid mobile', () => {
     await tabsBar.locator('[data-sheet-tab]', { hasText: 'Sheet 2' }).click();
     const options = page.getByTestId('sheet-options-sheet');
     await expect(options).toBeVisible();
-    app.setPromptAnswer('Budget');
     await options.locator('md-list-item', { hasText: 'Rename sheet' }).click();
+    await expect(page.getByTestId('sheet-rename-sheet')).toBeVisible();
+    await page.locator('[data-testid="rename-input"] input').fill('Budget');
+    await page.getByTestId('rename-save').click();
     await expect(tabsBar.locator('[data-sheet-tab]', { hasText: 'Budget' })).toBeVisible();
 
     // Move left swaps the tab order. Unavailable actions are omitted, not
@@ -223,7 +225,7 @@ test.describe('DataGrid mobile', () => {
 
     // Overview mode (no chrome hiding in focus mode), back on the tall sheet
     await page.getByTestId('sheet-tabs-bar').locator('[data-sheet-tab]', { hasText: 'Sheet 1' }).click();
-    await expect(page.getByTestId('doc-title-input')).toBeVisible();
+    await expect(page.getByTestId('doc-title')).toBeVisible();
     const pageEl = page.locator('.datagrid-page');
 
     const container = page.locator('.datagrid-container');
@@ -319,8 +321,11 @@ test.describe('DataGrid mobile', () => {
     const resize = page.getByTestId('resize-sheet');
     await expect(resize).toBeVisible();
     await expect(resize).toContainText('Applies to 1 row.');
-    await page.getByTestId('resize-input').fill('60');
-    await page.getByTestId('resize-input').press('Enter');
+    // MdTextField: .fill() throws on the custom-element host, so reach the
+    // inner input (Playwright's CSS engine pierces open shadow roots).
+    const resizeInput = page.locator('[data-testid="resize-input"] input');
+    await resizeInput.fill('60');
+    await resizeInput.press('Enter');
     await expect.poll(async () => (await header.boundingBox())!.height).toBeGreaterThan(50);
 
     // Reset restores the default height

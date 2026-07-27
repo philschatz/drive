@@ -53,7 +53,7 @@ test.describe('Unseen-changes dot', () => {
     // Opening the doc (non-peek editor subscriptions) marks it viewed.
     await page.locator('md-list-item', { hasText: 'Unseen Dot' }).first().click();
     await expect(page).toHaveURL(/#\/d\//, { timeout: 15_000 });
-    await expect(page.getByTestId('doc-title-input')).toHaveValue('Unseen Dot', { timeout: 10_000 });
+    await expect(page.getByTestId('doc-title')).toHaveText('Unseen Dot', { timeout: 10_000 });
 
     // Back home: the dot is gone.
     await page.evaluate(() => { location.hash = '#/'; });

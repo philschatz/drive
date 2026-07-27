@@ -20,11 +20,14 @@ export function ConnectionStatus<P extends PeerLike>({
   className = '',
   peers = [],
   peerTitle,
+  hideDots = false,
 }: {
   className?: string;
   /** Presence peers to list in the sheet (deduped to other users). */
   peers?: P[];
   peerTitle?: (peer: P) => string;
+  /** Hide the inline peer-dot row in the button (the sheet still lists peers). */
+  hideDots?: boolean;
 }) {
   const connected = useWsStatus();
   const transports = usePeerTransports();
@@ -59,7 +62,7 @@ export function ConnectionStatus<P extends PeerLike>({
             collapse to a single dot (keyed by user-group id); all of the local user's
             own devices are hidden, not just the current one. (Omitted when empty so
             the button's gap doesn't leave a hole before the icon.) */}
-        {visible.length > 0 && (
+        {!hideDots && visible.length > 0 && (
           <div className="flex items-center gap-1 max-w-[72px] sm:max-w-none overflow-hidden">
             {visible.map(peer => (
               <PeerDot

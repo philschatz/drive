@@ -24,9 +24,17 @@ export interface OverflowMenuItem {
 export function OverflowMenu({
   items,
   'aria-label': ariaLabel = 'More actions',
+  positioning = 'popover',
 }: {
   items: OverflowMenuItem[];
   'aria-label'?: string;
+  /**
+   * How md-menu escapes its container. Defaults to `popover` (the browser's top
+   * layer), which is the only value that survives an ancestor with clipping or
+   * a stacking context — a kebab inside an `md-list-item`'s `end` slot renders
+   * its menu trapped inside the row otherwise.
+   */
+  positioning?: 'popover' | 'fixed' | 'absolute' | 'document';
 }) {
   const menuRef = useRef<any>(null);
   const kebabRef = useRef<HTMLButtonElement>(null);
@@ -52,7 +60,7 @@ export function OverflowMenu({
       >
         <span className="material-symbols-outlined" style={{ fontSize: 22 }}>more_vert</span>
       </button>
-      <md-menu ref={menuRef} anchor-corner="end-end" menu-corner="start-end">
+      <md-menu ref={menuRef} positioning={positioning} anchor-corner="end-end" menu-corner="start-end">
         {items.map(item => (
           <Fragment key={item.label}>
             {item.dividerBefore && <md-divider role="separator" />}

@@ -8,6 +8,11 @@ const SheetCtx = createContext<{ onClose: () => void }>({ onClose: () => {} });
 interface SheetProps {
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
+  /**
+   * Chance to consume Escape before it closes the sheet — return true to keep
+   * the sheet open (e.g. PropertySheet pops its detail pane back to the list).
+   */
+  onEscape?: () => boolean;
   children?: any;
 }
 
@@ -15,12 +20,15 @@ interface SheetProps {
  * one when sheets are layered (e.g. a colour picker over a formatting sheet). */
 const openSheets: object[] = [];
 
-function Sheet({ open, onOpenChange, children }: SheetProps) {
+function Sheet({ open, onOpenChange, onEscape, children }: SheetProps) {
   const handleClose = useCallback(() => {
     onOpenChange?.(false);
   }, [onOpenChange]);
 
   const tokenRef = useRef({});
+  // Kept in a ref so a fresh inline callback each render doesn't resubscribe.
+  const escapeRef = useRef(onEscape);
+  escapeRef.current = onEscape;
 
   useEffect(() => {
     if (!open) return;
@@ -29,6 +37,15 @@ function Sheet({ open, onOpenChange, children }: SheetProps) {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
       if (openSheets[openSheets.length - 1] !== token) return; // a sheet is on top of us
+      // Something inside already handled it. `md-menu` (the select popup)
+      // preventDefaults Escape to close itself but does NOT stopPropagation,
+      // and keydown is composed — without this, dismissing an open select
+      // would tear down the whole sheet underneath it.
+      if (e.defaultPrevented) return;
+      if (escapeRef.current?.()) {
+        e.preventDefault();
+        return;
+      }
       handleClose();
     };
     document.addEventListener('keydown', onKey);

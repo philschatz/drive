@@ -1,8 +1,7 @@
 import { useState, useEffect } from 'preact/hooks';
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
-import { Input } from '@/components/ui/input';
-import { Textarea } from '@/components/ui/textarea';
-import { Label } from '@/components/ui/label';
+import { MdTextField } from '@/components/ui/md-text-field';
+import { PropertySheet } from '../../shared/PropertySheet';
+import type { PropertyDef } from '../../shared/PropertySheet';
 import { updateDoc } from '../../worker-api';
 import { docUrl } from '../../shared/doc-urls';
 
@@ -19,6 +18,9 @@ interface CalendarSettingsProps {
  * Calendar settings bottom sheet (name / color / description) — opened from the
  * title-bar overflow menu (and per-calendar from AllCalendars). Auto-save:
  * fields commit on blur/change; dismissing the sheet is the "done" gesture.
+ *
+ * Colour is an `inline` property: a swatch in the row's trailing slot rather
+ * than a detail pane, since `<input type="color">` opens the OS picker anyway.
  */
 export function CalendarSettings({ opened, docId, name, description, color, onClose }: CalendarSettingsProps) {
   const [localName, setLocalName] = useState(name);
@@ -40,52 +42,73 @@ export function CalendarSettings({ opened, docId, name, description, color, onCl
     }, effName, effDesc, effColor);
   };
 
+  const properties: PropertyDef[] = [
+    {
+      id: 'cs-name',
+      label: 'Name',
+      icon: 'label',
+      summary: () => localName,
+      render: ({ back }) => (
+        <MdTextField
+          label="Name"
+          data-testid="cs-name"
+          value={localName}
+          onInput={setLocalName}
+          onCommit={v => commit({ name: v })}
+          onEnter={v => { commit({ name: v }); back(); }}
+        />
+      ),
+    },
+    {
+      id: 'cs-color',
+      label: 'Color',
+      icon: 'palette',
+      summary: () => localColor,
+      inline: () => (
+        <input
+          type="color"
+          data-testid="cs-color"
+          aria-label="Color"
+          value={localColor}
+          onInput={(e: any) => setLocalColor(e.currentTarget.value)}
+          onChange={(e: any) => commit({ color: e.currentTarget.value })}
+          style={{ width: 28, height: 28, padding: 0, border: 'none', borderRadius: 4, cursor: 'pointer', background: 'none' }}
+        />
+      ),
+    },
+    {
+      id: 'cs-desc',
+      label: 'Description',
+      icon: 'notes',
+      summary: () => localDesc,
+      render: () => (
+        <MdTextField
+          label="Description"
+          type="textarea"
+          rows={4}
+          data-testid="cs-desc"
+          value={localDesc}
+          placeholder="Add a description..."
+          onInput={setLocalDesc}
+          onCommit={v => commit({ description: v })}
+        />
+      ),
+    },
+  ];
+
   return (
-    <Sheet open={opened} onOpenChange={(open: boolean) => { if (!open) onClose(); }}>
-      <SheetContent side="bottom" className="max-h-[85vh]">
-        <SheetHeader>
-          <SheetTitle>Calendar Settings</SheetTitle>
-        </SheetHeader>
-        <div className="flex flex-col gap-3 mt-4">
-          <div>
-            <Label>Name</Label>
-            <Input
-              value={localName}
-              onInput={(e: any) => setLocalName(e.currentTarget.value)}
-              onBlur={(e: any) => commit({ name: e.currentTarget.value })}
-              onKeyDown={(e: any) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
-            />
-          </div>
-          <div>
-            <Label>Color</Label>
-            <div className="flex items-center gap-2">
-              <input
-                type="color"
-                value={localColor}
-                onInput={(e: any) => setLocalColor(e.currentTarget.value)}
-                onChange={(e: any) => commit({ color: e.currentTarget.value })}
-                style={{ width: 28, height: 28, padding: 0, border: 'none', borderRadius: 4, cursor: 'pointer', background: 'none' }}
-              />
-              <span className="text-sm text-muted-foreground">{localColor}</span>
-            </div>
-          </div>
-          <div>
-            <Label>Description</Label>
-            <Textarea
-              value={localDesc}
-              onInput={(e: any) => setLocalDesc(e.currentTarget.value)}
-              onBlur={(e: any) => commit({ description: e.currentTarget.value })}
-              placeholder="Add a description..."
-              rows={3}
-            />
-          </div>
-          {docId && (
-            <a href={docUrl(docId)} className="text-xs text-muted-foreground hover:underline">
-              Open individual calendar view
-            </a>
-          )}
-        </div>
-      </SheetContent>
-    </Sheet>
+    <PropertySheet
+      open={opened}
+      title="Calendar Settings"
+      data-testid="calendar-settings"
+      properties={properties}
+      onClose={onClose}
+      flushOnClose
+      footer={docId ? (
+        <a href={docUrl(docId)} className="block mt-3 text-xs text-muted-foreground hover:underline">
+          Open individual calendar view
+        </a>
+      ) : undefined}
+    />
   );
 }

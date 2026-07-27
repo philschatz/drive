@@ -42,7 +42,6 @@ export function SentencesView({ docId, readOnly }: { docId?: string; rest?: stri
   const { canEdit, canEditRef, noAccess } = useCanEdit(docId, readOnly, history);
   const { peers, peerList, broadcast } = usePresence(docId);
   const keyboardInset = useKeyboardInset();
-  const titleFocusedRef = useRef(false);
   const editorApiRef = useRef<RichTextEditorApi | null>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
   // While local writes are in flight, subscription pushes lag the optimistic
@@ -72,7 +71,7 @@ export function SentencesView({ docId, readOnly }: { docId?: string; rest?: stri
       if (pendingWritesRef.current > 0) skippedSpansRef.current = docSpans ?? [];
       else setSpans(docSpans ?? []);
       onHeads(heads);
-      if (result.name && !titleFocusedRef.current) {
+      if (result.name) {
         setName(result.name);
         document.title = result.name + ' - Sentences';
       }
@@ -194,10 +193,7 @@ export function SentencesView({ docId, readOnly }: { docId?: string; rest?: stri
         icon="description"
         title={name}
         titleEditable={canEdit}
-        onTitleFocus={() => { titleFocusedRef.current = true; }}
-        onTitleChange={setName}
-        onTitleBlur={(value) => {
-          titleFocusedRef.current = false;
+        onRename={(value) => {
           if (!docId || !canEdit) return;
           const next = value.trim() || 'Sentences';
           setName(next);

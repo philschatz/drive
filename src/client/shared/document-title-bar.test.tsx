@@ -76,28 +76,46 @@ describe('DocumentTitleBar', () => {
     expect(el.tagName).toBe('SPAN');
   });
 
-  it('renders title as input when editable', () => {
+  // Renaming is deliberate — kebab → Rename → a sheet. The title itself is
+  // never an input, so tapping it can't start an accidental rename.
+  it('renders title as plain text even when renameable', () => {
     render(<DocumentTitleBar icon="grid" title="Sheet" titleEditable />);
-    const input = screen.getByDisplayValue('Sheet') as HTMLInputElement;
-    expect(input.tagName).toBe('INPUT');
+    expect(screen.getByTestId('doc-title').tagName).toBe('SPAN');
+    expect(screen.queryByTestId('doc-title-input')).toBeNull();
   });
 
-  it('calls onTitleChange on input', () => {
-    const onChange = jest.fn();
-    render(<DocumentTitleBar icon="grid" title="Old" titleEditable onTitleChange={onChange} />);
-    const input = screen.getByDisplayValue('Old') as HTMLInputElement;
+  it('offers Rename in the kebab only when renameable', () => {
+    const { unmount } = render(<DocumentTitleBar icon="grid" title="Sheet" />);
+    expect(screen.queryByTitle('Rename')).toBeNull();
+    unmount();
+
+    render(<DocumentTitleBar icon="grid" title="Sheet" titleEditable />);
+    expect(screen.getByTitle('Rename')).toBeTruthy();
+  });
+
+  it('kebab → Rename opens the rename sheet, which reports the new name', () => {
+    const onRename = jest.fn();
+    render(<DocumentTitleBar icon="grid" title="Old" titleEditable onRename={onRename} />);
+
+    // md-menu is unregistered under jsdom, so its items are always in the DOM.
+    fireEvent.click(screen.getByTitle('Rename'));
+    const input = screen.getByTestId('rename-input') as HTMLInputElement;
+    expect(input.value).toBe('Old');
+
     fireEvent.input(input, { target: { value: 'New' } });
-    expect(onChange).toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId('rename-save'));
+    expect(onRename).toHaveBeenCalledWith('New');
+    // Committing dismisses the sheet.
+    expect(screen.queryByTestId('rename-input')).toBeNull();
   });
 
-  it('calls onTitleBlur on blur', () => {
-    const onBlur = jest.fn();
-    render(<DocumentTitleBar icon="grid" title="Test" titleEditable onTitleBlur={onBlur} />);
-    const input = screen.getByDisplayValue('Test') as HTMLInputElement;
-    // preact/compat (loaded via the Sheet's createPortal import) aliases onBlur
-    // to a focusout listener; dispatch the native event jsdom-side.
-    fireEvent(input, new FocusEvent('focusout', { bubbles: true }));
-    expect(onBlur).toHaveBeenCalled();
+  it('rename ignores a blank name', () => {
+    const onRename = jest.fn();
+    render(<DocumentTitleBar icon="grid" title="Old" titleEditable onRename={onRename} />);
+    fireEvent.click(screen.getByTitle('Rename'));
+    fireEvent.input(screen.getByTestId('rename-input'), { target: { value: '   ' } });
+    fireEvent.click(screen.getByTestId('rename-save'));
+    expect(onRename).not.toHaveBeenCalled();
   });
 
   // The status is icon-only; the state is exposed through the button's

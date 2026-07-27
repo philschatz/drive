@@ -58,7 +58,7 @@ function sortedTasks(tasks: Record<string, Task>): { uid: string; task: Task }[]
 
 /**
  * One task row: tap toggles completion, long-press / right-click / Shift+F10 /
- * the trailing kebab opens the editor. The row itself carries the checkbox
+ * the trailing edit button opens the editor. The row itself carries the checkbox
  * semantics (role/aria-checked); the leading md-checkbox is purely visual.
  */
 function TaskListItem({ uid, task, canEdit, peerEditingTasks, onToggle, onEdit }: {
@@ -118,7 +118,9 @@ function TaskListItem({ uid, task, canEdit, peerEditingTasks, onToggle, onEdit }
             className="inline-flex items-center justify-center h-10 w-10 rounded-full state-layer text-muted-foreground"
             onClick={(e: MouseEvent) => { e.stopPropagation(); onEdit(uid, task); }}
           >
-            <span className="material-symbols-outlined" style={{ fontSize: 20 }}>more_vert</span>
+            {/* A pencil, not a kebab: opening the editor is the only thing this
+                button does, and a kebab promises a menu that isn't there. */}
+            <span className="material-symbols-outlined" style={{ fontSize: 20 }}>edit</span>
           </button>
         )}
       </span>
@@ -142,7 +144,6 @@ export function Tasks({ docId, rest, readOnly }: { docId?: string; rest?: string
   const { peers, peerList, broadcast } = usePresence(docId);
   const editorStateRef = useRef(editorState);
   editorStateRef.current = editorState;
-  const titleFocusedRef = useRef(false);
   const pendingTaskIdRef = useRef(taskId);
 
   // Auto-save: commits arrive on field blur/change while the editor stays open
@@ -239,7 +240,7 @@ export function Tasks({ docId, rest, readOnly }: { docId?: string; rest?: string
       if (!mounted) return;
       if (!result) return;
       setTasks(result.tasks || {});
-      if (result.name && !titleFocusedRef.current) {
+      if (result.name) {
         setListName(result.name);
         document.title = result.name + ' - Tasks';
       }
@@ -294,10 +295,7 @@ export function Tasks({ docId, rest, readOnly }: { docId?: string; rest?: string
         icon="checklist"
         title={listName}
         titleEditable={canEdit}
-        onTitleFocus={() => { titleFocusedRef.current = true; }}
-        onTitleChange={setListName}
-        onTitleBlur={(value) => {
-          titleFocusedRef.current = false;
+        onRename={(value) => {
           if (!docId || !canEdit) return;
           const name = value.trim() || 'Tasks';
           setListName(name);

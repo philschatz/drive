@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { openApp, createDocViaUI, type App } from './support';
+import { openApp, createDocViaUI, renameDocViaUI, type App } from './support';
 
 /**
  * DataGrid editor UI test. Editing is mobile-first: tapping a cell enters
@@ -74,11 +74,9 @@ test.describe('DataGrid', () => {
     await editor.press('Enter');
     await expect(cell(0, 0)).toContainText('Updated');
 
-    // Done exits focus mode; rename the spreadsheet from the overview bar
+    // Done exits focus mode; rename the spreadsheet from the overview bar's
+    // kebab (the title is plain text now — renaming is deliberate).
     await page.getByRole('button', { name: 'Done' }).click();
-    const nameInput = page.getByTestId('doc-title-input');
-    await nameInput.fill('Renamed Sheet');
-    await nameInput.blur();
-    await expect(nameInput).toHaveValue('Renamed Sheet');
+    await renameDocViaUI(app, 'Renamed Sheet');
   });
 });

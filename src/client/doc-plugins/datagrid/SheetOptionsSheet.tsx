@@ -1,4 +1,6 @@
+import { useState } from 'preact/hooks';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
+import { RenameSheet } from '../../shared/RenameSheet';
 
 /** Number stepper row: down/up buttons disable at the given bounds. */
 function Stepper({
@@ -82,6 +84,8 @@ export function SheetOptionsSheet({
   maxFrozenCols: number;
   onSetFrozen: (kind: 'row' | 'col', count: number) => void;
 }) {
+  const [renaming, setRenaming] = useState(false);
+
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent side="bottom" className="max-h-[85vh] p-4">
@@ -97,13 +101,7 @@ export function SheetOptionsSheet({
           <md-list-item
             type="button"
             data-testid="rename-sheet-item"
-            onClick={() => {
-              const next = prompt('Rename', sheetName);
-              if (next === null) return;
-              const trimmed = next.trim();
-              if (!trimmed) return;
-              onRename(sheetId, trimmed);
-            }}
+            onClick={() => setRenaming(true)}
           >
             <md-icon slot="start">edit</md-icon>
             <div slot="headline">Rename sheet</div>
@@ -152,6 +150,18 @@ export function SheetOptionsSheet({
         />
         </div>
       </SheetContent>
+
+      {/* Layered above this sheet — Sheet's Escape stack closes the topmost one. */}
+      <RenameSheet
+        open={renaming}
+        title="Rename sheet"
+        value={sheetName}
+        // Leaves the options sheet open underneath, as the old prompt did —
+        // renaming is often followed by another action here.
+        onRename={(name) => onRename(sheetId, name)}
+        onClose={() => setRenaming(false)}
+        data-testid="sheet-rename-sheet"
+      />
     </Sheet>
   );
 }

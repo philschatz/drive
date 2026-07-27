@@ -66,7 +66,6 @@ function CalendarInner({ docId, readOnly, initialEventId }: { docId: string; rea
   const calendarRef = useRef<any>(null);
   const calColorRef = useRef('#039be5');
   const calTZRef = useRef(Intl.DateTimeFormat().resolvedOptions().timeZone);
-  const titleFocusedRef = useRef(false);
   const pendingEventIdRef = useRef(initialEventId);
 
   const getEvents = useCallback(() => eventsRef.current, []);
@@ -155,7 +154,7 @@ function CalendarInner({ docId, readOnly, initialEventId }: { docId: string; rea
         setCalColor(color);
         document.documentElement.style.setProperty('--cal-color', color);
       }
-      if (result.name && !titleFocusedRef.current) {
+      if (result.name) {
         setCalName(result.name);
         document.title = result.name + ' - Calendar';
       }
@@ -189,10 +188,7 @@ function CalendarInner({ docId, readOnly, initialEventId }: { docId: string; rea
         icon="date_range"
         title={calName}
         titleEditable={canEdit}
-        onTitleFocus={() => { titleFocusedRef.current = true; }}
-        onTitleChange={setCalName}
-        onTitleBlur={(value) => {
-          titleFocusedRef.current = false;
+        onRename={(value) => {
           if (!docId || !canEdit) return;
           const name = value.trim() || 'Calendar';
           setCalName(name);

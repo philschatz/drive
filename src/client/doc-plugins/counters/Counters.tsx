@@ -9,16 +9,19 @@ import { useCanEdit } from '../../shared/useCanEdit';
 import { useFocusPathSync } from '../../shared/useFocusPathSync';
 import { HistorySlider } from '../../shared/HistorySlider';
 import { useLongPress } from '../../shared/useLongPress';
+import { OverflowMenu } from '../../shared/OverflowMenu';
 import { useDocumentValidation } from '../../shared/useDocumentValidation';
 import { DocLoader } from '../../shared/useDocument';
 import { Badge } from '@/components/ui/badge';
 import { Fab } from '@/components/ui/fab';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import type { CounterEvent } from './schema';
+import { describeRecurrence } from '../calendar/recurrence';
 import { MATERIAL_ORANGE } from '../../shared/categorical-colors';
 import { sortedCounters, metMissedByWeek, isArchived, currentStreak, type CounterEntry, type CounterStatus } from './occurrences';
 import { MetMissedChart } from './Chart';
 import { CounterEditor } from './CounterEditor';
+import { CompletionsSheet } from './CompletionsSheet';
 
 interface EditorState {
   uid: string;
@@ -61,14 +64,8 @@ function clickKey(): string {
 }
 
 function describeSchedule(ev: CounterEvent): string | null {
-  const rule = ev.recurrenceRule;
-  if (!rule) return ev.start ? ev.start.substring(0, 10) : null;
-  const every = rule.interval && rule.interval > 1 ? `every ${rule.interval} ` : '';
-  const base = every ? { daily: 'days', weekly: 'weeks', monthly: 'months', yearly: 'years' } : { daily: 'daily', weekly: 'weekly', monthly: 'monthly', yearly: 'yearly' };
-  const freq = (base as any)[rule.frequency] || rule.frequency;
-  const days = rule.byDay?.length ? ' on ' + rule.byDay.map(d => d.day).join(', ') : '';
-  const at = ev.startTime ? ' at ' + ev.startTime.substring(0, 5) : '';
-  return every + freq + days + at;
+  if (!ev.recurrenceRule) return ev.start ? ev.start.substring(0, 10) : null;
+  return describeRecurrence(ev.recurrenceRule, ev.startTime);
 }
 
 /** Streak tooltip, e.g. "5-day streak" (unit follows the recurrence frequency). */
@@ -82,7 +79,7 @@ function streakTitle(streak: number, frequency?: string): string {
  * clicking the leading icon or the title records a completion. Long-press /
  * right-click / Shift+F10 / the trailing kebab open the editor too.
  */
-function CounterListItem({ uid, ev, status, now, canEdit, peerEditingEvents, onRecord, onEdit }: {
+function CounterListItem({ uid, ev, status, now, canEdit, peerEditingEvents, onRecord, onEdit, onShowCompletions }: {
   uid: string;
   ev: CounterEvent;
   status: CounterStatus;
@@ -91,6 +88,7 @@ function CounterListItem({ uid, ev, status, now, canEdit, peerEditingEvents, onR
   peerEditingEvents: Record<string, PeerFieldInfo>;
   onRecord: (uid: string) => void;
   onEdit: (uid: string, ev: CounterEvent) => void;
+  onShowCompletions: (uid: string) => void;
 }) {
   const clickCount = Object.keys(ev.completions || {}).length;
   const streak = ev.recurrenceRule ? currentStreak(ev, now) : 0;
@@ -153,15 +151,19 @@ function CounterListItem({ uid, ev, status, now, canEdit, peerEditingEvents, onR
             )
           : clickCount > 0 && <Badge variant="outline" title={`${clickCount} recorded`}>{clickCount}×</Badge>}
         <PresenceDot fieldId={uid} peerFocusedFields={peerEditingEvents} />
+        {/* A real menu, not a shortcut to one action: a counter has both an
+            editor and a completions log. (Tasks only have an editor, so their
+            row shows a pencil instead.) */}
         {canEdit && (
-          <button
-            aria-label={`Edit ${title}`}
-            title="Edit"
-            className="inline-flex items-center justify-center h-10 w-10 rounded-full state-layer text-muted-foreground"
-            onClick={(e: MouseEvent) => { e.stopPropagation(); onEdit(uid, ev); }}
-          >
-            <span className="material-symbols-outlined" style={{ fontSize: 20 }}>more_vert</span>
-          </button>
+          <span onClick={(e: MouseEvent) => e.stopPropagation()}>
+            <OverflowMenu
+              aria-label={`Actions for ${title}`}
+              items={[
+                { icon: 'edit', label: 'Edit', title: `Edit ${title}`, onSelect: () => onEdit(uid, ev) },
+                { icon: 'history', label: `Completions (${clickCount})`, title: `Completions for ${title}`, onSelect: () => onShowCompletions(uid) },
+              ]}
+            />
+          </span>
         )}
       </span>
     </md-list-item>
@@ -174,6 +176,8 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
   const [events, setEvents] = useState<Record<string, CounterEvent>>({});
   const [editorState, setEditorState] = useState<EditorState | null>(null);
   const [chartOpen, setChartOpen] = useState(false);
+  /** Counter whose completions log is open, in its own sheet. */
+  const [completionsUid, setCompletionsUid] = useState<string | null>(null);
   // Re-derive "today" when the clock is read; a minute tick keeps statuses fresh
   // across midnight without re-rendering on every click.
   const [now, setNow] = useState(nowLocal);
@@ -190,7 +194,6 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
   const { peers, peerList, broadcast } = usePresence(docId);
   const editorStateRef = useRef(editorState);
   editorStateRef.current = editorState;
-  const titleFocusedRef = useRef(false);
   const pendingEventIdRef = useRef(eventId);
 
   // Auto-save: commits arrive on field blur/change while the editor stays open
@@ -276,7 +279,7 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
     const unsubscribe = subscribeQuery(docId, COUNTERS_QUERY, (result, heads) => {
       if (!mounted || !result) return;
       setEvents(result.events || {});
-      if (result.name && !titleFocusedRef.current) {
+      if (result.name) {
         setListName(result.name);
         document.title = result.name + ' - Counters';
       }
@@ -365,10 +368,7 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
         icon="event_repeat"
         title={listName}
         titleEditable={canEdit}
-        onTitleFocus={() => { titleFocusedRef.current = true; }}
-        onTitleChange={setListName}
-        onTitleBlur={(value) => {
-          titleFocusedRef.current = false;
+        onRename={(value) => {
           if (!docId || !canEdit) return;
           const name = value.trim() || 'Counters';
           setListName(name);
@@ -411,6 +411,7 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
                   peerEditingEvents={peerEditingEvents}
                   onRecord={recordClick}
                   onEdit={openEditor}
+                  onShowCompletions={setCompletionsUid}
                 />
               ))}
             </md-list>
@@ -474,13 +475,22 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
         canEdit={canEdit}
         onSave={saveCounter}
         onDelete={deleteCounter}
-        onDeleteCompletion={deleteCompletion}
+        onShowCompletions={setCompletionsUid}
         onClose={() => setEditorState(null)}
         onAddAnother={() => openEditor(null, null)}
         onArchive={archiveCounter}
         onUnarchive={unarchiveCounter}
         onFieldFocus={handleFieldFocus}
         peerFocusedFields={peerFocusedFields}
+      />
+
+      <CompletionsSheet
+        open={!!completionsUid}
+        uid={completionsUid || ''}
+        event={completionsUid ? events[completionsUid] ?? null : null}
+        canEdit={canEdit}
+        onDeleteCompletion={deleteCompletion}
+        onClose={() => setCompletionsUid(null)}
       />
     </>
     </DocLoader>

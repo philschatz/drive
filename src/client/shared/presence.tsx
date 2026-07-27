@@ -234,12 +234,24 @@ export function StatusDot({ online, direct, label, sizeClass = 'w-2 h-2' }: {
   );
 }
 
-export function PresenceDot({ fieldId, peerFocusedFields }: {
-  fieldId: string;
+/**
+ * The "a peer is editing this" dot for a single form field or property row.
+ *
+ * Pass `fieldId` for one field, or `fieldIds` for a row that stands in for a
+ * group of them (PropertySheet's grouped rows — a calendar event's "When" row
+ * covers ed-date/ed-time/ed-allday/ed-duration). Broadcast granularity is
+ * unchanged either way: peers still announce a document path, and the container's
+ * PATH_PROP_TO_FIELDS map fans that out to input ids.
+ */
+export function PresenceDot({ fieldId, fieldIds, peerFocusedFields }: {
+  fieldId?: string;
+  fieldIds?: string[];
   peerFocusedFields?: Record<string, PeerFieldInfo>;
 }) {
   const transports = usePeerTransports();
-  const info = peerFocusedFields?.[fieldId];
+  const info = fieldId
+    ? peerFocusedFields?.[fieldId]
+    : (fieldIds ?? []).map(id => peerFocusedFields?.[id]).find(Boolean);
   if (!info) return null;
   return (
     <PeerDot

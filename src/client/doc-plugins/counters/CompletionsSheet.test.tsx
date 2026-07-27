@@ -1,12 +1,7 @@
 import { render, screen, fireEvent } from '@testing-library/preact';
 import dayjs from 'dayjs';
 
-// CounterEditor renders per-field PresenceDots; shared/presence reaches
-// worker-api (import.meta / new Worker), which jsdom can't load — use the
-// standard in-memory mock.
-jest.mock('../../worker-api');
-
-import { CounterEditor } from './CounterEditor';
+import { CompletionsSheet } from './CompletionsSheet';
 import type { CounterEvent } from './schema';
 
 /** A completion key: a timezone-less local-datetime string N units in the past
@@ -16,10 +11,7 @@ const keyAgo = (n: number, unit: dayjs.ManipulateType) =>
 
 const baseProps = {
   uid: 'u1',
-  isNew: false,
-  opened: true,
-  onSave: jest.fn(),
-  onDelete: jest.fn(),
+  open: true,
   onDeleteCompletion: jest.fn(),
   onClose: jest.fn(),
 };
@@ -30,7 +22,7 @@ const evt = (completions?: CounterEvent['completions']): CounterEvent => ({
   ...(completions ? { completions } : {}),
 });
 
-describe('CounterEditor completions log', () => {
+describe('CompletionsSheet', () => {
   beforeEach(() => jest.clearAllMocks());
 
   it('lists completions most-recent-first with relative times', () => {
@@ -38,7 +30,7 @@ describe('CounterEditor completions log', () => {
     const kMid = keyAgo(5, 'minute');
     const kOld = keyAgo(3, 'hour');
     // Insertion order deliberately shuffled — the component must sort, not rely on it.
-    render(<CounterEditor {...baseProps} event={evt({ [kOld]: '', [kNew]: '', [kMid]: '' })} />);
+    render(<CompletionsSheet {...baseProps} event={evt({ [kOld]: '', [kNew]: '', [kMid]: '' })} />);
 
     expect(screen.getByRole('heading', { name: 'Completions (3)' })).toBeDefined();
     const items = screen.getAllByRole('listitem');
@@ -51,20 +43,20 @@ describe('CounterEditor completions log', () => {
   });
 
   it('shows an empty state and a zero count when there are no completions', () => {
-    render(<CounterEditor {...baseProps} event={evt()} />);
+    render(<CompletionsSheet {...baseProps} event={evt()} />);
     expect(screen.getByRole('heading', { name: 'Completions (0)' })).toBeDefined();
     expect(screen.getByText('No completions yet.')).toBeDefined();
   });
 
-  it('omits the completions section entirely for a brand-new counter', () => {
-    render(<CounterEditor {...baseProps} isNew event={{ '@type': 'Event', title: '' }} />);
-    expect(screen.queryByText(/^Completions/)).toBeNull();
+  it('renders nothing when closed', () => {
+    render(<CompletionsSheet {...baseProps} open={false} event={evt()} />);
+    expect(screen.queryByTestId('completions-sheet')).toBeNull();
   });
 
   it('deletes a completion (with confirmation), reporting uid + key', () => {
     const confirmSpy = jest.spyOn(window, 'confirm').mockReturnValue(true);
     const k = keyAgo(2, 'minute');
-    render(<CounterEditor {...baseProps} event={evt({ [k]: '' })} />);
+    render(<CompletionsSheet {...baseProps} event={evt({ [k]: '' })} />);
 
     fireEvent.click(screen.getByRole('button', { name: 'Delete completion' }));
     expect(confirmSpy).toHaveBeenCalledTimes(1);
@@ -74,7 +66,7 @@ describe('CounterEditor completions log', () => {
 
   it('does not delete when the confirmation is cancelled', () => {
     const confirmSpy = jest.spyOn(window, 'confirm').mockReturnValue(false);
-    render(<CounterEditor {...baseProps} event={evt({ [keyAgo(2, 'minute')]: '' })} />);
+    render(<CompletionsSheet {...baseProps} event={evt({ [keyAgo(2, 'minute')]: '' })} />);
 
     fireEvent.click(screen.getByRole('button', { name: 'Delete completion' }));
     expect(baseProps.onDeleteCompletion).not.toHaveBeenCalled();
@@ -82,7 +74,7 @@ describe('CounterEditor completions log', () => {
   });
 
   it('hides delete buttons in read-only (canEdit=false) but still lists completions', () => {
-    render(<CounterEditor {...baseProps} canEdit={false} event={evt({ [keyAgo(2, 'minute')]: '' })} />);
+    render(<CompletionsSheet {...baseProps} canEdit={false} event={evt({ [keyAgo(2, 'minute')]: '' })} />);
     expect(screen.getAllByRole('listitem')).toHaveLength(1);
     expect(screen.queryByRole('button', { name: 'Delete completion' })).toBeNull();
   });

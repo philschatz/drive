@@ -1,15 +1,14 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'preact/hooks';
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
-import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
-import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '@/components/ui/select';
+import { MdTextField } from '@/components/ui/md-text-field';
+import { MdSelect } from '@/components/ui/md-select';
 import type { CalendarEvent } from './schema';
-import { PresenceDot } from '../../shared/presence';
+import { PropertySheet, SheetActions, SheetActionItem } from '../../shared/PropertySheet';
+import type { PropertyDef } from '../../shared/PropertySheet';
 import type { PeerFieldInfo } from '../../shared/presence';
-import { isAllDay } from './recurrence';
+import { isAllDay, describeRecurrence } from './recurrence';
 
 interface EventEditorProps {
   uid: string;
@@ -59,6 +58,17 @@ const FIELD_TO_PROP: Record<string, string> = {
   'ed-location': 'location',
   'ed-desc': 'description',
 };
+
+/**
+ * The two grouped property rows. Date / all-day / time / duration are one
+ * decision ("when is this?") and all-day is a modality switch, so on separate
+ * rows two of them would appear and disappear from the list as you toggle it.
+ * The recurrence inputs are meaningless individually and all write one doc
+ * property. Presence-wise each row unions its members' field ids, since peers
+ * still broadcast at input granularity (see PATH_PROP_TO_FIELDS).
+ */
+const WHEN_FIELDS = ['ed-date', 'ed-time', 'ed-allday', 'ed-duration'];
+const REPEAT_FIELDS = ['ed-freq', 'ed-interval', 'ed-bydays', 'ed-ends', 'ed-count', 'ed-until'];
 
 function dateFrom(start?: string) { return start ? start.substring(0, 10) : ''; }
 function timeFrom(start?: string) { return start && start.length > 10 ? start.substring(11, 16) : ''; }
@@ -141,65 +151,86 @@ export function EventEditor({ uid, event, masterEvent, recurrenceDate, isNew, op
     }
   }, [event, masterEvent, isRecurring, recurrenceDate]);
 
-  const pd = (id: string) => <PresenceDot fieldId={id} peerFocusedFields={peerFocusedFields} />;
-  const peerOpacity = (id: string) => peerFocusedFields?.[id] ? 0.5 : undefined;
+  interface Draft {
+    title: string; date: string; allday: boolean; time: string; duration: string;
+    location: string; description: string; calDocId: string;
+    freq: string; interval: number; byDay: Record<string, boolean>;
+    endType: string; count: number; until: string;
+  }
 
-  const handleSave = () => {
-    if (!date) { alert('Date is required'); return; }
+  /**
+   * Auto-save, matching the task and counter editors: every field commits on
+   * blur/change and the X is the only "done" gesture — there is no Save/Cancel.
+   *
+   * `overrides` carries a value that hasn't landed in state yet (a select fires
+   * its handler before the re-render). A commit with no date is dropped rather
+   * than warned about: an event without a start can't be written, and under
+   * auto-save there is no button press to attach an alert to.
+   */
+  const commit = (overrides: Partial<Draft> = {}) => {
+    const d: Draft = {
+      title, date, allday, time, duration, location, description,
+      calDocId: selectedCalDocId, freq, interval, byDay, endType, count, until,
+      ...overrides,
+    };
+    if (!d.date) return;
 
     if (editingOccurrence) {
       const patch: any = {};
-      if (title !== (masterEvent!.title || '')) patch.title = title || 'Untitled';
-      const newStart = allday ? date : date + 'T' + (time || '09:00') + ':00';
+      if (d.title !== (masterEvent!.title || '')) patch.title = d.title || 'Untitled';
+      const newStart = d.allday ? d.date : d.date + 'T' + (d.time || '09:00') + ':00';
       if (newStart !== recurrenceDate) patch.start = newStart;
-      if (duration !== (masterEvent!.duration || 'PT1H')) patch.duration = duration || (allday ? 'P1D' : 'PT1H');
+      if (d.duration !== (masterEvent!.duration || 'PT1H')) patch.duration = d.duration || (d.allday ? 'P1D' : 'PT1H');
       // Patch whenever changed (including to ''), so clearing location sticks —
       // same behavior as description below.
-      if (location !== locationText(masterEvent!.location)) {
-        patch.location = location;
+      if (d.location !== locationText(masterEvent!.location)) {
+        patch.location = d.location;
       }
-      if (description !== (masterEvent!.description || '')) {
-        patch.description = description;
+      if (d.description !== (masterEvent!.description || '')) {
+        patch.description = d.description;
       }
+      if (Object.keys(patch).length === 0) return;
       onSaveOverride(uid, recurrenceDate!, patch);
       return;
     }
 
-    const updated: any = { '@type': 'Event', title: title || 'Untitled' };
-    if (allday) {
-      updated.start = date;
-      updated.duration = duration || 'P1D';
+    const updated: any = { '@type': 'Event', title: d.title || 'Untitled' };
+    if (d.allday) {
+      updated.start = d.date;
+      updated.duration = d.duration || 'P1D';
       updated.timeZone = null;
     } else {
-      updated.start = date + 'T' + (time || '09:00') + ':00';
-      updated.duration = duration || 'PT1H';
+      updated.start = d.date + 'T' + (d.time || '09:00') + ':00';
+      updated.duration = d.duration || 'PT1H';
       updated.timeZone = null;
     }
-    updated.location = location || undefined;
-    updated.description = description || undefined;
+    updated.location = d.location || undefined;
+    updated.description = d.description || undefined;
 
-    if (freq) {
-      const newRule: any = { '@type': 'RecurrenceRule', frequency: freq };
-      if (interval > 1) newRule.interval = interval;
-      if (freq === 'weekly') {
-        const selectedDays = Object.entries(byDay).filter(([, v]) => v).map(([k]) => ({ '@type': 'NDay', day: k }));
+    if (d.freq) {
+      const newRule: any = { '@type': 'RecurrenceRule', frequency: d.freq };
+      if (d.interval > 1) newRule.interval = d.interval;
+      if (d.freq === 'weekly') {
+        const selectedDays = Object.entries(d.byDay).filter(([, v]) => v).map(([k]) => ({ '@type': 'NDay', day: k }));
         if (selectedDays.length > 0) newRule.byDay = selectedDays;
       }
-      if (endType === 'count') newRule.count = count || 10;
-      else if (endType === 'until' && until) newRule.until = until;
+      if (d.endType === 'count') newRule.count = d.count || 10;
+      else if (d.endType === 'until' && d.until) newRule.until = d.until;
       updated.recurrenceRule = newRule;
     } else {
       updated.recurrenceRule = undefined;
     }
 
-    if (freq && masterEvent?.recurrenceOverrides) {
+    if (d.freq && masterEvent?.recurrenceOverrides) {
       updated.recurrenceOverrides = masterEvent.recurrenceOverrides;
     } else {
       updated.recurrenceOverrides = undefined;
     }
 
-    if (onMoveToCalendar && selectedCalDocId && selectedCalDocId !== calDocId) {
-      onMoveToCalendar(uid, updated, selectedCalDocId);
+    // Only when the pick actually changed — otherwise every keystroke's commit
+    // would re-run the cross-document move.
+    if (onMoveToCalendar && d.calDocId && d.calDocId !== calDocId) {
+      onMoveToCalendar(uid, updated, d.calDocId);
     } else {
       onSave(uid, updated);
     }
@@ -217,63 +248,66 @@ export function EventEditor({ uid, event, masterEvent, recurrenceDate, isNew, op
 
   const heading = isNew ? 'New Event' : (editingOccurrence ? 'Edit Occurrence' : 'Edit Event');
 
-  return (
-    <Sheet open={opened} onOpenChange={(open: boolean) => { if (!open) onClose(); }}>
-      <SheetContent side="bottom" className="panel max-h-[85vh]">
-        <SheetHeader>
-          <SheetTitle>{heading}</SheetTitle>
-        </SheetHeader>
-        <div className="flex flex-col gap-3 mt-4">
-          {editingOccurrence && (
-            <p className="text-xs text-muted-foreground">
-              Recurring event. <a href="#" onClick={(e: any) => { e.preventDefault(); onEditAll(uid); }}>Edit all events</a>
-            </p>
-          )}
+  const selectedCalendar = calendars?.find(c => c.docId === selectedCalDocId);
+  const whenSummary = !date
+    ? ''
+    : allday
+      ? `${date} (all day)`
+      : `${date}${time ? ` at ${time}` : ''}${duration ? ` for ${duration}` : ''}`;
 
-          {calendars && calendars.length > 1 && (
-            <div>
-              <Label>Calendar</Label>
-              <Select value={selectedCalDocId} onValueChange={(v: string) => setSelectedCalDocId(v)}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {calendars.map(c => (
-                    <SelectItem key={c.docId} value={c.docId}>
-                      <span className="flex items-center gap-2">
-                        <span className="inline-block w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: c.color }} />
-                        {c.name || 'Untitled'}
-                      </span>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          )}
-
-          <div style={{ opacity: peerOpacity('ed-title') }}>
-            <Label className="flex items-center gap-1"><span>Title</span>{pd('ed-title')}</Label>
-            <Input
-              id="ed-title"
-              value={title}
-              onInput={(e: any) => setTitle(e.currentTarget.value)}
-              onFocus={() => focusField('ed-title')}
-              onBlur={blurField}
-              autoFocus
-            />
-          </div>
-
-          <div style={{ opacity: peerOpacity('ed-date') }}>
-            <Label className="flex items-center gap-1"><span>Date</span>{pd('ed-date')}</Label>
-            <Input
-              id="ed-date"
-              type="date"
-              value={date}
-              onInput={(e: any) => setDate(e.currentTarget.value)}
-              onFocus={() => focusField('ed-date')}
-              onBlur={blurField}
-            />
-          </div>
+  const properties: PropertyDef[] = [
+    {
+      id: 'ed-calendar',
+      label: 'Calendar',
+      icon: 'calendar_month',
+      hidden: !calendars || calendars.length <= 1,
+      summary: () => selectedCalendar?.name || 'Untitled',
+      render: ({ back }) => (
+        <MdSelect
+          label="Calendar"
+          id="ed-calendar"
+          value={selectedCalDocId}
+          options={(calendars ?? []).map(c => ({ value: c.docId, label: c.name || 'Untitled' }))}
+          onValueChange={v => { setSelectedCalDocId(v); commit({ calDocId: v }); back(); }}
+        />
+      ),
+    },
+    {
+      id: 'ed-title',
+      label: 'Title',
+      icon: 'edit',
+      summary: () => title,
+      render: ({ back }) => (
+        <MdTextField
+          label="Title"
+          id="ed-title"
+          value={title}
+          onInput={setTitle}
+          onFocus={() => focusField('ed-title')}
+          onBlur={blurField}
+          onCommit={v => commit({ title: v })}
+          onEnter={v => { commit({ title: v }); back(); }}
+        />
+      ),
+    },
+    {
+      id: 'ed-when',
+      label: 'When',
+      icon: 'schedule',
+      presenceIds: WHEN_FIELDS,
+      summary: () => whenSummary,
+      render: () => (
+        <div className="flex flex-col gap-4">
+          <MdTextField
+            label="Date"
+            id="ed-date"
+            type="date"
+            value={date}
+            onInput={setDate}
+            onFocus={() => focusField('ed-date')}
+            onBlur={blurField}
+            onCommit={v => commit({ date: v })}
+          />
 
           <div className="flex items-center gap-2">
             <Checkbox
@@ -281,8 +315,13 @@ export function EventEditor({ uid, event, masterEvent, recurrenceDate, isNew, op
               checked={allday}
               onCheckedChange={(checked: boolean) => {
                 setAllday(checked);
-                if (checked && !duration.includes('D')) setDuration('P1D');
-                if (!checked && !duration.includes('T')) setDuration('PT1H');
+                // All-day and timed events carry different duration shapes, so
+                // the toggle rewrites it — and both go in the same commit.
+                let nextDuration = duration;
+                if (checked && !duration.includes('D')) nextDuration = 'P1D';
+                if (!checked && !duration.includes('T')) nextDuration = 'PT1H';
+                setDuration(nextDuration);
+                commit({ allday: checked, duration: nextDuration });
               }}
               onFocus={() => focusField('ed-allday')}
               onBlur={blurField}
@@ -291,155 +330,204 @@ export function EventEditor({ uid, event, masterEvent, recurrenceDate, isNew, op
           </div>
 
           {!allday && (
-            <div id="time-fields">
-              <div style={{ opacity: peerOpacity('ed-time') }}>
-                <Label className="flex items-center gap-1"><span>Time</span>{pd('ed-time')}</Label>
-                <Input
-                  id="ed-time"
-                  type="time"
-                  value={time}
-                  onInput={(e: any) => setTime(e.currentTarget.value)}
-                  onFocus={() => focusField('ed-time')}
-                  onBlur={blurField}
-                />
-              </div>
-              <div style={{ opacity: peerOpacity('ed-duration') }} className="mt-3">
-                <Label className="flex items-center gap-1"><span>Duration</span>{pd('ed-duration')}</Label>
-                <Input
-                  id="ed-duration"
-                  value={duration}
-                  onInput={(e: any) => setDuration(e.currentTarget.value)}
-                  onFocus={() => focusField('ed-duration')}
-                  onBlur={blurField}
-                />
-              </div>
+            <div id="time-fields" className="flex flex-col gap-4">
+              <MdTextField
+                label="Time"
+                id="ed-time"
+                type="time"
+                value={time}
+                onInput={setTime}
+                onFocus={() => focusField('ed-time')}
+                onBlur={blurField}
+                onCommit={v => commit({ time: v })}
+              />
+              <MdTextField
+                label="Duration"
+                id="ed-duration"
+                value={duration}
+                onInput={setDuration}
+                onFocus={() => focusField('ed-duration')}
+                onBlur={blurField}
+                onCommit={v => commit({ duration: v })}
+              />
             </div>
           )}
+        </div>
+      ),
+    },
+    {
+      id: 'ed-repeat',
+      label: 'Repeat',
+      icon: 'repeat',
+      // An occurrence override can't change the series' rule.
+      hidden: !!editingOccurrence,
+      presenceIds: REPEAT_FIELDS,
+      summary: () => (freq ? describeRecurrence({ frequency: freq, interval, byDay: Object.entries(byDay).filter(([, v]) => v).map(([day]) => ({ day })) }) : 'Never'),
+      render: () => (
+        <div className="flex flex-col gap-4">
+          <MdSelect
+            label="Repeat"
+            id="ed-freq"
+            value={freq || '_none'}
+            options={FREQ_OPTIONS}
+            onFocus={() => focusField('ed-freq')}
+            onValueChange={v => {
+              const next = v === '_none' ? '' : v;
+              setFreq(next);
+              commit({ freq: next });
+              blurField();
+            }}
+          />
 
-          {!editingOccurrence && (
-            <>
-              <div style={{ opacity: peerOpacity('ed-freq') }}>
-                <Label className="flex items-center gap-1"><span>Repeat</span>{pd('ed-freq')}</Label>
-                <Select value={freq || '_none'} onValueChange={(v: string) => setFreq(v === '_none' ? '' : v)}>
-                  <SelectTrigger
-                    id="ed-freq"
-                    onFocus={() => focusField('ed-freq')}
-                    onBlur={blurField}
-                  >
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {FREQ_OPTIONS.map(o => (
-                      <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+          {freq && (
+            <div id="recurrence-opts" className="flex flex-col gap-4">
+              <div className="flex items-center gap-2">
+                <span className="text-sm">Every</span>
+                <Input
+                  id="ed-interval"
+                  type="number"
+                  min={1}
+                  value={String(interval)}
+                  onInput={(e: any) => setInterval(parseInt(e.currentTarget.value) || 1)}
+                  onBlur={(e: any) => commit({ interval: parseInt(e.currentTarget.value) || 1 })}
+                  className="w-16"
+                />
+                <span className="text-sm">{FREQ_LABELS[freq] || 'days'}</span>
               </div>
 
-              {freq && (
-                <div id="recurrence-opts">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm">Every</span>
-                    <Input
-                      type="number"
-                      min={1}
-                      value={String(interval)}
-                      onInput={(e: any) => setInterval(parseInt(e.currentTarget.value) || 1)}
-                      className="w-16"
-                    />
-                    <span className="text-sm">{FREQ_LABELS[freq] || 'days'}</span>
-                  </div>
-
-                  {freq === 'weekly' && (
-                    <div id="weekly-days" className="flex items-center gap-1 mt-3">
-                      {DAY_LABELS.map(d => (
-                        <button
-                          key={d.key}
-                          className={`day-btn inline-flex items-center justify-center h-8 w-8 rounded-full text-xs font-medium transition-colors ${byDay[d.key] ? 'active bg-primary text-primary-foreground' : 'border border-input hover:bg-accent'}`}
-                          onClick={() => setByDay(prev => ({ ...prev, [d.key]: !prev[d.key] }))}
-                        >
-                          {d.label}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-
-                  <div className="mt-3">
-                    <Label>Ends</Label>
-                    <Select value={endType} onValueChange={(v: string) => setEndType(v || 'never')}>
-                      <SelectTrigger id="ed-ends">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {END_OPTIONS.map(o => (
-                          <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  {endType === 'count' && (
-                    <div id="end-count" className="flex items-center gap-2 mt-3">
-                      <Input
-                        id="ed-count"
-                        type="number"
-                        min={1}
-                        value={String(count)}
-                        onInput={(e: any) => setCount(parseInt(e.currentTarget.value) || 10)}
-                        className="w-20"
-                      />
-                      <span className="text-sm">occurrences</span>
-                    </div>
-                  )}
-                  {endType === 'until' && (
-                    <div id="end-until" className="mt-3">
-                      <Input
-                        id="ed-until"
-                        type="date"
-                        value={until}
-                        onInput={(e: any) => setUntil(e.currentTarget.value)}
-                      />
-                    </div>
-                  )}
+              {freq === 'weekly' && (
+                <div id="weekly-days" className="flex items-center gap-1">
+                  {DAY_LABELS.map(d => (
+                    <button
+                      key={d.key}
+                      className={`day-btn inline-flex items-center justify-center h-8 w-8 rounded-full text-xs font-medium transition-colors ${byDay[d.key] ? 'active bg-primary text-primary-foreground' : 'border border-input hover:bg-accent'}`}
+                      onClick={() => {
+                        const next = { ...byDay, [d.key]: !byDay[d.key] };
+                        setByDay(next);
+                        commit({ byDay: next });
+                      }}
+                    >
+                      {d.label}
+                    </button>
+                  ))}
                 </div>
               )}
-            </>
+
+              <MdSelect
+                label="Ends"
+                id="ed-ends"
+                value={endType}
+                options={END_OPTIONS}
+                onValueChange={v => { setEndType(v || 'never'); commit({ endType: v || 'never' }); }}
+              />
+
+              {endType === 'count' && (
+                <div id="end-count" className="flex items-center gap-2">
+                  <Input
+                    id="ed-count"
+                    type="number"
+                    min={1}
+                    value={String(count)}
+                    onInput={(e: any) => setCount(parseInt(e.currentTarget.value) || 10)}
+                    onBlur={(e: any) => commit({ count: parseInt(e.currentTarget.value) || 10 })}
+                    className="w-20"
+                  />
+                  <span className="text-sm">occurrences</span>
+                </div>
+              )}
+              {endType === 'until' && (
+                <div id="end-until">
+                  <MdTextField
+                    label="Until"
+                    id="ed-until"
+                    type="date"
+                    value={until}
+                    onInput={setUntil}
+                    onCommit={v => commit({ until: v })}
+                  />
+                </div>
+              )}
+            </div>
           )}
-
-          <div style={{ opacity: peerOpacity('ed-location') }}>
-            <Label className="flex items-center gap-1"><span>Location</span>{pd('ed-location')}</Label>
-            <Input
-              id="ed-location"
-              value={location}
-              onInput={(e: any) => setLocation(e.currentTarget.value)}
-              onFocus={() => focusField('ed-location')}
-              onBlur={blurField}
-            />
-          </div>
-
-          <div style={{ opacity: peerOpacity('ed-desc') }}>
-            <Label className="flex items-center gap-1"><span>Description</span>{pd('ed-desc')}</Label>
-            <Textarea
-              id="ed-desc"
-              value={description}
-              onInput={(e: any) => setDescription(e.currentTarget.value)}
-              onFocus={() => focusField('ed-desc')}
-              onBlur={blurField}
-              rows={3}
-            />
-          </div>
-
-          <div className="flex items-center gap-2 mt-4">
-            <Button id="ed-save" onClick={handleSave}>Save</Button>
-            <Button id="ed-cancel" variant="outline" onClick={onClose}>Cancel</Button>
-            {!isNew && (
-              <Button variant="ghost" className="text-destructive hover:text-destructive" onClick={handleDelete}>
-                {editingOccurrence ? 'Delete occurrence' : ('Delete' + (isRecurring ? ' all' : ''))}
-              </Button>
-            )}
-          </div>
         </div>
-      </SheetContent>
-    </Sheet>
+      ),
+    },
+    {
+      id: 'ed-location',
+      label: 'Location',
+      icon: 'location_on',
+      summary: () => location,
+      render: ({ back }) => (
+        <MdTextField
+          label="Location"
+          id="ed-location"
+          value={location}
+          onInput={setLocation}
+          onFocus={() => focusField('ed-location')}
+          onBlur={blurField}
+          onCommit={v => commit({ location: v })}
+          onEnter={v => { commit({ location: v }); back(); }}
+        />
+      ),
+    },
+    {
+      id: 'ed-desc',
+      label: 'Description',
+      icon: 'notes',
+      summary: () => description,
+      render: () => (
+        <MdTextField
+          label="Description"
+          id="ed-desc"
+          type="textarea"
+          rows={4}
+          value={description}
+          onInput={setDescription}
+          onFocus={() => focusField('ed-desc')}
+          onBlur={blurField}
+          onCommit={v => commit({ description: v })}
+        />
+      ),
+    },
+  ];
+
+  return (
+    <PropertySheet
+      open={opened}
+      title={heading}
+      data-testid="event-editor"
+      contentClassName="panel"
+      properties={properties}
+      peerFocusedFields={peerFocusedFields}
+      initialDetailId={isNew ? 'ed-title' : null}
+      onClose={onClose}
+      flushOnClose
+      // Switching to the whole series is a real mode change, not a footnote —
+      // it gets a full-width row rather than an inline link.
+      banner={editingOccurrence ? (
+        <md-list style={{ background: 'transparent' }}>
+          <md-list-item type="button" data-testid="ed-edit-all" onClick={() => onEditAll(uid)}>
+            <md-icon slot="start">repeat</md-icon>
+            <div slot="headline">Edit all events</div>
+            <div slot="supporting-text">You're editing one occurrence of a recurring event</div>
+            <md-icon slot="end" aria-hidden="true">chevron_right</md-icon>
+          </md-list-item>
+        </md-list>
+      ) : undefined}
+      // Delete sits with the properties rather than in the action bar: it acts on
+      // the event, not on the pending edit, and an error-toned Material row reads
+      // as destructive in a way a third button in a row of three does not.
+      footer={!isNew ? (
+        <SheetActions>
+          <SheetActionItem
+            icon="delete"
+            destructive
+            data-testid="ed-delete"
+            label={editingOccurrence ? 'Delete occurrence' : ('Delete' + (isRecurring ? ' all' : ''))}
+            onClick={handleDelete}
+          />
+        </SheetActions>
+      ) : undefined}
+    />
   );
 }

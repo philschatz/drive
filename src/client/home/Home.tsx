@@ -12,6 +12,7 @@ import { OverflowMenu, type OverflowMenuItem } from '../shared/OverflowMenu';
 import { useLongPress } from '../shared/useLongPress';
 import { CreateDocSheet, type ImportKind } from './CreateDocSheet';
 import { DocActionsSheet } from './DocActionsSheet';
+import { RenameSheet } from '../shared/RenameSheet';
 import dayjs from 'dayjs';
 import relativeTimePlugin from 'dayjs/plugin/relativeTime';
 
@@ -118,6 +119,8 @@ export function Home({ path }: { path?: string }) {
   // Share / Rename follow-ups they open.
   const [createOpen, setCreateOpen] = useState(false);
   const [actionsEntry, setActionsEntry] = useState<DocEntry | null>(null);
+  // Rename runs after the actions sheet closes itself, so it needs its own slot.
+  const [renameEntry, setRenameEntry] = useState<{ documentId: string; name: string } | null>(null);
   const repoPeers = usePeerList();
 
   useEffect(() => { document.title = 'Automerge Documents'; }, []);
@@ -370,7 +373,7 @@ export function Home({ path }: { path?: string }) {
       {/* Top app bar */}
       <div className="flex items-center gap-2 min-h-14 pl-2">
         <h1 className="md-title-large font-bold flex-1 min-w-0 truncate">Documents</h1>
-        <ConnectionStatus peers={repoPeers.map(peerId => ({ peerId }))} />
+        <ConnectionStatus hideDots peers={repoPeers.map(peerId => ({ peerId }))} />
         <OverflowMenu aria-label="Menu" items={homeMenuItems} />
       </div>
 
@@ -448,18 +451,22 @@ export function Home({ path }: { path?: string }) {
         entry={actionsEntry}
         onOpenChange={open => { if (!open) setActionsEntry(null); }}
         onShare={e => { window.location.hash = shareUrl(e.documentId); }}
-        onRename={e => {
-          const name = prompt('Rename', e.name || 'Untitled');
-          if (name === null) return;
-          const trimmed = name.trim();
-          if (!trimmed) return;
-          updateDoc(e.documentId, (d, n) => { d.name = n; }, trimmed);
-        }}
+        onRename={e => setRenameEntry(e)}
         onArchive={e => {
           if (confirm(`Archive "${e.name || 'Untitled'}" ${docLabel(e as DocEntry)}?`)) {
             handleArchive(e as DocEntry);
           }
         }}
+      />
+
+      <RenameSheet
+        open={!!renameEntry}
+        title="Rename document"
+        value={renameEntry?.name || 'Untitled'}
+        onRename={name => {
+          if (renameEntry) updateDoc(renameEntry.documentId, (d, n) => { d.name = n; }, name);
+        }}
+        onClose={() => setRenameEntry(null)}
       />
     </div>
   );

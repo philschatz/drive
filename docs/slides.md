@@ -185,6 +185,7 @@ Try it!
 - **Transitive access** — groups as members of groups and documents, with access capped to the minimum along each path
 - **Update events** — a callback per keyhive event, so the app can persist and refresh reactively
 - Plus one upstream panic: encrypting presence right after a remote rekey
+- Went through many iterations. Initially it was just devices, not user groups, and then the relay just broadcast all peers to each other and let them sort it out.
 
 ---
 
