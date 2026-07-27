@@ -1,4 +1,4 @@
-// The plugin Views are lazy (see shared/lazy-view.ts), so importing the
+// The plugin Views are lazy (see common/lazy-view.ts), so importing the
 // registry never loads the editor components — no View mocks needed here.
 import { DOC_PLUGINS } from './index';
 import { SCHEMA_PLUGINS } from '../../../shared/schemas';

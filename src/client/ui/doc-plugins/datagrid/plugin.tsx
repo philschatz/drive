@@ -1,6 +1,6 @@
 import type { DocTypePlugin, DocViewProps } from '../types';
 import { dataGridSchemaPlugin } from '../../../../shared/schemas/datagrid';
-import { lazyView } from '../../shared/lazy-view';
+import { lazyView } from '../../common/lazy-view';
 
 const DataGrid = lazyView(() => import('./DataGrid').then(m => m.DataGrid));
 

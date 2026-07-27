@@ -4,10 +4,10 @@
  */
 import { useState, useEffect } from 'preact/hooks';
 import { Button } from '@/components/ui/button';
-import { getIdentity, type IdentityInfo } from '../../shared/keyhive-api';
+import { getIdentity, type IdentityInfo } from '../../common/keyhive-api';
 import { enableSettingsSync, getReachableSettingsDoc } from '../../worker-api';
 import { idbGet, KEYS } from '../../../idb-storage';
-import { sourceUrl } from '../../shared/doc-urls';
+import { sourceUrl } from '../../common/doc-urls';
 import { useSectionAlerts } from '../SettingsSubScreen';
 
 export function StorageSettings() {

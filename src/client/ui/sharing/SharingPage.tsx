@@ -20,12 +20,12 @@ import {
   revokeMember,
   changeRole,
   onKeyhiveStateChanged,
-} from '../shared/keyhive-api';
+} from '../common/keyhive-api';
 import type { MemberInfo, MemberRole } from '../../../shared/keyhive-types';
 import { getFriendName, setFriendName, mergeCachedFriends } from '../friend-names';
-import { useDeviceStatuses, mostConnectedStatus, type DeviceStatus } from '../shared/use-devices';
-import { StatusDot } from '../shared/presence';
-import { docUrl } from '../shared/doc-urls';
+import { useDeviceStatuses, mostConnectedStatus, type DeviceStatus } from '../common/use-devices';
+import { StatusDot } from '../common/presence';
+import { docUrl } from '../common/doc-urls';
 import { AddFriendSheet } from '../settings/AddFriendSheet';
 import { AddPeopleSheet } from './AddPeopleSheet';
 import { MemberOptionsSheet } from './MemberOptionsSheet';

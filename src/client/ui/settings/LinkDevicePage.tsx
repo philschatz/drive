@@ -14,7 +14,7 @@
 import { useState, useCallback, useEffect } from 'preact/hooks';
 import { Button } from '@/components/ui/button';
 import { QRCodeDisplay } from '@/components/ui/qr-code';
-import { receiveContactCard, linkDevice, getLinkPayload, rendezvousJoinDeviceLink, onRendezvousEvent, getIdentity } from '../shared/keyhive-api';
+import { receiveContactCard, linkDevice, getLinkPayload, rendezvousJoinDeviceLink, onRendezvousEvent, getIdentity } from '../common/keyhive-api';
 import { resolveDeviceName } from '../device-names';
 import type { RendezvousStatus } from '../worker-api';
 import { RendezvousProgress } from './RendezvousProgress';

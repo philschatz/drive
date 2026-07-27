@@ -12,7 +12,7 @@
  */
 
 import { useState, useEffect, useRef } from 'preact/hooks';
-import { rendezvousCancel, onRendezvousEvent } from '../shared/keyhive-api';
+import { rendezvousCancel, onRendezvousEvent } from '../common/keyhive-api';
 import type { RendezvousStatus } from '../worker-api';
 import { formatBytes } from '../../../shared/format-bytes';
 import { QRCodeDisplay } from '@/components/ui/qr-code';

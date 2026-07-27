@@ -1,7 +1,7 @@
 import { EditableName } from './EditableName';
 import { getFriendName, setFriendName } from '../friend-names';
 import { onFriendNamesUpdated } from '../worker-api';
-import type { DeviceStatus } from '../shared/use-devices';
+import type { DeviceStatus } from '../common/use-devices';
 
 /**
  * Inline editor for a contact/user's name (each row in Contacts and the Share

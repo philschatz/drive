@@ -2,7 +2,7 @@ import { useRef, useState } from 'preact/hooks';
 import { FormulaEditor, type FormulaEditorApi, type FormulaHighlight } from './FormulaEditor';
 import type { ResolvedEntry } from './commands';
 import type { DataGridCellFormat } from '../../../../shared/schemas/datagrid';
-import { useKeyboardInset } from '../../shared/useKeyboardInset';
+import { useKeyboardInset } from '../../common/useKeyboardInset';
 
 /** Characters that are awkward to reach on mobile keyboards — shown as an
  * insert strip while the formula editor is focused. */

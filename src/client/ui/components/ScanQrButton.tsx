@@ -9,8 +9,8 @@
 import { useState } from 'preact/hooks';
 import { Suspense } from 'preact/compat';
 import { Button } from '@/components/ui/button';
-import { lazyView } from '@/shared/lazy-view';
-import { navigateToUrlOrHash } from '@/shared/navigate-url';
+import { lazyView } from '@/common/lazy-view';
+import { navigateToUrlOrHash } from '@/common/navigate-url';
 
 // jsqr is ~250K of source; load it only when the user actually starts a scan.
 const QrScanner = lazyView(() => import('@/components/QrScanner').then(m => m.QrScanner));

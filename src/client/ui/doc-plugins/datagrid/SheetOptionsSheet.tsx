@@ -1,6 +1,6 @@
 import { useState } from 'preact/hooks';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
-import { RenameSheet } from '../../shared/RenameSheet';
+import { RenameSheet } from '../../common/RenameSheet';
 
 /** Number stepper row: down/up buttons disable at the given bounds. */
 function Stepper({

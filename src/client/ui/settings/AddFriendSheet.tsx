@@ -12,9 +12,9 @@
 
 import { useState, useEffect, useRef } from 'preact/hooks';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
-import { getIdentity, ensureUserGroup, rendezvousCreateShare } from '../shared/keyhive-api';
+import { getIdentity, ensureUserGroup, rendezvousCreateShare } from '../common/keyhive-api';
 import { getFriendName, setFriendName } from '../friend-names';
-import { keyhiveReady, whenWsConnected } from '../shared/automerge';
+import { keyhiveReady, whenWsConnected } from '../common/automerge';
 import { RendezvousShare } from './RendezvousShare';
 import { buildAddFriendRendezvousUrl } from './AddFriendPage';
 

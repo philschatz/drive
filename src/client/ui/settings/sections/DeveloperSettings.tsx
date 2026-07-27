@@ -4,7 +4,7 @@
  */
 import { useState } from 'preact/hooks';
 import { Button } from '@/components/ui/button';
-import { navigateToUrlOrHash } from '../../shared/navigate-url';
+import { navigateToUrlOrHash } from '../../common/navigate-url';
 import { useSectionAlerts } from '../SettingsSubScreen';
 
 export function DeveloperSettings() {

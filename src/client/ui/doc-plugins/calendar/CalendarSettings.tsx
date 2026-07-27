@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'preact/hooks';
 import { MdTextField } from '@/components/ui/md-text-field';
-import { PropertySheet } from '../../shared/PropertySheet';
-import type { PropertyDef } from '../../shared/PropertySheet';
+import { PropertySheet } from '../../common/PropertySheet';
+import type { PropertyDef } from '../../common/PropertySheet';
 import { updateDoc } from '../../worker-api';
-import { docUrl } from '../../shared/doc-urls';
+import { docUrl } from '../../common/doc-urls';
 
 interface CalendarSettingsProps {
   opened: boolean;

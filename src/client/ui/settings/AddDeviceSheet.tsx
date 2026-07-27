@@ -10,10 +10,10 @@
 
 import { useState, useEffect } from 'preact/hooks';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
-import { rendezvousCreateDeviceLink, getIdentity } from '../shared/keyhive-api';
+import { rendezvousCreateDeviceLink, getIdentity } from '../common/keyhive-api';
 import { getSettingsMode, enableSettingsSync } from '../worker-api';
 import { resolveDeviceName } from '../device-names';
-import { keyhiveReady, whenWsConnected } from '../shared/automerge';
+import { keyhiveReady, whenWsConnected } from '../common/automerge';
 import { RendezvousShare } from './RendezvousShare';
 import { buildLinkDeviceRendezvousUrl } from './LinkDevicePage';
 

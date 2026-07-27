@@ -2,9 +2,9 @@ import { useState, useEffect, useRef, useMemo, useCallback } from 'preact/hooks'
 import { MdTextField } from '@/components/ui/md-text-field';
 import { MdSelect } from '@/components/ui/md-select';
 import type { Task } from '../../../../shared/schemas/tasks';
-import { PropertySheet, SheetActions, SheetActionItem } from '../../shared/PropertySheet';
-import type { PropertyDef } from '../../shared/PropertySheet';
-import type { PeerFieldInfo } from '../../shared/presence';
+import { PropertySheet, SheetActions, SheetActionItem } from '../../common/PropertySheet';
+import type { PropertyDef } from '../../common/PropertySheet';
+import type { PeerFieldInfo } from '../../common/presence';
 
 interface TaskEditorProps {
   uid: string;

@@ -5,17 +5,17 @@ import {
   getWorkerPeerId, getWorkerUserGroupId,
   type RichTextOp, type RichTextSpan,
 } from '../../worker-api';
-import { peerColor, peerDisplayName, peerIdentityKey, usePresence } from '../../shared/presence';
-import { DocumentTitleBar } from '../../shared/DocumentTitleBar';
-import { useDocumentHistory } from '../../shared/useDocumentHistory';
-import { useEditorUndoRedo } from '../../shared/useUndoRedo';
-import { useHideOnScroll } from '../../shared/useHideOnScroll';
-import { useCanEdit } from '../../shared/useCanEdit';
-import { useFocusPathSync } from '../../shared/useFocusPathSync';
-import { useKeyboardInset } from '../../shared/useKeyboardInset';
-import { useDocumentValidation } from '../../shared/useDocumentValidation';
-import { HistorySlider } from '../../shared/HistorySlider';
-import { DocLoader } from '../../shared/useDocument';
+import { peerColor, peerDisplayName, peerIdentityKey, usePresence } from '../../common/presence';
+import { DocumentTitleBar } from '../../common/DocumentTitleBar';
+import { useDocumentHistory } from '../../common/useDocumentHistory';
+import { useEditorUndoRedo } from '../../common/useUndoRedo';
+import { useHideOnScroll } from '../../common/useHideOnScroll';
+import { useCanEdit } from '../../common/useCanEdit';
+import { useFocusPathSync } from '../../common/useFocusPathSync';
+import { useKeyboardInset } from '../../common/useKeyboardInset';
+import { useDocumentValidation } from '../../common/useDocumentValidation';
+import { HistorySlider } from '../../common/HistorySlider';
+import { DocLoader } from '../../common/useDocument';
 import { Fab } from '@/components/ui/fab';
 import { RichTextEditor, type RemoteCursor, type RichTextEditorApi, type SelectionState } from './RichTextEditor';
 import { BottomFormatBar } from './BottomFormatBar';

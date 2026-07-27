@@ -3,8 +3,8 @@
  *
  * POSITIONAL: Jest finds this file only because `__mocks__/` sits directly
  * beside `worker-api.ts`. If the two ever land at different directory levels,
- * `jest.mock('../../worker-api')` silently loads the REAL module instead —
- * which top-level-constructs a Worker and dies with an opaque jsdom error.
+ * an automatic `jest.mock` of the worker API silently loads the REAL module
+ * instead — which top-level-constructs a Worker and dies in jsdom.
  * Tests assert `__isMock` to turn that into a clear failure.
  *
  * The real module marshals every call to a Web Worker running Automerge +
@@ -20,7 +20,7 @@
  *   beforeEach(() => (api as any).__reset());
  *   (api as any).__setDoc('doc1', { '@type': 'TaskList', name: 'X', tasks: {} });
  *
- * `shared/keyhive-api` is a thin re-export of this module, so mocking here also
+ * `common/keyhive-api` is a thin re-export of this module, so mocking here also
  * covers useAccess / the Sharing page.
  */
 import { compile } from '../../../shared/jq';
@@ -65,10 +65,10 @@ function setSpans(docId: string, path: (string | number)[], spans: RichTextSpan[
 // Presence: subscribable so container tests can inject peers (__setPresence).
 const presenceSubs = new Map<string, Set<(peers: Record<string, any>) => void>>();
 
-/** Reset all in-memory state — call in beforeEach. */
 /** Marker so a test can prove it got THIS module and not the real worker-api. */
 export const __isMock = true;
 
+/** Reset all in-memory state — call in beforeEach. */
 export function __reset(): void {
   docs.clear();
   querySubs.clear();

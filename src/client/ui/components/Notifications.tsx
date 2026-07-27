@@ -4,7 +4,7 @@ import relativeTime from 'dayjs/plugin/relativeTime';
 import { onWorkerError } from '@/worker-api';
 import { settingSet, settingSetSync } from '@client/idb-storage';
 import { watchTabLeadership } from '@/multi-tab';
-import { useVersionCheck } from '@/shared/useVersionCheck';
+import { useVersionCheck } from '@/common/useVersionCheck';
 import { upsertToast } from './ui/toast';
 
 dayjs.extend(relativeTime);

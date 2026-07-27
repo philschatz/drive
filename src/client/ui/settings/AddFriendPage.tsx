@@ -15,9 +15,9 @@
 
 import { useState, useCallback, useEffect } from 'preact/hooks';
 import { Button } from '@/components/ui/button';
-import { receiveContactCard, rendezvousReceive, getIdentity, onRendezvousEvent } from '../shared/keyhive-api';
+import { receiveContactCard, rendezvousReceive, getIdentity, onRendezvousEvent } from '../common/keyhive-api';
 import type { RendezvousStatus } from '../worker-api';
-import { keyhiveReady, whenWsConnected } from '../shared/automerge';
+import { keyhiveReady, whenWsConnected } from '../common/automerge';
 import { setFriendName, getFriendName } from '../friend-names';
 import { RendezvousProgress } from './RendezvousProgress';
 import { parseRendezvousToken } from '../../../shared/rendezvous-url';

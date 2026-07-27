@@ -2,9 +2,9 @@ import { useEffect, useState } from 'preact/hooks';
 import { Suspense } from 'preact/compat';
 import { openDoc, subscribeQuery } from './worker-api';
 import { getDocPlugin } from './doc-plugins';
-import { DocLoader } from './shared/useDocument';
-import { useAccess } from './shared/useAccess';
-import { sourceUrl } from './shared/doc-urls';
+import { DocLoader } from './common/useDocument';
+import { useAccess } from './common/useAccess';
+import { sourceUrl } from './common/doc-urls';
 import { buttonVariants } from '@/components/ui/button';
 import { getHashPath, getHashSearch } from './hash-history';
 import { settingSet, settingSetSync } from '../idb-storage';
@@ -92,7 +92,7 @@ function DocViewResolver({ docId, rest }: { docId: string; rest?: string }) {
   // Cached docs resolve synchronously, so the spinner is imperceptible for them.
   if (docType === undefined || !loaded || !plugin) return spinner;
 
-  // Views are code-split (see shared/lazy-view.ts); the first visit per
+  // Views are code-split (see common/lazy-view.ts); the first visit per
   // type fetches its chunk behind the same spinner.
   return (
     <Suspense fallback={spinner}>

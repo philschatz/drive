@@ -1,5 +1,5 @@
 import { pointToCell, buildRowOffsets, rowAtOffset, type GridGeometry } from './grid-geometry';
-import { nextChromeState } from '../../shared/useHideOnScroll';
+import { nextChromeState } from '../../common/useHideOnScroll';
 
 const base: GridGeometry = {
   containerLeft: 0,

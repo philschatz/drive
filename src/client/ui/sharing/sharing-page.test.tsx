@@ -7,7 +7,7 @@ let mockGetIdentity: jest.Mock;
 let mockStatuses: Record<string, { online: boolean; transport?: 'direct' | 'relay' }>;
 let mockNames: Record<string, string>;
 
-jest.mock('../shared/keyhive-api', () => ({
+jest.mock('../common/keyhive-api', () => ({
   getDocMembers: (...args: any[]) => mockGetDocMembers(...args),
   getMyAccess: (...args: any[]) => mockGetMyAccess(...args),
   getKnownFriends: (...args: any[]) => mockGetKnownContacts(...args),
@@ -38,7 +38,7 @@ jest.mock('@/components/ui/alert', () => ({
 
 // use-devices and presence pull in worker-api (import.meta / new Worker), which
 // the jsdom jest env can't load. Drive connection state through mockStatuses.
-jest.mock('../shared/use-devices', () => ({
+jest.mock('../common/use-devices', () => ({
   useDeviceStatuses: () => mockStatuses,
   mostConnectedStatus: (statuses: any, ids: string[]) => {
     for (const id of ids) {
@@ -49,7 +49,7 @@ jest.mock('../shared/use-devices', () => ({
   },
 }));
 
-jest.mock('../shared/presence', () => ({
+jest.mock('../common/presence', () => ({
   StatusDot: ({ online, direct }: any) => (
     <span data-testid="status-dot" data-online={String(!!online)} data-direct={String(!!direct)} />
   ),

@@ -5,9 +5,9 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { MdTextField } from '@/components/ui/md-text-field';
 import { MdSelect } from '@/components/ui/md-select';
 import type { CalendarEvent } from '../../../../shared/schemas/calendar';
-import { PropertySheet, SheetActions, SheetActionItem } from '../../shared/PropertySheet';
-import type { PropertyDef } from '../../shared/PropertySheet';
-import type { PeerFieldInfo } from '../../shared/presence';
+import { PropertySheet, SheetActions, SheetActionItem } from '../../common/PropertySheet';
+import type { PropertyDef } from '../../common/PropertySheet';
+import type { PeerFieldInfo } from '../../common/presence';
 import { isAllDay, describeRecurrence } from './recurrence';
 
 interface EventEditorProps {

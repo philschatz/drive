@@ -2,7 +2,7 @@ import Router from 'preact-router';
 import { Suspense } from 'preact/compat';
 import { DocRoute } from './DocRoute';
 import { Home } from './home/Home';
-import { lazyView } from './shared/lazy-view';
+import { lazyView } from './common/lazy-view';
 import { hashHistory } from './hash-history';
 import { Notifications } from './components/Notifications';
 import { Toaster } from './components/ui/toast';

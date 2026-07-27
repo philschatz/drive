@@ -5,7 +5,7 @@
 import { useState } from 'preact/hooks';
 import { Button } from '@/components/ui/button';
 import { DeviceList } from '@/components/DeviceList';
-import { useDevices, useDeviceStatuses } from '../../shared/use-devices';
+import { useDevices, useDeviceStatuses } from '../../common/use-devices';
 import { AddDeviceSheet } from '../AddDeviceSheet';
 import { useSectionAlerts } from '../SettingsSubScreen';
 

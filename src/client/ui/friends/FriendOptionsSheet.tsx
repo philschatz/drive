@@ -5,7 +5,7 @@
 
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { iconForType } from '../doc-plugins';
-import { docUrl } from '../shared/doc-urls';
+import { docUrl } from '../common/doc-urls';
 import type { FriendEntry } from './Friends';
 
 export function FriendOptionsSheet({

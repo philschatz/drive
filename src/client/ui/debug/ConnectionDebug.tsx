@@ -27,7 +27,7 @@ import {
   setDebugEnabled,
   clearAllCaches,
 } from '../worker-api';
-import { PeerDot, peerDisplayName } from '../shared/presence';
+import { PeerDot, peerDisplayName } from '../common/presence';
 import { EditableDeviceName } from '@/components/EditableDeviceName';
 import { PRODUCTION_RELAY_URL } from '../../../shared/relay-identity';
 import { isDebugEnabled } from '../../idb-storage';

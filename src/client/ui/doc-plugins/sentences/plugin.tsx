@@ -1,6 +1,6 @@
 import type { DocTypePlugin } from '../types';
 import { sentencesSchemaPlugin } from '../../../../shared/schemas/sentences';
-import { lazyView } from '../../shared/lazy-view';
+import { lazyView } from '../../common/lazy-view';
 
 const SentencesView = lazyView(() => import('./SentencesView').then(m => m.SentencesView));
 

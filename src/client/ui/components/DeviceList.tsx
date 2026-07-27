@@ -13,9 +13,9 @@
 import { DeleteButton } from '@/components/ui/delete-button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { EditableDeviceName } from '@/components/EditableDeviceName';
-import { StatusDot } from '@/shared/presence';
-import type { DeviceInfo } from '@/shared/keyhive-api';
-import type { DeviceStatus } from '@/shared/use-devices';
+import { StatusDot } from '@/common/presence';
+import type { DeviceInfo } from '@/common/keyhive-api';
+import type { DeviceStatus } from '@/common/use-devices';
 
 export function DeviceList({ devices, onRemove, onChangeRole, statuses }: {
   devices: DeviceInfo[];

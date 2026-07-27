@@ -1,4 +1,4 @@
-import { BarIconButton } from '../../shared/DocumentTitleBar';
+import { BarIconButton } from '../../common/DocumentTitleBar';
 
 /**
  * Top bar shown while a cell is selected (focus mode). Replaces the shared

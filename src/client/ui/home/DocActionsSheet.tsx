@@ -4,7 +4,7 @@
  * Archive / View source; availability follows the user's access level.
  */
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
-import { sourceUrl } from '@/shared/doc-urls';
+import { sourceUrl } from '@/common/doc-urls';
 
 export interface DocActionsTarget {
   documentId: string;

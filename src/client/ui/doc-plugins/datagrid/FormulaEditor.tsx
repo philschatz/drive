@@ -5,7 +5,7 @@ import { letterToColIndex } from './helpers';
 // Rotating palette for cell/range reference colors.
 // Shared with peer-presence colors so formula tokens, grid ref decorations,
 // and every other categorical consumer draw from one Material palette.
-import { MATERIAL_CATEGORICAL as REF_COLORS } from '../../shared/categorical-colors';
+import { MATERIAL_CATEGORICAL as REF_COLORS } from '../../common/categorical-colors';
 
 export interface FormulaRef {
   col: number;

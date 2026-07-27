@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'preact/hooks';
 
 import type { ValidationError } from '../../../shared/schemas';
-import { peerDisplayName, PeerDot } from '../shared/presence';
+import { peerDisplayName, PeerDot } from '../common/presence';
 import { usePeerTransports, type PeerTransport } from '../worker-api';
 
 type Path = (string | number)[];

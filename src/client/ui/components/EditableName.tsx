@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'preact/hooks';
-import { StatusDot } from '../shared/presence';
-import type { DeviceStatus } from '../shared/use-devices';
+import { StatusDot } from '../common/presence';
+import type { DeviceStatus } from '../common/use-devices';
 
 /**
  * Inline text-input editor shared by EditableDeviceName and EditableUserName.

@@ -10,13 +10,13 @@ import { useState, useEffect, useCallback } from 'preact/hooks';
 import { Alert } from '@/components/ui/alert';
 import { Fab } from '@/components/ui/fab';
 import { AddFriendSheet } from '../settings/AddFriendSheet';
-import { getDocMembers, getKnownFriends, getIdentity } from '../shared/keyhive-api';
-import { keyhiveReady } from '../shared/automerge';
+import { getDocMembers, getKnownFriends, getIdentity } from '../common/keyhive-api';
+import { keyhiveReady } from '../common/automerge';
 import { fetchDocList } from '../worker-api';
 import { getFriendName, getAllFriendNames, removeFriendName, setFriendName } from '../friend-names';
-import { StatusDot } from '../shared/presence';
-import { BarIconButton } from '../shared/DocumentTitleBar';
-import { useDeviceStatuses, mostConnectedStatus } from '../shared/use-devices';
+import { StatusDot } from '../common/presence';
+import { BarIconButton } from '../common/DocumentTitleBar';
+import { useDeviceStatuses, mostConnectedStatus } from '../common/use-devices';
 import { FriendOptionsSheet } from './FriendOptionsSheet';
 
 interface FriendDocInfo {
