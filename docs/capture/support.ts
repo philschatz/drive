@@ -1,5 +1,6 @@
 import { expect } from '@playwright/test';
 import type { Browser, BrowserContext, Page } from '@playwright/test';
+import { mkdir } from 'fs/promises';
 import path from 'path';
 import type { DriveBridge } from '../../src/client/test-bridge';
 import { waitFor } from '../../src/client/tests-pw/support/peer';
@@ -120,6 +121,28 @@ async function closeSetupPage(peer: CapturePeer): Promise<void> {
   await new Promise((r) => setTimeout(r, 500));
 }
 
+let clipSeq = 0;
+
+/**
+ * Close a recorded page and return a path to its finished .webm.
+ *
+ * `video.path()` is not usable here: Playwright only guarantees the recording
+ * is on disk once the whole *context* closes, so encoding straight from that
+ * path intermittently fails with "No such file or directory" — the capture
+ * still has more work to do in that context, so it cannot close it yet.
+ * `saveAs()` waits for the recording to be finalized and copies it out.
+ */
+async function finishRecording(page: Page, label: string): Promise<string> {
+  const video = page.video();
+  if (!video) throw new Error(`${label}: no video — was the peer created with { video: true }?`);
+  await page.close();
+  const dir = path.resolve(__dirname, '.work/clips');
+  await mkdir(dir, { recursive: true });
+  const dest = path.join(dir, `${label}-${++clipSeq}.webm`);
+  await video.saveAs(dest);
+  return dest;
+}
+
 /**
  * Record a screencast on a fresh page of `peer`'s context, and return the clip
  * window inside the resulting video.
@@ -160,11 +183,7 @@ export async function take(
   await page.waitForTimeout(opts.tail ?? 1200);
   const end = (Date.now() - t0) / 1000;
 
-  const video = page.video();
-  if (!video) throw new Error(`take(${peer.name}): no video — was the peer created with { video: true }?`);
-  // close() finalizes and flushes the recording; path() only resolves after.
-  await page.close();
-  return { video: await video.path(), start, end };
+  return { video: await finishRecording(page, peer.name), start, end };
 }
 
 /**
@@ -178,7 +197,21 @@ export async function takePair(
   left: CapturePeer,
   right: CapturePeer,
   flow: (l: Page, r: Page) => Promise<void>,
-  opts: { leftUrl?: string; rightUrl?: string; tail?: number } = {}
+  opts: {
+    leftUrl?: string;
+    rightUrl?: string;
+    tail?: number;
+    /**
+     * Runs after both pages are interactive but *before* the clip window opens.
+     *
+     * `ready()` plus 700ms covers the app shell, but not a view that keeps
+     * working after it mounts — the datagrid still has HyperFormula to spin up
+     * and a Monte Carlo pass to run. Since gif.ts freezes the opening frame for
+     * a beat so viewers can orient, anything half-painted at that moment is held
+     * on screen; use this to wait it out off-camera.
+     */
+    settle?: (l: Page, r: Page) => Promise<void>;
+  } = {}
 ): Promise<{ left: Clip; right: Clip }> {
   await Promise.all([closeSetupPage(left), closeSetupPage(right)]);
   const t0 = Date.now();
@@ -190,18 +223,20 @@ export async function takePair(
   await Promise.all([lPage.goto(opts.leftUrl ?? '/'), rPage.goto(opts.rightUrl ?? '/')]);
   await Promise.all([ready(lPage), ready(rPage)]);
   await lPage.waitForTimeout(700);
+  if (opts.settle) await opts.settle(lPage, rPage);
 
   const start = (Date.now() - t0) / 1000;
   await flow(lPage, rPage);
   await lPage.waitForTimeout(opts.tail ?? 1200);
   const end = (Date.now() - t0) / 1000;
 
-  const [lVideo, rVideo] = [lPage.video(), rPage.video()];
-  if (!lVideo || !rVideo) throw new Error('takePair: both peers must be created with { video: true }');
-  await Promise.all([lPage.close(), rPage.close()]);
+  const [lVideo, rVideo] = await Promise.all([
+    finishRecording(lPage, left.name),
+    finishRecording(rPage, right.name),
+  ]);
   return {
-    left: { video: await lVideo.path(), start, end },
-    right: { video: await rVideo.path(), start, end },
+    left: { video: lVideo, start, end },
+    right: { video: rVideo, start, end },
   };
 }
 

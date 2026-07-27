@@ -101,6 +101,36 @@ export async function tap(page: Page, target: Locator): Promise<void> {
   await page.mouse.up();
 }
 
+/**
+ * Rest the pointer on a QR code, then flash the frame white — the beat a viewer
+ * needs to register that *this* is the thing being scanned.
+ *
+ * Nothing in the app scans locally (the pairing goes over the rendezvous channel
+ * behind the scenes), so without this the QR simply vanishes and is replaced by
+ * the next screen, which reads as a glitch rather than a capture. The flash is a
+ * painted overlay rather than anything the app knows about, and it is removed
+ * again immediately.
+ */
+export async function scanFlash(page: Page, target: Locator, hold = 600): Promise<void> {
+  await glide(page, target);
+  await beat(page, hold);
+  await page.evaluate(() => {
+    const flash = document.createElement('div');
+    flash.style.cssText =
+      'position:fixed;inset:0;background:#fff;z-index:2147483646;pointer-events:none;' +
+      'opacity:0;transition:opacity 90ms linear';
+    document.body.appendChild(flash);
+    requestAnimationFrame(() => {
+      flash.style.opacity = '1';
+      setTimeout(() => {
+        flash.style.opacity = '0';
+        setTimeout(() => flash.remove(), 260);
+      }, 130);
+    });
+  });
+  await beat(page, 520);
+}
+
 /** Type into the focused element at a readable, human cadence. */
 export async function type(page: Page, text: string, delay = 55): Promise<void> {
   await page.keyboard.type(text, { delay });

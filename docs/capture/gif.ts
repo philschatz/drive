@@ -31,6 +31,20 @@ export interface Clip {
 const paletteChain = (fps: number) =>
   `fps=${fps},split[pg][pu];[pg]palettegen=stats_mode=diff[p];[pu][p]paletteuse=dither=none`;
 
+/**
+ * Seconds the opening frame is held before anything moves.
+ *
+ * These loop forever with no controls, so a viewer arrives mid-cycle and has to
+ * work out what they are looking at while it is already animating. Freezing the
+ * first frame gives them a beat to read the screen — and because the hold is at
+ * the head, it also reads as the loop's start rather than an arbitrary cut.
+ * `stop_mode=clone` already holds the *last* frame in hstackGif for a different
+ * reason (pane length matching); this is the mirror of it at the front.
+ */
+const LEAD_IN = 1.8;
+
+const leadIn = (seconds = LEAD_IN) => `tpad=start_mode=clone:start_duration=${seconds}`;
+
 async function ffmpeg(args: string[]): Promise<void> {
   try {
     await run('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', ...args], {
@@ -61,7 +75,7 @@ export async function toGif(name: string, clip: Clip, fps = 10): Promise<void> {
     '-ss', clip.start.toFixed(2),
     '-to', clip.end.toFixed(2),
     '-i', clip.video,
-    '-vf', paletteChain(fps),
+    '-vf', `${leadIn()},${paletteChain(fps)}`,
     '-loop', '0',
     out,
   ]);
@@ -76,18 +90,28 @@ export async function toGif(name: string, clip: Clip, fps = 10): Promise<void> {
  * input, which would cut the longer peer's story short. `tpad=stop_mode=clone`
  * freezes each pane's last frame so both run to the length of the longer one;
  * `-t` then trims the (now equal-length, padded) result back to that length.
+ *
+ * The lead-in is applied to the stacked result rather than per pane, so both
+ * panes hold the same opening frame, and `-t` allows for it — trimming to the
+ * clip length alone would cut exactly the hold back off again.
  */
 export async function hstackGif(
   name: string,
   left: Clip,
   right: Clip,
-  fps = 10
+  opts: { fps?: number; width?: number } = {}
 ): Promise<void> {
+  const { fps = 10, width } = opts;
   const out = path.join(DOCS_DIR, name);
   const leftDur = left.end - left.start;
   const rightDur = right.end - right.start;
   const total = Math.max(leftDur, rightDur);
   const pad = Math.ceil(Math.abs(leftDur - rightDur)) + 1;
+  // Downscale after the stack, before the palette, so the palette is generated
+  // from the pixels actually being written. Two phone panes is 864px wide, and
+  // the slides render it in a ~512px column — so anything past ~720 is bytes the
+  // viewer never sees.
+  const resize = width ? `scale=${width}:-1:flags=lanczos,` : '';
 
   await ffmpeg([
     '-ss', left.start.toFixed(2), '-to', left.end.toFixed(2), '-i', left.video,
@@ -95,8 +119,8 @@ export async function hstackGif(
     '-filter_complex',
     `[0:v]tpad=stop_mode=clone:stop_duration=${pad},pad=iw+4:ih:0:0:color=#c8c8c8[l];` +
       `[1:v]tpad=stop_mode=clone:stop_duration=${pad}[r];` +
-      `[l][r]hstack=inputs=2,${paletteChain(fps)}`,
-    '-t', total.toFixed(2),
+      `[l][r]hstack=inputs=2,${leadIn()},${resize}${paletteChain(fps)}`,
+    '-t', (total + LEAD_IN).toFixed(2),
     '-loop', '0',
     out,
   ]);

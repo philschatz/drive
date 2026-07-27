@@ -4,7 +4,6 @@ import { peerColor, peerDisplayName, usePresence } from '../shared/presence';
 import { DocumentTitleBar } from '../shared/DocumentTitleBar';
 import { HistorySlider } from '../shared/HistorySlider';
 import type { DocumentHistory } from '../shared/useDocumentHistory';
-import { usePresenceLog, PresenceLogTable } from '../shared/PresenceLog';
 import { SourceTree } from './SourceTree';
 import { validateDocument } from '../../shared/schemas';
 import { ValidationPanel } from '../shared/ValidationPanel';
@@ -13,7 +12,6 @@ import { sourcePath } from '../shared/doc-urls';
 import { hashHistory } from '../hash-history';
 import { Progress } from '@/components/ui/progress';
 import { Button } from '@/components/ui/button';
-import { JqPanel } from './JqPanel';
 import './source-viewer.css';
 
 type Path = (string | number)[];
@@ -76,12 +74,6 @@ function PatchTable({ patches }: { patches: any[] }) {
     </div>
   );
 }
-
-type ClipFormat = { type: string; size: number } & (
-  | { kind: 'text'; text: string }
-  | { kind: 'image'; dataUrl: string }
-  | { kind: 'binary' }
-);
 
 function ClipboardInspector() {
   const [collapsed, setCollapsed] = useState(true);

@@ -7,6 +7,15 @@ style: |
   section.tight { font-size: 22px; }
   section.tight h2 { font-size: 30px; margin-bottom: 0.35em; }
   section.tight li { margin: 0.2em 0; }
+
+  /* Screenshots and screencasts are split backgrounds. Inset them from the
+     slide edge and trace them with a soft shadow — drop-shadow follows the
+     contained bitmap rather than the figure box, so the shadow hugs the
+     screenshot itself and each one reads as a captured screen. */
+  section[data-marpit-advanced-background="background"] > div[data-marpit-advanced-background-container] > figure[style] {
+    margin: 32px !important;
+    filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.35)) drop-shadow(0 8px 18px rgba(0, 0, 0, 0.25)) !important;
+  }
 ---
 
 # Drive
@@ -19,7 +28,7 @@ style: |
 - Your documents live on your devices, not on someone's server
 - Shared only with the people you choose
 
-![h:300](homepage.png)
+![bg right:38% fit](homepage.png)
 
 ---
 
@@ -31,7 +40,7 @@ style: |
 - Install it straight from the browser; it runs standalone on your phone
 - Collaborate in real time, or edit offline and merge on reconnect
 
-![h:400](new-doc.gif)
+![bg right:38% fit](new-doc.gif)
 
 ---
 
@@ -65,7 +74,7 @@ Try it!
 - Same peer ids, same messages either way — the upgrade is invisible above the transport
 - A pair that can't punch through NAT just stays on the relay
 
-![h:340](connections.png)
+![bg right:38% fit](connections.png)
 
 ---
 
@@ -96,7 +105,7 @@ Try it!
 - Adding a device *or* a friend is the same move: scan a QR code
 - The QR carries a rendezvous channel id plus the key to decrypt it; the keyhive material is exchanged over that encrypted channel
 
-![h:280](linking-a-device.gif)
+![bg right:44% fit](linking-a-device.gif)
 
 ---
 
@@ -120,7 +129,18 @@ Try it!
 - A dot marks the field a peer is editing: **filled** for direct P2P, a **hollow ring** for relay
 - The field is greyed out letting a peer know it's being edited without stopping them
 
-![h:300](presence-updates.gif)
+![bg right:44% fit](presence-updates.gif)
+
+---
+
+## Presence in a spreadsheet
+
+<!-- _class: tight -->
+
+- Both peers pan and select freely; each sees the other's cell outlined and tagged, in that peer's own colour
+- Retype one input and every figure derived from it moves on both screens
+
+![bg right:44% fit](datagrid-presence.gif)
 
 ---
 
@@ -152,9 +172,8 @@ Try it!
 
 ---
 
-## Future: mobile app
+## Future: A real mobile app?
 
 - Better notifications — a PWA can't reliably wake up to say "someone edited this"
 - Background sync, so a phone stays current without the app open
 - Access to phone features: contacts, calendar, camera, files
-- The worker and crypto core stay as-is — only the shell changes

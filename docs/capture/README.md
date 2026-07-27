@@ -1,8 +1,8 @@
 # Regenerating the deck's images
 
 Every `.png` and `.gif` in `docs/` is produced by this directory — nothing here is
-hand-captured. `docs/presentation-brief.md` embeds five of them, and `npm run slides`
-copies the whole set into `dist/slides/`.
+hand-captured. `docs/slides.md` embeds five of them, and `npm run slides` copies the
+whole set into `dist/slides/`.
 
 ```bash
 npm run docs:capture                      # all eleven assets
@@ -42,11 +42,11 @@ documents in `src/client/home/examples/`, seeded via the empty home page's
 | `sharing.png` | A document's sharing page with two members |
 | `new-doc.gif` | FAB → type picker → naming a new task list → adding a task |
 | `timeline.gif` | Editing, then scrubbing the version-history slider |
-| `linking-a-device.gif` | Two devices: QR on one, the rendezvous ladder on the other |
-| `presence-updates.gif` | Two peers on one document: presence dots and live edits |
-| `add-and-share-with-friend.gif` | QR contact exchange, then sharing a document |
+| `linking-a-device.gif` | A device with a library of documents links a second one, which then receives them all |
+| `presence-updates.gif` | Two peers in the same task editor; the dot follows the other's field as it moves |
+| `add-and-share-with-friend.gif` | Sharing an open document with a new contact by QR, who then opens it |
 
-Referenced by `presentation-brief.md`: `homepage.png`, `new-doc.gif`, `connections.png`,
+Referenced by `slides.md`: `homepage.png`, `new-doc.gif`, `connections.png`,
 `linking-a-device.gif`, `presence-updates.gif`. The rest are kept current for future decks.
 
 ## Layout
@@ -95,3 +95,17 @@ pointer, which produces a cursor that jumps with no visible travel.
   start from a fresh context.
 - **Direct WebRTC is opportunistic.** `connections.png` prefers a `direct (P2P)` dot
   but falls back to `via relay` with a warning rather than failing.
+- **Do not downscale to save bytes — it costs them.** `hstackGif`'s `width` option
+  makes these *bigger*: lanczos turns crisp UI text into anti-aliased gradients, and
+  a GIF cannot compress those. `add-and-share-with-friend.gif` went 1.3 MB → 2.7 MB
+  at `width: 720`. Lower `fps` instead; that is the lever that works on flat UI.
+- **`video.path()` is a trap.** Playwright only guarantees a recording is on disk
+  once the whole *context* closes, and a capture still has work to do in that
+  context. `finishRecording` uses `saveAs()`, which waits; encoding from `path()`
+  intermittently fails with "No such file or directory".
+- **Sheets that open themselves.** The sharing page pops its QR invite automatically
+  when a document has no members and you have no contacts. Clicking "Add people" at
+  that moment hits the sheet's own full-screen overlay and *dismisses* it — the raw
+  `page.mouse` calls `tap()` uses skip actionability checks, so this fails silently.
+  If a flow mysteriously does nothing, suspect an overlay and check with
+  `locator.click()`, which reports the interception instead of swallowing it.
