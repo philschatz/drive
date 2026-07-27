@@ -8,7 +8,7 @@
  */
 
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
-import type { MemberRole } from '../shared/keyhive-types';
+import type { MemberRole } from '../../shared/keyhive-types';
 
 const ROLES: { role: MemberRole; icon: string; label: string; detail: string }[] = [
   { role: 'read', icon: 'visibility', label: 'Read', detail: 'Can view but not change' },

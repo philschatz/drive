@@ -805,7 +805,7 @@ describe('KeyhiveOps', () => {
       // bridge holds, so the membership nudge stops minting orphan rotation ops.
       // Security outcome is unchanged: after an add, the next tryEncrypt mints the
       // rotation itself via try_encrypt_content, which IS emitted and synced.
-      const { neutralizeForcePcsUpdate } = await import('../shared/keyhive-repo');
+      const { neutralizeForcePcsUpdate } = await import('./keyhive-repo');
       const { khA, opsA, syncAtoB, encrypt, decryptOnB } = await setupSyncedPair();
 
       neutralizeForcePcsUpdate(khA);

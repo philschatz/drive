@@ -15,7 +15,7 @@ import { idbDelPrefix, settingGet, settingSetSync, closeDb, CACHE_PREFIX } from 
 import { setFriendNamesDispatch, applyFriendNamesFromWorker } from './friend-names';
 import { setDeviceNamesDispatch, applyDeviceNamesFromWorker } from './device-names';
 import { generateDefaultDeviceName } from './lib/device-name';
-import type { ArchiveDocResult } from './shared/keyhive-types';
+import type { ArchiveDocResult } from '../shared/keyhive-types';
 import { startWebRTCBridge } from './webrtc-bridge';
 import { WorkerClient } from './worker-client';
 import type { RichTextOp, RichTextSpan } from '../shared/rich-text-ops';
@@ -774,8 +774,8 @@ export interface IdentityInfo {
   devices?: DeviceInfo[];
 }
 
-import type { MemberInfo, MemberRole } from './shared/keyhive-types';
-export type { MemberRole, IndividualMemberInfo, GroupMemberInfo, MemberInfo } from './shared/keyhive-types';
+import type { MemberInfo, MemberRole } from '../shared/keyhive-types';
+export type { MemberRole, IndividualMemberInfo, GroupMemberInfo, MemberInfo } from '../shared/keyhive-types';
 
 /** A contact card plus the sender's user-group id, for QR/URL linking & sharing. */
 export interface LinkPayload {

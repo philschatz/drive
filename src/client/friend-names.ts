@@ -1,4 +1,4 @@
-import type { MemberInfo } from './shared/keyhive-types';
+import type { MemberInfo } from '../shared/keyhive-types';
 
 // --- Dispatch hook (injected from automerge.ts to avoid circular imports) ---
 

@@ -6,7 +6,7 @@
 
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { getFriendName } from '../friend-names';
-import type { MemberInfo } from '../shared/keyhive-types';
+import type { MemberInfo } from '../../shared/keyhive-types';
 
 export function AddPeopleSheet({
   open,

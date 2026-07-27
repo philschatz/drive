@@ -21,7 +21,7 @@ import {
   changeRole,
   onKeyhiveStateChanged,
 } from '../shared/keyhive-api';
-import type { MemberInfo, MemberRole } from '../shared/keyhive-types';
+import type { MemberInfo, MemberRole } from '../../shared/keyhive-types';
 import { getFriendName, setFriendName, mergeCachedFriends } from '../friend-names';
 import { useDeviceStatuses, mostConnectedStatus, type DeviceStatus } from '../shared/use-devices';
 import { StatusDot } from '../shared/presence';

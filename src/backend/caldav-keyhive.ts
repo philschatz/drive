@@ -13,7 +13,7 @@
  */
 import { WebSocketClientAdapter } from '@automerge/automerge-repo-network-websocket';
 import { NodeFSStorageAdapter } from '@automerge/automerge-repo-storage-nodefs';
-import { KeyhiveOps } from '../client/keyhive-ops';
+import { KeyhiveOps } from '../shared/keyhive-ops';
 import { createKeyhiveRepo } from '../shared/keyhive-repo';
 import { ensureKeyhiveNodeShim, initSubductionNode } from './keyhive-node-shim';
 

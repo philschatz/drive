@@ -15,7 +15,7 @@ import { isRendezvousType } from '../shared/rendezvous-protocol';
 import { isWebRTCSignalType, type WebRTCSignalFrame } from '../shared/webrtc-signal';
 import { makeWebRTCRelayAdapter, type WebRTCRelayAdapter } from './webrtc-relay-adapter';
 import { RELAY_PEER_ID, PRODUCTION_RELAY_URL, isRelayLeaveFrame } from '../shared/relay-identity';
-import { errMsg } from './keyhive-ops';
+import { errMsg } from '../shared/keyhive-ops';
 import { idbKvStore } from './idb-kvstore';
 import { DriveEngine } from '../shared/drive-engine';
 import type { EngineHost, EngineNetwork } from '../shared/engine-host';

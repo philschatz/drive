@@ -3,7 +3,7 @@
  */
 
 import { getFriendName, setFriendName, removeFriendName, applyFriendNamesFromWorker, setFriendNamesDispatch, mergeCachedFriends } from './friend-names';
-import type { MemberInfo } from './shared/keyhive-types';
+import type { MemberInfo } from '../shared/keyhive-types';
 
 function group(agentId: string): MemberInfo {
   return { agentId, displayId: agentId, type: 'group', isMe: false, deviceIds: [] };

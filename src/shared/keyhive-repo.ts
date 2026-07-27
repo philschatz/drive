@@ -12,7 +12,7 @@
  * `export * from "@keyhive/keyhive/slim"` re-export doesn't resolve under the
  * backend tsconfig's moduleResolution, but every value is present at runtime.
  */
-import { KeyhiveOps } from '../client/keyhive-ops';
+import { KeyhiveOps } from './keyhive-ops';
 import { RELAY_PEER_ID } from './relay-identity';
 
 export interface CreateKeyhiveRepoOptions {

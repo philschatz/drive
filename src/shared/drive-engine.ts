@@ -11,9 +11,9 @@
 import { deepAssign } from './deep-assign';
 import { syncToTarget } from './sync-to-target';
 import { validateDocument } from './schemas';
-import { KeyhiveOps, bytesToBase64, base64ToBytes, errMsg } from '../client/keyhive-ops';
-import { LRU } from '../client/lru-cache';
-import { generateRendezvous, encryptString, decryptString } from '../client/rendezvous-crypto';
+import { KeyhiveOps, bytesToBase64, base64ToBytes, errMsg } from './keyhive-ops';
+import { LRU } from './lru-cache';
+import { generateRendezvous, encryptString, decryptString } from './rendezvous-crypto';
 import { formatBytes } from './format-bytes';
 import {
   RDV_SUB, RDV_UNSUB, RDV_MSG, RDV_PEER,

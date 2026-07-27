@@ -1,5 +1,5 @@
 import { Keyhive } from "@keyhive/keyhive/slim";
-import type { MemberRole, MemberInfo, ArchiveDocResult } from './shared/keyhive-types';
+import type { MemberRole, MemberInfo, ArchiveDocResult } from './keyhive-types';
 
 // Re-export these so the worker can use them without duplicating
 export function bytesToBase64(bytes: Uint8Array): string {

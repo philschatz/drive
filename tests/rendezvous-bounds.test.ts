@@ -8,14 +8,14 @@
  * Legitimate payloads (contact bundles ~25 KB) stay far under the cap.
  */
 
-jest.mock('../src/client/rendezvous-crypto', () => ({
+jest.mock('../src/shared/rendezvous-crypto', () => ({
   generateRendezvous: jest.fn(() => ({ rendezvousId: 'rid', key: 'k' })),
   encryptString: jest.fn(async () => new Uint8Array(0)),
   decryptString: jest.fn(async () => 'plaintext'),
 }));
 
 import { DriveEngine, RDV_MAX_DATA_BYTES } from '../src/shared/drive-engine';
-import { decryptString } from '../src/client/rendezvous-crypto';
+import { decryptString } from '../src/shared/rendezvous-crypto';
 import { RDV_MSG } from '../src/shared/rendezvous-protocol';
 
 /** Engine with one live rendezvous session (no init() — handleRendezvousFrame
