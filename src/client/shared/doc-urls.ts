@@ -2,7 +2,10 @@
  * Central builders for document URLs. All doc URLs are hash-based and type-free:
  * `#/d/<docId>[/<rest>]` — the document's `@type` selects the view (see DocRoute),
  * never the URL. `<rest>` is the plugin-specific deep-link remainder
- * (e.g. `events/<uid>`, `tasks/<uid>`, `sheets/<sid>/cells/<row>:<col>`).
+ * (e.g. `events/<uid>`, `tasks/<uid>`, `sheets/<sid>`).
+ *
+ * Transient selection state is deliberately absent: nothing mirrors the focused
+ * field into the hash, so `<rest>` only ever holds real navigation.
  */
 
 export const DOC_ROUTE_PREFIX = '/d';
@@ -15,6 +18,16 @@ export function docPath(docId: string, rest?: string): string {
 /** Href for a document, e.g. `#/d/<id>`. */
 export function docUrl(docId: string, rest?: string): string {
   return `#${docPath(docId, rest)}`;
+}
+
+/** Router-relative path for a document's sharing screen, e.g. `/d/<id>/share`. */
+export function sharePath(docId: string): string {
+  return docPath(docId, 'share');
+}
+
+/** Href for a document's sharing screen, e.g. `#/d/<id>/share`. */
+export function shareUrl(docId: string): string {
+  return `#${sharePath(docId)}`;
 }
 
 /** Encode a focus path (array of keys) as a `rest` string. */
@@ -32,24 +45,12 @@ export function sourceUrl(docId: string, path?: (string | number)[]): string {
   return `#${sourcePath(docId, path)}`;
 }
 
-function hrefFor(docId: string, rest?: string, query?: string): string {
-  const base = window.location.href.split('#')[0];
-  return `${base}${docUrl(docId, rest)}${query ?? ''}`;
-}
-
 /**
- * Record the current deep-link state in the URL without navigating (the router
- * only listens to hashchange/popstate, so these do not re-render routes; Back
- * still flows the new `rest` down through the router). `query` must include its
- * leading `?` (e.g. `?anchor=r1:c2`).
- *
- * replaceDocHash: transient state (focused field / selected cell) — no history entry.
- * pushDocHash: navigation-like state (switching sheets) — Back returns to it.
+ * Record navigation-like state (switching sheets) in the URL so Back returns to
+ * it. The router only listens to hashchange/popstate, so this does not re-render
+ * routes on the way in; Back still flows the new `rest` down through the router.
  */
-export function replaceDocHash(docId: string, rest?: string, query?: string): void {
-  window.history.replaceState(null, '', hrefFor(docId, rest, query));
-}
-
-export function pushDocHash(docId: string, rest?: string, query?: string): void {
-  window.history.pushState(null, '', hrefFor(docId, rest, query));
+export function pushDocHash(docId: string, rest?: string): void {
+  const base = window.location.href.split('#')[0];
+  window.history.pushState(null, '', `${base}${docUrl(docId, rest)}`);
 }

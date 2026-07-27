@@ -86,13 +86,17 @@ Per-peer transport is surfaced to the UI via the worker's `p2p-status` message �
 
 ### Routing
 
-`src/client/App.tsx` defines routes via preact-router:
+`src/client/App.tsx` defines hash routes via preact-router (custom `hashHistory`). Document URLs are **type-free**: `#/d/<docId>` for every doc type — the document's `@type` selects the view (see `DocRoute`), never the URL.
 
-- `/` → Home (document list)
-- `/calendars/:docId` → Calendar editor
-- `/tasks/:docId` → Task list editor
-- `/datagrids/:docId` → DataGrid editor
-- `/source/:docId` → Raw JSON document inspector
+- `#/` → Home (document list)
+- `#/d/:docId` → the editor for that document's `@type`
+- `#/d/:docId/share` → Sharing screen (members, roles, invites)
+- `#/source/:docId` → Raw JSON document inspector
+- `#/settings`, `#/contacts`, `#/add-friend/:cardData`, `#/link-device/:cardData`
+
+Routes are ranked by segment specificity, not JSX order, so the static `/d/:docId/share` wins over `DocRoute`'s `/d/:docId/:rest*`. Build doc URLs with the helpers in `src/client/shared/doc-urls.ts` (`docUrl`, `shareUrl`, `sourceUrl`) rather than string concatenation.
+
+**Transient state never goes in the URL.** `<rest>` carries only real navigation (e.g. the DataGrid's `sheets/<sheetId>`, pushed via `pushDocHash` so Back moves between sheets). The focused field / selected cell is broadcast as presence by `useFocusPathSync` and is deliberately *not* mirrored into the hash.
 
 ### CalDAV
 

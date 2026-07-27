@@ -1,18 +1,17 @@
 /**
  * Add Friend — bottom sheet.
  *
- * Opened contextually (Sharing panel, Settings, Contacts) instead of a route.
+ * Opened contextually (Sharing page, Settings, Contacts) instead of a route.
  * The rendezvous auto-starts on open (no "Start the process" button): once
  * keyhive + the relay socket are ready and a user group exists, it shows the
- * QR/link. When a friend completes the exchange, `onAdded` fires with their
- * user-group id so the caller can use them immediately (e.g. auto-select them
- * in the share dropdown). Closing the sheet unmounts RendezvousShare, which
- * cancels the rendezvous.
+ * QR/link. When a friend completes the exchange the sheet resolves itself with a
+ * native dialog — an alert if they sent a name, a prompt to supply one if they
+ * didn't — fires `onAdded` with their user-group id, and closes. Closing
+ * unmounts RendezvousShare, which cancels the rendezvous.
  */
 
-import { useState, useEffect } from 'preact/hooks';
+import { useState, useEffect, useRef } from 'preact/hooks';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
-import { Button } from '@/components/ui/button';
 import { getIdentity, ensureUserGroup, rendezvousCreateShare } from '../shared/keyhive-api';
 import { getContactName, setContactName } from '../contact-names';
 import { keyhiveReady, whenWsConnected } from '../shared/automerge';
@@ -31,20 +30,15 @@ export function AddFriendSheet({ open, onOpenChange, onAdded }: AddFriendSheetPr
   const [error, setError] = useState('');
   // ensureUserGroup + WS connect done → mount RendezvousShare (which stages the QR).
   const [ready, setReady] = useState(false);
-  // The friend we added back once the exchange completes; when they sent no name
-  // we prompt for one here (the sharer has no other chance to label them).
-  const [contact, setContact] = useState<{ groupId: string; hasName: boolean } | null>(null);
-  const [contactName, setContactNameInput] = useState('');
-  const [contactSaved, setContactSaved] = useState(false);
+  // The completion runs off a worker event, so guard against it resolving twice.
+  const handledRef = useRef(false);
 
   // Prepare the share as soon as the sheet opens (replaces "Start the process"),
   // and reset everything when it closes so the next open stages a fresh rendezvous.
   useEffect(() => {
     if (!open) {
       setReady(false);
-      setContact(null);
-      setContactNameInput('');
-      setContactSaved(false);
+      handledRef.current = false;
       setError('');
       return;
     }
@@ -69,18 +63,29 @@ export function AddFriendSheet({ open, onOpenChange, onAdded }: AddFriendSheetPr
     return () => { cancelled = true; };
   }, [open]);
 
-  const handleSaveContact = async () => {
-    if (!contact) return;
-    const trimmed = contactName.trim();
-    if (trimmed) {
-      try {
-        await setContactName(contact.groupId, trimmed);
-      } catch (err: any) {
-        setError('Could not save the name: ' + (err?.message ?? 'storage error'));
-        return;
+  /**
+   * The exchange completed. Settle the contact's name in one native dialog so
+   * the sheet can close itself, then hand the id to the caller.
+   */
+  const handleReceived = async ({ groupId, hasName }: { groupId: string; hasName: boolean }) => {
+    if (handledRef.current) return;
+    handledRef.current = true;
+    if (hasName) {
+      // The worker persisted the name before emitting the event, so the cache
+      // has it; fall back in case that push hasn't landed yet.
+      alert(`${getContactName(groupId) ?? 'Your friend'} was added.`);
+    } else {
+      const trimmed = prompt('Name this contact', '')?.trim();
+      if (trimmed) {
+        try {
+          await setContactName(groupId, trimmed);
+        } catch (err: any) {
+          setError('Could not save the name: ' + (err?.message ?? 'storage error'));
+        }
       }
     }
-    setContactSaved(true);
+    onAdded?.(groupId);
+    onOpenChange(false);
   };
 
   return (
@@ -113,34 +118,8 @@ export function AddFriendSheet({ open, onOpenChange, onAdded }: AddFriendSheetPr
               waitingLabel="Waiting for your friend to open the link…"
               transferLabel="Exchanging contact info…"
               doneLabel="Connected — you're now contacts."
-              onReceivedContact={(info) => { setContact(info); onAdded?.(info.groupId); }}
+              onReceivedContact={handleReceived}
             />
-
-            {contact && !contact.hasName && !contactSaved && (
-              <div className="mt-4">
-                <p className="text-sm text-muted-foreground mb-2">
-                  Your friend didn’t share a name. Add one so you can recognize them later.
-                </p>
-                <div className="flex gap-2">
-                  <input
-                    className="flex-1 text-sm p-2 rounded border border-border"
-                    value={contactName}
-                    onInput={(e: any) => setContactNameInput(e.currentTarget.value)}
-                    onKeyDown={(e: any) => { if (e.key === 'Enter') handleSaveContact(); }}
-                    placeholder="Enter a name for this contact..."
-                    autoFocus
-                  />
-                  <Button size="sm" onClick={handleSaveContact}>Save</Button>
-                </div>
-              </div>
-            )}
-
-            {contactSaved && (
-              <p className="text-sm text-green-600 mt-3">
-                <span className="material-symbols-outlined align-middle mr-1" style={{ fontSize: 16 }}>check_circle</span>
-                Saved.
-              </p>
-            )}
           </div>
         ) : (
           !error && <p className="text-sm text-muted-foreground">Preparing your share link…</p>

@@ -1,10 +1,9 @@
 import type { ComponentChildren } from 'preact';
-import { useEffect, useRef, useState } from 'preact/hooks';
+import { useEffect, useRef } from 'preact/hooks';
 import { ConnectionStatus } from './ConnectionStatus';
 import { type PresenceState } from './presence';
-import { AccessControlSheet } from '../components/AccessControl';
 import { useAccess } from './useAccess';
-import { sourceUrl } from './doc-urls';
+import { sourceUrl, sharePath, shareUrl } from './doc-urls';
 import { OverflowMenu, type OverflowMenuItem } from './OverflowMenu';
 import { MATERIAL_ORANGE } from './categorical-colors';
 
@@ -176,7 +175,6 @@ export function DocumentTitleBar<P extends PeerLike>({
   children?: ComponentChildren;
 }) {
   const { access } = useAccess(docId);
-  const [shareOpen, setShareOpen] = useState(false);
   const titleInputRef = useRef<HTMLInputElement>(null);
 
   // Bar layout is declared, not measured: undo/redo first, then the document's
@@ -219,7 +217,7 @@ export function DocumentTitleBar<P extends PeerLike>({
       icon: 'share',
       label: 'Sharing',
       title: 'Share & permissions',
-      onSelect: () => setShareOpen(true),
+      onSelect: () => { window.location.hash = sharePath(docId); },
     });
   }
   if (historyItem && historyPlacement === 'menu') menuItems.push(historyItem);
@@ -326,16 +324,16 @@ export function DocumentTitleBar<P extends PeerLike>({
         <ConnectionStatus peers={peers} peerTitle={peerTitle} />
 
         {/* Admins manage sharing, so they get the share button right on the
-            bar; other access levels find Share in the overflow menu. */}
+            bar; other access levels find Sharing in the overflow menu. */}
         {docId && isAdmin && (
-          <button
+          <a
+            href={shareUrl(docId)}
             aria-label="Share"
             title="Share & permissions"
             className="inline-flex items-center justify-center h-10 w-10 rounded-full state-layer shrink-0"
-            onClick={() => setShareOpen(true)}
           >
             <span className="material-symbols-outlined" style={{ fontSize: 20 }}>share</span>
-          </button>
+          </a>
         )}
 
         {/* Validation errors: a warning that takes you to the source editor,
@@ -360,16 +358,6 @@ export function DocumentTitleBar<P extends PeerLike>({
             for non-admins). Hidden entirely when everything fits. */}
         {menuItems.length > 0 && <OverflowMenu items={menuItems} />}
       </div>
-
-      {/* Share & Permissions sheet — opened from the overflow menu. */}
-      {docId && (
-        <AccessControlSheet
-          docId={docId}
-          access={access}
-          open={shareOpen}
-          onOpenChange={setShareOpen}
-        />
-      )}
     </div>
   );
 }

@@ -5,7 +5,7 @@
  * blurb, the empty state, and a row per device (icon, truncated agent id, role,
  * "This device" badge, and a remove button for non-self devices).
  *
- * Role editing mirrors the document Share & Permissions panel (AccessControl):
+ * Role editing parallels the document Sharing page (`sharing/SharingPage`):
  * an admin device sees a Read/Edit/Admin Select per device (with a self-demotion
  * confirmation); a non-admin device sees a static role label with no controls.
  */
@@ -26,7 +26,7 @@ export function DeviceList({ devices, onRemove, onChangeRole, statuses }: {
   statuses?: Record<string, DeviceStatus>;
 }) {
   // The current device is the "me" row; only an admin device can manage access —
-  // mirrors AccessControl's `myAccess === 'admin'` gate.
+  // mirrors the Sharing page's `myAccess === 'admin'` gate.
   const isAdmin = devices.find(d => d.isMe)?.role === 'admin';
 
   const handleChangeRole = (dev: DeviceInfo, newRole: string) => {

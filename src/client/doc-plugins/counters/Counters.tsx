@@ -266,9 +266,9 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
     setFocusedPath(path);
   }, []);
 
-  // Clear a stale field focus when the editor closes; sync presence + URL.
+  // Clear a stale field focus when the editor closes; sync presence.
   useEffect(() => { if (!editorState) setFocusedPath(null); }, [editorState]);
-  useFocusPathSync(docId, focusPath, broadcast);
+  useFocusPathSync(focusPath, broadcast);
 
   useEffect(() => {
     if (!docId) return;

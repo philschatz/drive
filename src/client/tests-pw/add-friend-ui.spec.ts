@@ -12,8 +12,21 @@ import { newPeer, waitFor, type Peer } from './support/peer';
  *     because its peers are pre-booted at '/').
  *
  * Both browsers must end up mutual contacts, and — since two fresh browsers have
- * no name set — each side must offer an input to name the (nameless) other.
+ * no name set — each side must raise a prompt to name the (nameless) other.
  */
+
+/**
+ * Answer the completion dialogs the add-friend flow raises: a prompt asking for
+ * the (nameless) friend's name, or an alert when they did send one. Must be
+ * attached before the flow can finish. Registering any handler opts out of
+ * Playwright's default auto-dismiss, so this has to cover every dialog type.
+ */
+function answerNamePrompt(peer: Pick<Peer, 'page'>, name: string) {
+  peer.page.on('dialog', (dialog) => {
+    if (dialog.type() === 'prompt') void dialog.accept(name);
+    else void dialog.accept();
+  });
+}
 
 /**
  * Open `url` in a brand-new, un-warmed context, exactly as a friend clicking the
@@ -22,13 +35,16 @@ import { newPeer, waitFor, type Peer } from './support/peer';
  * Unlike newPeer we do NOT await keyhiveReady before returning — that would mask
  * the cold-start race; `call`/`waitFor` below tolerate the not-yet-ready worker.
  */
-async function coldOpenLink(browser: Browser, name: string, url: string): Promise<Peer> {
+async function coldOpenLink(browser: Browser, name: string, url: string, promptAnswer?: string): Promise<Peer> {
   const context = await browser.newContext();
   const page = await context.newPage();
   page.on('console', (msg) => {
     if (msg.type() === 'error') console.log(`[${name}] console.error: ${msg.text()}`);
   });
   page.on('pageerror', (err) => console.log(`[${name}] pageerror: ${err.message}`));
+
+  // Before goto: doReceive() auto-runs on mount, so the dialog can fire early.
+  if (promptAnswer !== undefined) answerNamePrompt({ page }, promptAnswer);
 
   await page.goto(url);
   await page.waitForFunction(() => !!(window as any).__drive, undefined, { timeout: 60_000 });
@@ -66,10 +82,12 @@ test('two fresh browsers become mutual contacts via the add-friend link', async 
   let bob: Peer | undefined;
   try {
     alice = await newPeer(browser, 'alice');
+    // Neither peer has a name set, so both ends finish on a name prompt.
+    answerNamePrompt(alice, 'Bob');
     const url = await startShareAndGetLink(alice);
 
     // A different, cold browser opens the link — the receiver flow runs itself.
-    bob = await coldOpenLink(browser, 'bob', url);
+    bob = await coldOpenLink(browser, 'bob', url, 'Alice');
 
     // Each peer's own user-group id (the id a contact is keyed by).
     const { userGroupId: aliceGroup } = await alice.call('ensureUserGroup', { create: true });
@@ -94,40 +112,36 @@ test('two fresh browsers become mutual contacts via the add-friend link', async 
   }
 });
 
-test('each side can name a contact who sent no name', async ({ browser }) => {
+test('each side names a contact who sent no name, via the prompt', async ({ browser }) => {
   let alice: Peer | undefined;
   let bob: Peer | undefined;
-  const NAME_INPUT = 'Enter a name for this contact...';
   try {
-    // Neither peer sets a name, so neither transmits one during the exchange.
+    // Neither peer sets a name, so neither transmits one during the exchange —
+    // which is what makes both ends fall through to the naming prompt.
     alice = await newPeer(browser, 'alice');
+    answerNamePrompt(alice, 'Bob (from Alice)');
     const url = await startShareAndGetLink(alice);
-    bob = await coldOpenLink(browser, 'bob', url);
+    bob = await coldOpenLink(browser, 'bob', url, 'Alice (from Bob)');
 
     const { userGroupId: aliceGroup } = await alice.call('ensureUserGroup', { create: true });
     const { userGroupId: bobGroup } = await bob.call('ensureUserGroup', { create: true });
 
-    // Receiver side (Bob): the "name this contact" input is already offered.
-    const bobInput = bob.page.getByPlaceholder(NAME_INPUT);
-    await expect(bobInput).toBeVisible({ timeout: 30_000 });
-    await bobInput.fill('Alice (from Bob)');
-    await bob.page.getByRole('button', { name: 'Save' }).click();
+    // Receiver side (Bob): the prompt answer is saved against Alice's group.
     await waitFor(
       () => bob!.call('getAllContactNames'),
       (names) => names[aliceGroup!] === 'Alice (from Bob)',
       { label: 'bob named alice' },
     );
 
-    // Sharer side (Alice): she got no name for Bob, so an input must appear here too.
-    const aliceInput = alice.page.getByPlaceholder(NAME_INPUT);
-    await expect(aliceInput).toBeVisible({ timeout: 30_000 });
-    await aliceInput.fill('Bob (from Alice)');
-    await alice.page.getByRole('button', { name: 'Save' }).click();
+    // Sharer side (Alice): she got no name for Bob, so she is prompted too.
     await waitFor(
       () => alice!.call('getAllContactNames'),
       (names) => names[bobGroup!] === 'Bob (from Alice)',
       { label: 'alice named bob' },
     );
+
+    // Both dialogs resolved themselves: Alice's sheet closed behind them.
+    await expect(alice.page.locator('input[readonly]')).toHaveCount(0);
   } finally {
     await Promise.all([alice?.close(), bob?.close()].filter(Boolean) as Promise<void>[]);
   }

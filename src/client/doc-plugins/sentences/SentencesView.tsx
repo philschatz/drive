@@ -115,9 +115,7 @@ export function SentencesView({ docId, readOnly }: { docId?: string; rest?: stri
     return () => { cancelled = true; };
   }, [docId, editMode, selState?.from, selState?.to]);
 
-  useFocusPathSync(docId, editMode ? ['content'] : undefined, broadcast, {
-    presencePath: editMode ? (cursorPath ?? ['content']) : null,
-  });
+  useFocusPathSync(editMode ? (cursorPath ?? ['content']) : null, broadcast);
 
   // Peers' cursors → indices (re-resolved when peers broadcast or the doc
   // changes, so the lines track surrounding edits) → colored carets in the

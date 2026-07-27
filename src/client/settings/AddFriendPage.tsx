@@ -8,7 +8,9 @@
  *   /#/add-friend/<base64url-deflated-card> ← legacy: bundle embedded in the URL.
  *
  * Flow: pull the contact card (via rendezvous or the URL), receiveContactCard to
- * add them as a known contact, then let the user assign a human-readable name.
+ * add them as a known contact, then settle their name in a native dialog — an
+ * alert if they sent one, a prompt to supply one if they didn't — and return
+ * Home. Only the failure path stays on screen, so it can offer a retry.
  */
 
 import { useState, useCallback, useEffect } from 'preact/hooks';
@@ -78,11 +80,6 @@ function decodeFriendData(b64url: string): { cardJson: string; displayName?: str
 export function AddFriendPage({ cardData }: AddFriendPageProps) {
   const [status, setStatus] = useState('');
   const [error, setError] = useState<string | null>(null);
-  // A contact is identified by its user-group id (its share target), never by a
-  // bare individual device id.
-  const [contactGroupId, setContactGroupId] = useState<string | null>(null);
-  const [name, setName] = useState('');
-  const [saved, setSaved] = useState(false);
   const [processing, setProcessing] = useState(false);
   const [phase, setPhase] = useState<RendezvousStatus | null>(null);
   const [transferDetail, setTransferDetail] = useState<string>();
@@ -153,9 +150,15 @@ export function AddFriendPage({ cardData }: AddFriendPageProps) {
         throw new Error('This contact is not a group \u2014 ask them to open Settings and show a fresh friend QR/link.');
       }
       // Identify the contact by its user-group id, never the individual device id.
-      setContactGroupId(cardResult.userGroupId);
-      if (displayName) setName(displayName);
-      setStatus('You added each other. Give them a name so you can recognize them later.');
+      if (displayName) {
+        alert(`${displayName} was added.`);
+      } else {
+        const trimmed = prompt('Name this contact', '')?.trim();
+        // Inside the try: a storage failure surfaces as the error screen rather
+        // than bouncing the user Home with nothing shown.
+        if (trimmed) await setContactName(cardResult.userGroupId, trimmed);
+      }
+      window.location.hash = '/';
     } catch (err: any) {
       setError(err.message || 'Failed to add contact');
     } finally {
@@ -164,19 +167,6 @@ export function AddFriendPage({ cardData }: AddFriendPageProps) {
     // `rdv` is derived from cardData; depending on it would rebuild this each render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cardData]);
-
-  const handleSave = async () => {
-    if (!contactGroupId) return;
-    if (name.trim()) {
-      try {
-        await setContactName(contactGroupId, name.trim());
-      } catch (err: any) {
-        setError(`Failed to save contact: ${err?.message ?? 'storage error'}`);
-        return;
-      }
-    }
-    setSaved(true);
-  };
 
   // Auto-start once when the page mounts with card data.
   useEffect(() => { doReceive(); }, [doReceive]);
@@ -202,43 +192,6 @@ export function AddFriendPage({ cardData }: AddFriendPageProps) {
             </Button>
             <Button variant="outline" onClick={() => { window.location.hash = '/'; }}>
               Home
-            </Button>
-          </div>
-        </div>
-      ) : saved ? (
-        <div>
-          <p className="text-sm text-green-600 font-medium mb-4">
-            <span className="material-symbols-outlined align-middle mr-1" style={{ fontSize: 16 }}>check_circle</span>
-            {name.trim() ? `You and ${name.trim()} are now contacts.` : "You're now contacts."}
-          </p>
-          <p className="text-xs text-muted-foreground mb-4">
-            You added each other in one step — you can both share documents from any
-            document's sharing panel.
-          </p>
-          <Button variant="outline" onClick={() => { window.location.hash = '/'; }}>
-            Home
-          </Button>
-        </div>
-      ) : contactGroupId ? (
-        <div>
-          <p className="text-sm text-green-600 font-medium mb-4">
-            <span className="material-symbols-outlined align-middle mr-1" style={{ fontSize: 16 }}>check_circle</span>
-            Contact received
-          </p>
-          <p className="text-sm text-muted-foreground mb-3">{status}</p>
-          <div className="mb-4">
-            <input
-              className="w-full text-sm p-2 rounded border border-border"
-              value={name}
-              onInput={(e: any) => setName(e.currentTarget.value)}
-              onKeyDown={(e: any) => { if (e.key === 'Enter') handleSave(); }}
-              placeholder="Enter a name for this contact..."
-              autoFocus
-            />
-          </div>
-          <div className="flex gap-2 justify-center">
-            <Button variant="default" onClick={handleSave}>
-              {name.trim() ? 'Save' : 'Skip'}
             </Button>
           </div>
         </div>

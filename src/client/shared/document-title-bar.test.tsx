@@ -41,11 +41,6 @@ jest.mock('./keyhive-api', () => ({
   revokeMember: jest.fn(),
 }));
 
-jest.mock('../components/AccessControl', () => ({
-  AccessControl: () => null,
-  AccessControlSheet: () => null,
-}));
-
 let mockAccessReturn = { access: null, canEdit: true, loaded: true };
 jest.mock('./useAccess', () => ({
   useAccess: () => mockAccessReturn,
@@ -227,12 +222,13 @@ describe('DocumentTitleBar', () => {
     expect(backLink.getAttribute('href')).toBe('#/');
   });
 
-  it('shows the inline share button for admins (no overflow Share item)', () => {
+  it('links admins straight to the sharing page (no overflow Share item)', () => {
     mockAccessReturn = { access: 'admin', canEdit: true, loaded: true };
     render(<DocumentTitleBar icon="grid" title="Test" docId="doc-123" />);
-    const btn = screen.getByLabelText('Share');
-    expect(btn.tagName).toBe('BUTTON');
-    // Exactly one Share surface — the inline button, not a duplicate menu item.
+    const link = screen.getByLabelText('Share');
+    expect(link.tagName).toBe('A');
+    expect(link.getAttribute('href')).toBe('#/d/doc-123/share');
+    // Exactly one Share surface — the inline link, not a duplicate menu item.
     expect(screen.getAllByTitle('Share & permissions').length).toBe(1);
   });
 

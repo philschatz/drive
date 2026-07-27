@@ -6,18 +6,16 @@ const DataGrid = lazyView(() => import('./DataGrid').then(m => m.DataGrid));
 
 const sid = () => Math.random().toString(36).slice(2, 10);
 
-/** The grid's sheet selection rides in the URL as `sheets/<sheetId>[/<rest>]`.
- * Split it out of the generic rest so DataGrid keeps its dedicated sheetId prop.
- * Must be recomputed every render so back/forward-driven rest changes keep
- * reaching DataGrid's sheet-switch effect. */
-function splitGridRest(rest?: string): { sheetId?: string; rest?: string } {
-  const m = rest?.match(/^sheets\/([^/]+)(?:\/(.*))?$/);
-  return m ? { sheetId: m[1], rest: m[2] || undefined } : { rest };
+/** The grid's sheet selection rides in the URL as `sheets/<sheetId>`, the only
+ * grid state the URL carries. Pull it out of the generic rest so DataGrid keeps
+ * its dedicated sheetId prop. Must be recomputed every render so
+ * back/forward-driven rest changes keep reaching DataGrid's sheet-switch effect. */
+function gridSheetId(rest?: string): string | undefined {
+  return rest?.match(/^sheets\/([^/]+)/)?.[1];
 }
 
 function DataGridView(p: DocViewProps) {
-  const g = splitGridRest(p.rest);
-  return <DataGrid docId={p.docId} sheetId={g.sheetId} rest={g.rest} readOnly={p.readOnly} />;
+  return <DataGrid docId={p.docId} sheetId={gridSheetId(p.rest)} readOnly={p.readOnly} />;
 }
 
 export const dataGridPlugin: DocTypePlugin = {

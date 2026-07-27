@@ -208,9 +208,9 @@ export function Tasks({ docId, rest, readOnly }: { docId?: string; rest?: string
     setFocusedPath(path);
   }, []);
 
-  // Clear a stale field focus when the editor closes; sync presence + URL.
+  // Clear a stale field focus when the editor closes; sync presence.
   useEffect(() => { if (!editorState) setFocusedPath(null); }, [editorState]);
-  useFocusPathSync(docId, focusPath, broadcast);
+  useFocusPathSync(focusPath, broadcast);
 
   const peerFocusedFields = useMemo(() => {
     const result: Record<string, PeerFieldInfo> = {};

@@ -18,6 +18,7 @@ const LinkDevicePage = lazyView(() => import('./settings/LinkDevicePage').then(m
 const AddFriendPage = lazyView(() => import('./settings/AddFriendPage').then(m => m.AddFriendPage));
 const AllCalendars = lazyView(() => import('./doc-plugins/calendar/AllCalendars').then(m => m.AllCalendars));
 const SourceViewer = lazyView(() => import('./source/SourceViewer').then(m => m.SourceViewer));
+const SharingPage = lazyView(() => import('./sharing/SharingPage').then(m => m.SharingPage));
 
 export function App() {
   return (
@@ -38,6 +39,9 @@ export function App() {
         <LinkDevicePage path="/link-device/:cardData" />
         <AddFriendPage path="/add-friend/:cardData" />
         <AllCalendars path="/calendars/" />
+        {/* Ranked above the DocRoute wildcard below: preact-router scores a
+            static segment higher than `:rest*`, regardless of JSX order. */}
+        <SharingPage path="/d/:docId/share" />
         <DocRoute path="/d/:docId/:rest*" />
         <DocRoute path="/d/:docId" />
         <SourceViewer path="/source/:docId/:rest*" />

@@ -94,9 +94,9 @@ function CalendarInner({ docId, readOnly, initialEventId }: { docId: string; rea
     setFocusedPath(path);
   }, []);
 
-  // Clear a stale field focus when the editor closes; sync presence + URL.
+  // Clear a stale field focus when the editor closes; sync presence.
   useEffect(() => { if (!editorState) setFocusedPath(null); }, [editorState]);
-  useFocusPathSync(docId, focusPath, broadcast);
+  useFocusPathSync(focusPath, broadcast);
 
   useEffect(() => {
     if (!docId) return;

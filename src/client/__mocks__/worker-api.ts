@@ -15,7 +15,7 @@
  *   (api as any).__setDoc('doc1', { '@type': 'TaskList', name: 'X', tasks: {} });
  *
  * `shared/keyhive-api` is a thin re-export of this module, so mocking here also
- * covers useAccess / AccessControl.
+ * covers useAccess / the Sharing page.
  */
 import { compile } from '../../shared/jq';
 import { deepAssign as realDeepAssign } from '../../shared/deep-assign';

@@ -1,6 +1,6 @@
 /**
- * Shared access-level icon, used by the document topbar (AccessControl trigger) and
- * the home page rows so both render the same glyph for a given keyhive access level.
+ * Shared access-level icon, used by the document topbar and the home page rows so
+ * both render the same glyph for a given keyhive access level.
  *
  * `null` explicitly means "no access" (revoked / not a member). Any other unrecognized
  * value throws — we fail fast on a bad/typo'd access string rather than silently

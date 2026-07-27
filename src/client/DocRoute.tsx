@@ -26,8 +26,8 @@ export function DocRoute({ docId, rest }: { docId?: string; rest?: string; path?
       settingSet('last-opened-doc', url).catch(() => {});
     };
     record();
-    // Plugins update rest/query via replaceDocHash/pushDocHash without
-    // re-rendering this route, so track hash changes while mounted.
+    // Plugins update rest via pushDocHash without re-rendering this route,
+    // so track hash changes while mounted.
     window.addEventListener('hashchange', record);
     return () => window.removeEventListener('hashchange', record);
   }, [docId]);

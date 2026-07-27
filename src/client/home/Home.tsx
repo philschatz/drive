@@ -1,5 +1,4 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'preact/hooks';
-import { Suspense } from 'preact/compat';
 import { usePeerList } from '../shared/automerge';
 import { ConnectionStatus } from '../shared/ConnectionStatus';
 import { createDoc, updateDoc, subscribeQuery, fetchDocList, archiveDoc, onDocListUpdated, onUnseenChangesUpdated, getUnseenChanges, HOME_SUMMARY_QUERY } from '../worker-api';
@@ -11,15 +10,14 @@ import { Fab } from '@/components/ui/fab';
 import { AccessIcon } from '@/components/AccessIcon';
 import { OverflowMenu, type OverflowMenuItem } from '../shared/OverflowMenu';
 import { useLongPress } from '../shared/useLongPress';
-import { lazyView } from '@/shared/lazy-view';
 import { CreateDocSheet, type ImportKind } from './CreateDocSheet';
-import { DocActionsSheet, type DocActionsTarget } from './DocActionsSheet';
+import { DocActionsSheet } from './DocActionsSheet';
 import dayjs from 'dayjs';
 import relativeTimePlugin from 'dayjs/plugin/relativeTime';
 
 dayjs.extend(relativeTimePlugin);
 import { iconForType, docTypeLabel, type DocTypePlugin } from '@/doc-plugins';
-import { docUrl } from '@/shared/doc-urls';
+import { docUrl, shareUrl } from '@/shared/doc-urls';
 import { relativeTime } from '../../shared/relative-time';
 import { settingSet, settingSetSync } from '../idb-storage';
 import type { ImportProgress } from './import-docs';
@@ -27,10 +25,6 @@ import { useInstallNudge } from './install-nudge';
 
 declare const __APP_VERSION__: string;
 declare const __BUILD_TIME__: string;
-
-// Lazy: the share sheet drags in the add-friend flow (pako, qrcode) — keep
-// that out of the main chunk; it loads when a share sheet first opens.
-const AccessControlSheet = lazyView(() => import('@/components/AccessControl').then(m => m.AccessControlSheet));
 
 interface DocEntry {
   type: string;
@@ -120,7 +114,6 @@ export function Home({ path }: { path?: string }) {
   // Share / Rename follow-ups they open.
   const [createOpen, setCreateOpen] = useState(false);
   const [actionsEntry, setActionsEntry] = useState<DocEntry | null>(null);
-  const [shareEntry, setShareEntry] = useState<DocActionsTarget | null>(null);
   const repoPeers = usePeerList();
 
   useEffect(() => { document.title = 'Automerge Documents'; }, []);
@@ -446,11 +439,11 @@ export function Home({ path }: { path?: string }) {
         }}
       />
 
-      {/* Long-press / kebab → per-doc actions, with Share & Rename follow-ups */}
+      {/* Long-press / kebab → per-doc actions, with Rename as a follow-up */}
       <DocActionsSheet
         entry={actionsEntry}
         onOpenChange={open => { if (!open) setActionsEntry(null); }}
-        onShare={setShareEntry}
+        onShare={e => { window.location.hash = shareUrl(e.documentId); }}
         onRename={e => {
           const name = prompt('Rename', e.name || 'Untitled');
           if (name === null) return;
@@ -464,16 +457,6 @@ export function Home({ path }: { path?: string }) {
           }
         }}
       />
-      {shareEntry && (
-        <Suspense fallback={null}>
-          <AccessControlSheet
-            docId={shareEntry.documentId}
-            access={shareEntry.access}
-            open
-            onOpenChange={open => { if (!open) setShareEntry(null); }}
-          />
-        </Suspense>
-      )}
     </div>
   );
 }

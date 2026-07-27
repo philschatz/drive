@@ -59,32 +59,10 @@ const CUSTOM_FN_NAMES = [
   'TRIANGULAR', 'UNIFORM', 'UNIQUE', 'WEIBULL',
 ];
 
-function getAnchorFromHash(): string | null {
-  const hash = window.location.hash;
-  const q = hash.indexOf('?');
-  if (q < 0) return null;
-  return new URLSearchParams(hash.slice(q + 1)).get('anchor');
-}
-
-function parseCellRef(cellId: string, anchorId?: string | null) {
-  const sep = cellId.indexOf(':');
-  const rowId = cellId.slice(0, sep);
-  const colId = cellId.slice(sep + 1);
-  if (anchorId) {
-    const aSep = anchorId.indexOf(':');
-    return { rowId, colId, anchorRowId: anchorId.slice(0, aSep), anchorColId: anchorId.slice(aSep + 1) };
-  }
-  return { rowId, colId };
-}
-
-export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; sheetId?: string; rest?: string; readOnly?: boolean; path?: string }) {
-  // Parse cellId from the rest wildcard: "cells/{rowId}:{colId}" → "{rowId}:{colId}"
-  const cellId = rest?.startsWith('cells/') ? rest.slice(6).split('/')[0] : undefined;
+export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId?: string; readOnly?: boolean; path?: string }) {
   // Read initial sheet from URL — prefer router-provided sheetId, fall back to parsing hash
   const initialSheetId = sheetId
     || (docId ? window.location.hash.match(/\/sheets\/([^/?#]+)/)?.[1] : undefined);
-  // Capture initial cell from router prop (resolved after sheet data loads)
-  const [initialCellId] = useState(cellId);
   const [gridName, setGridName] = useState('Spreadsheet');
   const [, setTick] = useState(0);
   const [selectedCell, setSelectedCell] = useState<[number, number] | null>(null);
@@ -133,7 +111,6 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
   const errorMessagesRef = useRef<Map<string, string>>(new Map());
   const spillTargetsRef = useRef<Set<string>>(new Set());
   const activeSheetUnsubRef = useRef<(() => void) | null>(null);
-  const pendingCellRef = useRef<{ rowId: string; colId: string; anchorRowId?: string; anchorColId?: string } | null>(null);
   const [syncing, setSyncing] = useState(false);
   const titleFocusedRef = useRef(false);
   const editFromBarRef = useRef(false);
@@ -1188,10 +1165,6 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
           bridge.watch(docId, activeSheet);
           subscribeToSheet(activeSheet);
         }
-        // Queue initial cell selection from URL (resolved after sheet data loads)
-        if (initialCellId) {
-          pendingCellRef.current = parseCellRef(initialCellId, getAnchorFromHash());
-        }
       }
 
       setRawDoc(result);
@@ -1216,27 +1189,7 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
     };
   }, [docId]);
 
-  // Resolve pending cell selection once row/col IDs are available
-  useEffect(() => {
-    if (visibleRowIds.length === 0 || visibleColIds.length === 0) return;
-    const pending = pendingCellRef.current;
-    if (pending) {
-      const row = visibleRowIds.indexOf(pending.rowId);
-      const col = visibleColIds.indexOf(pending.colId);
-      if (row < 0 || col < 0) { pendingCellRef.current = null; return; }
-      setSelectedCell([col, row]);
-      if (pending.anchorRowId && pending.anchorColId) {
-        const ar = visibleRowIds.indexOf(pending.anchorRowId);
-        const ac = visibleColIds.indexOf(pending.anchorColId);
-        if (ar >= 0 && ac >= 0) setSelectionAnchor([ac, ar]);
-      }
-      pendingCellRef.current = null;
-    }
-    // No default selection: with no cell in the URL the grid opens in
-    // overview mode (selectedCell === null).
-  }, [visibleRowIds, visibleColIds]);
-
-  // Automerge path to the focused cell (used for both URL sync and Edit Source link)
+  // Automerge path to the focused cell (drives presence and the Edit Source link)
   const focusPath: (string | number)[] | undefined = useMemo(() => {
     if (!currentSheetId) return undefined;
     if (!selectedCell || visibleRowIds.length === 0 || visibleColIds.length === 0) return ['sheets', currentSheetId];
@@ -1245,30 +1198,13 @@ export function DataGrid({ docId, sheetId, rest, readOnly }: { docId?: string; s
     return ['sheets', currentSheetId, 'cells', `${visibleRowIds[row]}:${visibleColIds[col]}`];
   }, [selectedCell, visibleRowIds, visibleColIds, currentSheetId]);
 
-  // Sync selection → presence broadcast + URL + Edit Source link
-  // All three derive from focusPath (the primary selected cell).
-  // The URL additionally encodes the range anchor as a query param (?anchor=rowId:colId);
-  // presence only tracks the primary cell since PresenceState.focusedField is a single path.
-  let anchorQuery: string | undefined;
-  if (selectionAnchor && selectedCell) {
-    const [ac, ar] = selectionAnchor;
-    if (ar < visibleRowIds.length && ac < visibleColIds.length) {
-      anchorQuery = `?anchor=${visibleRowIds[ar]}:${visibleColIds[ac]}`;
-    }
-  }
-  // (docId gated on focusPath: while the sheet is still loading we must not
-  // clear the URL's cell path — pendingCellRef still has to resolve it.)
-  useFocusPathSync(focusPath ? docId : null, focusPath, broadcast, {
-    query: anchorQuery,
-    presencePath: focusPath && focusPath.length > 2 ? focusPath : null,
-  });
+  // Broadcast the selected cell as presence. Only a real cell counts — a
+  // sheet-only path (length 2) means nothing is selected, so peers see null.
+  useFocusPathSync(focusPath && focusPath.length > 2 ? focusPath : null, broadcast);
 
   // Handle sheetId prop changes from back/forward navigation
   useEffect(() => {
     if (!sheetId || sheetId === currentSheetId) return;
-    if (cellId) {
-      pendingCellRef.current = parseCellRef(cellId, getAnchorFromHash());
-    }
     handleSelectSheet(sheetId, /* skipUrlUpdate */ true);
   }, [sheetId]);
 
