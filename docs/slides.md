@@ -19,7 +19,7 @@ style: |
 - Your documents live on your devices, not on someone's server
 - Shared only with the people you choose
 
-![homepage](homepage.png)
+![h:300](homepage.png)
 
 ---
 
@@ -96,7 +96,7 @@ Try it!
 - Adding a device *or* a friend is the same move: scan a QR code
 - The QR carries a rendezvous channel id plus the key to decrypt it; the keyhive material is exchanged over that encrypted channel
 
-![h:340](linking-a-device.gif)
+![h:280](linking-a-device.gif)
 
 ---
 
@@ -118,7 +118,7 @@ Try it!
 - A peer's presence is a **path into the document** (e.g. `['events', uid, 'title']`), never screen coordinates
 - So any view can render it — the calendar, the grid, and the raw JSON editor all highlight the same node
 - A dot marks the field a peer is editing: **filled** for direct P2P, a **hollow ring** for relay
-- A user's devices collapse into one identity and color
+- The field is greyed out letting a peer know it's being edited without stopping them
 
 ![h:300](presence-updates.gif)
 

@@ -36,13 +36,23 @@ export function ConnectionStatus<P extends PeerLike>({
     <>
       {/* One button: peer dots + status icon — tapping either opens the sheet.
           (The text label was pure noise on a narrow bar; the accessible name
-          still reads "Connected"/"Disconnected".) */}
+          still reads "Connected"/"Disconnected".)
+
+          Disconnected from the relay there are no peers and no transports to
+          report, so the button is disabled (dimmed to the MD3 38% disabled
+          opacity) rather than recoloured — the greyed-out control is the
+          offline signal. */}
       <button
         aria-label={connected ? 'Connected' : 'Disconnected'}
-        className={`inline-flex items-center gap-2 cursor-pointer hover:opacity-80 ${className}`}
+        disabled={!connected}
+        className={
+          'inline-flex items-center gap-2 ' +
+          (connected ? 'cursor-pointer hover:opacity-80 ' : 'cursor-default opacity-[0.38] ') +
+          className
+        }
         title={connected
           ? 'Connected to relay. Tap for peer details.'
-          : 'Not connected to relay. Tap for peer details.'}
+          : 'Not connected to relay.'}
         onClick={() => setOpen(true)}
       >
         {/* Peer dots — clipped to ~4 dots on narrow screens. Devices of the same user
@@ -64,7 +74,7 @@ export function ConnectionStatus<P extends PeerLike>({
           </div>
         )}
         <span
-          className={`material-symbols-outlined shrink-0 ${connected ? 'text-on-surface-variant' : 'text-error'}`}
+          className="material-symbols-outlined shrink-0 text-on-surface-variant"
           style={{ fontSize: 20 }}
           aria-hidden="true"
         >
@@ -80,7 +90,7 @@ export function ConnectionStatus<P extends PeerLike>({
 
           <div className="mt-3 flex items-center gap-2 text-sm">
             <span
-              className={`material-symbols-outlined shrink-0 ${connected ? 'text-on-surface-variant' : 'text-error'}`}
+              className="material-symbols-outlined shrink-0 text-on-surface-variant"
               style={{ fontSize: 20 }}
               aria-hidden="true"
             >

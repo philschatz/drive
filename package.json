@@ -21,6 +21,7 @@
     "coverage": "npm run test:coverage && npm run coverage:merge",
     "test:pw": "playwright test",
     "test:pw:open": "playwright test --ui",
+    "docs:capture": "playwright test -c docs/capture/playwright.config.ts",
     "stop": "pkill -f 'ts-node.*serve' || true",
     "slides": "mkdir -p dist/slides && cp docs/*.png docs/*.gif dist/slides/ && marp --no-stdin docs/slides.md -o dist/slides/index.html"
   },

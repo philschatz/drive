@@ -236,7 +236,7 @@ export function DocumentTitleBar<P extends PeerLike>({
   return (
     <div
       className={
-        'flex items-center gap-1 pl-1 pr-1 min-h-14 w-full bg-surface transition-transform duration-200' +
+        'flex items-center gap-1 pl-1 pr-1 min-h-14 w-full bg-page transition-transform duration-200' +
         (sticky ? ' sticky top-0 z-20' : '') +
         (hidden ? ' -translate-y-full' : '')
       }

@@ -37,7 +37,7 @@ export function VersionHistorySheet({ open, onOpenChange, history }: VersionHist
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="bottom" className="max-h-[70vh] flex flex-col">
+      <SheetContent side="bottom" className="max-h-[35vh] flex flex-col">
         <SheetHeader>
           <SheetTitle>Version history ({changeCount})</SheetTitle>
         </SheetHeader>

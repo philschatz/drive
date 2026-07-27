@@ -114,6 +114,21 @@ describe('DocumentTitleBar', () => {
     expect(screen.getByLabelText('Disconnected').textContent).toBe('wifi_off');
   });
 
+  // Offline there are no peers or transports to show, so the status button is
+  // disabled — its greyed-out state is the offline signal, and no browser
+  // dispatches a click from it, so the peer sheet can't be opened. (jsdom's
+  // fireEvent does dispatch on disabled buttons, so asserting "no sheet opens"
+  // here would test jsdom, not the app — the `disabled` flag is the contract.)
+  it('disables the status button when not connected', () => {
+    mockUseConnectionStatus.mockReturnValue(true);
+    render(<DocumentTitleBar icon="grid" title="Test" />);
+    expect((screen.getByLabelText('Connected') as HTMLButtonElement).disabled).toBe(false);
+
+    mockUseConnectionStatus.mockReturnValue(false);
+    render(<DocumentTitleBar icon="grid" title="Test" />);
+    expect((screen.getByLabelText('Disconnected') as HTMLButtonElement).disabled).toBe(true);
+  });
+
   it('renders peer dots for other peers', () => {
     const peers = [
       { peerId: 'self-peer-id' },

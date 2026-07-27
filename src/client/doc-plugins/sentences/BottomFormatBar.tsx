@@ -76,7 +76,7 @@ export function BottomFormatBar({
   return (
     <>
       <div
-        className="fixed left-0 right-0 z-20 bg-surface flex items-center gap-0.5 px-1 min-h-14 overflow-x-auto"
+        className="fixed left-0 right-0 z-20 bg-page flex items-center gap-0.5 px-1 min-h-14 overflow-x-auto"
         style={{
           bottom: keyboardInset,
           borderTop: '1px solid var(--md-sys-color-outline-variant)',

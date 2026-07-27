@@ -53,10 +53,11 @@ type Side = "top" | "bottom" | "left" | "right";
 
 const sideClasses: Record<Side, string> = {
   top: "inset-x-0 top-0 border-b bg-background rounded-b-none",
-  // Material bottom sheet: rounded top, raised surface tone, elevation, safe-area
-  // inset, slide-up entrance. `max-h-[85vh]` is the common per-consumer default.
+  // Material bottom sheet: rounded top, elevation, safe-area inset, slide-up
+  // entrance. `max-h-[85vh]` is the common per-consumer default. `bg-surface` is
+  // lighter than the grey page (`bg-page`), which is what makes it read as raised.
   bottom:
-    "inset-x-0 bottom-0 bg-surface-container-low rounded-t-[28px] elevation-3 " +
+    "inset-x-0 bottom-0 bg-surface rounded-t-[28px] elevation-3 " +
     "pb-[env(safe-area-inset-bottom)] animate-[slideUp_220ms_cubic-bezier(0.05,0.7,0.1,1)]",
   left: "inset-y-0 left-0 h-full w-3/4 border-r bg-background sm:max-w-sm",
   right: "inset-y-0 right-0 h-full w-3/4 border-l bg-background sm:max-w-sm",
