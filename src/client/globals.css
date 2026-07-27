@@ -1,6 +1,6 @@
 @import "tailwindcss";
 @import "material-symbols/outlined.css";
-@source "./shared";
+@source "./ui";
 
 @custom-variant dark (&:is(.dark *));
 

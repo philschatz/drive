@@ -8,7 +8,7 @@ import { existsSync } from 'fs';
  * localStorage = separate peers) against the built app served by the production
  * server (`npm start`), which also attaches the in-memory WebSocket relay. Tests
  * drive the worker API directly via `window.__drive.*` (exposed by
- * src/client/test-bridge.ts, which is included in production builds).
+ * src/client/ui/test-bridge.ts, which is included in production builds).
  *
  * On NixOS the browsers Playwright downloads won't run, so we point at the
  * system Chromium. Override with CHROMIUM_BIN if it lives elsewhere. When

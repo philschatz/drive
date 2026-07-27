@@ -185,7 +185,7 @@ export default defineConfig(async () => {
         display: 'standalone',
         // Marker lets a cold PWA launch (which lands on the hashless base URL)
         // be told apart from the user deliberately navigating to Home, so only
-        // the former reopens the last document (see src/client/main.tsx).
+        // the former reopens the last document (see src/client/ui/main.tsx).
         start_url: `${base}?source=pwa`,
         scope: base,
         icons: [
@@ -225,7 +225,8 @@ export default defineConfig(async () => {
   },
   resolve: {
     alias: {
-      '@/': resolve(__dirname, 'src/client') + '/',
+      '@/': resolve(__dirname, 'src/client/ui') + '/',
+      '@client/': resolve(__dirname, 'src/client') + '/',
       '@automerge/automerge/slim': automergeEntry,
       '@automerge/automerge': automergeEntry,
       '@automerge/automerge-subduction/slim': resolve(__dirname, 'node_modules/@automerge/automerge-subduction/dist/esm/slim.js'),

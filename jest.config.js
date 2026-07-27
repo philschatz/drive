@@ -58,7 +58,8 @@ module.exports = {
             esModuleInterop: true,
             skipLibCheck: true,
             paths: {
-              '@/*': ['./src/client/*'],
+              '@/*': ['./src/client/ui/*'],
+              '@client/*': ['./src/client/*'],
               'react': ['./node_modules/preact/compat/'],
               'react-dom': ['./node_modules/preact/compat/'],
             },
@@ -66,7 +67,8 @@ module.exports = {
         }],
       },
       moduleNameMapper: {
-        '^@/(.*)$': '<rootDir>/src/client/$1',
+        '^@/(.*)$': '<rootDir>/src/client/ui/$1',
+        '^@client/(.*)$': '<rootDir>/src/client/$1',
         '^@testing-library/preact$': '<rootDir>/node_modules/@testing-library/preact/dist/cjs/index.js',
         '^preact/jsx-runtime$': '<rootDir>/node_modules/preact/jsx-runtime/dist/jsxRuntime.js',
         '^preact/test-utils$': '<rootDir>/node_modules/preact/test-utils/dist/testUtils.js',
@@ -81,7 +83,7 @@ module.exports = {
         '^react/jsx-dev-runtime$': '<rootDir>/node_modules/preact/jsx-runtime/dist/jsxRuntime.js',
         '^react-dom$': '<rootDir>/node_modules/preact/compat/dist/compat.js',
         '^react-dom/test-utils$': '<rootDir>/node_modules/preact/test-utils/dist/testUtils.js',
-        '\\.css$': '<rootDir>/src/client/__mocks__/style.js',
+        '\\.css$': '<rootDir>/src/client/ui/__mocks__/style.js',
       },
     },
   ],

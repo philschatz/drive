@@ -24,7 +24,7 @@
 import { Encoder, decode } from 'cbor-x';
 import { MAX_MESSAGE_BYTES } from './webrtc-chunk';
 import { WRTC_SIGNAL, type WebRTCSignalFrame } from '../shared/webrtc-signal';
-import type { BridgeToWorkerMsg, WorkerToBridgeMsg } from './webrtc-bridge';
+import type { BridgeToWorkerMsg, WorkerToBridgeMsg } from './ui/webrtc-bridge';
 import type { Message, NetworkAdapterInterface, PeerId, PeerMetadata } from '@automerge/automerge-repo';
 
 export interface WebRTCRelayAdapterOptions {
