@@ -2,7 +2,7 @@ import 'temporal-polyfill/global';
 import {
   expectedOccurrences, metInPeriod, windowEnd, currentStatus, currentStreak, sortedCounters, metMissedByWeek, isArchived,
 } from './occurrences';
-import type { CounterEvent } from './schema';
+import type { CounterEvent } from '../../../shared/schemas/counters';
 
 const NOW = '2026-07-21T12:00:00'; // a Tuesday
 

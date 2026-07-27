@@ -1,4 +1,4 @@
-import type { CalendarEvent } from './schema';
+import type { CalendarEvent } from '../../../shared/schemas/calendar';
 
 const DAY_MAP: Record<string, number> = { su: 7, mo: 1, tu: 2, we: 3, th: 4, fr: 5, sa: 6 };
 

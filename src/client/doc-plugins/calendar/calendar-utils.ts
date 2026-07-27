@@ -1,4 +1,4 @@
-import type { CalendarEvent } from './schema';
+import type { CalendarEvent } from '../../../shared/schemas/calendar';
 import { toDateStr } from './recurrence';
 
 export interface EditorState {

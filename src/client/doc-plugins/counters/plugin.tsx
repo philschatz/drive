@@ -1,5 +1,5 @@
 import type { DocTypePlugin } from '../types';
-import { countersSchemaPlugin } from './schema';
+import { countersSchemaPlugin } from '../../../shared/schemas/counters';
 import { lazyView } from '../../shared/lazy-view';
 
 const Counters = lazyView(() => import('./Counters').then(m => m.Counters));

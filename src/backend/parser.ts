@@ -3,7 +3,7 @@ import type {
   CalendarEvent,
   RecurrenceRule,
   NDay,
-} from '../client/doc-plugins/calendar/schema'
+} from '../shared/schemas/calendar'
 import type {
   PatchObject,
   Participant,

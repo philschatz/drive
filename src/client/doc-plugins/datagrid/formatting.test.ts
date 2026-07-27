@@ -1,5 +1,5 @@
 import { formatToCss, resolveConditionalFormat, buildIndexMaps } from './formatting';
-import type { ConditionalFormatRule } from './schema';
+import type { ConditionalFormatRule } from '../../../shared/schemas/datagrid';
 
 // ── M3: cell background uses backgroundColor, not the `background` shorthand ──
 // The `background` shorthand accepts url(...), which the browser would fetch from

@@ -2,7 +2,7 @@ import { render, screen, fireEvent } from '@testing-library/preact';
 import dayjs from 'dayjs';
 
 import { CompletionsSheet } from './CompletionsSheet';
-import type { CounterEvent } from './schema';
+import type { CounterEvent } from '../../../shared/schemas/counters';
 
 /** A completion key: a timezone-less local-datetime string N units in the past
  * (the format recordClick writes, minus the millisecond suffix). */

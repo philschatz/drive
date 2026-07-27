@@ -4,7 +4,7 @@ import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
 import { MdTextField } from '@/components/ui/md-text-field';
 import { MdSelect } from '@/components/ui/md-select';
-import type { CalendarEvent } from './schema';
+import type { CalendarEvent } from '../../../shared/schemas/calendar';
 import { PropertySheet, SheetActions, SheetActionItem } from '../../shared/PropertySheet';
 import type { PropertyDef } from '../../shared/PropertySheet';
 import type { PeerFieldInfo } from '../../shared/presence';

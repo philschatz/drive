@@ -5,8 +5,8 @@
  * changeDriveSettings rejects any change whose result fails validateDocument. So
  * these cases double as the accept/reject contract for that gate.
  */
-import { validateDocument } from '../../shared/schemas';
-import { KEYHIVE_ID_RE, AUTOMERGE_DOC_ID_RE } from './schema';
+import { validateDocument } from '.';
+import { KEYHIVE_ID_RE, AUTOMERGE_DOC_ID_RE } from './drive-settings';
 
 // Sample ids that match each id format.
 const ID = 'A'.repeat(43) + '=';        // base64 of 32 bytes (keyhive id)

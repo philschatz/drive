@@ -22,7 +22,7 @@ import { computeSelectionAggregates } from './aggregates';
 import { pointToCell, buildRowOffsets, rowAtOffset } from './grid-geometry';
 import { useHideOnScroll } from '../../shared/useHideOnScroll';
 import { buildFormatCache, buildIndexMaps, formatToCss, formatDisplayValue, isAccountingFormat, resolveConditionalFormat } from './formatting';
-import type { DataGridCellFormat } from './schema';
+import type { DataGridCellFormat } from '../../../shared/schemas/datagrid';
 import { SheetTabsBar } from './SheetTabsBar';
 import { SheetListSheet } from './SheetListSheet';
 import { SheetOptionsSheet } from './SheetOptionsSheet';

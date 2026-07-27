@@ -3,7 +3,7 @@ import {
   Select, SelectTrigger, SelectValue, SelectContent, SelectItem,
 } from '@/components/ui/select';
 import { FONT_FAMILIES, FONT_SIZES, NUMBER_FORMATS } from './format-presets';
-import type { DataGridCellFormat } from './schema';
+import type { DataGridCellFormat } from '../../../shared/schemas/datagrid';
 import type { ColorTarget } from './ColorSheet';
 
 function ToggleButton({

@@ -6,7 +6,7 @@ import {
   buildClipboardData, writeClipboard, parseHtmlClipboard,
   getEffectiveRange, type ClipboardEntry, type CellRange,
 } from './clipboard';
-import type { DataGridDocument, DataGridCell, DataGridCellFormat } from './schema';
+import type { DataGridDocument, DataGridCell, DataGridCellFormat } from '../../../shared/schemas/datagrid';
 import {
   FONT_FAMILIES, FONT_SIZES, NUMBER_FORMATS, PRESET_COLORS, BORDER_PRESETS,
 } from './format-presets';

@@ -1,5 +1,5 @@
-import { validateDocument } from '../../../shared/schemas';
-import { validateCalendarEvent } from './schema';
+import { validateDocument } from '.';
+import { validateCalendarEvent } from './calendar';
 
 // ---------------------------------------------------------------------------
 // helpers

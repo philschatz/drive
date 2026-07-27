@@ -20,12 +20,12 @@ export type {
 export { validateNode } from './core';
 
 import { type ValidationError, type DocSchemaPlugin, validateNode } from './core';
-import { calendarSchemaPlugin } from '../../client/doc-plugins/calendar/schema';
-import { taskListSchemaPlugin } from '../../client/doc-plugins/tasks/schema';
-import { dataGridSchemaPlugin } from '../../client/doc-plugins/datagrid/schema';
-import { countersSchemaPlugin } from '../../client/doc-plugins/counters/schema';
-import { sentencesSchemaPlugin } from '../../client/doc-plugins/sentences/schema';
-import { driveSettingsSchemaPlugin } from '../../client/settings/schema';
+import { calendarSchemaPlugin } from './calendar';
+import { taskListSchemaPlugin } from './tasks';
+import { dataGridSchemaPlugin } from './datagrid';
+import { countersSchemaPlugin } from './counters';
+import { sentencesSchemaPlugin } from './sentences';
+import { driveSettingsSchemaPlugin } from './drive-settings';
 
 /** Every known document type's validation core. Adding a document type means
  * registering its schema core here and its full plugin in src/client/doc-plugins.

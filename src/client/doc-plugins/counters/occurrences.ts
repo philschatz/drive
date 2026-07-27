@@ -1,4 +1,4 @@
-import type { CounterEvent } from './schema';
+import type { CounterEvent } from '../../../shared/schemas/counters';
 import { generateDates, parseDuration } from '../calendar/recurrence';
 
 /** All functions take `now` as a local datetime string ("YYYY-MM-DDTHH:mm:ss")

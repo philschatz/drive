@@ -10,7 +10,7 @@ import { useHideOnScroll } from '../../shared/useHideOnScroll';
 import { useCanEdit } from '../../shared/useCanEdit';
 import { useFocusPathSync } from '../../shared/useFocusPathSync';
 import { HistorySlider } from '../../shared/HistorySlider';
-import type { CalendarEvent } from './schema';
+import type { CalendarEvent } from '../../../shared/schemas/calendar';
 import { rebuildExpanded } from './recurrence';
 import { mapToSXEvents, createSXCalendar } from './schedule-x';
 import type { EventLookupMap } from './schedule-x';

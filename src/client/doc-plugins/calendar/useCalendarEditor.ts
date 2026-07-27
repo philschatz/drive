@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef } from 'preact/hooks';
-import type { CalendarEvent } from './schema';
+import type { CalendarEvent } from '../../../shared/schemas/calendar';
 import { generateUid, type EditorState } from './calendar-utils';
 import { toDateStr } from './recurrence';
 

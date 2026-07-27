@@ -5,7 +5,7 @@ import type { PeerState } from '../../shared/automerge';
 import { openDoc, subscribeQuery, updateDoc, queryDoc, deepAssign, fetchDocList } from '../../worker-api';
 import { initPresence, colorForKey, type PresenceState } from '../../shared/presence';
 import { DocumentTitleBar } from '../../shared/DocumentTitleBar';
-import type { CalendarEvent } from './schema';
+import type { CalendarEvent } from '../../../shared/schemas/calendar';
 import { mapMultiCalToSXEvents, createMultiCalSXCalendar } from './schedule-x';
 import type { MultiCalEventLookupMap, CalendarSource } from './schedule-x';
 import { initDragDrop } from './drag-drop';

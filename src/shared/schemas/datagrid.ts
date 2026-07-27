@@ -2,7 +2,7 @@ import {
   type ValidationError, type DocSchemaPlugin,
   str, num, bool, obj, record,
   HEX_COLOR_RE,
-} from '../../../shared/schemas/core';
+} from './core';
 
 /**
  * Sheet / column / row ids are all minted by `shortId()`

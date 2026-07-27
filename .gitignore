@@ -38,11 +38,12 @@ playwright-report/
 # Raw screen recordings from `npm run docs:capture`; the finished .png/.gif it
 # encodes from them are committed in docs/.
 docs/capture/.work/
-# Throwaway verification/probe specs — still end in .spec.ts so Playwright's
-# default testMatch discovers and runs them, but never get auto-committed.
-*.probe.spec.ts
-
 # Temporary files
+# Every throwaway file — one-off node scripts, scratch data, and verification
+# specs — is named tmp-*. Probe specs are tmp-<name>.probe.spec.ts: still ending
+# in .spec.ts so Playwright's default testMatch discovers and runs them, but
+# never auto-committed. (*.tmp covers the suffix form; tmp-* the prefix form.)
+tmp-*
 *.tmp
 test.ics
 test-parser.js

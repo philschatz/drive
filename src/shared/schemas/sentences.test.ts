@@ -1,4 +1,4 @@
-import { validateDocument } from '../../../shared/schemas';
+import { validateDocument } from '.';
 
 describe('Document schema', () => {
   it('accepts a valid document (block markers are plain chars in JSON)', () => {

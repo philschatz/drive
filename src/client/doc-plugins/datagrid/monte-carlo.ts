@@ -8,7 +8,7 @@ import HyperFormula from 'hyperformula';
 import { sampleDistribution, computeStats, type DistributionInfo, type DistributionStats } from './distributions';
 import { registerCustomFunctions, hfConfig, addGoogleSheetsNamedExpressions } from './hf-functions';
 import { buildSheetData, sortedEntries } from './helpers';
-import type { DataGridDocument } from './schema';
+import type { DataGridDocument } from '../../../shared/schemas/datagrid';
 
 export interface MCResults {
   cells: Map<string, DistributionStats>;  // key: "sheetIdx:col:row"

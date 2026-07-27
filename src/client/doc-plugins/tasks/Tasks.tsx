@@ -10,7 +10,7 @@ import { useCanEdit } from '../../shared/useCanEdit';
 import { useFocusPathSync } from '../../shared/useFocusPathSync';
 import { HistorySlider } from '../../shared/HistorySlider';
 import { useLongPress } from '../../shared/useLongPress';
-import type { TaskDocument, Task } from './schema';
+import type { TaskDocument, Task } from '../../../shared/schemas/tasks';
 import { TaskEditor } from './TaskEditor';
 import { useDocumentValidation } from '../../shared/useDocumentValidation';
 import { DocLoader } from '../../shared/useDocument';

@@ -1,6 +1,6 @@
 import 'temporal-polyfill/global';
-import { validateDocument } from '../../../shared/schemas';
-import type { CounterDocument } from './schema';
+import { validateDocument } from '.';
+import type { CounterDocument } from './counters';
 
 const validDoc = (): CounterDocument => ({
   '@type': 'Calendar+Counters',

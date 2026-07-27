@@ -5,7 +5,7 @@ import { MdTextField } from '@/components/ui/md-text-field';
 import { MdSelect } from '@/components/ui/md-select';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { colIndexToLetter, shortId } from './helpers';
-import type { ConditionalFormatRule, ConditionalFormatRange, DataGridCellFormat } from './schema';
+import type { ConditionalFormatRule, ConditionalFormatRange, DataGridCellFormat } from '../../../shared/schemas/datagrid';
 
 // ============================================================
 // Types

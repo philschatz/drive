@@ -13,7 +13,7 @@
 import {
   type DocSchemaPlugin,
   str, obj, record, arr,
-} from '../../shared/schemas/core';
+} from './core';
 
 /**
  * Id string formats used as this doc's map keys/values, validated so a corrupt

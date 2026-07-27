@@ -1,4 +1,4 @@
-import type { DataGridCellFormat, DataGridBorder, FormatRange, ConditionalFormatRule, ConditionalFormatRange } from './schema';
+import type { DataGridCellFormat, DataGridBorder, FormatRange, ConditionalFormatRule, ConditionalFormatRange } from '../../../shared/schemas/datagrid';
 import { sortedEntries } from './helpers';
 
 // ============================================================

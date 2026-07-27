@@ -9,7 +9,7 @@ import {
   participantSchema, alertSchema,
   isParseableLocalDateTime, isParseableDuration, isParseableTimeZone,
   isDangerousUri, checkRecurrenceRuleDeps, checkRecurrenceOverrideKeys,
-} from '../../../shared/schemas/core';
+} from './core';
 
 export interface NDay {
   "@type": "NDay";

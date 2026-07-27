@@ -4,7 +4,7 @@
 // (independent of Jest's wall-clock timeout) plus no regression on normal rules.
 import 'temporal-polyfill/global';
 import { generateDates, rebuildExpanded } from './recurrence';
-import type { CalendarEvent } from './schema';
+import type { CalendarEvent } from '../../../shared/schemas/calendar';
 import { captureConsole } from '../../../../tests/support/console';
 
 const RANGE_START = '2026-01-01';

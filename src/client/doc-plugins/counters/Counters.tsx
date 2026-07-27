@@ -15,7 +15,7 @@ import { DocLoader } from '../../shared/useDocument';
 import { Badge } from '@/components/ui/badge';
 import { Fab } from '@/components/ui/fab';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
-import type { CounterEvent } from './schema';
+import type { CounterEvent } from '../../../shared/schemas/counters';
 import { describeRecurrence } from '../calendar/recurrence';
 import { MATERIAL_ORANGE } from '../../shared/categorical-colors';
 import { sortedCounters, metMissedByWeek, isArchived, currentStreak, type CounterEntry, type CounterStatus } from './occurrences';

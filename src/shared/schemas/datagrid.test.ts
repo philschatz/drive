@@ -1,4 +1,4 @@
-import { validateDocument } from '../../../shared/schemas';
+import { validateDocument } from '.';
 
 // ---------------------------------------------------------------------------
 // helpers

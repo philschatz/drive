@@ -3,7 +3,7 @@ import type {
   CalendarEvent,
   RecurrenceRule,
   NDay,
-} from './schema'
+} from '../../../shared/schemas/calendar'
 import type {
   PatchObject,
   Participant,

@@ -122,6 +122,8 @@ The backend implements CalDAV (RFC 4791) at `/dav/`. `src/backend/parser.ts` con
 **Material form fields.** The `md-*` custom elements are registered only in `main.tsx`, so under jsdom they never upgrade — which is why editor tests work at all (rows are inert hosts, handlers still fire). A raw `md-outlined-text-field` would break them outright: testing-library's `fireEvent.input` needs a `value` *setter* and throws without one. So use the two-mode wrappers `components/ui/md-text-field.tsx` and `md-select.tsx`, which fall back to a real `input`/`textarea`/`select` when the element isn't defined. Bind `input`, never `change` — preact/compat rewrites `onChange` to an input listener on form elements. The `MdSelect` fallback is a native `<select>`, so selects *can* now be driven in jsdom with `fireEvent.input`.
 - **Playwright** (`src/client/tests-pw/`): two-peer sync (`support/peer.ts`, `window.__drive`), multi-tab (Web Locks), real-worker/IndexedDB behavior, and heavy browser-only rendering (schedule-x calendar, HyperFormula datagrid).
 
+**Throwaway files are named `tmp-*`** (gitignored — the repo auto-commits everything else). That covers one-off node scripts (`tmp-codemod.mjs`), scratch data, and verification specs: a probe spec is `tmp-<name>.probe.spec.ts`, which still ends in `.spec.ts` so Playwright's default `testMatch` discovers and runs it.
+
 ## Key Conventions
 
 - Use `deepAssign()` (from `src/shared/deep-assign.ts`) when patching nested properties inside `handle.change()` — it recursively merges without overwriting sibling fields

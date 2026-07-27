@@ -7,8 +7,8 @@ import { PropertySheet, SheetActions, SheetActionItem } from '../../shared/Prope
 import type { PropertyDef } from '../../shared/PropertySheet';
 import type { PeerFieldInfo } from '../../shared/presence';
 import { describeRecurrence } from '../calendar/recurrence';
-import type { CounterEvent } from './schema';
-import type { RecurrenceRule, NDay } from '../calendar/schema';
+import type { CounterEvent } from '../../../shared/schemas/counters';
+import type { RecurrenceRule, NDay } from '../../../shared/schemas/calendar';
 
 /** Editor input id → Automerge doc path (relative props filled with uid below).
  * The recurrence cluster (freq/interval/weekdays) maps to the rule itself. */

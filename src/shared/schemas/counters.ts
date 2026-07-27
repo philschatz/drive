@@ -5,8 +5,8 @@ import {
   recurrenceRuleSchema,
   isParseableLocalDateTime, isParseableDuration,
   checkRecurrenceRuleDeps,
-} from '../../../shared/schemas/core';
-import { baseEventFields, checkBaseEventTimeDeps, type RecurrenceRule } from '../calendar/schema';
+} from './core';
+import { baseEventFields, checkBaseEventTimeDeps, type RecurrenceRule } from './calendar';
 
 /** "HH:mm" or "HH:mm:ss" — the local time-of-day a recurring counter's window opens. */
 export const TIME_OF_DAY_RE = /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/;

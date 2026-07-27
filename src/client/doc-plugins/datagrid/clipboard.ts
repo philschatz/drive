@@ -1,5 +1,5 @@
 import { internalToR1C1, getDisplayValue } from './helpers';
-import type { DataGridCell, DataGridCellFormat } from './schema';
+import type { DataGridCell, DataGridCellFormat } from '../../../shared/schemas/datagrid';
 import { formatToCss } from './formatting';
 
 // ============================================================

@@ -8,8 +8,8 @@ import {
   boolMap, linkSchema, virtualLocationSchema, recurrenceRuleSchema,
   isParseableLocalDateTime, isParseableDuration, isParseableTimeZone,
   checkRecurrenceRuleDeps, checkRecurrenceOverrideKeys,
-} from '../../../shared/schemas/core';
-import type { RecurrenceRule } from '../calendar/schema';
+} from './core';
+import type { RecurrenceRule } from './calendar';
 
 export interface Task {
   "@type": "Task";

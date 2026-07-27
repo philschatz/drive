@@ -3,7 +3,7 @@ import { createEventsServicePlugin } from '@schedule-x/events-service';
 import { createCurrentTimePlugin } from '@schedule-x/current-time';
 import type { ExpandedEvent } from './recurrence';
 import { rebuildExpanded, isAllDay } from './recurrence';
-import type { CalendarDocument } from './schema';
+import type { CalendarDocument } from '../../../shared/schemas/calendar';
 
 export interface EventLookupMap {
   [id: string]: ExpandedEvent;

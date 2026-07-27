@@ -10,7 +10,7 @@ import { useState, useEffect } from 'preact/hooks';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { DeleteButton } from '@/components/ui/delete-button';
 import { relativeTime } from '../../../shared/relative-time';
-import type { CounterEvent } from './schema';
+import type { CounterEvent } from '../../../shared/schemas/counters';
 
 export function CompletionsSheet({
   open,

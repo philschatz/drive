@@ -1,5 +1,5 @@
-import { validateDocument } from '../../../shared/schemas';
-import { validateTask } from './schema';
+import { validateDocument } from '.';
+import { validateTask } from './tasks';
 
 // ---------------------------------------------------------------------------
 // helpers

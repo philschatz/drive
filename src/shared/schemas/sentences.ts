@@ -1,7 +1,7 @@
 import {
   type ValidationError, type DocSchemaPlugin,
   str, obj,
-} from '../../../shared/schemas/core';
+} from './core';
 
 /**
  * Sentences — the word-processing document type. `content` is an Automerge Peritext text field:

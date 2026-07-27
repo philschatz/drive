@@ -1,6 +1,6 @@
 import { useCallback } from 'preact/hooks';
 import { updateDoc, deepAssign } from '../../worker-api';
-import type { CalendarEvent } from './schema';
+import type { CalendarEvent } from '../../../shared/schemas/calendar';
 import type { EditorState } from './calendar-utils';
 
 /**
