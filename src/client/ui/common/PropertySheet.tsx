@@ -8,6 +8,12 @@
  * that property's editor alone. This is the standard MD3 mobile pattern, and it
  * removes the "wall of form controls" the flat editors had.
  *
+ * A pane editing a single field marks itself `transactional` and wraps its control
+ * in a `FieldEditor`, which owns the draft and offers Cancel/Save. Those panes lose
+ * the Back arrow, so the edit has exactly one discard gesture and one commit
+ * gesture. Multi-control panes (an event's When, a recurrence rule) and dropdowns
+ * still auto-save and keep Back.
+ *
  * Peer presence rides along at both levels: a list row carries a PresenceDot in
  * its trailing slot, so you can see which property a peer is editing without
  * opening anything, and the detail pane repeats the dot beside the field's own
@@ -83,6 +89,13 @@ export interface PropertyDef {
   inline?: () => ComponentChildren;
   hidden?: boolean;
   /**
+   * This pane edits one field and supplies its own Cancel/Save (see `FieldEditor`),
+   * so the header's Back arrow is dropped: Cancel is the single discard gesture and
+   * Save the single commit gesture, rather than Back silently meaning "save".
+   * Grouped panes leave this off — they auto-save and keep Back.
+   */
+  transactional?: boolean;
+  /**
    * Presence field ids that light this row's dot; defaults to `[id]`. Grouped
    * rows (a calendar event's "When" covers date/time/all-day/duration) list every
    * member field, since peers broadcast at input granularity.
@@ -103,16 +116,15 @@ export interface PropertySheetProps {
   footer?: ComponentChildren;
   /** Notice about the item as a whole (e.g. "this is one occurrence"), both modes. */
   banner?: ComponentChildren;
-  /** Transactional Save/Cancel bar, shown in both modes. */
-  actions?: ComponentChildren;
   /** Extra classes for the sheet surface (e.g. the calendar editor's `.panel` hook). */
   contentClassName?: string;
   /**
    * Blur the focused element before closing so an auto-save commit-on-blur runs.
    * Chrome fires no `focusout` when a focused element is simply removed from the
-   * DOM, so Escape-to-close would otherwise drop what you just typed. Opt-in:
-   * editors with explicit Save don't want it, and in jsdom a click on Close
-   * doesn't move focus, so an unconditional blur would fire a spurious commit.
+   * DOM, so Escape-to-close would otherwise drop what you just typed. Only the
+   * auto-saving panes need it — a `transactional` pane commits on Save, and in
+   * jsdom a click on Close doesn't move focus, so an unconditional blur would fire
+   * a spurious commit.
    */
   flushOnClose?: boolean;
   'data-testid'?: string;
@@ -127,7 +139,6 @@ export function PropertySheet({
   onClose,
   footer,
   banner,
-  actions,
   contentClassName,
   flushOnClose,
   'data-testid': testId,
@@ -141,7 +152,6 @@ export function PropertySheet({
       onClose={onClose}
       footer={footer}
       banner={banner}
-      actions={actions}
       contentClassName={contentClassName}
       flushOnClose={flushOnClose}
       data-testid={testId}
@@ -162,7 +172,6 @@ function PropertySheetBody({
   onClose,
   footer,
   banner,
-  actions,
   contentClassName,
   flushOnClose,
   'data-testid': testId,
@@ -214,6 +223,20 @@ function PropertySheetBody({
         'input, textarea, select, md-outlined-text-field, md-outlined-select, button',
       );
     el?.focus?.();
+    // A Material field delegates focus to an <input> that Lit renders into its
+    // shadow root *asynchronously*, so on the pane's first paint there is nothing
+    // to delegate to yet and the focus() above is silently dropped — leaving
+    // <body> focused, the iOS keyboard down, and keystrokes going to the
+    // document. Retry once the element has rendered. `updateComplete` settles in
+    // a microtask, so this is still inside the tap's user-activation window; the
+    // activeElement guard keeps it from stealing focus back from a peer field the
+    // user has since moved to.
+    const rendered = (el as any)?.updateComplete;
+    if (rendered?.then) {
+      rendered.then(() => {
+        if (document.activeElement === document.body) el?.focus?.();
+      });
+    }
   }, [detailId]);
 
   return (
@@ -221,7 +244,9 @@ function PropertySheetBody({
       <SheetContent side="bottom" className={`max-h-[85vh] p-4${contentClassName ? ` ${contentClassName}` : ''}`}>
         <SheetHeader>
           <div className="flex items-center gap-1 pr-8">
-            {detail && (
+            {/* A transactional pane has its own Cancel, so a Back arrow would be a
+                second, ambiguous way out of the same edit. */}
+            {detail && !detail.transactional && (
               <button
                 aria-label="Back"
                 className="inline-flex items-center justify-center h-10 w-10 -ml-2 rounded-full state-layer shrink-0 focus:outline-none"
@@ -298,8 +323,6 @@ function PropertySheetBody({
             {footer}
           </div>
         )}
-
-        {actions}
       </SheetContent>
     </Sheet>
   );

@@ -7,6 +7,7 @@ import { MdSelect } from '@/components/ui/md-select';
 import type { CalendarEvent } from '../../../../shared/schemas/calendar';
 import { PropertySheet, SheetActions, SheetActionItem } from '../../common/PropertySheet';
 import type { PropertyDef } from '../../common/PropertySheet';
+import { FieldEditor } from '../../common/FieldEditor';
 import type { PeerFieldInfo } from '../../common/presence';
 import { isAllDay, describeRecurrence } from './recurrence';
 
@@ -159,13 +160,14 @@ export function EventEditor({ uid, event, masterEvent, recurrenceDate, isNew, op
   }
 
   /**
-   * Auto-save, matching the task and counter editors: every field commits on
-   * blur/change and the X is the only "done" gesture — there is no Save/Cancel.
+   * Matching the task and counter editors: a single-field pane commits on its Save,
+   * while the multi-control When and Repeat panes still commit on blur/change with
+   * the X as their "done" gesture.
    *
    * `overrides` carries a value that hasn't landed in state yet (a select fires
-   * its handler before the re-render). A commit with no date is dropped rather
-   * than warned about: an event without a start can't be written, and under
-   * auto-save there is no button press to attach an alert to.
+   * its handler before the re-render, as does a pane's Save). A commit with no date
+   * is dropped rather than warned about: an event without a start can't be written,
+   * and the auto-saving panes have no button press to attach an alert to.
    */
   const commit = (overrides: Partial<Draft> = {}) => {
     const d: Draft = {
@@ -277,17 +279,29 @@ export function EventEditor({ uid, event, masterEvent, recurrenceDate, isNew, op
       label: 'Title',
       icon: 'edit',
       summary: () => title,
+      transactional: true,
       render: ({ back }) => (
-        <MdTextField
-          label="Title"
-          id="ed-title"
+        // key={uid}: the sheet stays open when switching between an occurrence and
+        // its series, and a still-mounted FieldEditor would keep the old draft.
+        <FieldEditor
+          key={uid}
+          data-testid="ed-title"
           value={title}
-          onInput={setTitle}
-          onFocus={() => focusField('ed-title')}
-          onBlur={blurField}
-          onCommit={v => commit({ title: v })}
-          onEnter={v => { commit({ title: v }); back(); }}
-        />
+          onCancel={back}
+          onSave={v => { setTitle(v); commit({ title: v }); back(); }}
+        >
+          {({ value, onInput, save }) => (
+            <MdTextField
+              label="Title"
+              id="ed-title"
+              value={value}
+              onInput={onInput}
+              onFocus={() => focusField('ed-title')}
+              onBlur={blurField}
+              onEnter={save}
+            />
+          )}
+        </FieldEditor>
       ),
     },
     {
@@ -457,17 +471,26 @@ export function EventEditor({ uid, event, masterEvent, recurrenceDate, isNew, op
       label: 'Location',
       icon: 'location_on',
       summary: () => location,
+      transactional: true,
       render: ({ back }) => (
-        <MdTextField
-          label="Location"
-          id="ed-location"
+        <FieldEditor
+          data-testid="ed-location"
           value={location}
-          onInput={setLocation}
-          onFocus={() => focusField('ed-location')}
-          onBlur={blurField}
-          onCommit={v => commit({ location: v })}
-          onEnter={v => { commit({ location: v }); back(); }}
-        />
+          onCancel={back}
+          onSave={v => { setLocation(v); commit({ location: v }); back(); }}
+        >
+          {({ value, onInput, save }) => (
+            <MdTextField
+              label="Location"
+              id="ed-location"
+              value={value}
+              onInput={onInput}
+              onFocus={() => focusField('ed-location')}
+              onBlur={blurField}
+              onEnter={save}
+            />
+          )}
+        </FieldEditor>
       ),
     },
     {
@@ -475,18 +498,27 @@ export function EventEditor({ uid, event, masterEvent, recurrenceDate, isNew, op
       label: 'Description',
       icon: 'notes',
       summary: () => description,
-      render: () => (
-        <MdTextField
-          label="Description"
-          id="ed-desc"
-          type="textarea"
-          rows={4}
+      transactional: true,
+      render: ({ back }) => (
+        <FieldEditor
+          data-testid="ed-desc"
           value={description}
-          onInput={setDescription}
-          onFocus={() => focusField('ed-desc')}
-          onBlur={blurField}
-          onCommit={v => commit({ description: v })}
-        />
+          onCancel={back}
+          onSave={v => { setDescription(v); commit({ description: v }); back(); }}
+        >
+          {({ value, onInput }) => (
+            <MdTextField
+              label="Description"
+              id="ed-desc"
+              type="textarea"
+              rows={4}
+              value={value}
+              onInput={onInput}
+              onFocus={() => focusField('ed-desc')}
+              onBlur={blurField}
+            />
+          )}
+        </FieldEditor>
       ),
     },
   ];

@@ -4,6 +4,7 @@ import { MdSelect } from '@/components/ui/md-select';
 import type { Task } from '../../../../shared/schemas/tasks';
 import { PropertySheet, SheetActions, SheetActionItem } from '../../common/PropertySheet';
 import type { PropertyDef } from '../../common/PropertySheet';
+import { FieldEditor } from '../../common/FieldEditor';
 import type { PeerFieldInfo } from '../../common/presence';
 
 interface TaskEditorProps {
@@ -84,10 +85,9 @@ export function TaskEditor({ uid, task, isNew, opened, onSave, onDelete, onClose
   }, [uid, task]);
 
   /**
-   * Auto-save: commit the full current field set (with optional not-yet-in-state
-   * overrides, e.g. a select's fresh value). Called on field blur/change — there
-   * are no Save/Cancel buttons. A NEW task is only created once it has a title,
-   * so dismissing an untouched editor never creates anything.
+   * Commit the full current field set, with optional not-yet-in-state overrides —
+   * a pane's Save, or a select's fresh value. A NEW task is only created once it
+   * has a title, so dismissing an untouched editor never creates anything.
    */
   const commit = (overrides: Partial<Task> = {}) => {
     const effTitle = ((overrides.title ?? title) || '').trim();
@@ -116,24 +116,43 @@ export function TaskEditor({ uid, task, isNew, opened, onSave, onDelete, onClose
       label: 'Title',
       icon: 'edit',
       summary: () => title,
+      transactional: true,
       render: ({ back }) => (
-        <MdTextField
-          label="Title"
+        // key={uid}: onAddAnother swaps in a fresh blank task without closing this
+        // pane, and a still-mounted FieldEditor would keep the previous draft.
+        <FieldEditor
+          key={uid}
           data-testid="ted-title"
           value={title}
-          onInput={setTitle}
-          onFocus={() => focusField('ted-title')}
-          onBlur={blurField}
-          onCommit={v => commit({ title: v })}
-          onEnter={() => {
-            if (!title.trim()) return; // no accidental empty tasks
-            commit();
-            // Rapid entry: keep the sheet open on a fresh blank task, still in
-            // this pane. Editing an existing task instead returns to the list.
-            if (isNew) onAddAnother?.();
-            else back();
+          validate={v => !!v.trim()} // no accidental empty tasks
+          onCancel={back}
+          onSave={v => {
+            commit({ title: v });
+            if (isNew) {
+              // Rapid entry: keep the sheet open on a fresh blank task, still in
+              // this pane. Clear `title` here rather than leaving it to the
+              // per-uid reset effect below — that effect runs *after* the keyed
+              // remount, which would seed the new draft from the old title.
+              setTitle('');
+              onAddAnother?.();
+            } else {
+              setTitle(v);
+              back();
+            }
           }}
-        />
+        >
+          {({ value, onInput, save }) => (
+            <MdTextField
+              label="Title"
+              data-testid="ted-title"
+              value={value}
+              onInput={onInput}
+              onFocus={() => focusField('ted-title')}
+              onBlur={blurField}
+              onEnter={save}
+            />
+          )}
+        </FieldEditor>
       ),
     },
     {
@@ -141,17 +160,26 @@ export function TaskEditor({ uid, task, isNew, opened, onSave, onDelete, onClose
       label: 'Due date',
       icon: 'event',
       summary: () => due,
-      render: () => (
-        <MdTextField
-          label="Due date"
-          type="date"
+      transactional: true,
+      render: ({ back }) => (
+        <FieldEditor
           data-testid="ted-due"
           value={due}
-          onInput={setDue}
-          onFocus={() => focusField('ted-due')}
-          onBlur={blurField}
-          onCommit={v => commit({ due: v })}
-        />
+          onCancel={back}
+          onSave={v => { setDue(v); commit({ due: v }); back(); }}
+        >
+          {({ value, onInput }) => (
+            <MdTextField
+              label="Due date"
+              type="date"
+              data-testid="ted-due"
+              value={value}
+              onInput={onInput}
+              onFocus={() => focusField('ted-due')}
+              onBlur={blurField}
+            />
+          )}
+        </FieldEditor>
       ),
     },
     {
@@ -159,20 +187,35 @@ export function TaskEditor({ uid, task, isNew, opened, onSave, onDelete, onClose
       label: 'Priority',
       icon: 'flag',
       summary: () => (priority ? String(priority) : ''),
-      render: () => (
-        <MdTextField
-          label="Priority"
-          type="number"
-          min={0}
-          max={9}
+      transactional: true,
+      render: ({ back }) => (
+        <FieldEditor
           data-testid="ted-priority"
           value={String(priority)}
-          supportingText="0 = none"
-          onInput={v => setPriority(parseInt(v) || 0)}
-          onFocus={() => focusField('ted-priority')}
-          onBlur={blurField}
-          onCommit={v => commit({ priority: parseInt(v) || 0 })}
-        />
+          onCancel={back}
+          onSave={v => {
+            const next = parseInt(v) || 0;
+            setPriority(next);
+            commit({ priority: next });
+            back();
+          }}
+        >
+          {({ value, onInput, save }) => (
+            <MdTextField
+              label="Priority"
+              type="number"
+              min={0}
+              max={9}
+              data-testid="ted-priority"
+              value={value}
+              supportingText="0 = none"
+              onInput={onInput}
+              onFocus={() => focusField('ted-priority')}
+              onBlur={blurField}
+              onEnter={save}
+            />
+          )}
+        </FieldEditor>
       ),
     },
     {
@@ -203,18 +246,27 @@ export function TaskEditor({ uid, task, isNew, opened, onSave, onDelete, onClose
       label: 'Description',
       icon: 'notes',
       summary: () => description,
-      render: () => (
-        <MdTextField
-          label="Description"
-          type="textarea"
-          rows={4}
+      transactional: true,
+      render: ({ back }) => (
+        <FieldEditor
           data-testid="ted-desc"
           value={description}
-          onInput={setDescription}
-          onFocus={() => focusField('ted-desc')}
-          onBlur={blurField}
-          onCommit={v => commit({ description: v })}
-        />
+          onCancel={back}
+          onSave={v => { setDescription(v); commit({ description: v }); back(); }}
+        >
+          {({ value, onInput }) => (
+            <MdTextField
+              label="Description"
+              type="textarea"
+              rows={4}
+              data-testid="ted-desc"
+              value={value}
+              onInput={onInput}
+              onFocus={() => focusField('ted-desc')}
+              onBlur={blurField}
+            />
+          )}
+        </FieldEditor>
       ),
     },
   ];
@@ -230,7 +282,8 @@ export function TaskEditor({ uid, task, isNew, opened, onSave, onDelete, onClose
       // also what makes Enter-to-add-another a continuous flow.
       initialDetailId={isNew ? 'ted-title' : null}
       onClose={onClose}
-      flushOnClose
+      // No flushOnClose: every text pane here is transactional and Progress commits
+      // on pick, so there is nothing pending for a blur-on-close to rescue.
       footer={!isNew ? (
         <SheetActions>
           <SheetActionItem icon="delete" label="Delete" destructive data-testid="ted-delete" onClick={handleDelete} />

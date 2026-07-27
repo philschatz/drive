@@ -5,12 +5,11 @@
  *
  * A native prompt is an OS dialog: it doesn't match the app's Material
  * language, can't be styled, and is invisible to screen recordings. This is the
- * same MdTextField the item editors use, so renaming a document looks like
- * renaming a task.
+ * same MdTextField the item editors use, in the same `FieldEditor` their
+ * single-field panes use, so renaming a document looks like renaming a task.
  */
-import { useState, useEffect, useCallback, useRef, useLayoutEffect } from 'preact/hooks';
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
-import { Button } from '@/components/ui/button';
+import { useRef, useLayoutEffect } from 'preact/hooks';
+import { FieldSheet } from './FieldEditor';
 import { MdTextField, type MdTextFieldHandle } from '@/components/ui/md-text-field';
 
 export interface RenameSheetProps {
@@ -35,50 +34,38 @@ export function RenameSheet({
   onClose,
   'data-testid': testId = 'rename-sheet',
 }: RenameSheetProps) {
-  const [name, setName] = useState(value);
   const fieldRef = useRef<MdTextFieldHandle>(null);
-
-  // Re-seed on open — the sheet is kept mounted by its parent, so the previous
-  // edit would otherwise linger.
-  useEffect(() => { if (open) setName(value); }, [open, value]);
 
   // useLayoutEffect: iOS only raises the keyboard for a focus() inside the
   // transient user-activation window, which a post-paint effect misses.
   useLayoutEffect(() => { if (open) fieldRef.current?.focus(); }, [open]);
 
-  const submit = useCallback((next: string) => {
-    const trimmed = next.trim();
-    if (!trimmed) return;
-    onRename(trimmed);
-    onClose();
-  }, [onRename, onClose]);
-
-  if (!open) return null;
-
   return (
-    <Sheet open onOpenChange={(o: boolean) => { if (!o) onClose(); }}>
-      <SheetContent side="bottom" className="max-h-[60vh] p-4">
-        <div data-testid={testId}>
-          <SheetHeader>
-            <SheetTitle className="pr-8">{title}</SheetTitle>
-          </SheetHeader>
-          <div className="mt-4">
-            <MdTextField
-              ref={fieldRef}
-              label={label}
-              id="rename-input"
-              data-testid="rename-input"
-              value={name}
-              onInput={setName}
-              onEnter={submit}
-            />
-          </div>
-          <div className="flex items-center justify-end gap-2 mt-4">
-            <Button variant="outline" onClick={onClose}>Cancel</Button>
-            <Button data-testid="rename-save" onClick={() => submit(name)}>Save</Button>
-          </div>
-        </div>
-      </SheetContent>
-    </Sheet>
+    <FieldSheet
+      open={open}
+      title={title}
+      value={value}
+      data-testid={testId}
+      // Fixed stem regardless of which caller opened the sheet, so specs target
+      // `rename-save` rather than `doc-rename-sheet-save`.
+      fieldTestId="rename"
+      // An empty name is a no-op, not an "Untitled": Save disables and Enter does
+      // nothing, so the sheet just stays open.
+      validate={v => !!v.trim()}
+      onSave={v => { onRename(v.trim()); onClose(); }}
+      onClose={onClose}
+    >
+      {({ value: name, onInput, save }) => (
+        <MdTextField
+          ref={fieldRef}
+          label={label}
+          id="rename-input"
+          data-testid="rename-input"
+          value={name}
+          onInput={onInput}
+          onEnter={save}
+        />
+      )}
+    </FieldSheet>
   );
 }

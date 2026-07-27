@@ -7,27 +7,34 @@ title: Drive — Signal for documents
 
 # Drive
 
-## Signal for documents
+## What is it?
 
 <!-- _class: tight -->
 
-- End-to-end encrypted by default, not as a setting
-- Your documents live on your devices, not on someone's server
-- Shared only with the people you choose
+- Signal for documents
+- E2E encryption
+- Docs live on your devices
 
-![bg right:38% fit](homepage.png)
+![bg right:38% fit](new-doc.gif)
 
 ---
 
-## Just a webpage
+## Yeah but what's it made of?
 
 <!-- _class: tight -->
 
-- Static files — no backend to sign up for
-- Install it straight from the browser; it runs standalone on your phone
-- Collaborate in real time, or edit offline and merge on reconnect
+- PWA
+- Automerge
+- Keyhive
+- relay server
 
-![bg right:38% fit](new-doc.gif)
+![bg right:38% fit](timeline.gif)
+
+<!--
+- Just static files (GH Pages)
+- Runs offline on your phone (PWA)
+- Peers find each other through a relay
+-->
 
 ---
 
@@ -39,36 +46,30 @@ Try it!
 - [philschatz.com/drive](https://philschatz.com/drive) (it's GitHub Pages)
 - [philschatz.com/drive/slides](https://philschatz.com/drive/slides) these slides
 
----
-
-## Four pieces
-
-<!-- _class: tight -->
-
-- **PWA** — installable, offline, precached
-- **Automerge** — CRDTs, so concurrent and offline edits merge without conflicts
-- **Keyhive** — identity, access control, encryption
-- **Relay** — a stateless server whose only job is helping your devices and friends find each other
-- Every edit is a change in the history, so a document can be scrubbed back to any earlier state
-
-![bg right:38% fit](timeline.gif)
+![bg right:38% fit](homepage.png)
 
 ---
 
-## Relay, then direct
+## Relay 2 WebRTC
 
 <!-- _class: tight -->
 
+- introduces peers
+- use group id to match
+- peers upgrade to WebRTC
+
+![bg right:38% fit](connections.png)
+
+<!--
 - The relay does discovery and forwards opaque bytes by target id
 - Once two peers know about each other, they upgrade to a direct WebRTC channel
 - Same peer ids, same messages either way — the upgrade is invisible above the transport
 - A pair that can't punch through NAT just stays on the relay
-
-![bg right:38% fit](connections.png)
+-->
 
 ---
 
-## End-to-end encrypted
+## E2EZ
 
 <!-- _class: tight -->
 
@@ -83,7 +84,6 @@ Try it!
 
 ## The ask
 
-- This is a prototype exploring the design, not a product
 - I'd rather help someone build theirs than duplicate the work
 - If you're already building local-first, E2E-encrypted collaborative documents, I'd like to contribute
 - So: tell me who to talk to

@@ -513,10 +513,13 @@ test('presence-updates.gif', async ({ browser }) => {
       await expect(r.getByTestId('ted-title-row')).toBeVisible({ timeout: 30_000 });
       await beat(r, 900);
 
-      // Sam edits one property at a time, returning to the list between each;
-      // on Phil's side the dot follows, because presence is a path into the
-      // document rather than a cursor position.
-      const back = (p: typeof r) => tap(p, p.getByRole('button', { name: 'Back' }));
+      // Sam edits one property at a time, tapping Save to return to the list; on
+      // Phil's side the dot follows while Sam types, because presence is a path
+      // into the document rather than a cursor position, and then the value lands
+      // on Save. These panes are transactional, so Save is the *only* thing that
+      // writes — leaving one any other way records a clip in which the dots move
+      // over values that never change.
+      const save = (p: typeof r, id: string) => tap(p, p.getByTestId(`${id}-save`));
 
       await tap(r, r.getByTestId('ted-title-row'));
       const title = r.locator('[data-testid="ted-title"] input');
@@ -525,7 +528,7 @@ test('presence-updates.gif', async ({ browser }) => {
       await title.press('End');
       await typeText(r, ' — burgers + salad', 85);
       await beat(l, 1400);
-      await back(r);
+      await save(r, 'ted-title');
       await beat(l, 600);
 
       await tap(r, r.getByTestId('ted-priority-row'));
@@ -535,7 +538,7 @@ test('presence-updates.gif', async ({ browser }) => {
       await r.keyboard.press('ControlOrMeta+a');
       await typeText(r, '2', 120);
       await beat(l, 1400);
-      await back(r);
+      await save(r, 'ted-priority');
       await beat(l, 600);
 
       await tap(r, r.getByTestId('ted-desc-row'));
@@ -543,12 +546,23 @@ test('presence-updates.gif', async ({ browser }) => {
       await expect(desc).toBeVisible({ timeout: 30_000 });
       await beat(r, 400);
       await typeText(r, 'Two dinners, one packed lunch.', 70);
-      await beat(l, 1600);
+      await beat(l, 1200);
+      // Save this one too, so the clip ends on Phil's list showing all three
+      // values rather than on a description that never arrived.
+      await save(r, 'ted-desc');
+      // Save sat where the list's Delete row lands once the pane pops, so park
+      // the cursor back on Title for the final hold — a closing frame with the
+      // pointer resting on a red Delete reads as a warning, not a summary.
+      await glide(r, r.getByTestId('ted-title-row'));
+      await beat(l, 1200);
     },
     // Both start on Home; the flow navigates them into the document, staggered.
     { leftUrl: '/#/', rightUrl: '/#/' }
   );
 
+  // fps 8, as the other long two-peer clips use: three Save round-trips make this
+  // flow longer than it was under auto-save, and `width` is the wrong lever (see
+  // the note in gif.ts — downscaling costs bytes here rather than saving them).
   await hstackGif('presence-updates.gif', clips.left, clips.right);
   await Promise.all([phil.close(), sam.close()]);
 });

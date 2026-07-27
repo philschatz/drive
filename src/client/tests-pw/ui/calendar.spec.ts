@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { openApp, createDocViaUI, mdSelect, mdField, openProperty, backToProperties, type App } from './support';
+import { openApp, createDocViaUI, mdSelect, mdField, openProperty, backToProperties, saveProperty, cancelProperty, type App } from './support';
 
 /**
  * Calendar editor UI test (ported from cypress/e2e/calendar.cy.ts). Consolidated
@@ -10,10 +10,13 @@ import { openApp, createDocViaUI, mdSelect, mdField, openProperty, backToPropert
  *
  * The editor is a PropertySheet: it opens on a list of properties and shows one
  * property's fields at a time, so each interaction taps its row first
- * (`openProperty`) and pops back with `backToProperties`. Date/time/all-day/
- * duration share the "When" row; the whole recurrence rule shares "Repeat".
- * It also auto-saves — every field commits on blur/change, there is no
- * Save/Cancel, and closing the sheet is the only "done" gesture.
+ * (`openProperty`). Date/time/all-day/duration share the "When" row; the whole
+ * recurrence rule shares "Repeat".
+ *
+ * How a pane is left depends on what it edits. A single-field pane (Title,
+ * Location, Description) is transactional: no Back arrow, and `saveProperty` is
+ * what commits. The multi-control When and Repeat panes still auto-save on
+ * blur/change and pop back with `backToProperties`.
  */
 test.describe.configure({ mode: 'serial' });
 
@@ -33,7 +36,7 @@ test.describe('Calendar', () => {
     await expect(page.locator('.sx__time-grid-day')).toBeVisible({ timeout: 5_000 });
   }
 
-  /** Close the editor — the X, since there is no Cancel button any more. */
+  /** Close the whole editor via the sheet's X (a pane's Cancel only pops the pane). */
   async function closeEditor() {
     await app.page.locator('.panel').getByRole('button', { name: 'Close' }).click();
     await expect(app.page.locator('.panel')).toHaveCount(0);
@@ -69,7 +72,7 @@ test.describe('Calendar', () => {
 
     // A new event opens straight in the Title pane.
     await mdField(page, 'ed-title').fill(opts.title);
-    await backToProperties(page);
+    await saveProperty(page, 'ed-title');
 
     await openProperty(page, 'ed-when');
     if (opts.date) await mdField(page, 'ed-date').fill(opts.date);
@@ -85,12 +88,12 @@ test.describe('Calendar', () => {
     if (opts.location) {
       await openProperty(page, 'ed-location');
       await mdField(page, 'ed-location').fill(opts.location);
-      await backToProperties(page);
+      await saveProperty(page, 'ed-location');
     }
     if (opts.description) {
       await openProperty(page, 'ed-desc');
       await mdField(page, 'ed-desc').fill(opts.description);
-      await backToProperties(page);
+      await saveProperty(page, 'ed-desc');
     }
     if (opts.frequency) {
       await openProperty(page, 'ed-repeat');
@@ -98,7 +101,8 @@ test.describe('Calendar', () => {
       await backToProperties(page);
     }
 
-    // Auto-save: everything is already written; closing is the done gesture.
+    // Everything is written by now — each pane's Save, or the When/Repeat panes'
+    // auto-save — so closing is just the done gesture.
     await closeEditor();
   }
 
@@ -151,11 +155,19 @@ test.describe('Calendar', () => {
     await page.keyboard.press('Escape');
     await expect(page.locator('.panel')).toHaveCount(0);
 
-    // Edit the title -> "Updated Title". Auto-save: blurring the field writes it.
+    // Cancel in the (transactional) title pane throws the edit away.
+    await openEvent('Brand New Event');
+    await openProperty(page, 'ed-title');
+    await mdField(page, 'ed-title').fill('Abandoned Title');
+    await cancelProperty(page, 'ed-title');
+    await expect(page.getByTestId('ed-title-row')).toContainText('Brand New Event');
+    await closeEditor();
+
+    // Edit the title -> "Updated Title". Save is what writes it.
     await openEvent('Brand New Event');
     await openProperty(page, 'ed-title');
     await mdField(page, 'ed-title').fill('Updated Title');
-    await backToProperties(page);
+    await saveProperty(page, 'ed-title');
     await expect(page.getByTestId('ed-title-row')).toContainText('Updated Title');
     await closeEditor();
     await expect(page.getByText('Updated Title').first()).toBeVisible();

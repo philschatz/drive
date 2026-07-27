@@ -166,9 +166,27 @@ export async function openProperty(page: Page, rowId: string): Promise<void> {
   await page.getByTestId(`${rowId}-row`).click();
 }
 
-/** Return to a PropertySheet's property list from a detail pane. */
+/**
+ * Return to a PropertySheet's property list from an *auto-saving* detail pane —
+ * a multi-control one like the event editor's When or Repeat. Single-field panes
+ * are transactional and have no Back arrow; use `saveProperty` / `cancelProperty`.
+ */
 export async function backToProperties(page: Page): Promise<void> {
   await page.getByRole('button', { name: 'Back' }).click();
+}
+
+/**
+ * Commit a transactional (single-field) detail pane and return to the list. Unlike
+ * `backToProperties` this is what actually writes the value — a single-field pane
+ * no longer commits on blur.
+ */
+export async function saveProperty(page: Page, rowId: string): Promise<void> {
+  await page.getByTestId(`${rowId}-save`).click();
+}
+
+/** Discard a transactional detail pane's edit and return to the list. */
+export async function cancelProperty(page: Page, rowId: string): Promise<void> {
+  await page.getByTestId(`${rowId}-cancel`).click();
 }
 
 /**
@@ -178,4 +196,12 @@ export async function backToProperties(page: Page): Promise<void> {
  */
 export function mdField(page: Page, id: string) {
   return page.locator(`#${id} input, #${id} textarea`);
+}
+
+/**
+ * Same, for the editors that identify their fields by testid rather than `id`
+ * (the task and counter editors; the calendar one uses `id`).
+ */
+export function mdFieldTid(page: Page, testId: string) {
+  return page.locator(`[data-testid="${testId}"] input, [data-testid="${testId}"] textarea`);
 }

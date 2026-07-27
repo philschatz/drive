@@ -136,9 +136,15 @@ Three things every screencast gets for free, and one to reach for:
   `[data-testid="x"] input` (Playwright's CSS engine pierces open shadow roots).
 - **Item editors are property lists.** Task/counter/event editors show a list of
   properties and open one field at a time, so a field is only in the DOM after
-  its `<id>-row` has been tapped; `Back` returns to the list. A *new* item opens
-  straight in its title pane. Escape pops detail→list rather than closing, so a
-  flow that used Escape to dismiss now needs a Close click.
+  its `<id>-row` has been tapped. A *new* item opens straight in its title pane.
+  Escape pops detail→list rather than closing, so a flow that used Escape to
+  dismiss now needs a Close click.
+- **A single-field pane commits on Save, not on Back.** Those panes have no `Back`
+  button at all — tap `<id>-save` (or `<id>-cancel` to discard). Only the
+  multi-control panes (an event's *When*, an RRULE) still auto-save and keep
+  `Back`. This is a *silent* failure mode in a capture: a flow that leaves such a
+  pane any other way still records, but the value never lands, so the clip shows
+  dots moving over values that never change.
 - **Presence dedupe hides your own devices**, and collapses one user's devices into a
   single dot. Two distinct identities are required or `presence-updates.gif` shows
   nothing.

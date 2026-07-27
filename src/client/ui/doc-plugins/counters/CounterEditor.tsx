@@ -5,6 +5,7 @@ import { MdTextField } from '@/components/ui/md-text-field';
 import { MdSelect } from '@/components/ui/md-select';
 import { PropertySheet, SheetActions, SheetActionItem } from '../../common/PropertySheet';
 import type { PropertyDef } from '../../common/PropertySheet';
+import { FieldEditor } from '../../common/FieldEditor';
 import type { PeerFieldInfo } from '../../common/presence';
 import { describeRecurrence } from '../calendar/recurrence';
 import type { CounterEvent } from '../../../../shared/schemas/counters';
@@ -103,10 +104,10 @@ export function CounterEditor({ uid, event, isNew, opened, canEdit = true, onSav
   const completionCount = Object.keys(event.completions ?? {}).length;
 
   /**
-   * Auto-save: commit the full current field set (with optional not-yet-in-state
-   * overrides, e.g. a select's fresh value). Called on field blur/change — there
-   * are no Save/Cancel buttons. A NEW counter is only created once it has a
-   * title, so dismissing an untouched editor never creates anything.
+   * Commit the full current field set, with optional not-yet-in-state overrides —
+   * a pane's Save, or the Repeat pane's auto-save on change. A NEW counter is only
+   * created once it has a title, so dismissing an untouched editor never creates
+   * anything.
    */
   const commit = (overrides: Partial<{
     title: string;
@@ -167,23 +168,43 @@ export function CounterEditor({ uid, event, isNew, opened, canEdit = true, onSav
       label: 'Title',
       icon: 'edit',
       summary: () => title,
+      transactional: true,
       render: ({ back }) => (
-        <MdTextField
-          label="Title"
+        // key={uid}: onAddAnother swaps in a fresh blank counter without closing
+        // this pane, and a still-mounted FieldEditor would keep the old draft.
+        <FieldEditor
+          key={uid}
           data-testid="ced-title"
           value={title}
-          onInput={setTitle}
-          onFocus={() => focusField('ced-title')}
-          onBlur={blurField}
-          onCommit={v => commit({ title: v })}
-          onEnter={() => {
-            if (!title.trim()) return; // no accidental empty counters
-            commit();
-            // Rapid entry: keep the sheet open on a fresh blank counter.
-            if (isNew) onAddAnother?.();
-            else back();
+          validate={v => !!v.trim()} // no accidental empty counters
+          onCancel={back}
+          onSave={v => {
+            commit({ title: v });
+            if (isNew) {
+              // Rapid entry: keep the sheet open on a fresh blank counter. Clear
+              // `title` here rather than leaving it to the per-uid reset effect —
+              // that effect runs *after* the keyed remount, which would seed the
+              // new draft from the old title.
+              setTitle('');
+              onAddAnother?.();
+            } else {
+              setTitle(v);
+              back();
+            }
           }}
-        />
+        >
+          {({ value, onInput, save }) => (
+            <MdTextField
+              label="Title"
+              data-testid="ced-title"
+              value={value}
+              onInput={onInput}
+              onFocus={() => focusField('ced-title')}
+              onBlur={blurField}
+              onEnter={save}
+            />
+          )}
+        </FieldEditor>
       ),
     },
     {
@@ -259,18 +280,27 @@ export function CounterEditor({ uid, event, isNew, opened, canEdit = true, onSav
       icon: 'schedule',
       hidden: !recurring,
       summary: () => startTime,
-      render: () => (
-        <MdTextField
-          label="Time of day"
-          type="time"
+      transactional: true,
+      render: ({ back }) => (
+        <FieldEditor
           data-testid="ced-time"
           value={startTime}
-          supportingText="When the window to do this opens each time. Leave blank for all day."
-          onInput={setStartTime}
-          onFocus={() => focusField('ced-time')}
-          onBlur={blurField}
-          onCommit={v => commit({ startTime: v })}
-        />
+          onCancel={back}
+          onSave={v => { setStartTime(v); commit({ startTime: v }); back(); }}
+        >
+          {({ value, onInput }) => (
+            <MdTextField
+              label="Time of day"
+              type="time"
+              data-testid="ced-time"
+              value={value}
+              supportingText="When the window to do this opens each time. Leave blank for all day."
+              onInput={onInput}
+              onFocus={() => focusField('ced-time')}
+              onBlur={blurField}
+            />
+          )}
+        </FieldEditor>
       ),
     },
     {
@@ -279,18 +309,28 @@ export function CounterEditor({ uid, event, isNew, opened, canEdit = true, onSav
       icon: 'timelapse',
       hidden: !recurring,
       summary: () => duration,
-      render: () => (
-        <MdTextField
-          label="Duration"
+      transactional: true,
+      render: ({ back }) => (
+        <FieldEditor
           data-testid="ced-duration"
           value={duration}
-          placeholder="PT1H"
-          supportingText="How long you have to do it before it counts as missed (e.g. PT30M)."
-          onInput={setDuration}
-          onFocus={() => focusField('ced-duration')}
-          onBlur={blurField}
-          onCommit={v => commit({ duration: v })}
-        />
+          onCancel={back}
+          onSave={v => { setDuration(v); commit({ duration: v }); back(); }}
+        >
+          {({ value, onInput, save }) => (
+            <MdTextField
+              label="Duration"
+              data-testid="ced-duration"
+              value={value}
+              placeholder="PT1H"
+              supportingText="How long you have to do it before it counts as missed (e.g. PT30M)."
+              onInput={onInput}
+              onFocus={() => focusField('ced-duration')}
+              onBlur={blurField}
+              onEnter={save}
+            />
+          )}
+        </FieldEditor>
       ),
     },
   ];

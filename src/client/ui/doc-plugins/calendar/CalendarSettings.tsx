@@ -2,6 +2,7 @@ import { useState, useEffect } from 'preact/hooks';
 import { MdTextField } from '@/components/ui/md-text-field';
 import { PropertySheet } from '../../common/PropertySheet';
 import type { PropertyDef } from '../../common/PropertySheet';
+import { FieldEditor } from '../../common/FieldEditor';
 import { updateDoc } from '../../worker-api';
 import { docUrl } from '../../common/doc-urls';
 
@@ -16,8 +17,9 @@ interface CalendarSettingsProps {
 
 /**
  * Calendar settings bottom sheet (name / color / description) — opened from the
- * title-bar overflow menu (and per-calendar from AllCalendars). Auto-save:
- * fields commit on blur/change; dismissing the sheet is the "done" gesture.
+ * title-bar overflow menu (and per-calendar from AllCalendars). Name and
+ * description commit on their pane's Save; the colour swatch, being inline on its
+ * row, commits on change.
  *
  * Colour is an `inline` property: a swatch in the row's trailing slot rather
  * than a detail pane, since `<input type="color">` opens the OS picker anyway.
@@ -48,15 +50,24 @@ export function CalendarSettings({ opened, docId, name, description, color, onCl
       label: 'Name',
       icon: 'label',
       summary: () => localName,
+      transactional: true,
       render: ({ back }) => (
-        <MdTextField
-          label="Name"
+        <FieldEditor
           data-testid="cs-name"
           value={localName}
-          onInput={setLocalName}
-          onCommit={v => commit({ name: v })}
-          onEnter={v => { commit({ name: v }); back(); }}
-        />
+          onCancel={back}
+          onSave={v => { setLocalName(v); commit({ name: v }); back(); }}
+        >
+          {({ value, onInput, save }) => (
+            <MdTextField
+              label="Name"
+              data-testid="cs-name"
+              value={value}
+              onInput={onInput}
+              onEnter={save}
+            />
+          )}
+        </FieldEditor>
       ),
     },
     {
@@ -81,17 +92,26 @@ export function CalendarSettings({ opened, docId, name, description, color, onCl
       label: 'Description',
       icon: 'notes',
       summary: () => localDesc,
-      render: () => (
-        <MdTextField
-          label="Description"
-          type="textarea"
-          rows={4}
+      transactional: true,
+      render: ({ back }) => (
+        <FieldEditor
           data-testid="cs-desc"
           value={localDesc}
-          placeholder="Add a description..."
-          onInput={setLocalDesc}
-          onCommit={v => commit({ description: v })}
-        />
+          onCancel={back}
+          onSave={v => { setLocalDesc(v); commit({ description: v }); back(); }}
+        >
+          {({ value, onInput }) => (
+            <MdTextField
+              label="Description"
+              type="textarea"
+              rows={4}
+              data-testid="cs-desc"
+              value={value}
+              placeholder="Add a description..."
+              onInput={onInput}
+            />
+          )}
+        </FieldEditor>
       ),
     },
   ];
@@ -103,7 +123,8 @@ export function CalendarSettings({ opened, docId, name, description, color, onCl
       data-testid="calendar-settings"
       properties={properties}
       onClose={onClose}
-      flushOnClose
+      // No flushOnClose: name/description are transactional, and the colour swatch
+      // commits on change.
       footer={docId ? (
         <a href={docUrl(docId)} className="block mt-3 text-xs text-muted-foreground hover:underline">
           Open individual calendar view

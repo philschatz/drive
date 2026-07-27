@@ -18,8 +18,8 @@ const DOC = 'doc-tasks';
 
 const seed = () => mock.__setDoc(DOC, { '@type': 'TaskList', name: 'Test Tasks', tasks: {} });
 
-/** Add a task through the FAB → New Task sheet (auto-save: Enter commits and
- *  chains to the next blank task; there is no Save button). */
+/** Add a task through the FAB → New Task sheet (Enter is the title pane's Save,
+ *  and on a new task it chains to the next blank one). */
 const addTask = (title: string) => {
   fireEvent.click(document.querySelector('md-fab')!);
   expect(screen.getByText('New Task')).toBeTruthy();
@@ -28,7 +28,7 @@ const addTask = (title: string) => {
   fireEvent.keyDown(input, { key: 'Enter' });
 };
 
-/** Dismiss the editor sheet (the only "done" gesture under auto-save). */
+/** Dismiss the editor sheet. */
 const closeSheet = () => fireEvent.click(screen.getByRole('button', { name: 'Close' }));
 
 /** A task row is the md-list-item carrying role="checkbox". */
@@ -64,20 +64,26 @@ describe('Tasks container CRUD', () => {
     expect(doc.tasks[milkUid].progress).toBe('completed');
     expect(rowOf('Buy milk').getAttribute('data-checked')).toBe('true');
 
-    // Open the editor via the row's trailing kebab, retitle — auto-save
-    // commits on blur, no Save button. An existing task opens on the property
-    // list (only a NEW one jumps straight into the title), so tap Title first.
+    // Open the editor via the row's trailing kebab and retitle. An existing task
+    // opens on the property list (only a NEW one jumps straight into the title),
+    // so tap Title first. The title pane is transactional: Cancel throws the
+    // typing away …
     fireEvent.click(screen.getByRole('button', { name: 'Edit Walk the dog' }));
     expect(screen.getByText('Edit Task')).toBeTruthy();
     fireEvent.click(screen.getByTestId('ted-title-row'));
     const titleInput = screen.getByTestId('ted-title');
     expect((titleInput as HTMLInputElement).value).toBe('Walk the dog');
-    fireEvent.input(titleInput, { target: { value: 'Walk the dog in the park' } });
-    // preact/compat (loaded via Radix) aliases onBlur to a focusout listener;
-    // real browsers fire focusout alongside blur, but in jsdom we must dispatch
-    // the native event ourselves (fireEvent.blur/focusOut miss it).
-    fireEvent(titleInput, new FocusEvent('focusout', { bubbles: true }));
-    // Auto-save wrote through on blur (before the sheet is even dismissed).
+    fireEvent.input(titleInput, { target: { value: 'Abandon me' } });
+    fireEvent.click(screen.getByTestId('ted-title-cancel'));
+    expect(screen.getByTestId('ted-title-row')).toBeTruthy(); // back on the list
+    expect(
+      Object.values(mock.__getDoc(DOC).tasks).map((t: any) => t.title)
+    ).not.toContain('Abandon me');
+
+    // … and Save writes through, before the sheet is even dismissed.
+    fireEvent.click(screen.getByTestId('ted-title-row'));
+    fireEvent.input(screen.getByTestId('ted-title'), { target: { value: 'Walk the dog in the park' } });
+    fireEvent.click(screen.getByTestId('ted-title-save'));
     expect(
       Object.values(mock.__getDoc(DOC).tasks).map((t: any) => t.title)
     ).toContain('Walk the dog in the park');

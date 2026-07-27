@@ -63,6 +63,19 @@ describe('PropertySheet', () => {
     expect(screen.queryByTestId('p-title-input')).toBeNull();
   });
 
+  it('a transactional pane drops the Back arrow, since it has its own Cancel', () => {
+    setup({
+      properties: [{ ...PROPS[0], transactional: true }, PROPS[1]],
+    });
+    fireEvent.click(screen.getByTestId('p-title-row'));
+    expect(screen.getByTestId('p-title-input')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Back' })).toBeNull();
+
+    // Escape still pops to the list, which is what that pane's Cancel does too.
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.getByTestId('p-when-row')).toBeTruthy();
+  });
+
   it('focuses the [data-autofocus] control on entering detail', () => {
     setup();
     fireEvent.click(screen.getByTestId('p-title-row'));
