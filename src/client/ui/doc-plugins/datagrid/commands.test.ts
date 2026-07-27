@@ -370,3 +370,74 @@ describe('commitAutofill with a hidden row in the fill span', () => {
     expect(doc.sheets.s1.cells['r1:c0']).toBeUndefined();
   });
 });
+
+// ── Ctrl+V must reach the paste command ─────────────────────────────────
+
+describe('dispatchKey: paste', () => {
+  const ctrlV = () => {
+    let prevented = false;
+    return {
+      event: {
+        key: 'v', shiftKey: false, altKey: false, ctrlKey: true, metaKey: false,
+        preventDefault() { prevented = true; },
+      } as unknown as KeyboardEvent,
+      wasPrevented: () => prevented,
+    };
+  };
+
+  const harness = () => {
+    const h = makeHarness({
+      rows: [{ id: 'r0', index: 1 }, { id: 'r1', index: 2 }],
+      cols: [{ id: 'c0', index: 1 }, { id: 'c1', index: 2 }],
+      cells: { 'r0:c0': 'Src' },
+      selectedCell: [1, 1], // paste destination B2
+      clipboard: {
+        values: [['Src']],
+        formats: [[undefined]],
+        mode: 'copy',
+        range: { minRow: 0, maxRow: 0, minCol: 0, maxCol: 0 },
+      },
+    });
+    h.state.canEdit = true;
+    return h;
+  };
+
+  it('Ctrl+V requests a paste instead of being dropped on the floor', () => {
+    // `executePaste` used to be reachable ONLY from the grid's native paste-event
+    // listener, and dispatchKey skipped the paste command outright. In any browser
+    // or focus state where that event is not dispatched (Firefox fires no clipboard
+    // event at a non-editable element; the listener is bound to a conditionally
+    // rendered container), Ctrl+V therefore did nothing at all — while Ctrl+C,
+    // handled entirely in keydown, kept working. That asymmetry is the bug.
+    const { state, ctx } = harness();
+    const onPasteShortcut = jest.fn();
+    (ctx as any).onPasteShortcut = onPasteShortcut;
+    const { event, wasPrevented } = ctrlV();
+
+    const handled = useGridCommands(state, ctx).dispatchKey(event, true);
+
+    expect(handled).toBe(true);
+    expect(onPasteShortcut).toHaveBeenCalledTimes(1);
+    // Must NOT preventDefault: that would suppress the browser's own paste event,
+    // which is the better source when it is dispatched.
+    expect(wasPrevented()).toBe(false);
+  });
+
+  it('the requested paste actually writes cells', () => {
+    // What onPasteShortcut defers to, once no native event has shown up.
+    const { doc, state, ctx } = harness();
+    useGridCommands(state, ctx).executePaste();
+    expect(doc.sheets.s1.cells['r1:c1']).toEqual({ value: 'Src' });
+  });
+
+  it('does nothing on Ctrl+V when the grid is read-only', () => {
+    const { doc, state, ctx } = harness();
+    state.canEdit = false;
+    const onPasteShortcut = jest.fn();
+    (ctx as any).onPasteShortcut = onPasteShortcut;
+    const handled = useGridCommands(state, ctx).dispatchKey(ctrlV().event, true);
+    expect(handled).toBe(false);
+    expect(onPasteShortcut).not.toHaveBeenCalled();
+    expect(doc.sheets.s1.cells['r1:c1']).toBeUndefined();
+  });
+});

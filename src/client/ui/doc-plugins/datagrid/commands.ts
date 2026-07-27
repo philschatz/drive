@@ -25,6 +25,14 @@ export interface Shortcut {
   display?: string;  // Override auto-generated display string
 }
 
+/**
+ * How long the paste shortcut waits for the browser's own `paste` event before
+ * falling back to the async Clipboard API. Long enough that a dispatched event
+ * always wins the race (it follows keydown immediately), short enough to feel
+ * instant when none is coming.
+ */
+export const PASTE_FALLBACK_MS = 50;
+
 export function matchShortcut(e: KeyboardEvent, isMod: boolean, s: Shortcut): boolean {
   if (s.mod !== undefined && s.mod !== isMod) return false;
   if (s.shift !== undefined && s.shift !== e.shiftKey) return false;
@@ -107,6 +115,14 @@ export interface GridCommandContext {
   redo: () => void;
   /** Native paste event clipboard data (set by paste event listener). */
   pasteEvent?: ClipboardEvent;
+  /**
+   * The user pressed the paste shortcut. Schedules a *deferred* `executePaste()`
+   * with no ClipboardEvent, which the grid's paste listener cancels if the
+   * browser's own event arrives first (it is the better source). This is what
+   * makes Ctrl+V work at all in a browser or focus state where no native paste
+   * event is ever dispatched.
+   */
+  onPasteShortcut?: () => void;
   /** Sheet tab that was right-clicked (for sheet context menu). */
   targetSheetId?: string;
   onDeleteSheet?: (id: string) => void;
@@ -2093,11 +2109,27 @@ export function useGridCommands(
 
   function dispatchKey(e: KeyboardEvent, isMod: boolean): boolean {
     for (const cmd of KEY_COMMANDS) {
-      // Skip paste — handled by the native paste event listener so we get clipboardData
-      if (cmd.id === 'paste') continue;
       if (!state.canEdit && !READ_ONLY_COMMANDS.has(cmd.id)) continue;
       for (const shortcut of cmd.shortcuts!) {
         if (matchShortcut(e, isMod, shortcut)) {
+          // Paste is the one shortcut handled indirectly, for two reasons.
+          //
+          // It must NOT preventDefault: the browser's own native `paste` event is
+          // the better source — it carries clipboardData synchronously and needs
+          // no clipboard-read permission — and preventing the default here would
+          // suppress it. keydown also runs *before* that event, so pasting inline
+          // here would both beat the good source and then paste a second time.
+          //
+          // But a native event does not always arrive (Firefox fires no clipboard
+          // event at a non-editable element, and the grid's listener is bound to a
+          // conditionally-rendered container), and `executePaste` is otherwise
+          // only ever called from that listener — so Ctrl+V would silently do
+          // nothing at all while Ctrl+C kept working. Hence a *deferred* fallback,
+          // which the listener cancels if the real event shows up.
+          if (cmd.id === 'paste') {
+            ctx.onPasteShortcut?.();
+            return true;
+          }
           e.preventDefault();
           cmd.execute(state, ctx);
           return true;

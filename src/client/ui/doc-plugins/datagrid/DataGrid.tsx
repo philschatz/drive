@@ -3,7 +3,7 @@ import { subscribeQuery, updateDoc, getWorkerPeerId, getWorkerUserGroupId } from
 import { peerColor, usePresence } from '../../common/presence';
 import { DocumentTitleBar } from '../../common/DocumentTitleBar';
 import { peerDisplayName, type PeerFieldInfo } from '../../common/presence';
-import { useGridCommands, commitReorder, commitAutofill, applyFormatToSelection, type GridCommandState, type GridCommandContext } from './commands';
+import { useGridCommands, commitReorder, commitAutofill, applyFormatToSelection, PASTE_FALLBACK_MS, type GridCommandState, type GridCommandContext } from './commands';
 import { CommandContextMenuContent } from './CommandBar';
 import { FocusTopBar } from './FocusTopBar';
 import { ConditionalFormatSheet } from './ConditionalFormatSheet';
@@ -130,8 +130,24 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
   const touchSelRef = useRef<{ pointerId: number; startX: number; startY: number; startCell: [number, number]; active: boolean } | null>(null);
   const autofillDragRef = useRef<{ sourceRange: { minCol: number; maxCol: number; minRow: number; maxRow: number } } | null>(null);
   const dispatchKeyRef = useRef<((e: KeyboardEvent, isMod: boolean) => boolean) | null>(null);
+  /** Pending Ctrl+V fallback, cancelled by a real paste event (see below). */
+  const pasteFallbackTimerRef = useRef<number | null>(null);
   const commandCtxRef = useRef<GridCommandContext | null>(null);
   const executePasteRef = useRef<((e?: ClipboardEvent) => void) | null>(null);
+
+  // Ctrl/Cmd+V fallback, for the browsers and focus states where no native paste
+  // event is ever dispatched (Firefox fires no clipboard event at a non-editable
+  // element). Deferred, so the native event — which arrives just after keydown —
+  // gets first refusal and cancels this; only if none shows up do we paste from
+  // the async Clipboard API, which may prompt for clipboard-read permission.
+  const handlePasteShortcut = useCallback(() => {
+    if (pasteFallbackTimerRef.current !== null) clearTimeout(pasteFallbackTimerRef.current);
+    pasteFallbackTimerRef.current = window.setTimeout(() => {
+      pasteFallbackTimerRef.current = null;
+      executePasteRef.current?.();
+    }, PASTE_FALLBACK_MS);
+  }, []);
+
   const [autofillTarget, setAutofillTarget] = useState<{ minCol: number; maxCol: number; minRow: number; maxRow: number } | null>(null);
   const [clipboardSource, setClipboardSource] = useState<{ minRow: number; maxRow: number; minCol: number; maxCol: number } | null>(null);
   const [condFormatOpen, setCondFormatOpen] = useState(false);
@@ -1356,29 +1372,49 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
     formatCache,
     openConditionalFormatPanel: () => setCondFormatOpen(true),
     openResizeSheet: (kind) => { setHeaderMenu(null); setResizeKind(kind); },
+    onPasteShortcut: handlePasteShortcut,
   };
   commandCtxRef.current = commandCtx;
   const commands = useGridCommands(commandState, commandCtx);
   dispatchKeyRef.current = commands.dispatchKey;
   executePasteRef.current = commands.executePaste;
 
-  // Native paste event listener — provides synchronous clipboard data that
-  // the async Clipboard API often fails to deliver (permissions, focus loss).
-  // Depends on gridMounted because the datagrid-container div is conditionally
-  // rendered (behind columnDefs.length > 0 && doc2), so tableRef.current is
-  // null on first render. Re-runs once when the grid appears.
   const gridMounted = !!rawDoc && columnDefs.length > 0;
+
+  // Native paste event listener — the preferred source, because it carries
+  // clipboardData synchronously and needs no clipboard-read permission.
+  //
+  // Bound to `document`, not to the container, and with no deps. It used to be
+  // `el.addEventListener` gated on `gridMounted`, which could never fire: the
+  // container renders behind `columnDefs.length > 0 && doc2` (and `doc2` is a
+  // ref, so it is not even reactive), while gridMounted watches `rawDoc`. Any
+  // render where gridMounted flipped true before the container existed left
+  // `tableRef.current` null, the effect bailed, and — gridMounted never changing
+  // again — the listener was never attached for the rest of the session. That is
+  // invisible for copy, which lives entirely in keydown, so it presented as
+  // "copy works, paste doesn't". A document listener has no element to miss.
   useEffect(() => {
-    const el = tableRef.current;
-    if (!el) return;
     const handlePaste = (e: Event) => {
       const ce = e as ClipboardEvent;
+      const el = tableRef.current;
+      // Only the grid's own paste. A paste into the bottom editor bar's
+      // CodeMirror (or any other field) must be left entirely alone.
+      if (!el || !(ce.target instanceof Node) || !el.contains(ce.target)) return;
+      // The real event won the race with the keyboard fallback below.
+      if (pasteFallbackTimerRef.current !== null) {
+        clearTimeout(pasteFallbackTimerRef.current);
+        pasteFallbackTimerRef.current = null;
+      }
       ce.preventDefault();
       executePasteRef.current?.(ce);
     };
-    el.addEventListener('paste', handlePaste);
-    return () => el.removeEventListener('paste', handlePaste);
-  }, [gridMounted]);
+    document.addEventListener('paste', handlePaste);
+    return () => document.removeEventListener('paste', handlePaste);
+  }, []);
+
+  useEffect(() => () => {
+    if (pasteFallbackTimerRef.current !== null) clearTimeout(pasteFallbackTimerRef.current);
+  }, []);
 
   const focusMode = selectedCell !== null;
 
