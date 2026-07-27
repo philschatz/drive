@@ -343,6 +343,37 @@ export async function setDisplayName(page: Page, name: string): Promise<void> {
 }
 
 /**
+ * Name this device, the way Settings → Devices does.
+ *
+ * A device names itself by sniffing the user agent (`💻 Chrome`), which in a
+ * capture means every device is labelled with whatever browser Playwright is
+ * driving — the same for both panes of a two-device shot. Naming them
+ * explicitly is what makes "this happened on the other device" legible.
+ *
+ * Driven through the UI because `setDeviceName` is not part of the worker API
+ * bridge, the same gap `setDisplayName` works around for friend names.
+ *
+ * Call this BEFORE linking: the link rendezvous carries `resolveDeviceName()`
+ * to the other device, so a name set afterwards never reaches it. The row
+ * exists even on a device that has never linked — `listGroupDevices`
+ * synthesizes the self row when there is no user group yet.
+ */
+export async function setDeviceName(peer: CapturePeer, name: string): Promise<string> {
+  const { agentId } = await peer.call('getIdentity');
+  await peer.page.goto('/#/settings/devices');
+  const input = peer.page.getByTitle(agentId);
+  await expect(input).toBeVisible({ timeout: 30_000 });
+  await input.fill(name);
+  await input.press('Enter');
+  await waitFor(
+    () => peer.call('getAllDeviceNames'),
+    (names) => names[agentId] === name,
+    { label: `${peer.name} is named ${name}`, timeout: 30_000 }
+  );
+  return agentId;
+}
+
+/**
  * Make two peers mutual contacts, as tests-pw/support/scenarios.ts does.
  * Splitting it out of `setupSharedDoc` lets the add-friend capture drive the
  * same exchange through the QR UI instead.

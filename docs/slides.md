@@ -1,21 +1,8 @@
 ---
 marp: true
-theme: default
+theme: drive
 paginate: true
 title: Drive — Signal for documents
-style: |
-  section.tight { font-size: 22px; }
-  section.tight h2 { font-size: 30px; margin-bottom: 0.35em; }
-  section.tight li { margin: 0.2em 0; }
-
-  /* Screenshots and screencasts are split backgrounds. Inset them from the
-     slide edge and trace them with a soft shadow — drop-shadow follows the
-     contained bitmap rather than the figure box, so the shadow hugs the
-     screenshot itself and each one reads as a captured screen. */
-  section[data-marpit-advanced-background="background"] > div[data-marpit-advanced-background-container] > figure[style] {
-    margin: 32px !important;
-    filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.35)) drop-shadow(0 8px 18px rgba(0, 0, 0, 0.25)) !important;
-  }
 ---
 
 # Drive
@@ -62,6 +49,9 @@ Try it!
 - **Automerge** — CRDTs, so concurrent and offline edits merge without conflicts
 - **Keyhive** — identity, access control, encryption
 - **Relay** — a stateless server whose only job is helping your devices and friends find each other
+- Every edit is a change in the history, so a document can be scrubbed back to any earlier state
+
+![bg right:38% fit](timeline.gif)
 
 ---
 
@@ -80,10 +70,14 @@ Try it!
 
 ## End-to-end encrypted
 
+<!-- _class: tight -->
+
 - Keyhive wraps a **single** network adapter — everything below it is interchangeable transport
 - Document changes, membership ops, and presence are all encrypted before they leave the device
 - The relay sees ciphertext plus an address; it is never a member of anything
-- Every share or revoke rotates the document key to a new epoch
+- Every share or revoke rotates the document key to a new epoch — so a role change lands on the other screen as it happens
+
+![bg right:44% fit](device-permissions.gif)
 
 ---
 
@@ -109,6 +103,18 @@ Try it!
 
 ---
 
+## Sharing with a friend
+
+<!-- _class: tight -->
+
+- Same QR, other direction: the invite carries the document instead of a device
+- Sharing always names a role, so there is no "shared, figure the rest out later"
+- The member list *is* the access — every row is a live keyhive delegation, not a record of one
+
+![bg right:42% fit](add-and-share-with-friend.gif)
+
+---
+
 ## Thin UI, fat worker
 
 <!-- _class: tight -->
@@ -117,6 +123,9 @@ Try it!
 - The main thread is only UI; a worker owns local and remote updates (automerge, keyhive, transports)
 - The UI subscribes to small **jq query slices**, so it never holds a whole document in memory
 - The relay never stores messages for later delivery, so the always-online peer keeps a handful of docs open and **cycles through the rest** looking for updates — a browser tab just holds its whole list open
+- Underneath it is all JSON, so the raw editor is one more view over the same tree
+
+![bg right:44% fit](source-presence.gif)
 
 ---
 
@@ -152,6 +161,9 @@ Try it!
 - Shapes are chosen *for* the CRDT: id-keyed maps instead of arrays, fractional indices for order
 - The spreadsheet is the hard case, so formulas reference row/column **ids** — reordering never rewrites them
 - Calendar, tasks, and counters follow open specs (JSCalendar / RFC 8984)
+- Every change is re-validated, locally and from peers — errors are advisory, never a block
+
+![bg right:44% fit](validation.gif)
 
 ---
 
@@ -161,9 +173,13 @@ Try it!
 - Because it's always online, it's the peer two phones meet when they're never open at the same time
 - That covers store-and-forward without the relay ever holding plaintext
 
+![bg right:38% fit](settings.png)
+
 ---
 
 ## Keyhive gaps
+
+<!-- _class: tight -->
 
 - **Serialization** — freshly rotated keys lived only in memory, so a reload lost them ("Key not found" forever)
 - **Transitive access** — groups as members of groups and documents, with access capped to the minimum along each path
@@ -177,3 +193,5 @@ Try it!
 - Better notifications — a PWA can't reliably wake up to say "someone edited this"
 - Background sync, so a phone stays current without the app open
 - Access to phone features: contacts, calendar, camera, files
+
+![bg right:38% fit](todo.png)

@@ -11,7 +11,6 @@ import { useAccess } from '../shared/useAccess';
 import { sourcePath } from '../shared/doc-urls';
 import { hashHistory } from '../hash-history';
 import { Progress } from '@/components/ui/progress';
-import { Button } from '@/components/ui/button';
 import './source-viewer.css';
 
 type Path = (string | number)[];
@@ -75,95 +74,6 @@ function PatchTable({ patches }: { patches: any[] }) {
   );
 }
 
-function ClipboardInspector() {
-  const [collapsed, setCollapsed] = useState(true);
-  const [items, setItems] = useState<ClipFormat[][] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  const read = async () => {
-    try {
-      const clipboardItems = await navigator.clipboard.read();
-      const result: ClipFormat[][] = [];
-      for (const item of clipboardItems) {
-        const formats: ClipFormat[] = [];
-        for (const type of item.types) {
-          const blob = await item.getType(type);
-          if (type.startsWith('text/')) {
-            formats.push({ kind: 'text', type, size: blob.size, text: await blob.text() });
-          } else if (type.startsWith('image/')) {
-            const dataUrl = await new Promise<string>(resolve => {
-              const reader = new FileReader();
-              reader.onload = () => resolve(reader.result as string);
-              reader.readAsDataURL(blob);
-            });
-            formats.push({ kind: 'image', type, size: blob.size, dataUrl });
-          } else {
-            formats.push({ kind: 'binary', type, size: blob.size });
-          }
-        }
-        result.push(formats);
-      }
-      setItems(result);
-      setError(null);
-    } catch (e) {
-      setError(String(e));
-      setItems(null);
-    }
-  };
-
-  return (
-    <div className="presence-log">
-      <div className="presence-log-header">
-        <span className="presence-log-toggle" onClick={() => setCollapsed(!collapsed)}>
-          {collapsed ? '\u25b6' : '\u25bc'}
-        </span>
-        <strong>Clipboard</strong>
-        <button style={{ marginLeft: 8, fontSize: '0.75rem', padding: '1px 6px', cursor: 'pointer' }} onClick={() => { read(); setCollapsed(false); }}>
-          Read
-        </button>
-      </div>
-      {!collapsed && (
-        <div className="presence-log-body">
-          {error && <div style={{ color: '#c00', padding: '4px 8px' }}>{error}</div>}
-          {items === null && !error && (
-            <div className="presence-log-empty">Click Read to inspect the system clipboard.</div>
-          )}
-          {items?.length === 0 && <div className="presence-log-empty">Clipboard is empty.</div>}
-          {items?.map((item, i) => (
-            <div key={i} style={{ borderBottom: '1px solid #dee2e6' }}>
-              {items.length > 1 && (
-                <div style={{ padding: '2px 8px', fontWeight: 'bold', fontSize: '0.75rem', background: '#f1f3f5' }}>
-                  Item {i + 1}
-                </div>
-              )}
-              {item.map(fmt => (
-                <div key={fmt.type}>
-                  <div style={{ padding: '2px 8px 0', fontSize: '0.7rem', color: '#666', fontFamily: 'monospace' }}>
-                    {fmt.type} <span style={{ color: '#aaa' }}>({fmt.size} B)</span>
-                  </div>
-                  {fmt.kind === 'text' ? (
-                    <pre style={{ margin: 0, padding: '2px 8px 6px', whiteSpace: 'pre-wrap', wordBreak: 'break-all', fontSize: '0.8rem', color: '#ce9178' }}>
-                      {fmt.text || <em style={{ color: '#aaa' }}>(empty)</em>}
-                    </pre>
-                  ) : fmt.kind === 'image' ? (
-                    <div style={{ padding: '4px 8px 6px' }}>
-                      <img src={fmt.dataUrl} style={{ maxWidth: '100%', maxHeight: 200, display: 'block' }} />
-                    </div>
-                  ) : (
-                    <div style={{ padding: '2px 8px 6px', fontSize: '0.8rem', color: '#aaa', fontStyle: 'italic' }}>
-                      binary data
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
 
 export function SourceViewer({ docId, rest, readOnly }: { docId?: string; rest?: string; readOnly?: boolean; path?: string }) {
   const [status, setStatus] = useState('Loading document...');
@@ -183,21 +93,11 @@ export function SourceViewer({ docId, rest, readOnly }: { docId?: string; rest?:
   const atLatest = useRef(true);
   const titleFocusedRef = useRef(false);
 
-  const { entries: presenceLog, addEntry: addLogEntry, clear: clearLog } = usePresenceLog();
-
-  const { peers, peerList, broadcast } = usePresence(docLoaded ? docId : undefined, {
-    onRawUpdate: (states) => {
-      // Log incoming presence changes
-      for (const [peerId, peer] of Object.entries(states)) {
-        addLogEntry('recv', 'presence', peerId, JSON.stringify(peer.value));
-      }
-    },
-  });
+  const { peers, peerList, broadcast } = usePresence(docLoaded ? docId : undefined);
 
   const handleFocusPath = useCallback((path: Path | null) => {
-    addLogEntry('sent', 'broadcast', 'self', `focusedField: ${JSON.stringify(path)}`);
     broadcast('focusedField', path);
-  }, [addLogEntry, broadcast]);
+  }, [broadcast]);
 
   const peerFocusedPaths = useMemo(() => {
     const result: Array<{ path: Path; color: string; peerId: string; userGroupId?: string }> = [];
@@ -478,9 +378,6 @@ export function SourceViewer({ docId, rest, readOnly }: { docId?: string; rest?:
 
         <div className="viewer-panels">
           <PatchTable patches={versionPatches} />
-          <PresenceLogTable entries={presenceLog} onClear={clearLog} />
-          {snapshot && <JqPanel data={snapshot} docType={snapshot?.['@type']} />}
-          <ClipboardInspector />
         </div>
       </div>
     </div>

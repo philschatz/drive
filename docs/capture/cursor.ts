@@ -33,7 +33,20 @@ const CURSOR_SCRIPT = `
         will-change: transform;
       }
       #\${ID}.pw-visible { opacity: 1; }
-      #\${ID}.pw-down { transform: scale(.62); background: rgba(17,17,17,.42); }
+      #\${ID}.pw-down { transform: scale(.62); background: rgba(17,17,17,.55); }
+      /* The press ripple. A 110ms mousedown is one frame at 8-10fps, so the
+         pulse is a separate element with its own longer animation: the click
+         stays legible even when the frame it happened on is dropped. */
+      .pw-ripple {
+        position: fixed; width: 26px; height: 26px; margin: -13px 0 0 -13px;
+        border-radius: 9999px; border: 2px solid rgba(17,17,17,.6);
+        pointer-events: none; z-index: 2147483646;
+        animation: pw-ripple 420ms ease-out forwards;
+      }
+      @keyframes pw-ripple {
+        from { transform: scale(.5); opacity: .75; }
+        to   { transform: scale(2.6); opacity: 0; }
+      }
     \`;
     document.head.appendChild(style);
 
@@ -50,7 +63,16 @@ const CURSOR_SCRIPT = `
     };
     // Capture phase so overlays that stopPropagation() still move the cursor.
     addEventListener('mousemove', move, true);
-    addEventListener('mousedown', (e) => { move(e); dot.classList.add('pw-down'); }, true);
+    addEventListener('mousedown', (e) => {
+      move(e);
+      dot.classList.add('pw-down');
+      const ripple = document.createElement('div');
+      ripple.className = 'pw-ripple';
+      ripple.style.left = e.clientX + 'px';
+      ripple.style.top = e.clientY + 'px';
+      document.body.appendChild(ripple);
+      setTimeout(() => ripple.remove(), 500);
+    }, true);
     addEventListener('mouseup', () => dot.classList.remove('pw-down'), true);
   };
 
@@ -92,13 +114,20 @@ export async function glide(page: Page, target: Locator, steps = 18): Promise<vo
   await page.mouse.move(x, y, { steps });
 }
 
-/** Glide to `target`, pause, then press-and-release so the cursor pulse is visible. */
+/**
+ * Glide to `target`, pause, then press-and-release so the cursor pulse is visible.
+ *
+ * The press is held for ~250ms, not the ~110ms a real click takes: at the 8–10fps
+ * these GIFs encode at, a shorter press can fall entirely between two frames and
+ * the UI then appears to change on its own.
+ */
 export async function tap(page: Page, target: Locator): Promise<void> {
   await glide(page, target);
   await beat(page, 220);
   await page.mouse.down();
-  await beat(page, 110);
+  await beat(page, 250);
   await page.mouse.up();
+  await beat(page, 120);
 }
 
 /**

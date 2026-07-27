@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 import { readFileSync } from 'fs';
 import path from 'path';
 import { beat, glide, scanFlash, tap, tapAndReplace, tapAndType, type as typeText } from './cursor';
@@ -10,6 +10,7 @@ import {
   nameContact,
   openDocNamed,
   seedExamples,
+  setDeviceName,
   setDisplayName,
   share,
   still,
@@ -29,6 +30,17 @@ import {
  *
  * See README.md for the full list and how to add one.
  */
+
+/**
+ * Device names for the two-device shots.
+ *
+ * A device names itself after the browser it is running in, so both panes of a
+ * capture would otherwise read "💻 Chrome" — and a slide about *this device* vs
+ * *that device* needs them to be visibly different platforms. Same 📱-plus-name
+ * shape the app's own generator uses (src/client/lib/device-name.ts).
+ */
+const ANDROID = '📱 Android';
+const IOS = '📱 iOS';
 
 /** A TaskList with enough content to look real in a two-peer capture. */
 const SHARED_TASKS = {
@@ -98,30 +110,47 @@ const SHARED_COUNTERS = {
   '@type': 'Calendar+Counters',
   name: 'Habit Tracker',
   events: {
+    // `startTime` is a time of day, not a date-time; completion keys are the full
+    // local date-times. Getting either wrong shows up as a validation badge rather
+    // than a counter.
     water: {
       '@type': 'Event',
       title: 'Two litres of water',
-      startTime: '2026-07-20T08:00:00',
-      recurrenceRule: { frequency: 'daily' },
+      startTime: '08:00',
+      recurrenceRule: { '@type': 'RecurrenceRule', frequency: 'daily' },
       completions: {
-        '2026-07-23T08:12:00': '',
-        '2026-07-24T08:40:00': '',
-        '2026-07-25T09:05:00': '',
+        '2026-07-24T08:12:00': '',
+        '2026-07-25T08:40:00': '',
+        '2026-07-26T09:05:00': '',
       },
     },
     veg: {
       '@type': 'Event',
       title: 'Vegetables at lunch',
-      startTime: '2026-07-20T12:30:00',
-      recurrenceRule: { frequency: 'daily' },
-      completions: { '2026-07-24T12:35:00': '', '2026-07-25T12:41:00': '' },
+      startTime: '12:30',
+      recurrenceRule: { '@type': 'RecurrenceRule', frequency: 'daily' },
+      completions: { '2026-07-25T12:35:00': '', '2026-07-26T12:41:00': '' },
     },
     walk: {
       '@type': 'Event',
       title: 'Walk before dark',
-      startTime: '2026-07-20T18:00:00',
-      recurrenceRule: { frequency: 'daily' },
+      startTime: '18:00',
+      recurrenceRule: { '@type': 'RecurrenceRule', frequency: 'daily' },
       completions: { '2026-07-25T18:20:00': '' },
+    },
+    // No recurrence, so this one is a free tally: schedule-less counters sort
+    // last (STATUS_ORDER in occurrences.ts), which makes it *the* bottom row, and
+    // its badge is a running `N×` count. That matters because recording again on
+    // an already-done daily counter changes nothing on screen, whereas this
+    // number visibly ticks up — which is the whole point of the click.
+    pushups: {
+      '@type': 'Event',
+      title: 'Push-ups, whenever',
+      completions: {
+        '2026-07-24T07:10:00': '',
+        '2026-07-25T07:30:00': '',
+        '2026-07-26T07:05:00': '',
+      },
     },
   },
 };
@@ -237,19 +266,6 @@ test('todo.png', async ({ browser }) => {
   await phil.close();
 });
 
-test('link-device.png', async ({ browser }) => {
-  const phil = await capturePeer(browser, 'phil');
-  await setDisplayName(phil.page, 'Phil');
-  await phil.page.goto('/#/settings/devices');
-  // Opening the sheet fires a native confirm() about syncing settings to the
-  // new device; the peer's dialog handler accepts it.
-  await phil.page.getByRole('button', { name: 'Link Device' }).click();
-  await expect(phil.page.locator('div[title="Click to copy link"] svg')).toBeVisible({ timeout: 60_000 });
-  await beat(phil.page, 600);
-  await still(phil.page, 'link-device.png');
-  await phil.close();
-});
-
 // ---------------------------------------------------------------- stills, two peers
 
 test('connections.png', async ({ browser }) => {
@@ -257,6 +273,8 @@ test('connections.png', async ({ browser }) => {
   const sam = await capturePeer(browser, 'sam');
   await setDisplayName(phil.page, 'Phil');
   await setDisplayName(sam.page, 'Sam');
+  await setDeviceName(phil, ANDROID);
+  const samAgentId = await setDeviceName(sam, IOS);
   const { bGroup } = await befriend(phil, sam);
 
   const { docId } = await phil.call('createDoc', SHARED_TASKS);
@@ -278,37 +296,16 @@ test('connections.png', async ({ browser }) => {
 
   await phil.page.goto('/#/connection');
   await expect(phil.page.getByText(/Peer devices connected: [1-9]/)).toBeVisible({ timeout: 60_000 });
+  // Sam is a friend, not a linked device, so their device name never travelled
+  // to Phil — the peer row would read as a truncated agent id. The row's field
+  // is editable for exactly this reason (a local label), so set it here.
+  const samRow = phil.page.getByTitle(samAgentId);
+  await expect(samRow).toBeVisible({ timeout: 30_000 });
+  await samRow.fill(IOS);
+  await samRow.press('Enter');
   await beat(phil.page, 800);
   await still(phil.page, 'connections.png');
   await Promise.all([phil.close(), sam.close()]);
-});
-
-test('sharing.png', async ({ browser }) => {
-  const phil = await capturePeer(browser, 'phil');
-  const sam = await capturePeer(browser, 'sam');
-  const ada = await capturePeer(browser, 'ada');
-  await setDisplayName(phil.page, 'Phil');
-  await setDisplayName(sam.page, 'Sam');
-  await setDisplayName(ada.page, 'Ada');
-  const { bGroup: samGroup } = await befriend(phil, sam);
-  const { bGroup: adaGroup } = await befriend(phil, ada);
-  await nameContact(phil, 0, 'Sam');
-  await nameContact(phil, 1, 'Ada');
-
-  const { docId } = await phil.call('createDoc', SHARED_TASKS);
-  // Two people at different roles — the page is about who can do what.
-  await share(phil, sam, samGroup, docId, 'edit');
-  await share(phil, ada, adaGroup, docId, 'read');
-  await sam.page.goto(`/#/d/${docId}`);
-  await ada.page.goto(`/#/d/${docId}`);
-
-  await phil.page.goto(`/#/d/${docId}/share`);
-  // The list is *other* members — you are not a row in your own share list.
-  await expect(phil.page.getByTestId('member-row')).toHaveCount(2, { timeout: 60_000 });
-  await expect(phil.page.getByTestId('member-row').filter({ hasText: 'Sam' })).toBeVisible();
-  await beat(phil.page, 1200);
-  await still(phil.page, 'sharing.png');
-  await Promise.all([phil.close(), sam.close(), ada.close()]);
 });
 
 // ---------------------------------------------------------------- screencasts, one peer
@@ -390,16 +387,21 @@ test('timeline.gif', async ({ browser }) => {
 // ---------------------------------------------------------------- screencasts, two peers
 
 test('linking-a-device.gif', async ({ browser }) => {
-  const laptop = await capturePeer(browser, 'laptop', { video: true });
-  const phone = await capturePeer(browser, 'phone', { video: true });
-  await setDisplayName(laptop.page, 'Phil');
+  const android = await capturePeer(browser, 'android', { video: true });
+  const ios = await capturePeer(browser, 'ios', { video: true });
+  await setDisplayName(android.page, 'Phil');
+  // Name both before linking: the rendezvous carries each device's name to the
+  // other, so the Devices list at the end of the clip reads 📱 Android / 📱 iOS
+  // instead of two rows of the same browser.
+  await setDeviceName(android, ANDROID);
+  const iosAgentId = await setDeviceName(ios, IOS);
   // The point of linking is that the new device inherits the user's documents,
   // so the first device needs a library worth inheriting.
-  await seedExamples(laptop.page);
+  await seedExamples(android.page);
 
   const clips = await takePair(
-    laptop,
-    phone,
+    android,
+    ios,
     async (l, r) => {
       // Open on the first device's documents, and the second device's empty one.
       await expect(l.getByTestId('doc-row')).toHaveCount(EXAMPLE_COUNT);
@@ -442,9 +444,11 @@ test('linking-a-device.gif', async ({ browser }) => {
       }
       await beat(r, 1500);
 
-      // And the new device shows as Online back on the first one.
+      // And the new device shows as Online back on the first one, under the
+      // name it announced during the handshake.
       await l.goto('/#/settings/devices');
       await expect(l.getByText(/^Online/).first()).toBeVisible({ timeout: 60_000 });
+      await expect(l.getByTitle(iosAgentId)).toHaveValue(IOS, { timeout: 30_000 });
       await beat(l, 800);
     },
     { leftUrl: '/#/', rightUrl: '/#/' }
@@ -453,7 +457,7 @@ test('linking-a-device.gif', async ({ browser }) => {
   // The longest of the pair clips, and mostly static screens waiting on a
   // handshake — 8fps costs nothing here and keeps it near the others in size.
   await hstackGif('linking-a-device.gif', clips.left, clips.right, { fps: 8 });
-  await Promise.all([laptop.close(), phone.close()]);
+  await Promise.all([android.close(), ios.close()]);
 });
 
 test('presence-updates.gif', async ({ browser }) => {
@@ -736,6 +740,12 @@ test('source-presence.gif', async ({ browser }) => {
       settle: async (l, r) => {
         await expect(cellAt(l, LODGING)).toBeVisible({ timeout: 60_000 });
         await expect(sourceRow(r, 'r1:c1')).toBeVisible({ timeout: 60_000 });
+        // Wait for HyperFormula to actually finish. A painted grid is not an
+        // evaluated one: cross-sheet references read `#REF!` for a beat, and the
+        // opening frame is the one held longest. A `±` in this cell means the
+        // Monte Carlo pass has landed too.
+        await expect(cellAt(l, LODGING)).toContainText('±', { timeout: 60_000 });
+        await expect(cellAt(l, [1, 3])).not.toContainText('#REF', { timeout: 60_000 });
       },
     }
   );
@@ -744,98 +754,176 @@ test('source-presence.gif', async ({ browser }) => {
   await Promise.all([phil.close(), sam.close()]);
 });
 
-test('permissions.gif', async ({ browser }) => {
-  const phil = await capturePeer(browser, 'phil', { video: true });
-  const sam = await capturePeer(browser, 'sam', { video: true });
-  await setDisplayName(phil.page, 'Phil');
-  await setDisplayName(sam.page, 'Sam');
-  await befriend(phil, sam);
-  await nameContact(phil, 0, 'Sam');
-  await nameContact(sam, 0, 'Phil');
+/**
+ * One user, two of their own devices — and an access change that lands on the
+ * other one while you watch.
+ *
+ * Two devices rather than two people because a role is not a property of a
+ * document share here: the Sharing page is group-only (adding a friend adds all
+ * of their devices), so the only per-device control in the app is Settings →
+ * Devices. It is not a lesser demonstration — keyhive caps access at the minimum
+ * along the delegation path, so a device demoted inside its own user-group is
+ * demoted on every document that group can reach, and `getMyAccess` resolves the
+ * *device*, not the group. Hence: change the role of 📱 iOS on the left, and the
+ * Habit Tracker open on 📱 iOS re-renders on the right with no reload.
+ *
+ * The demoted device is always the linked one. A founding device's root
+ * delegation is permanent in keyhive, so demoting 📱 Android would change the
+ * Select and nothing else.
+ */
+test('device-permissions.gif', async ({ browser }) => {
+  // A device link plus five role changes, and every one of those is a keyhive
+  // revoke-and-re-add with a key rotation that has to reach the other device.
+  // This does not fit the suite-wide 240s.
+  test.setTimeout(600_000);
+  const android = await capturePeer(browser, 'android', { video: true });
+  const ios = await capturePeer(browser, 'ios', { video: true });
+  await setDisplayName(android.page, 'Phil');
+  await setDeviceName(android, ANDROID);
+  const iosAgentId = await setDeviceName(ios, IOS);
 
-  // Deliberately *not* shared: the clip opens with Sam holding no access at all.
-  const { docId } = await phil.call('createDoc', SHARED_COUNTERS);
+  const { docId } = await android.call('createDoc', SHARED_COUNTERS);
 
-  /** Sam's record buttons exist only at `edit` or `admin`. */
+  // Link the second device off camera — the handshake is its own asset
+  // (linking-a-device.gif) and this clip is about what happens afterwards.
+  await android.page.goto('/#/settings/devices');
+  await android.page.getByRole('button', { name: 'Link Device' }).click();
+  const link = android.page.locator('input[readonly]');
+  await expect(link).toBeVisible({ timeout: 60_000 });
+  await ios.page.goto(await link.inputValue());
+  await expect(ios.page.getByText('Linking complete')).toBeVisible({ timeout: 120_000 });
+  // A linked device joins the user-group as an admin, and the group administers
+  // every document its user creates — so the doc arrives on its own.
+  await warmDoc(ios, docId, 'Habit Tracker');
+
+  /** Write affordances on the second device; present only at `edit` or `admin`. */
   const recordButtons = (page: Page) => page.locator('[aria-label^="Record completion"]');
   /** The share glyph is on the title bar for admins only; others get a kebab item. */
   const shareGlyph = (page: Page) => page.locator('[aria-label="Share"]');
+  /** The bottom row is the schedule-less tally, whose badge is a `N×` count. */
+  const bottomRow = (page: Page) => page.getByTestId('counter-row').last();
+  const bottomCount = async (page: Page) =>
+    ((await bottomRow(page).innerText()).match(/(\d+)×/) ?? [])[1];
+  /**
+   * A counter's title, which records a completion just like the leading icon
+   * does. Aimed at rather than the icon because it is the bigger target and the
+   * cursor lands somewhere a viewer is already reading — and because it is the
+   * same spot in both states: with write access it is a button, without it the
+   * identical text is inert, so the tap that worked visibly stops working.
+   */
+  const titleOf = (row: Locator) => row.locator('[slot="headline"] button, [slot="headline"]').first();
 
-  /** row → options sheet → role sheet → the role. No confirm() on this path. */
-  async function setRole(page: Page, role: 'read' | 'edit' | 'admin'): Promise<void> {
-    await tap(page, page.getByTestId('member-row').first());
-    await expect(page.getByTestId('member-options-sheet')).toBeVisible({ timeout: 30_000 });
+  /** Record on the bottom counter; the count ticks up on this device's screen. */
+  async function recordOnBottom(page: Page): Promise<void> {
+    const before = await bottomCount(page);
+    await tap(page, titleOf(bottomRow(page)));
+    await expect
+      .poll(() => bottomCount(page), { timeout: 30_000, intervals: [300] })
+      .not.toBe(before);
+  }
+
+  /**
+   * The 📱 iOS row of the device list, found by its name field.
+   *
+   * DeviceList carries no testids and its role Select has no id, so the shared
+   * `radixSelect` helper does not apply. The name input's `title` is the device's
+   * agentId, and the row is its grandparent (input → EditableName span → row).
+   */
+  const iosRow = (page: Page) => page.getByTitle(iosAgentId).locator('../..');
+
+  /** Change 📱 iOS's role from 📱 Android. No confirm(): that guard is self-only. */
+  async function setDeviceRole(page: Page, role: 'Read' | 'Edit' | 'Admin'): Promise<void> {
+    const trigger = iosRow(page).getByRole('combobox');
+    await tap(page, trigger);
+    // The listbox is portalled to document.body, so it is not inside the row.
+    await expect(page.getByRole('listbox')).toBeVisible({ timeout: 30_000 });
     await beat(page, 500);
-    await tap(page, page.getByTestId('member-change-role'));
-    await expect(page.getByTestId('role-picker-sheet')).toBeVisible({ timeout: 30_000 });
-    await beat(page, 500);
-    // The sheets are portalled to document.body, so the role rows are not inside
-    // the member row — scope them to the page.
-    await tap(page, page.getByTestId(`role-${role}`));
-    await expect(page.getByTestId('member-row').first().getByTestId('member-role'))
-      // Rendered lowercase and capitalized in CSS; `changeRole` is a revoke plus
-      // a re-add with a key rotation, so give it room.
-      .toHaveText(role, { timeout: 60_000 });
+    // Matched on text, not accessible name: under Preact these Radix options
+    // report the *selected* value as their name, so all three answer to
+    // `getByRole('option', { name: 'Admin' })` and none to `'Edit'`.
+    await tap(page, page.getByRole('option').filter({ hasText: role }));
+    // The Select is controlled by the fetched role, so it snaps back to the old
+    // value until the change round-trips. That is the real signal — and it takes
+    // a while: changeDeviceRole is a revoke plus a re-add with a key rotation.
+    await expect(trigger).toHaveText(role, { timeout: 60_000 });
   }
 
   const clips = await takePair(
-    phil,
-    sam,
+    android,
+    ios,
     async (l, r) => {
-      await beat(l, 1200);
+      // A linked device starts out as an admin of its own user-group.
+      await expect(iosRow(l).getByRole('combobox')).toHaveText('Admin');
+      await beat(l, 1600);
 
-      // Phil grants access. Sam's home page is empty until this lands.
-      await tap(l, l.getByRole('button', { name: 'Add people' }));
-      await expect(l.getByTestId('add-people-sheet')).toBeVisible({ timeout: 30_000 });
-      await beat(l, 600);
-      await tap(l, l.getByTestId('add-person-row').first());
-      await expect(l.getByTestId('role-picker-sheet')).toBeVisible({ timeout: 30_000 });
-      await beat(l, 600);
-      await tap(l, l.getByTestId('role-admin'));
-
-      // It shows up on Sam's home page by itself, and he opens it.
-      const row = r.getByTestId('doc-row').filter({ hasText: 'Habit Tracker' });
-      await expect(row).toBeVisible({ timeout: 90_000 });
-      await beat(r, 1200);
-      await tap(r, row);
-      await expect(recordButtons(r).first()).toBeVisible({ timeout: 60_000 });
+      // Admin: the second device has the share glyph, and its counters work.
       await expect(shareGlyph(r)).toBeVisible({ timeout: 30_000 });
-      await beat(r, 1600);
+      await recordOnBottom(r);
+      await beat(r, 1400);
 
-      // Down to edit: Sam keeps the record buttons, but the share affordance goes.
-      await setRole(l, 'edit');
+      // Down to edit: the share affordance goes, but the same tap still records.
+      await setDeviceRole(l, 'Edit');
       await expect(shareGlyph(r)).toHaveCount(0, { timeout: 60_000 });
-      await expect(recordButtons(r).first()).toBeVisible();
-      await beat(r, 1800);
+      await beat(r, 1000);
+      await recordOnBottom(r);
+      await beat(r, 1400);
 
-      // Down to read: every write affordance disappears from Sam's screen — the
-      // buttons are not disabled, they are simply not rendered.
-      await setRole(l, 'read');
+      // Down to read: every write affordance disappears — the buttons are not
+      // disabled, they are not rendered. So the same tap on the same title now
+      // does nothing: the tally holds, and no editor sheet opens either.
+      await setDeviceRole(l, 'Read');
       await expect(recordButtons(r)).toHaveCount(0, { timeout: 60_000 });
       await expect(r.getByRole('button', { name: 'New counter' })).toHaveCount(0);
-      await beat(r, 1800);
+      await beat(r, 900);
+      const held = await bottomCount(r);
+      await tap(r, titleOf(bottomRow(r)));
+      await expect(r.getByTestId('ced-title')).toHaveCount(0);
+      await beat(r, 1200);
+      expect(await bottomCount(r)).toBe(held);
+      await beat(r, 1200);
 
       // And back up again, each step arriving without a reload.
-      await setRole(l, 'edit');
+      await setDeviceRole(l, 'Edit');
       await expect(recordButtons(r).first()).toBeVisible({ timeout: 60_000 });
-      await beat(r, 1600);
+      await beat(r, 1000);
+      await recordOnBottom(r);
+      await beat(r, 1400);
 
-      await setRole(l, 'admin');
+      await setDeviceRole(l, 'Admin');
       await expect(shareGlyph(r)).toBeVisible({ timeout: 60_000 });
-      await beat(r, 2000);
+      await beat(r, 1400);
+
+      // Close on the second device proving it for itself: it opens Sharing and
+      // finds the admin-only "Add people" control there. Nobody else is on this
+      // document and this user has no friends, so the page opens its QR invite
+      // by itself — dismiss that to land on the page underneath.
+      await tap(r, shareGlyph(r));
+      await expect(r.getByRole('heading', { name: 'Sharing' })).toBeVisible({ timeout: 30_000 });
+      const closeInvite = r.getByRole('button', { name: 'Close' }).first();
+      await closeInvite.waitFor({ state: 'visible', timeout: 20_000 }).catch(() => {});
+      if (await closeInvite.isVisible()) {
+        await beat(r, 1000);
+        await tap(r, closeInvite);
+      }
+      await expect(r.getByRole('button', { name: 'Add people' })).toBeVisible({ timeout: 30_000 });
+      await beat(r, 2400);
     },
     {
-      leftUrl: `/#/d/${docId}/share`,
-      rightUrl: '/#/',
+      // The device list on one; the document it is about to lose access to on the other.
+      leftUrl: '/#/settings/devices',
+      rightUrl: `/#/d/${docId}`,
       settle: async (l, r) => {
-        await expect(l.getByRole('button', { name: 'Add people' })).toBeVisible({ timeout: 60_000 });
-        await expect(r.getByTestId('doc-row')).toHaveCount(0, { timeout: 30_000 });
+        await expect(l.getByTitle(iosAgentId)).toBeVisible({ timeout: 60_000 });
+        await expect(r.getByTestId('counter-row').first()).toBeVisible({ timeout: 60_000 });
       },
     }
   );
 
-  await hstackGif('permissions.gif', clips.left, clips.right, { fps: 8, width: 720 });
-  await Promise.all([phil.close(), sam.close()]);
+  // The longest asset in the set — five key rotations, each of which has to reach
+  // the other device. 6fps was measured and came out *bigger* than 8 (fewer frames
+  // each carrying a larger delta), so this stays at the house rate.
+  await hstackGif('device-permissions.gif', clips.left, clips.right, { fps: 8 });
+  await Promise.all([android.close(), ios.close()]);
 });
 
 test('add-and-share-with-friend.gif', async ({ browser }) => {

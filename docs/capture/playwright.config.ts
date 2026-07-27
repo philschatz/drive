@@ -34,9 +34,13 @@ export default defineConfig({
   timeout: 240_000,
   expect: { timeout: 30_000 },
   reporter: [['list']],
-  // Scratch space for raw .webm recordings and Playwright's own artifacts.
+  // Playwright's own artifacts. Deliberately a *subdirectory* of the .work
+  // scratch space rather than .work itself: Playwright wipes its outputDir, and
+  // with the raw recordings sitting in .work/video it would delete a .webm out
+  // from under `video.saveAs()` — which surfaces as an intermittent
+  // "ENOENT … page@<hash>.webm" at the end of a two-pane capture.
   // Gitignored; the finished .png/.gif land in docs/ instead.
-  outputDir: '.work',
+  outputDir: '.work/pw',
   use: {
     baseURL,
     viewport: VIEWPORT,

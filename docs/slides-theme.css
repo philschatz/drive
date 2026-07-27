@@ -1,0 +1,90 @@
+/* @theme drive */
+
+/*
+ * Deck theme for docs/slides.md.
+ *
+ * Colours are lifted from the app's own MD3 blue-seed palette
+ * (src/client/globals.css) so the slides and the product read as one thing.
+ * The important part is that the page is a tinted surface rather than white:
+ * the screenshots are themselves mostly white, so they only read as captured
+ * screens laid *on* the slide if the slide is not the same colour as they are.
+ */
+
+@import 'default';
+
+:root {
+  /* Subset of --md-sys-color-* actually used here. */
+  --drive-primary: #415f91;
+  --drive-on-surface: #191c20;
+  --drive-on-surface-variant: #43474e;
+  --drive-outline-variant: #c4c6d0;
+  --drive-surface-bright: #f6f7fd;
+  --drive-surface-dim: #e2e5f0;
+
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+
+section {
+  background: linear-gradient(
+    155deg,
+    var(--drive-surface-bright) 0%,
+    var(--drive-surface-dim) 100%
+  );
+  color: var(--drive-on-surface);
+}
+
+section h1,
+section h2 {
+  color: var(--drive-primary);
+}
+
+/* Bullets lead with a bolded term (**PWA** — …); tint it so the term and the
+   gloss after the dash separate at a glance. */
+section strong {
+  color: var(--drive-primary);
+}
+
+section a {
+  color: var(--drive-primary);
+}
+
+section code {
+  background: rgb(255 255 255 / 0.65);
+  border: 1px solid var(--drive-outline-variant);
+  color: var(--drive-on-surface-variant);
+}
+
+/* Page number: legible on the tint, but never competing with a screenshot it
+   happens to overlap. */
+section::after {
+  color: var(--drive-on-surface-variant);
+  opacity: 0.5;
+  text-shadow: 0 0 6px rgb(255 255 255 / 0.9);
+}
+
+/* Denser slides opt in with `<!-- _class: tight -->`. */
+section.tight {
+  font-size: 22px;
+}
+
+section.tight h2 {
+  font-size: 30px;
+  margin-bottom: 0.35em;
+}
+
+section.tight li {
+  margin: 0.2em 0;
+}
+
+/* Screenshots and screencasts are split backgrounds. Inset them from the slide
+   edge and trace them with a soft shadow — drop-shadow follows the contained
+   bitmap rather than the figure box, so the shadow hugs the screenshot itself
+   whatever its aspect ratio. Marpit appends its own `figure { all: initial }`
+   rule after this file, hence the !important. */
+section[data-marpit-advanced-background='background']
+  > div[data-marpit-advanced-background-container]
+  > figure[style] {
+  margin: 32px !important;
+  filter: drop-shadow(0 0 1px rgb(0 0 0 / 0.35))
+    drop-shadow(0 8px 20px rgb(0 0 0 / 0.22)) !important;
+}
