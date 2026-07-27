@@ -35,8 +35,8 @@ const V2_RENAMES: Record<string, string> = {
   // contact-names / known-contact-groups now live in the DriveSettings doc, but the
   // v1→v2 rename still lands them on their `data:*` names so the engine's one-time
   // doc-migration (which reads LEGACY_IDB_KEYS) can pick them up on the next launch.
-  'contact-names':        LEGACY_IDB_KEYS.contactNames,
-  'known-contact-groups': LEGACY_IDB_KEYS.knownContactGroups,
+  'contact-names':        LEGACY_IDB_KEYS.friendNames,
+  'known-contact-groups': LEGACY_IDB_KEYS.knownFriendGroups,
   'user-group-id':        KEYS.userGroupId,
 };
 const V2_DELETE_KEYS = ['linked-devices', 'pending-group-adds'];

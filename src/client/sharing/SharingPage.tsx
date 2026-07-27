@@ -14,7 +14,7 @@ import { Alert } from '@/components/ui/alert';
 import {
   getDocMembers,
   getMyAccess,
-  getKnownContacts,
+  getKnownFriends,
   getIdentity,
   addMember,
   revokeMember,
@@ -22,7 +22,7 @@ import {
   onKeyhiveStateChanged,
 } from '../shared/keyhive-api';
 import type { MemberInfo, MemberRole } from '../shared/keyhive-types';
-import { getContactName, setContactName, mergeCachedContacts } from '../contact-names';
+import { getFriendName, setFriendName, mergeCachedFriends } from '../friend-names';
 import { useDeviceStatuses, mostConnectedStatus, type DeviceStatus } from '../shared/use-devices';
 import { StatusDot } from '../shared/presence';
 import { docUrl } from '../shared/doc-urls';
@@ -32,7 +32,7 @@ import { MemberOptionsSheet } from './MemberOptionsSheet';
 import { RolePickerSheet } from './RolePickerSheet';
 
 function displayNameFor(agentId: string): string {
-  return getContactName(agentId) || `${agentId.slice(0, 8)}…`;
+  return getFriendName(agentId) || `${agentId.slice(0, 8)}…`;
 }
 
 /** Best-connected first, then offline; named contacts before bare ids. */
@@ -65,12 +65,12 @@ export function SharingPage({ docId }: { docId?: string; path?: string }) {
 
   const refresh = useCallback(async () => {
     if (!docId) return;
-    // allSettled so a failure in one call (e.g. getKnownContacts iterating over
+    // allSettled so a failure in one call (e.g. getKnownFriends iterating over
     // docs with incomplete CGKA state) doesn't prevent member list display.
     const [membersResult, accessResult, contactsResult, identityResult] = await Promise.allSettled([
       getDocMembers(docId),
       getMyAccess(docId),
-      getKnownContacts(docId),
+      getKnownFriends(docId),
       getIdentity(),
     ]);
 
@@ -88,7 +88,7 @@ export function SharingPage({ docId }: { docId?: string; path?: string }) {
         exclude.add(identityResult.value.agentId);
         if (identityResult.value.userGroupId) exclude.add(identityResult.value.userGroupId);
       }
-      setContacts(mergeCachedContacts(contactsResult.value, exclude));
+      setContacts(mergeCachedFriends(contactsResult.value, exclude));
     }
 
     const firstError = [membersResult, accessResult, contactsResult, identityResult]
@@ -129,11 +129,11 @@ export function SharingPage({ docId }: { docId?: string; path?: string }) {
 
   const handleRename = (member: MemberInfo) => {
     setOptionsFor(null);
-    const next = prompt('Rename', getContactName(member.agentId) ?? '');
+    const next = prompt('Rename', getFriendName(member.agentId) ?? '');
     if (next === null) return;
     const trimmed = next.trim();
     if (!trimmed) return;
-    setContactName(member.agentId, trimmed)
+    setFriendName(member.agentId, trimmed)
       .then(() => refresh())
       .catch((err: any) => setError('Could not save the name: ' + (err?.message ?? 'storage error')));
   };
@@ -166,7 +166,7 @@ export function SharingPage({ docId }: { docId?: string; path?: string }) {
         deviceStatuses,
         member.type === 'group' ? member.deviceIds : [member.agentId],
       ),
-      name: getContactName(member.agentId),
+      name: getFriendName(member.agentId),
     }))
     .sort((a, b) => {
       const rank = connectionRank(a.status) - connectionRank(b.status);
@@ -274,7 +274,7 @@ export function SharingPage({ docId }: { docId?: string; path?: string }) {
           // Sharing is group-only: every contact is a user-group, so adding the
           // group gives all of that user's devices access.
           if (contact.type !== 'group') {
-            setError('This contact has no group — please re-add them as a friend.');
+            setError('This friend has no group — please add them again.');
             return;
           }
           setRoleTarget({ agentId: contact.agentId });

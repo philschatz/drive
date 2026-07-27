@@ -6,7 +6,7 @@ import { useState, useEffect, useCallback } from 'preact/hooks';
 import { Button } from '@/components/ui/button';
 import { getIdentity, ensureUserGroup, type IdentityInfo } from '../../shared/keyhive-api';
 import { idbGet, KEYS } from '../../idb-storage';
-import { getContactName, setContactName } from '../../contact-names';
+import { getFriendName, setFriendName } from '../../friend-names';
 import { sourceUrl } from '../../shared/doc-urls';
 import { AddFriendSheet } from '../AddFriendSheet';
 import { useSectionAlerts } from '../SettingsSubScreen';
@@ -28,7 +28,7 @@ export function ProfileSettings() {
       const id = await getIdentity();
       setIdentity(id);
       // Your name is stored as a User Group contact (keyed by user-group id), not by device.
-      const name = (id.userGroupId && getContactName(id.userGroupId)) || '';
+      const name = (id.userGroupId && getFriendName(id.userGroupId)) || '';
       setDisplayName(name);
       setSavedName(name);
       // KEYS.driveSettings holds a docId string (SHARED) or a blob object (LOCAL);
@@ -53,7 +53,7 @@ export function ProfileSettings() {
     try {
       const { userGroupId } = await ensureUserGroup({ create: true });
       if (!userGroupId) throw new Error('Could not create your user group.');
-      await setContactName(userGroupId, displayName.trim());
+      await setFriendName(userGroupId, displayName.trim());
       setMessage('Name saved.');
       await refresh();
     } catch (err: any) {
@@ -90,7 +90,7 @@ export function ProfileSettings() {
         <div className="mt-3 flex items-center gap-2">
           <Button variant="outline" size="sm" onClick={() => setAddFriendOpen(true)}>
             <span className="material-symbols-outlined mr-1" style={{ fontSize: 16 }}>person_add</span>
-            Add Friend
+            Invite a friend
           </Button>
         </div>
       </section>
@@ -114,7 +114,7 @@ export function ProfileSettings() {
                 </code>
               ) : (
                 <span className="text-xs text-muted-foreground italic">
-                  Not created yet — add a friend or add a device
+                  Not created yet — invite a friend or add a device
                 </span>
               )}
             </div>
@@ -134,7 +134,7 @@ export function ProfileSettings() {
                 <a
                   href={sourceUrl(settingsDocId)}
                   className="text-xs font-mono text-primary underline underline-offset-2"
-                  title="View / edit your shared settings (contacts, device names, seen state)"
+                  title="View / edit your shared settings (friends, device names, seen state)"
                 >
                   {settingsDocId.slice(0, 16)}…
                 </a>

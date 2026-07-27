@@ -130,7 +130,7 @@ validateNode(value, schema, path, errors): void   // depth-first, accumulates Va
 
 ## 5. Keyhive Integration (access control + E2E encryption)
 
-- `keyhive-ops.ts` — `KeyhiveOps` class. Identity/contacts (`getIdentity`, `getContactCard`, `receiveContactCard`), **user groups** (multi-device "users": `ensureUserGroup`, `listGroupDevices`, `addDeviceToGroup`, `linkDevice`), **document access** (`getDocMembers` → `{ members }`, `getMyAccess`, `addMember`, `revokeMember`, `changeMemberRole`). Side-effects (persist, sync, registerDoc, etc.) are **injected** so the same class runs in the worker and on the CalDAV server.
+- `keyhive-ops.ts` — `KeyhiveOps` class. Identity/friends (`getIdentity`, `getContactCard`, `receiveContactCard`), **user groups** (multi-device "users": `ensureUserGroup`, `listGroupDevices`, `addDeviceToGroup`, `linkDevice`), **document access** (`getDocMembers` → `{ members }`, `getMyAccess`, `addMember`, `revokeMember`, `changeMemberRole`). Side-effects (persist, sync, registerDoc, etc.) are **injected** so the same class runs in the worker and on the CalDAV server.
 - **Invite links removed (commit c704720):** the URL-based invite flow — `generateInvite`/`claimInvite`/`dismissInvite`, the `/invite/...` routes + `InvitePage`, the `invite-codec`/`invite-storage` modules, and the CalDAV `claim-invite` endpoint — was deleted. The earlier known problem (a link-claimed doc attached the claimant's *individual device* rather than their user-group, so it never appeared on the home page) is now moot. **Sharing is exclusively direct-contact (user-group) sharing via `addMember`**, which grants the recipient's user-group and therefore shows up correctly in their doc list. `getDocMembers` consequently returns only `{ members }` (no `invites`).
 - Roles (per recent rename): `read` / `edit` / `admin` (formerly write→edit, pull→relay).
 - **Contact bundle** envelope (`{__kind:'contact-bundle', card, groupId?, groupEvents?}`) is exchanged over the QR rendezvous.
@@ -144,7 +144,7 @@ validateNode(value, schema, path, errors): void   // depth-first, accumulates Va
 
 ### Bootstrap & routing
 - Entry `main.tsx`: imports `temporal-polyfill/global`, `globals.css`, renders `<App/>` into `#app`, imports `test-bridge` (exposes `window.__drive` — **always**, even in prod, for Playwright).
-- `App.tsx` (preact-router, **hash history** via `hash-history.ts`). Routes: `/`, `/settings`, `/contacts`, `/link-device/:cardData`, `/add-friend/:cardData`, `/calendars/` (AllCalendars), `/calendars/:docId(/:rest*)`, `/tasks/:docId(/:rest*)`, `/datagrids/:docId/sheets/:sheetId/:rest*`, `/source/:docId/:rest*`, plus `/view/...` read-only variants of each editor.
+- `App.tsx` (preact-router, **hash history** via `hash-history.ts`). Routes: `/`, `/settings`, `/friends`, `/link-device/:cardData`, `/add-friend/:cardData`, `/calendars/` (AllCalendars), `/calendars/:docId(/:rest*)`, `/tasks/:docId(/:rest*)`, `/datagrids/:docId/sheets/:sheetId/:rest*`, `/source/:docId/:rest*`, plus `/view/...` read-only variants of each editor.
 - `rest*` wildcard encodes a **focus path** in the URL (e.g. `/calendars/{id}/events/{uid}/title` → `['events',uid,'title']`), synced bidirectionally with presence broadcast and `history.replaceState`.
 
 ### Worker API (`worker-api.ts`)

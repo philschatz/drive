@@ -64,8 +64,8 @@ it('renames legacy data/auth keys, preserving their values', async () => {
   // contact-names / known-contact-groups now land on their LEGACY_IDB_KEYS names,
   // from which the engine's one-time doc-migration later picks them up.
   expect(await idbGet(KEYS.docIds)).toEqual([{ id: 'doc1' }, { id: 'doc2' }]);
-  expect(await idbGet(LEGACY_IDB_KEYS.contactNames)).toEqual({ agentA: 'Alice' });
-  expect(await idbGet(LEGACY_IDB_KEYS.knownContactGroups)).toEqual(['groupA']);
+  expect(await idbGet(LEGACY_IDB_KEYS.friendNames)).toEqual({ agentA: 'Alice' });
+  expect(await idbGet(LEGACY_IDB_KEYS.knownFriendGroups)).toEqual(['groupA']);
   expect(await idbGet(KEYS.userGroupId)).toBe('my-group-id');
 
   // Old keys are gone after the rename.

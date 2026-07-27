@@ -19,7 +19,7 @@ export interface DeleteButtonProps {
 /**
  * Reusable trash-can delete button. Always runs a native confirm() prompt
  * before invoking onConfirm. Used across home, members panel, devices list,
- * and contacts so destructive actions look and behave the same.
+ * and friends so destructive actions look and behave the same.
  */
 export function DeleteButton({
   onConfirm,

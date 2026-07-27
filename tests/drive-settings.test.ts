@@ -36,7 +36,7 @@ function makeEngine() {
 
   // Seed a loaded DriveSettings handle so ensureDriveSettingsDoc() returns it
   // immediately (no keyhive needed).
-  let state: any = { '@type': 'DriveSettings', contacts: {}, deviceNames: {}, archivedDocIds: {} };
+  let state: any = { '@type': 'DriveSettings', friends: {}, deviceNames: {}, archivedDocIds: {} };
   const handle = {
     doc: () => state,
     change: (fn: (d: any) => void) => { const c = structuredClone(state); fn(c); state = c; },
@@ -49,37 +49,37 @@ function makeEngine() {
   (engine as any).driveSettingsDocId = DOC;
 
   const e = engine as any;
-  const contactEvents = () => emitted.filter(x => x.type === 'contact-names-updated');
+  const friendEvents = () => emitted.filter(x => x.type === 'friend-names-updated');
   const deviceEvents = () => emitted.filter(x => x.type === 'device-names-updated');
-  return { engine: e, docState: () => state, emitted, contactEvents, deviceEvents };
+  return { engine: e, docState: () => state, emitted, friendEvents, deviceEvents };
 }
 
-describe('contact roster (unified contacts map)', () => {
-  it('putContactName writes a name and broadcasts', async () => {
-    const { engine, docState, contactEvents } = makeEngine();
-    await engine.putContactName(ID, 'Alice');
-    expect(docState().contacts[ID]).toBe('Alice');
-    expect(await engine.getContactNames()).toEqual({ [ID]: 'Alice' });
-    expect(contactEvents().at(-1).names).toEqual({ [ID]: 'Alice' });
+describe('friend roster (unified friends map)', () => {
+  it('putFriendName writes a name and broadcasts', async () => {
+    const { engine, docState, friendEvents } = makeEngine();
+    await engine.putFriendName(ID, 'Alice');
+    expect(docState().friends[ID]).toBe('Alice');
+    expect(await engine.getFriendNames()).toEqual({ [ID]: 'Alice' });
+    expect(friendEvents().at(-1).names).toEqual({ [ID]: 'Alice' });
   });
 
-  it('addKnownContactGroup records an unnamed (null) contact, excluded from names', async () => {
+  it('addKnownFriendGroup records an unnamed (null) friend, excluded from names', async () => {
     const { engine, docState } = makeEngine();
-    const already = await engine.addKnownContactGroup(ID2);
+    const already = await engine.addKnownFriendGroup(ID2);
     expect(already).toBe(false);
-    expect(docState().contacts[ID2]).toBeNull();
+    expect(docState().friends[ID2]).toBeNull();
     // Named-only view drops the null; the roster (keys) still includes it.
-    expect(await engine.getContactNames()).toEqual({});
-    expect(Object.keys(docState().contacts)).toContain(ID2);
+    expect(await engine.getFriendNames()).toEqual({});
+    expect(Object.keys(docState().friends)).toContain(ID2);
     // Idempotent: a second add reports already-known.
-    expect(await engine.addKnownContactGroup(ID2)).toBe(true);
+    expect(await engine.addKnownFriendGroup(ID2)).toBe(true);
   });
 
-  it('deleteContactName removes the contact from the roster entirely', async () => {
+  it('deleteFriendName removes the friend from the roster entirely', async () => {
     const { engine, docState } = makeEngine();
-    await engine.putContactName(ID, 'Alice');
-    await engine.deleteContactName(ID);
-    expect(ID in docState().contacts).toBe(false);
+    await engine.putFriendName(ID, 'Alice');
+    await engine.deleteFriendName(ID);
+    expect(ID in docState().friends).toBe(false);
   });
 
   it('putDeviceName writes + broadcasts device names', async () => {
@@ -102,22 +102,28 @@ describe('archived-doc tombstones (in the doc)', () => {
 describe('enforced validation (changeDriveSettings)', () => {
   it('rejects an invalid contact value (number) — nothing committed', () => {
     const { engine, docState } = makeEngine();
-    expect(() => engine.changeDriveSettings((d: any) => { d.contacts[ID] = 5; })).toThrow(/rejected/i);
-    expect(docState().contacts[ID]).toBeUndefined();
+    expect(() => engine.changeDriveSettings((d: any) => { d.friends[ID] = 5; })).toThrow(/rejected/i);
+    expect(docState().friends[ID]).toBeUndefined();
   });
 
   it('rejects a malformed contact key', () => {
     const { engine } = makeEngine();
-    expect(() => engine.changeDriveSettings((d: any) => { d.contacts['not-an-id'] = 'x'; })).toThrow(/rejected/i);
+    expect(() => engine.changeDriveSettings((d: any) => { d.friends['not-an-id'] = 'x'; })).toThrow(/rejected/i);
   });
 
-  it('rejects a stray top-level key', () => {
-    const { engine } = makeEngine();
-    expect(() => engine.changeDriveSettings((d: any) => { d.bogus = 1; })).toThrow(/rejected/i);
+  // An unknown key is a *warning*, not an error: a build that doesn't recognise a
+  // field must not have every subsequent settings write throw. (That is exactly
+  // what a leftover `contacts` key would have done after the friends rename.)
+  it('tolerates a stray top-level key instead of bricking every write', () => {
+    const { engine, docState } = makeEngine();
+    expect(() => engine.changeDriveSettings((d: any) => { d.bogus = 1; })).not.toThrow();
+    // And a real error still rejects, with the stray key present.
+    expect(() => engine.changeDriveSettings((d: any) => { d.friends[ID] = 5; })).toThrow(/rejected/i);
+    expect(docState().bogus).toBe(1);
   });
 
-  it('putContactName with a malformed id rejects', async () => {
+  it('putFriendName with a malformed id rejects', async () => {
     const { engine } = makeEngine();
-    await expect(engine.putContactName('bad-id', 'x')).rejects.toThrow(/rejected/i);
+    await expect(engine.putFriendName('bad-id', 'x')).rejects.toThrow(/rejected/i);
   });
 });

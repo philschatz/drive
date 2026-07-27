@@ -99,7 +99,7 @@ export function ConnectionDebug({ path }: { path?: string }) {
           <dd className="font-mono break-all">{relayUrl()}</dd>
         </dl>
         <p className="text-xs text-muted-foreground mt-2">
-          Edits are always saved on this device and sync to your other devices and contacts
+          Edits are always saved on this device and sync to your other devices and friends
           once one is online. The relay only routes changes between devices — it never stores them.
         </p>
       </section>
@@ -123,13 +123,13 @@ export function ConnectionDebug({ path }: { path?: string }) {
         </dl>
       </section>
 
-      {/* Peers — other devices/contacts. NOT the server. */}
+      {/* Peers — other devices/friends. NOT the server. */}
       <section className="mb-6">
         <h2 className="text-lg font-semibold mb-2">
           Peer devices connected: {peers.length}
         </h2>
         <p className="text-xs text-muted-foreground mb-2">
-          Other devices/contacts currently reachable. {peerConnected ? 'At least one peer is online.' : 'No peers online right now.'}
+          Other devices/friends currently reachable. {peerConnected ? 'At least one peer is online.' : 'No peers online right now.'}
         </p>
         {peers.length === 0 ? (
           <p className="text-sm text-muted-foreground">No peers.</p>

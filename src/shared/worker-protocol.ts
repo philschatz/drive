@@ -51,8 +51,8 @@ export type MainToWorker =
   | { type: 'archive-doc'; id: number; docId: string }
   // Contact name mutations (IDB-backed). `id` correlates the result so the main
   // thread can await persistence and surface failures instead of losing them.
-  | { type: 'set-contact-name'; id: number; agentId: string; name: string }
-  | { type: 'remove-contact-name'; id: number; agentId: string }
+  | { type: 'set-friend-name'; id: number; agentId: string; name: string }
+  | { type: 'remove-friend-name'; id: number; agentId: string }
   // Device name mutations (IDB-backed, keyed by device agentId). Same shape as
   // the contact-name messages; `id` correlates the awaited persistence result.
   | { type: 'set-device-name'; id: number; agentId: string; name: string }
@@ -72,7 +72,7 @@ export type MainToWorker =
   | { type: 'kh-ensure-user-group'; id: number; create?: boolean; adoptGroupId?: string; waitForSync?: boolean }
   | { type: 'kh-link-device'; id: number; deviceAgentId: string; peerGroupId?: string | null }
   | { type: 'kh-get-link-payload'; id: number }
-  | { type: 'kh-get-known-contacts'; id: number; excludeDocId?: string }
+  | { type: 'kh-get-known-friends'; id: number; excludeDocId?: string }
   // Encrypted relay rendezvous (large-payload contact exchange via QR id+key)
   | { type: 'kh-rdv-create-share'; id: number; displayName?: string }
   | { type: 'kh-rdv-receive'; id: number; rendezvousId: string; key: string; displayName?: string }
@@ -118,7 +118,7 @@ export type WorkerToMain =
   | { type: 'update-validation'; docId: string; errors: ValidationError[] }
   // Doc list / contact names push
   | { type: 'doc-list-updated'; list: Array<{ id: string; type?: string; name?: string; sharingGroupId?: string }> }
-  | { type: 'contact-names-updated'; names: Record<string, string> }
+  | { type: 'friend-names-updated'; names: Record<string, string> }
   | { type: 'device-names-updated'; names: Record<string, string> }
   // Per-doc "has new changes since last viewed" state, pushed as a full map on
   // every transition. Absent docId = unknown (the doc has a last-viewed record
@@ -135,6 +135,6 @@ export type WorkerToMain =
       message?: string;
       // Set on the sharer's terminal 'received' event: the contact we added back,
       // and whether they sent a name (so the sharer's UI can prompt for one if not).
-      contactGroupId?: string;
-      contactHasName?: boolean;
+      friendGroupId?: string;
+      friendHasName?: boolean;
     };

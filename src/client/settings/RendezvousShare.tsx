@@ -60,8 +60,8 @@ export function RendezvousShare({
       else {
         setPhase(e.status);
         if (e.status === 'sending' && e.message) setTransferDetail(e.message);
-        if (e.status === 'received' && e.contactGroupId) {
-          onReceivedContactRef.current?.({ groupId: e.contactGroupId, hasName: !!e.contactHasName });
+        if (e.status === 'received' && e.friendGroupId) {
+          onReceivedContactRef.current?.({ groupId: e.friendGroupId, hasName: !!e.friendHasName });
         }
       }
     });

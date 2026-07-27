@@ -12,7 +12,7 @@ import { deepAssign } from '../shared/deep-assign';
 import type { RendezvousStatus } from '../shared/rendezvous-protocol';
 export type { RendezvousStatus } from '../shared/rendezvous-protocol';
 import { idbDelPrefix, settingGet, settingSetSync, closeDb, CACHE_PREFIX } from './idb-storage';
-import { setContactNamesDispatch, applyContactNamesFromWorker } from './contact-names';
+import { setFriendNamesDispatch, applyFriendNamesFromWorker } from './friend-names';
 import { setDeviceNamesDispatch, applyDeviceNamesFromWorker } from './device-names';
 import { generateDefaultDeviceName } from './lib/device-name';
 import type { ArchiveDocResult } from './shared/keyhive-types';
@@ -92,15 +92,15 @@ export function onDeviceNamesUpdated(fn: () => void): () => void {
   return () => { deviceNamesListeners.delete(fn); };
 }
 
-// ── Contact-name push (cache lives in contact-names.ts; this just notifies UI) ─
+// ── Friend-name push (cache lives in friend-names.ts; this just notifies UI) ─
 const contactNamesListeners = new Set<() => void>();
 
 /**
  * Subscribe to contact-name changes (e.g. a contact's name learned via QR
- * rendezvous). The cache in contact-names.ts is already updated when this fires;
+ * rendezvous). The cache in friend-names.ts is already updated when this fires;
  * the callback is just a re-render nudge. Returns a cleanup function.
  */
-export function onContactNamesUpdated(fn: () => void): () => void {
+export function onFriendNamesUpdated(fn: () => void): () => void {
   contactNamesListeners.add(fn);
   return () => { contactNamesListeners.delete(fn); };
 }
@@ -135,7 +135,7 @@ function logSend(msg: { type: string } & Record<string, any>): void {
 const client = new WorkerClient(worker, { log: logSend });
 
 // Wire up the contact-names dispatch hook (avoids a circular import with contact-names)
-setContactNamesDispatch((type, agentId, name) =>
+setFriendNamesDispatch((type, agentId, name) =>
   // Route through request() so the caller can await persistence and a failed write
   // rejects (rather than being a silent fire-and-forget that drops the data).
   request<void>(type, { agentId, ...(name !== undefined ? { name } : {}) })
@@ -287,9 +287,9 @@ export interface RendezvousEvent {
   status: RendezvousStatus;
   message?: string;
   /** On the sharer's terminal 'received' event: the contact we just added back. */
-  contactGroupId?: string;
+  friendGroupId?: string;
   /** Whether that contact arrived with a display name (else the sharer must prompt for one). */
-  contactHasName?: boolean;
+  friendHasName?: boolean;
 }
 type RendezvousEventListener = (e: RendezvousEvent) => void;
 const rdvEventListeners = new Set<RendezvousEventListener>();
@@ -344,8 +344,8 @@ worker.onmessage = (e: MessageEvent<WorkerToMain>) => {
     case 'doc-list-updated':
       emitDocList(msg.list as any);
       break;
-    case 'contact-names-updated':
-      applyContactNamesFromWorker(msg.names);
+    case 'friend-names-updated':
+      applyFriendNamesFromWorker(msg.names);
       for (const fn of contactNamesListeners) fn();
       break;
     case 'device-names-updated':
@@ -804,8 +804,8 @@ export function receiveContactCard(
 }
 
 /** Get known contacts across all documents, excluding members of a specific doc. */
-export function getKnownContacts(excludeDocId: string): Promise<MemberInfo[]> {
-  return khRequest('kh-get-known-contacts', { excludeDocId });
+export function getKnownFriends(excludeDocId: string): Promise<MemberInfo[]> {
+  return khRequest('kh-get-known-friends', { excludeDocId });
 }
 
 /** Ensure this device has a personal user-group; returns its id (base64). */

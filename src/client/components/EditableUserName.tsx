@@ -1,6 +1,6 @@
 import { EditableName } from './EditableName';
-import { getContactName, setContactName } from '../contact-names';
-import { onContactNamesUpdated } from '../worker-api';
+import { getFriendName, setFriendName } from '../friend-names';
+import { onFriendNamesUpdated } from '../worker-api';
 import type { DeviceStatus } from '../shared/use-devices';
 
 /**
@@ -13,9 +13,9 @@ export function EditableUserName({ agentId, suffix, status }: { agentId: string;
   return (
     <EditableName
       agentId={agentId}
-      get={getContactName}
-      set={setContactName}
-      subscribe={onContactNamesUpdated}
+      get={getFriendName}
+      set={setFriendName}
+      subscribe={onFriendNamesUpdated}
       placeholder={`${agentId.slice(0, 12)}…`}
       title={agentId}
       suffix={suffix}

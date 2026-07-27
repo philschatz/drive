@@ -4,7 +4,7 @@
  */
 import { Button } from '@/components/ui/button';
 import { idbGet, idbSet, KEYS } from '../../idb-storage';
-import { getAllContactNames, setContactName } from '../../contact-names';
+import { getAllFriendNames, setFriendName } from '../../friend-names';
 import { getAllDeviceNames, setDeviceName } from '../../device-names';
 import { useSectionAlerts } from '../SettingsSubScreen';
 
@@ -16,9 +16,9 @@ export function BackupSettings() {
       // Contact/device names now live in the synced DriveSettings doc; read them
       // from the worker-hydrated caches. docList stays a device-local hint.
       const docList = await idbGet<unknown[]>(KEYS.docIds).then(v => v ?? []);
-      const contactNames = getAllContactNames();
+      const friendNames = getAllFriendNames();
       const deviceNames = getAllDeviceNames();
-      const payload = { version: 1, exportedAt: new Date().toISOString(), docList, contactNames, deviceNames };
+      const payload = { version: 2, exportedAt: new Date().toISOString(), docList, friendNames, deviceNames };
       const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -42,19 +42,23 @@ export function BackupSettings() {
       try {
         const text = await file.text();
         const payload = JSON.parse(text);
-        if (!payload || payload.version !== 1) throw new Error('Invalid backup file (wrong version).');
+        if (!payload || (payload.version !== 1 && payload.version !== 2))
+          throw new Error('Invalid backup file (wrong version).');
         if (!Array.isArray(payload.docList)) throw new Error('Invalid backup: docList must be an array.');
-        if (typeof payload.contactNames !== 'object' || Array.isArray(payload.contactNames))
-          throw new Error('Invalid backup: contactNames must be an object.');
+        // v1 called this `contactNames`; v2 renamed it to `friendNames`. Accept
+        // either so backups taken before the rename still restore.
+        const friendNames = payload.friendNames ?? payload.contactNames;
+        if (typeof friendNames !== 'object' || Array.isArray(friendNames))
+          throw new Error('Invalid backup: friendNames must be an object.');
         // Legacy backups may carry an `invites` field — it's no longer used, so ignore it.
         // `deviceNames` was added later; older backups omit it, so default to {}.
         const deviceNames: Record<string, string> = (payload.deviceNames && typeof payload.deviceNames === 'object' && !Array.isArray(payload.deviceNames))
           ? payload.deviceNames : {};
         await idbSet(KEYS.docIds, payload.docList);
-        // Contact/device names live in the synced DriveSettings doc now — restore
+        // Friend/device names live in the synced DriveSettings doc now — restore
         // them through the worker so they land in (and re-sync from) that document.
         await Promise.all([
-          ...Object.entries(payload.contactNames as Record<string, string>).map(([id, name]) => setContactName(id, name)),
+          ...Object.entries(friendNames as Record<string, string>).map(([id, name]) => setFriendName(id, name)),
           ...Object.entries(deviceNames).map(([id, name]) => setDeviceName(id, name)),
         ]);
         window.location.reload();
@@ -70,7 +74,7 @@ export function BackupSettings() {
       {alerts}
       <section className="mb-6">
         <p className="text-xs text-muted-foreground mb-2">
-          Export or import your document list and contacts.
+          Export or import your document list and friends.
           This does not include document contents (those sync via Automerge).
         </p>
         <div className="flex items-center gap-2">

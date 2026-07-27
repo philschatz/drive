@@ -53,10 +53,12 @@ to clean up   *     document ⇒ SHARED mode (contacts + names, device names, an
  * live code writes them. (Seen state, `data:last-viewed-heads`, was NOT moved —
  * it stays device-local; see KEYS.lastViewedHeads.)
  */
+// The string VALUES are frozen — they are on real users' disks. Only the
+// property names follow the Contact → Friend rename.
 export const LEGACY_IDB_KEYS = {
-  contactNames: 'data:contact-names',
+  friendNames: 'data:contact-names',
   deviceNames: 'data:device-names',
-  knownContactGroups: 'data:known-contact-groups',
+  knownFriendGroups: 'data:known-contact-groups',
   archivedDocIds: 'data:archived-doc-ids',
 } as const;
 

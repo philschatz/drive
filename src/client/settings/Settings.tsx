@@ -1,6 +1,6 @@
 /**
  * Settings index — a Material list navigating to sub-screens (profile, devices,
- * storage, backup, developer tools, debugging, danger zone) plus Contacts.
+ * storage, backup, developer tools, debugging, danger zone) plus Friends.
  * The sections themselves live under ./sections/ and render at
  * `#/settings/:section` via SettingsSection.
  */
@@ -13,7 +13,7 @@ const GROUPS: Array<Array<{ icon: string; label: string; href: string }>> = [
   [
     { icon: 'person', label: 'Profile', href: '#/settings/profile' },
     { icon: 'devices', label: 'Devices', href: '#/settings/devices' },
-    { icon: 'contacts', label: 'Contacts', href: '#/contacts' },
+    { icon: 'group', label: 'Friends', href: '#/friends' },
   ],
   [
     { icon: 'sync', label: 'Settings Storage', href: '#/settings/storage' },
@@ -41,6 +41,8 @@ export function Settings({ path }: { path?: string }) {
           <span className="material-symbols-outlined" style={{ fontSize: 24 }}>arrow_back</span>
         </a>
         <h1 className="md-title-large font-bold flex-1 min-w-0 truncate">Settings</h1>
+        {/* The app's single QR entry point — friend invites, device links and
+            document URLs all scan from here. */}
         <ScanQrButton onError={setError} />
       </div>
 

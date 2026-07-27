@@ -13,7 +13,7 @@
 import { useState, useEffect, useRef } from 'preact/hooks';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { getIdentity, ensureUserGroup, rendezvousCreateShare } from '../shared/keyhive-api';
-import { getContactName, setContactName } from '../contact-names';
+import { getFriendName, setFriendName } from '../friend-names';
 import { keyhiveReady, whenWsConnected } from '../shared/automerge';
 import { RendezvousShare } from './RendezvousShare';
 import { buildAddFriendRendezvousUrl } from './AddFriendPage';
@@ -48,7 +48,7 @@ export function AddFriendSheet({ open, onOpenChange, onAdded }: AddFriendSheetPr
         await keyhiveReady;
         const id = await getIdentity();
         if (cancelled) return;
-        setSavedName((id.userGroupId && getContactName(id.userGroupId)) || '');
+        setSavedName((id.userGroupId && getFriendName(id.userGroupId)) || '');
         // Gate on the relay socket: a rendezvous subscribe sent before the WS is open
         // is silently dropped, leaving us waiting forever. (Same guard the pages used.)
         await whenWsConnected();
@@ -73,12 +73,12 @@ export function AddFriendSheet({ open, onOpenChange, onAdded }: AddFriendSheetPr
     if (hasName) {
       // The worker persisted the name before emitting the event, so the cache
       // has it; fall back in case that push hasn't landed yet.
-      alert(`${getContactName(groupId) ?? 'Your friend'} was added.`);
+      alert(`${getFriendName(groupId) ?? 'Your friend'} was added.`);
     } else {
       const trimmed = prompt('Name this contact', '')?.trim();
       if (trimmed) {
         try {
-          await setContactName(groupId, trimmed);
+          await setFriendName(groupId, trimmed);
         } catch (err: any) {
           setError('Could not save the name: ' + (err?.message ?? 'storage error'));
         }
@@ -92,20 +92,15 @@ export function AddFriendSheet({ open, onOpenChange, onAdded }: AddFriendSheetPr
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent side="bottom" className="max-h-[85vh] overflow-y-auto">
         <SheetHeader>
-          <SheetTitle>Add a friend</SheetTitle>
+          <SheetTitle>Invite a friend</SheetTitle>
         </SheetHeader>
 
         <p className="text-sm text-muted-foreground mt-3 mb-3 max-w-md">
-          Show this QR code to a friend so they can add you as a contact and share documents with you.
+          Show this QR code to a friend so they can add you and share documents with you.
         </p>
 
-        {savedName ? (
+        {savedName && (
           <p className="text-sm mb-3">Sharing as: <span className="font-medium">{savedName}</span></p>
-        ) : (
-          <p className="text-sm text-muted-foreground mb-3">
-            No name set — <a href="#/settings" className="underline hover:text-foreground">set your name in Settings</a> so
-            your friend can recognize you (optional).
-          </p>
         )}
 
         {error && <p className="text-sm text-destructive mb-3">{error}</p>}
@@ -116,8 +111,8 @@ export function AddFriendSheet({ open, onOpenChange, onAdded }: AddFriendSheetPr
               create={() => rendezvousCreateShare(savedName || undefined)}
               buildUrl={buildAddFriendRendezvousUrl}
               waitingLabel="Waiting for your friend to open the link…"
-              transferLabel="Exchanging contact info…"
-              doneLabel="Connected — you're now contacts."
+              transferLabel="Exchanging details…"
+              doneLabel="Connected — you're now friends."
               onReceivedContact={handleReceived}
             />
           </div>

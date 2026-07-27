@@ -33,7 +33,7 @@ describe('validateDocument(DriveSettings)', () => {
   it('accepts a fully-populated valid doc, names or null', () => {
     expect(ok({
       '@type': 'DriveSettings',
-      contacts: { [ID]: 'Alice', [ID2]: null },
+      friends: { [ID]: 'Alice', [ID2]: null },
       deviceNames: { [ID]: '💻 Firefox' },
       archivedDocIds: { [DOC]: { grantSigs: [] } },
     })).toEqual([]);
@@ -44,11 +44,11 @@ describe('validateDocument(DriveSettings)', () => {
   });
 
   it('rejects a non-string, non-null contact value', () => {
-    expect(ok({ '@type': 'DriveSettings', contacts: { [ID]: 5 } }).length).toBeGreaterThan(0);
+    expect(ok({ '@type': 'DriveSettings', friends: { [ID]: 5 } }).length).toBeGreaterThan(0);
   });
 
   it('rejects a malformed contact / device key', () => {
-    expect(ok({ '@type': 'DriveSettings', contacts: { 'not-an-id': 'x' } }).length).toBeGreaterThan(0);
+    expect(ok({ '@type': 'DriveSettings', friends: { 'not-an-id': 'x' } }).length).toBeGreaterThan(0);
     expect(ok({ '@type': 'DriveSettings', deviceNames: { 'nope': 'x' } }).length).toBeGreaterThan(0);
   });
 

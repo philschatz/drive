@@ -2,28 +2,28 @@ import type { MemberInfo } from './shared/keyhive-types';
 
 // --- Dispatch hook (injected from automerge.ts to avoid circular imports) ---
 
-type ContactNamesDispatch = (type: 'set-contact-name' | 'remove-contact-name', agentId: string, name?: string) => Promise<void>;
-let dispatch: ContactNamesDispatch | null = null;
+type FriendNamesDispatch = (type: 'set-friend-name' | 'remove-friend-name', agentId: string, name?: string) => Promise<void>;
+let dispatch: FriendNamesDispatch | null = null;
 
-export function setContactNamesDispatch(fn: ContactNamesDispatch): void {
+export function setFriendNamesDispatch(fn: FriendNamesDispatch): void {
   dispatch = fn;
 }
 
-// --- In-memory cache (populated by worker via applyContactNamesFromWorker) ---
+// --- In-memory cache (populated by worker via applyFriendNamesFromWorker) ---
 
 let cache: Record<string, string> = {};
 
-/** Replace the entire cache. Called by automerge.ts on `contact-names-updated`. */
-export function applyContactNamesFromWorker(names: Record<string, string>): void {
+/** Replace the entire cache. Called by automerge.ts on `friend-names-updated`. */
+export function applyFriendNamesFromWorker(names: Record<string, string>): void {
   cache = { ...names };
 }
 
-export function getContactName(agentId: string): string | undefined {
+export function getFriendName(agentId: string): string | undefined {
   return cache[agentId];
 }
 
 /** Return a snapshot of all saved contact names (agentId → name). */
-export function getAllContactNames(): Record<string, string> {
+export function getAllFriendNames(): Record<string, string> {
   return { ...cache };
 }
 
@@ -37,7 +37,7 @@ export function getAllContactNames(): Record<string, string> {
  * panel and the Contacts page show the same set of contacts even if the keyhive view
  * (read from IndexedDB in the worker) and the in-memory cache momentarily diverge.
  */
-export function mergeCachedContacts(
+export function mergeCachedFriends(
   fromKeyhive: MemberInfo[],
   excludeIds: Iterable<string> = [],
 ): MemberInfo[] {
@@ -64,16 +64,16 @@ export function mergeCachedContacts(
  * and the promise rejects — so a failed save surfaces instead of silently diverging
  * from the persisted store.
  */
-export async function setContactName(agentId: string, name: string): Promise<void> {
+export async function setFriendName(agentId: string, name: string): Promise<void> {
   const trimmed = name.trim();
   if (!trimmed) {
-    await removeContactName(agentId);
+    await removeFriendName(agentId);
     return;
   }
   const prev = cache[agentId];
   cache[agentId] = trimmed;
   try {
-    await dispatch?.('set-contact-name', agentId, trimmed);
+    await dispatch?.('set-friend-name', agentId, trimmed);
   } catch (err) {
     if (prev === undefined) delete cache[agentId];
     else cache[agentId] = prev;
@@ -81,11 +81,11 @@ export async function setContactName(agentId: string, name: string): Promise<voi
   }
 }
 
-export async function removeContactName(agentId: string): Promise<void> {
+export async function removeFriendName(agentId: string): Promise<void> {
   const prev = cache[agentId];
   delete cache[agentId];
   try {
-    await dispatch?.('remove-contact-name', agentId);
+    await dispatch?.('remove-friend-name', agentId);
   } catch (err) {
     if (prev !== undefined) cache[agentId] = prev;
     throw err;

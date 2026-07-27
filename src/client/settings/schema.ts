@@ -1,6 +1,6 @@
 /**
  * Worker-safe schema for the per-user, keyhive-private `DriveSettings` document
- * (the synced source of truth for contacts, device names, and archived-doc
+ * (the synced source of truth for friends, device names, and archived-doc
  * tombstones). Registered in src/shared/schemas so
  * validation runs inside the automerge worker. Deliberately NOT registered in
  * src/client/doc-plugins — there is no editor View; the doc is inspected/edited
@@ -33,12 +33,12 @@ export interface ArchivedDocTombstone {
 export interface DriveSettingsDocument {
   '@type': 'DriveSettings';
   /**
-   * The whole contact roster in one map, keyed by contact user-group id. The
-   * value is the display name, or `null` when the contact is known but unnamed.
-   * Also holds YOUR own name, keyed by your own user-group id. (Contacts you
+   * The whole friend roster in one map, keyed by friend user-group id. The
+   * value is the display name, or `null` when the friend is known but unnamed.
+   * Also holds YOUR own name, keyed by your own user-group id. (Friends you
    * share a doc with are derived live from keyhive and are not stored here.)
    */
-  contacts: Record<string, string | null>;
+  friends: Record<string, string | null>;
   /** Friendly per-device names, keyed by device agentId. */
   deviceNames: Record<string, string>;
   /** Docs hidden from Home, keyed by automerge docId, with their re-share baseline. */
@@ -47,11 +47,11 @@ export interface DriveSettingsDocument {
 
 export const driveSettingsSchema = obj({
   '@type': str({ enum: ['DriveSettings'] }),
-  // Keyed by contact user-group id. `str({ optional: true })` is how the DSL
+  // Keyed by friend user-group id. `str({ optional: true })` is how the DSL
   // expresses "string or null": the validator accepts null/absent only where a
-  // node is optional. So a contact value may be a name string or null
+  // node is optional. So a friend value may be a name string or null
   // (known-but-unnamed); a number is rejected.
-  contacts: record(str({ optional: true }), { optional: true, keyPattern: KEYHIVE_ID_RE }),
+  friends: record(str({ optional: true }), { optional: true, keyPattern: KEYHIVE_ID_RE }),
   // Keyed by device agentId.
   deviceNames: record(str(), { optional: true, keyPattern: KEYHIVE_ID_RE }),
   // Keyed by automerge docId; value carries the re-share baseline signatures.

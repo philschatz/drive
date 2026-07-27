@@ -48,7 +48,7 @@ export function MemberOptionsSheet({
                 <div slot="headline">Rename</div>
                 {/* Contact names are global: this renames them everywhere, not
                     just on this document. */}
-                <div slot="supporting-text">Renames this contact everywhere</div>
+                <div slot="supporting-text">Renames this friend everywhere</div>
               </md-list-item>
 
               {isAdmin && (

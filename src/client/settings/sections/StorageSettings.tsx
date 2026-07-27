@@ -39,7 +39,7 @@ export function StorageSettings() {
       existing = await getReachableSettingsDoc();
     } catch { /* fall through to the confirm+create path */ }
     if (!existing && !window.confirm(
-      'Sync your settings (contacts, device names, seen state) across your devices?\n\n' +
+      'Sync your settings (friends, device names, seen state) across your devices?\n\n' +
       "This is permanent — synced settings can't be made device-only again.",
     )) return;
     setSyncing(true);
@@ -58,7 +58,7 @@ export function StorageSettings() {
       <section className="mb-6">
         {settingsDocId ? (
           <p className="text-xs text-muted-foreground">
-            Your settings (contacts, device names, seen state) are{' '}
+            Your settings (friends, device names, seen state) are{' '}
             <strong>synced across your devices</strong> —{' '}
             <a href={sourceUrl(settingsDocId)} className="text-primary underline underline-offset-2">
               inspect them
@@ -75,13 +75,13 @@ export function StorageSettings() {
               variant="outline"
               onClick={handleEnableSync}
               disabled={syncing || !identity?.userGroupId}
-              title={identity?.userGroupId ? undefined : 'Add a contact or link a device first to enable synced settings'}
+              title={identity?.userGroupId ? undefined : 'Add a friend or link a device first to enable synced settings'}
             >
               {syncing ? 'Enabling…' : 'Sync settings across devices'}
             </Button>
             {!identity?.userGroupId && (
               <p className="text-[11px] text-muted-foreground mt-1">
-                Add a contact or link a device first to enable synced settings.
+                Add a friend or link a device first to enable synced settings.
               </p>
             )}
           </>

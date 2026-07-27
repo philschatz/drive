@@ -290,7 +290,11 @@ export class DriveEngine {
     } else {
       next = this.Automerge.change(this.Automerge.clone(handle.doc()), mutator);
     }
-    const errors = validateDocument(next);
+    // Only hard errors reject. An unknown property is reported as a `warning`
+    // (see obj() in schemas/core.ts) — a key this build doesn't know about must
+    // never make every subsequent settings write throw, which is what a stale
+    // key from another build would otherwise do.
+    const errors = validateDocument(next).filter(e => e.kind !== 'warning');
     if (errors.length) {
       const detail = errors.slice(0, 3).map(e => `${e.path.join('.') || '(root)'}: ${e.message}`).join('; ');
       throw new Error(`DriveSettings change rejected (would be invalid): ${detail}`);
@@ -350,13 +354,35 @@ export class DriveEngine {
     // guard anyway: only adopt an object as the blob, else seed a bare one.
     this.localSettings = (stored && typeof stored === 'object')
       ? stored
-      : { '@type': 'DriveSettings', contacts: {}, deviceNames: {}, archivedDocIds: {} };
+      : { '@type': 'DriveSettings', friends: {}, deviceNames: {}, archivedDocIds: {} };
     this.installLocalHandle();
+    // Rename first: everything below writes into `friends`.
+    this.migrateContactsToFriends();
     // The one-time legacy-key → blob consolidation (writes the blob via the local
     // handle, then deletes the five LEGACY_IDB_KEYS). This IS the local migration.
     await this.mergeLegacyIntoSettings();
     this.refreshFromSettingsDoc();
     return this.driveSettingsHandle;
+  }
+
+  /**
+   * One-way local rename of the roster map `contacts` → `friends`. Idempotent,
+   * and a no-op on docs created after the rename. Must run before anything else
+   * writes settings, since the schema no longer declares `contacts`.
+   *
+   * Safe despite the pre-state being "invalid": assertValidSettingsChange
+   * validates the post-mutation clone, which no longer carries the old key.
+   */
+  private migrateContactsToFriends(): void {
+    const doc = this.driveSettingsDoc();
+    if (!doc?.contacts) return;
+    this.changeDriveSettings(d => {
+      if (!d.friends) d.friends = {};
+      for (const [k, v] of Object.entries(d.contacts ?? {})) {
+        if (!(k in d.friends)) d.friends[k] = v; // never clobber a newer name
+      }
+      delete d.contacts;
+    });
   }
 
   /** Install the __local facade over this.localSettings into this.driveSettingsHandle. */
@@ -450,6 +476,8 @@ export class DriveEngine {
     this.driveSettingsDocId = docId;
     this.driveSettingsHandle = handle;
     this.subscribeDriveSettings(handle);
+    // Rename before the first read/write of the roster (see migrateContactsToFriends).
+    this.migrateContactsToFriends();
     this.refreshFromSettingsDoc();
   }
 
@@ -484,7 +512,7 @@ export class DriveEngine {
     const { docIdBytes } = await this.khOps.createKeyhiveDoc();
     this.setNextDocId(docIdBytes);
     const handle = await this.repo.create2({
-      '@type': 'DriveSettings', contacts: {}, deviceNames: {}, archivedDocIds: {},
+      '@type': 'DriveSettings', friends: {}, deviceNames: {}, archivedDocIds: {},
     });
     await this.khOps.enableSharing(handle.documentId, docIdBytes);
     const doc = handle.doc();
@@ -528,7 +556,7 @@ export class DriveEngine {
 
   /** Rebroadcast names (called on load + on remote edit). */
   private refreshFromSettingsDoc(): void {
-    this.broadcastContactNames(this.getContactNamesMap());
+    this.broadcastFriendNames(this.getFriendNamesMap());
     this.broadcastDeviceNames(this.getDeviceNamesMap());
   }
 
@@ -579,7 +607,7 @@ export class DriveEngine {
   /** Copy keys from `src`'s maps into the canonical doc without clobbering existing ones. */
   private fillMissingSettings(src: any): void {
     this.changeDriveSettings(d => {
-      for (const field of ['contacts', 'deviceNames', 'archivedDocIds'] as const) {
+      for (const field of ['friends', 'deviceNames', 'archivedDocIds'] as const) {
         const s = src?.[field];
         if (!s || typeof s !== 'object') continue;
         if (!d[field]) d[field] = {};
@@ -595,27 +623,27 @@ export class DriveEngine {
     if (this.legacyMerged || !this.driveSettingsHandle) return;
     this.legacyMerged = true;
     try {
-      const [contactNames, knownGroups, deviceNames, archivedDocIds] = await Promise.all([
-        this.host.kv.get<Record<string, string>>(LEGACY_IDB_KEYS.contactNames),
-        this.host.kv.get<string[]>(LEGACY_IDB_KEYS.knownContactGroups),
+      const [friendNames, knownGroups, deviceNames, archivedDocIds] = await Promise.all([
+        this.host.kv.get<Record<string, string>>(LEGACY_IDB_KEYS.friendNames),
+        this.host.kv.get<string[]>(LEGACY_IDB_KEYS.knownFriendGroups),
         this.host.kv.get<Record<string, string>>(LEGACY_IDB_KEYS.deviceNames),
         this.host.kv.get<ArchivedDocTombstones>(LEGACY_IDB_KEYS.archivedDocIds),
       ]);
-      if (contactNames || knownGroups || deviceNames || archivedDocIds) {
+      if (friendNames || knownGroups || deviceNames || archivedDocIds) {
         this.changeDriveSettings(d => {
-          if (!d.contacts) d.contacts = {};
+          if (!d.friends) d.friends = {};
           if (!d.deviceNames) d.deviceNames = {};
           if (!d.archivedDocIds) d.archivedDocIds = {};
-          for (const g of knownGroups ?? []) if (!(g in d.contacts)) d.contacts[g] = null;
-          for (const [k, v] of Object.entries(contactNames ?? {})) if (d.contacts[k] == null) d.contacts[k] = v;
+          for (const g of knownGroups ?? []) if (!(g in d.friends)) d.friends[g] = null;
+          for (const [k, v] of Object.entries(friendNames ?? {})) if (d.friends[k] == null) d.friends[k] = v;
           for (const [k, v] of Object.entries(deviceNames ?? {})) if (!(k in d.deviceNames)) d.deviceNames[k] = v;
           for (const [k, v] of Object.entries(archivedDocIds ?? {})) if (!(k in d.archivedDocIds)) d.archivedDocIds[k] = { grantSigs: [...((v as any)?.grantSigs ?? [])] };
         });
         console.log('[engine] migrated legacy IDB settings into the DriveSettings doc');
       }
       await Promise.all([
-        this.host.kv.del(LEGACY_IDB_KEYS.contactNames),
-        this.host.kv.del(LEGACY_IDB_KEYS.knownContactGroups),
+        this.host.kv.del(LEGACY_IDB_KEYS.friendNames),
+        this.host.kv.del(LEGACY_IDB_KEYS.knownFriendGroups),
         this.host.kv.del(LEGACY_IDB_KEYS.deviceNames),
         this.host.kv.del(LEGACY_IDB_KEYS.archivedDocIds),
       ]);
@@ -638,41 +666,41 @@ export class DriveEngine {
     this.changeDriveSettings(d => { for (const id of docIds) if (d.archivedDocIds) delete d.archivedDocIds[id]; });
   }
 
-  // ── Contact roster (unified `contacts` map in the DriveSettings doc) ────────
-  // Value is the display name, or null when a contact is known but unnamed.
-  private getContactNamesMap(): Record<string, string> {
-    const contacts = this.driveSettingsDoc()?.contacts;
+  // ── Friend roster (unified `friends` map in the DriveSettings doc) ──────────
+  // Value is the display name, or null when a friend is known but unnamed.
+  private getFriendNamesMap(): Record<string, string> {
+    const friends = this.driveSettingsDoc()?.friends;
     const out: Record<string, string> = {};
-    if (contacts) for (const [k, v] of Object.entries(contacts)) if (typeof v === 'string') out[k] = v;
+    if (friends) for (const [k, v] of Object.entries(friends)) if (typeof v === 'string') out[k] = v;
     return out;
   }
-  /** Persist a contact's user-group (unnamed → null); returns true if already known. */
-  private async addKnownContactGroup(groupId: string): Promise<boolean> {
+  /** Persist a friend's user-group (unnamed → null); returns true if already known. */
+  private async addKnownFriendGroup(groupId: string): Promise<boolean> {
     const handle = await this.ensureDriveSettingsDoc({ create: true });
     if (!handle) return false;
-    if (this.driveSettingsDoc()?.contacts && groupId in this.driveSettingsDoc()!.contacts) return true;
-    this.changeDriveSettings(d => { if (!d.contacts) d.contacts = {}; if (!(groupId in d.contacts)) d.contacts[groupId] = null; });
+    if (this.driveSettingsDoc()?.friends && groupId in this.driveSettingsDoc()!.friends) return true;
+    this.changeDriveSettings(d => { if (!d.friends) d.friends = {}; if (!(groupId in d.friends)) d.friends[groupId] = null; });
     return false;
   }
-  private async getContactNames(): Promise<Record<string, string>> { return this.getContactNamesMap(); }
-  private broadcastContactNames(names: Record<string, string>): void {
-    this.emit({ type: 'contact-names-updated', names });
+  private async getFriendNames(): Promise<Record<string, string>> { return this.getFriendNamesMap(); }
+  private broadcastFriendNames(names: Record<string, string>): void {
+    this.emit({ type: 'friend-names-updated', names });
   }
-  private async putContactName(agentId: string, name: string | undefined): Promise<void> {
+  private async putFriendName(agentId: string, name: string | undefined): Promise<void> {
     const trimmed = name?.trim();
     if (!trimmed) return;
     const handle = await this.ensureDriveSettingsDoc({ create: true });
-    if (!handle) throw new Error('Cannot save contact name — settings document unavailable');
-    if (this.driveSettingsDoc()?.contacts?.[agentId] === trimmed) return;
-    this.changeDriveSettings(d => { if (!d.contacts) d.contacts = {}; d.contacts[agentId] = trimmed; });
-    this.broadcastContactNames(this.getContactNamesMap());
+    if (!handle) throw new Error('Cannot save friend name — settings document unavailable');
+    if (this.driveSettingsDoc()?.friends?.[agentId] === trimmed) return;
+    this.changeDriveSettings(d => { if (!d.friends) d.friends = {}; d.friends[agentId] = trimmed; });
+    this.broadcastFriendNames(this.getFriendNamesMap());
   }
-  private async deleteContactName(agentId: string): Promise<void> {
+  private async deleteFriendName(agentId: string): Promise<void> {
     if (!this.driveSettingsHandle) return;
     // The unified map means deleting the key drops them from the roster entirely
     // (no separate known-groups list to prune).
-    this.changeDriveSettings(d => { if (d.contacts) delete d.contacts[agentId]; });
-    this.broadcastContactNames(this.getContactNamesMap());
+    this.changeDriveSettings(d => { if (d.friends) delete d.friends[agentId]; });
+    this.broadcastFriendNames(this.getFriendNamesMap());
   }
 
   // ── Device-name store (keyed by device agentId; part of the DriveSettings doc) ──
@@ -1310,7 +1338,7 @@ export class DriveEngine {
   private rdvSend(frame: { type: string; rendezvousId: string; data?: Uint8Array }): void {
     this.host.network.sendOverlayFrame(frame);
   }
-  private rdvEvent(rendezvousId: string, status: RendezvousStatus, message?: string, extra?: { contactGroupId?: string; contactHasName?: boolean }): void {
+  private rdvEvent(rendezvousId: string, status: RendezvousStatus, message?: string, extra?: { friendGroupId?: string; friendHasName?: boolean }): void {
     this.emit({ type: 'kh-rdv-event', rendezvousId, status, ...(message !== undefined ? { message } : {}), ...(extra ?? {}) });
   }
   private async rdvSendPayload(rendezvousId: string, key: string, plaintext: string): Promise<void> {
@@ -1499,7 +1527,7 @@ export class DriveEngine {
       // avoids a dot-flash on every start.
       for (const e of earlyList) if (!this.lastViewedHeads![e.id]) this.unseenChanges[e.id] = true;
       this.emitUnseen();
-      this.broadcastContactNames(await this.getContactNames());
+      this.broadcastFriendNames(await this.getFriendNames());
       this.broadcastDeviceNames(await this.getDeviceNames());
       this.emit({ type: 'kh-ready' });
     } catch (khErr: any) {
@@ -2225,23 +2253,23 @@ export class DriveEngine {
       return;
     }
 
-    if (msg.type === 'set-contact-name') {
+    if (msg.type === 'set-friend-name') {
       try {
-        await this.putContactName(msg.agentId, msg.name);
+        await this.putFriendName(msg.agentId, msg.name);
         emit({ type: 'result', id: msg.id });
       } catch (err: any) {
-        console.error('[engine] set-contact-name failed:', errMsg(err));
+        console.error('[engine] set-friend-name failed:', errMsg(err));
         emit({ type: 'result', id: msg.id, error: errMsg(err) });
       }
       return;
     }
 
-    if (msg.type === 'remove-contact-name') {
+    if (msg.type === 'remove-friend-name') {
       try {
-        await this.deleteContactName(msg.agentId);
+        await this.deleteFriendName(msg.agentId);
         emit({ type: 'result', id: msg.id });
       } catch (err: any) {
-        console.error('[engine] remove-contact-name failed:', errMsg(err));
+        console.error('[engine] remove-friend-name failed:', errMsg(err));
         emit({ type: 'result', id: msg.id, error: errMsg(err) });
       }
       return;
@@ -2294,7 +2322,7 @@ export class DriveEngine {
         const result = await this.khOps.receiveContactCard(msg.cardJson);
         const friendGroupId = msg.isDevice ? null : msg.userGroupId;
         const alreadyKnown = !result.isOwnCard && !!friendGroupId
-          ? await this.addKnownContactGroup(friendGroupId)
+          ? await this.addKnownFriendGroup(friendGroupId)
           : false;
         emit({ type: 'result', id: msg.id, result: { ...result, userGroupId: friendGroupId, alreadyKnown } });
       } catch (err: any) { emit({ type: 'result', id: msg.id, error: errMsg(err) }); }
@@ -2318,15 +2346,15 @@ export class DriveEngine {
       return;
     }
 
-    if (msg.type === 'kh-get-known-contacts') {
+    if (msg.type === 'kh-get-known-friends') {
       try {
         if (!this.khOps) throw new Error('Keyhive not available');
-        // The unified `contacts` map holds every known contact (named or null),
-        // so its keys ARE the known-contact-group ids.
+        // The unified `friends` map holds every known friend (named or null),
+        // so its keys ARE the known-friend-group ids.
         await this.ensureDriveSettingsDoc();
-        const contactGroupIds = Object.keys(this.driveSettingsDoc()?.contacts ?? {});
+        const friendGroupIds = Object.keys(this.driveSettingsDoc()?.friends ?? {});
         const excludeKhDocId = msg.excludeDocId ? this.resolveKhDocId(msg.excludeDocId) : undefined;
-        const result = await this.khOps.getKnownContacts(excludeKhDocId, contactGroupIds);
+        const result = await this.khOps.getKnownFriends(excludeKhDocId, friendGroupIds);
         emit({ type: 'result', id: msg.id, result });
       } catch (err: any) { emit({ type: 'result', id: msg.id, error: errMsg(err) }); }
       return;
@@ -2372,8 +2400,8 @@ export class DriveEngine {
                 const resolvedGroupId = replyGroupId ?? result.groupId ?? null;
                 const added = !result.isOwnCard && !!resolvedGroupId;
                 if (added) {
-                  await this.addKnownContactGroup(resolvedGroupId!);
-                  await this.putContactName(resolvedGroupId!, displayName);
+                  await this.addKnownFriendGroup(resolvedGroupId!);
+                  await this.putFriendName(resolvedGroupId!, displayName);
                 }
                 this.rdvSessions.delete(rendezvousId);
                 this.rdvSend({ type: RDV_UNSUB, rendezvousId });
@@ -2381,7 +2409,7 @@ export class DriveEngine {
                 // sharer's UI can offer a name input when they didn't — the sharer
                 // otherwise has no chance to label a nameless friend.
                 this.rdvEvent(rendezvousId, 'received', undefined, added
-                  ? { contactGroupId: resolvedGroupId!, contactHasName: !!displayName?.trim() }
+                  ? { friendGroupId: resolvedGroupId!, friendHasName: !!displayName?.trim() }
                   : undefined);
               } catch (err: any) {
                 this.rdvSessions.delete(rendezvousId);
@@ -2436,7 +2464,7 @@ export class DriveEngine {
         const result = await this.khOps.receiveContactCard(cardJson);
         const resolvedGroupId = userGroupId ?? result.groupId ?? null;
         const alreadyKnown = !result.isOwnCard && !!resolvedGroupId
-          ? await this.addKnownContactGroup(resolvedGroupId)
+          ? await this.addKnownFriendGroup(resolvedGroupId)
           : false;
         if (!result.isOwnCard) {
           const myUserGroupId = await this.khOps.ensureUserGroup({ create: true });

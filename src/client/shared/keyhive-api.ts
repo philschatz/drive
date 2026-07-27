@@ -4,7 +4,7 @@ export {
   getIdentity,
   getContactCard,
   receiveContactCard,
-  getKnownContacts,
+  getKnownFriends,
   getDocMembers,
   getMyAccess,
   rendezvousCreateShare,

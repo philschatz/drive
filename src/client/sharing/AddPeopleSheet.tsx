@@ -1,11 +1,11 @@
 /**
  * Pick who to share a document with: the friends not already on it, plus an
- * "Invite a new Friend" row that opens the QR exchange. Choosing either leads to
+ * "Invite a friend" row that opens the QR exchange. Choosing either leads to
  * the role picker — this sheet never grants access itself.
  */
 
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
-import { getContactName } from '../contact-names';
+import { getFriendName } from '../friend-names';
 import type { MemberInfo } from '../shared/keyhive-types';
 
 export function AddPeopleSheet({
@@ -25,7 +25,7 @@ export function AddPeopleSheet({
   // Named contacts first, then alphabetically — an unnamed contact is just an
   // id fragment, so it is the least useful thing to lead with.
   const sorted = [...contacts]
-    .map(contact => ({ contact, name: getContactName(contact.agentId) }))
+    .map(contact => ({ contact, name: getFriendName(contact.agentId) }))
     .sort((a, b) => {
       if (a.name && !b.name) return -1;
       if (!a.name && b.name) return 1;
@@ -59,7 +59,7 @@ export function AddPeopleSheet({
             {/* Always last, and the only row when you have no friends yet. */}
             <md-list-item type="button" data-testid="invite-friend" onClick={onInvite}>
               <md-icon slot="start">person_add</md-icon>
-              <div slot="headline">Invite a new Friend</div>
+              <div slot="headline">Invite a friend</div>
             </md-list-item>
           </md-list>
         </div>

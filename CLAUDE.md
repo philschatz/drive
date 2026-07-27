@@ -36,7 +36,7 @@ npx jest tests/parser.test.ts
 ### Directory Layout
 
 - `src/backend/` — Express server, CalDAV handler, ICS↔JMAP parser/serializer, REST routes
-- `src/client/` — Preact SPA. Document-type plugins live under `src/client/doc-plugins/` (`calendar/`, `tasks/`, `datagrid/`, `counters/`, alongside the registry `index.ts` + `types.ts`); other feature directories are `home/`, `source/`, `contacts/`, `settings/`, `shared/`
+- `src/client/` — Preact SPA. Document-type plugins live under `src/client/doc-plugins/` (`calendar/`, `tasks/`, `datagrid/`, `counters/`, alongside the registry `index.ts` + `types.ts`); other feature directories are `home/`, `source/`, `friends/`, `sharing/`, `settings/`, `shared/`
 - `src/shared/` — Code shared between client features: automerge repo setup, presence system, schema validation, deep-assign utility
 - `tests/` — Jest tests (backend + shared logic)
 - `src/client/tests-pw/` — Playwright E2E tests (editor UI specs + two-peer sync harness)
@@ -70,7 +70,7 @@ Documents follow JSCalendar (RFC 8984) with modifications for CRDT collaboration
 
 `src/client/shared/presence.tsx` provides real-time peer awareness using Automerge's native Presence API. All editors share a unified `PresenceState` type: `{ viewing: boolean, focusedField: (string | number)[] | null, userGroupId?: string }`. The focused field path encodes what a peer is editing (e.g., `['events', uid, 'title']`). Each `PresenceState` key is broadcast as its own channel and **encrypted with the document's keyhive key** in the worker, so the ephemeral channel (plaintext on the wire) never leaks what a peer is viewing/editing.
 
-**Peer identity.** A peerId is per-*device* (`<base64-device-verifying-key>-drive`), but contacts and the local user's own name are stored keyed by **user-group id** (`contact-names` / `known-contact-groups`, see `src/client/contact-names.ts`). So the worker advertises the sender's `userGroupId` inside the presence payload (the peerId itself cannot be the group id — it is bridge-generated and must decode to a 32-byte keyhive `Identifier`). `peerIdentityKey(peerId, userGroupId)` returns the group id when present (else the device agentId); `peerDisplayName` / `peerColor` key off it, so a contact resolves to their saved name and a user's multiple devices collapse to one identity/color. Consumers that only have bare repo peerIds (e.g. Home's document list) have no presence payload and fall back to the per-device agentId.
+**Peer identity.** A peerId is per-*device* (`<base64-device-verifying-key>-drive`), but friends and the local user's own name are stored keyed by **user-group id** (the `friends` map in the DriveSettings doc, cached by `src/client/friend-names.ts`). So the worker advertises the sender's `userGroupId` inside the presence payload (the peerId itself cannot be the group id — it is bridge-generated and must decode to a 32-byte keyhive `Identifier`). `peerIdentityKey(peerId, userGroupId)` returns the group id when present (else the device agentId); `peerDisplayName` / `peerColor` key off it, so a friend resolves to their saved name and a user's multiple devices collapse to one identity/color. Consumers that only have bare repo peerIds (e.g. Home's document list) have no presence payload and fall back to the per-device agentId.
 
 ### Sync & Networking
 
@@ -80,7 +80,7 @@ Transport, from the bottom up:
 
 - **Relay (default).** `src/backend/relay.ts` is a stateless WebSocket relay (also embedded in `serve.ts` / dev via `relay-plugin.ts`) that does peer discovery and routes opaque encrypted bytes by `targetId`. It identifies itself with the all-zero `RELAY_PEER_ID` (`src/shared/relay-identity.ts`) and is never a keyhive member.
 - **Direct WebRTC (opportunistic upgrade).** `src/client/webrtc-relay-adapter.ts` is the single adapter handed to keyhive: it wraps the relay adapter and, per peer, routes that peer's sync over a direct `RTCDataChannel` once one is open, falling back to the relay otherwise. Because `RTCPeerConnection` is window-only, the peer connections live on the **main thread** in `src/client/webrtc-bridge.ts`, connected to the worker over a `MessagePort` (same pattern as the HyperFormula bridge). STUN-only by default (no TURN — symmetric-NAT peers stay on the relay); override ICE servers with `VITE_ICE_SERVERS`. The bridge retries a stalled negotiation a few times, then leaves that peer on the relay.
-- **Relay overlay frames.** Two protocols ride the relay socket alongside the automerge-repo protocol and are intercepted client-side before reaching the repo: WebRTC signaling (`WRTC_SIGNAL`, `src/shared/webrtc-signal.ts`) carrying SDP/ICE, and the encrypted **rendezvous** channel (`RDV_*`, `src/shared/rendezvous-protocol.ts`) used for QR contact/device exchange.
+- **Relay overlay frames.** Two protocols ride the relay socket alongside the automerge-repo protocol and are intercepted client-side before reaching the repo: WebRTC signaling (`WRTC_SIGNAL`, `src/shared/webrtc-signal.ts`) carrying SDP/ICE, and the encrypted **rendezvous** channel (`RDV_*`, `src/shared/rendezvous-protocol.ts`) used for QR friend/device exchange.
 
 Per-peer transport is surfaced to the UI via the worker's `p2p-status` message → `usePeerTransports()`; the shared `PeerDot` (`src/client/shared/presence.tsx`) renders a **filled** dot for a direct channel and a **hollow ring** (the default) for relay, so a relayed connection is never mistaken for P2P.
 
@@ -92,7 +92,7 @@ Per-peer transport is surfaced to the UI via the worker's `p2p-status` message �
 - `#/d/:docId` → the editor for that document's `@type`
 - `#/d/:docId/share` → Sharing screen (members, roles, invites)
 - `#/source/:docId` → Raw JSON document inspector
-- `#/settings`, `#/contacts`, `#/add-friend/:cardData`, `#/link-device/:cardData`
+- `#/settings`, `#/friends`, `#/add-friend/:cardData`, `#/link-device/:cardData`
 
 Routes are ranked by segment specificity, not JSX order, so the static `/d/:docId/share` wins over `DocRoute`'s `/d/:docId/:rest*`. Build doc URLs with the helpers in `src/client/shared/doc-urls.ts` (`docUrl`, `shareUrl`, `sourceUrl`) rather than string concatenation.
 

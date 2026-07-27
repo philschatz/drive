@@ -1,5 +1,5 @@
 /**
- * Add Friend page — handles QR-code-based contact sharing.
+ * Add Friend page — the receiving side of a QR friend invite.
  *
  * URL forms:
  *   /#/add-friend/r.<rendezvousId>.<key>   ← preferred: tiny QR; the real (large)
@@ -18,7 +18,7 @@ import { Button } from '@/components/ui/button';
 import { receiveContactCard, rendezvousReceive, getIdentity, onRendezvousEvent } from '../shared/keyhive-api';
 import type { RendezvousStatus } from '../worker-api';
 import { keyhiveReady, whenWsConnected } from '../shared/automerge';
-import { setContactName, getContactName } from '../contact-names';
+import { setFriendName, getFriendName } from '../friend-names';
 import { RendezvousProgress } from './RendezvousProgress';
 import { parseRendezvousToken } from '../../shared/rendezvous-url';
 import { deflate, inflate } from 'pako';
@@ -102,7 +102,7 @@ export function AddFriendPage({ cardData }: AddFriendPageProps) {
 
   const doReceive = useCallback(async () => {
     if (!cardData) {
-      setError('Invalid link — missing contact card data.');
+      setError('Invalid link — missing friend data.');
       return;
     }
     setProcessing(true);
@@ -125,42 +125,42 @@ export function AddFriendPage({ cardData }: AddFriendPageProps) {
         await whenWsConnected();
         // Our own name is stored as a User Group contact (keyed by user-group id).
         const me = await getIdentity();
-        const myName = (me.userGroupId && getContactName(me.userGroupId)) || undefined;
+        const myName = (me.userGroupId && getFriendName(me.userGroupId)) || undefined;
         const result = await rendezvousReceive(rdv.rendezvousId, rdv.key, myName);
         cardResult = result;
         displayName = result.displayName;
       } else {
         // Legacy path: the bundle is embedded in the URL.
-        setStatus('Decoding contact card...');
+        setStatus('Decoding friend details...');
         const decoded = decodeFriendData(cardData);
         if (!decoded.userGroupId) {
-          throw new Error('This contact is not a group \u2014 ask them to open Settings and show a fresh friend QR/link.');
+          throw new Error('This friend is not a group \u2014 ask them to open Settings and show a fresh friend QR/link.');
         }
-        setStatus('Adding contact...');
+        setStatus('Adding friend...');
         const result = await receiveContactCard(decoded.cardJson, { userGroupId: decoded.userGroupId });
         cardResult = { isOwnCard: result.isOwnCard, userGroupId: result.userGroupId ?? decoded.userGroupId, alreadyKnown: result.alreadyKnown };
         displayName = decoded.displayName;
       }
 
       if (cardResult.isOwnCard) {
-        setError("This is your own contact card. Share this link with a friend \u2014 don't open it yourself.");
+        setError("This is your own invite. Share this link with a friend \u2014 don't open it yourself.");
         return;
       }
       if (!cardResult.userGroupId) {
-        throw new Error('This contact is not a group \u2014 ask them to open Settings and show a fresh friend QR/link.');
+        throw new Error('This friend is not a group \u2014 ask them to open Settings and show a fresh friend QR/link.');
       }
       // Identify the contact by its user-group id, never the individual device id.
       if (displayName) {
         alert(`${displayName} was added.`);
       } else {
-        const trimmed = prompt('Name this contact', '')?.trim();
+        const trimmed = prompt('Name this friend', '')?.trim();
         // Inside the try: a storage failure surfaces as the error screen rather
         // than bouncing the user Home with nothing shown.
-        if (trimmed) await setContactName(cardResult.userGroupId, trimmed);
+        if (trimmed) await setFriendName(cardResult.userGroupId, trimmed);
       }
       window.location.hash = '/';
     } catch (err: any) {
-      setError(err.message || 'Failed to add contact');
+      setError(err.message || 'Failed to add friend');
     } finally {
       setProcessing(false);
     }
@@ -175,7 +175,7 @@ export function AddFriendPage({ cardData }: AddFriendPageProps) {
     <div className="max-w-md mx-auto p-8 text-center">
       <h1 className="text-xl font-bold mb-4">
         <span className="material-symbols-outlined align-middle mr-1" style={{ fontSize: 24 }}>person_add</span>
-        Add Friend
+        Adding friend
       </h1>
 
       {error ? (
@@ -200,9 +200,9 @@ export function AddFriendPage({ cardData }: AddFriendPageProps) {
           phase={phase}
           rendezvousId={rdv.rendezvousId}
           waitingLabel="Connecting to your friend — keep this open…"
-          transferLabel="Exchanging contact info…"
+          transferLabel="Exchanging details…"
           transferDetail={transferDetail}
-          doneLabel="You're now contacts."
+          doneLabel="You're now friends."
         />
       ) : (
         <p className="text-sm text-muted-foreground">{status || 'Processing...'}</p>

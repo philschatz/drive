@@ -13,7 +13,7 @@ import { Toaster } from './components/ui/toast';
 const Settings = lazyView(() => import('./settings/Settings').then(m => m.Settings));
 const SettingsSection = lazyView(() => import('./settings/SettingsSection').then(m => m.SettingsSection));
 const ConnectionDebug = lazyView(() => import('./debug/ConnectionDebug').then(m => m.ConnectionDebug));
-const Contacts = lazyView(() => import('./contacts/Contacts').then(m => m.Contacts));
+const Friends = lazyView(() => import('./friends/Friends').then(m => m.Friends));
 const LinkDevicePage = lazyView(() => import('./settings/LinkDevicePage').then(m => m.LinkDevicePage));
 const AddFriendPage = lazyView(() => import('./settings/AddFriendPage').then(m => m.AddFriendPage));
 const AllCalendars = lazyView(() => import('./doc-plugins/calendar/AllCalendars').then(m => m.AllCalendars));
@@ -35,7 +35,7 @@ export function App() {
         <Settings path="/settings" />
         <SettingsSection path="/settings/:section" />
         <ConnectionDebug path="/connection" />
-        <Contacts path="/contacts" />
+        <Friends path="/friends" />
         <LinkDevicePage path="/link-device/:cardData" />
         <AddFriendPage path="/add-friend/:cardData" />
         <AllCalendars path="/calendars/" />

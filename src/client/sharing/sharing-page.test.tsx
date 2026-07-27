@@ -10,7 +10,7 @@ let mockNames: Record<string, string>;
 jest.mock('../shared/keyhive-api', () => ({
   getDocMembers: (...args: any[]) => mockGetDocMembers(...args),
   getMyAccess: (...args: any[]) => mockGetMyAccess(...args),
-  getKnownContacts: (...args: any[]) => mockGetKnownContacts(...args),
+  getKnownFriends: (...args: any[]) => mockGetKnownContacts(...args),
   getIdentity: (...args: any[]) => mockGetIdentity(...args),
   onKeyhiveStateChanged: jest.fn(() => jest.fn()),
   changeRole: jest.fn(),
@@ -18,11 +18,11 @@ jest.mock('../shared/keyhive-api', () => ({
   addMember: jest.fn(),
 }));
 
-jest.mock('../contact-names', () => ({
-  getContactName: (id: string) => mockNames[id],
-  setContactName: jest.fn(() => Promise.resolve()),
+jest.mock('../friend-names', () => ({
+  getFriendName: (id: string) => mockNames[id],
+  setFriendName: jest.fn(() => Promise.resolve()),
   // Pass-through: these tests don't exercise the cache merge.
-  mergeCachedContacts: (fromKeyhive: any[]) => fromKeyhive,
+  mergeCachedFriends: (fromKeyhive: any[]) => fromKeyhive,
 }));
 
 jest.mock('@/components/ui/sheet', () => ({

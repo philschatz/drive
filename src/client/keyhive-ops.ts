@@ -680,9 +680,9 @@ export class KeyhiveOps {
     return true;
   }
 
-  async getKnownContacts(
+  async getKnownFriends(
     excludeDocId?: string,
-    contactGroupIds?: string[],
+    friendGroupIds?: string[],
   ): Promise<MemberInfo[]> {
     const me = await this.kh.individual;
     const myAgentStr = me.toAgent().toString();
@@ -726,8 +726,8 @@ export class KeyhiveOps {
 
     // Also include contacts from the friend list who aren't yet members of any
     // document. A stored contact is always a user-group (its id is the group id).
-    if (contactGroupIds) {
-      for (const groupId of contactGroupIds) {
+    if (friendGroupIds) {
+      for (const groupId of friendGroupIds) {
         if (groupId === myGroupId) continue;
         if (excludeSet.has(groupId)) continue;
         if (seen.has(groupId)) continue;

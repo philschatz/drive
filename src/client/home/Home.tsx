@@ -88,9 +88,13 @@ function DocListItem({ entry, unseenFlag, onOpen, onActions }: {
       </div>
       <div slot="supporting-text" title={entry.lastUpdated || undefined}>{supporting}</div>
       <span slot="end" className="flex items-center gap-0.5">
-        <span className="inline-flex items-center justify-center h-8 w-8 text-muted-foreground">
-          <AccessIcon access={entry.access ?? null} style={{ fontSize: 18 }} />
-        </span>
+        {/* Admin gets no glyph — it's the norm (you made the doc); only the levels that
+            differ from it (read / edit / no access) are worth calling out. */}
+        {entry.access !== 'admin' && (
+          <span className="inline-flex items-center justify-center h-8 w-8 text-muted-foreground">
+            <AccessIcon access={entry.access ?? null} style={{ fontSize: 18 }} />
+          </span>
+        )}
         <button
           aria-label={`More actions for ${entry.name || 'Untitled'}`}
           title="More actions"
@@ -357,7 +361,7 @@ export function Home({ path }: { path?: string }) {
     ...(calendarCount > 1
       ? [{ icon: 'date_range', label: 'All calendars', href: '#/calendars/' }]
       : []),
-    { icon: 'contacts', label: 'Contacts', href: '#/contacts' },
+    { icon: 'group', label: 'Friends', href: '#/friends' },
     { icon: 'settings', label: 'Settings', href: '#/settings' },
   ];
 

@@ -2025,12 +2025,12 @@ describe('KeyhiveOps', () => {
       expect(await b.getUserGroupId()).toBe(aGroupId);
     });
 
-    it('getKnownContacts lists a stored contact as their user-group', async () => {
+    it('getKnownFriends lists a stored contact as their user-group', async () => {
       const { ops: a } = await createOps();
       // A stored contact is identified by its user-group id (sharing is group-only).
       const groupId = bytesToBase64(crypto.getRandomValues(new Uint8Array(32)));
 
-      const contacts = await a.getKnownContacts(undefined, [groupId]);
+      const contacts = await a.getKnownFriends(undefined, [groupId]);
       const entry = contacts.find((c) => c.agentId === groupId);
       expect(entry).toBeDefined();
       expect(entry!.type).toBe('group'); // a contact is the user-group; its agentId is the share target

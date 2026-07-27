@@ -3,7 +3,7 @@ import { generateDefaultDeviceName } from './lib/device-name';
 /**
  * Per-device friendly names, keyed by device agentId.
  *
- * Direct twin of contact-names.ts, but keyed by *device* agentId rather than
+ * Direct twin of friend-names.ts, but keyed by *device* agentId rather than
  * user-group id: it holds this device's own name plus peer device names learned
  * during the device-link rendezvous. Same optimistic-cache + worker-dispatch
  * shape so a failed persist rolls back and surfaces instead of silently
@@ -47,7 +47,7 @@ export function resolveDeviceName(agentId: string, allowDefault = true): string 
 }
 
 /**
- * Persist a device name (see setContactName for the optimistic-cache contract).
+ * Persist a device name (see setFriendName for the optimistic-cache contract).
  * A blank name delegates to removeDeviceName so it falls back to the default.
  */
 export async function setDeviceName(agentId: string, name: string): Promise<void> {

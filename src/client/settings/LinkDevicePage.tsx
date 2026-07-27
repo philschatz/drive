@@ -100,7 +100,7 @@ export function LinkDevicePage({ cardData }: LinkDevicePageProps) {
 
   const doLink = useCallback(async () => {
     if (!cardData) {
-      setError('Invalid link — missing contact card data.');
+      setError('Invalid link — missing friend data.');
       return;
     }
     setProcessing(true);
@@ -119,7 +119,7 @@ export function LinkDevicePage({ cardData }: LinkDevicePageProps) {
         return;
       }
 
-      setStatus('Decoding contact card...');
+      setStatus('Decoding friend details...');
       const { cardJson, userGroupId: peerGroupId } = decodeLinkData(cardData);
 
       setStatus('Linking this device...');

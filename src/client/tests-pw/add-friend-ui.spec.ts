@@ -2,16 +2,16 @@ import { test, expect, type Browser } from '@playwright/test';
 import { newPeer, waitFor, type Peer } from './support/peer';
 
 /**
- * End-to-end "Add Friend" through the real UI + link (not the worker API):
- *   - the sharer opens the Add Friend sheet (from Contacts), which auto-starts the
- *     rendezvous — no "Start the process" button — and the QR link appears in a
- *     readonly input we read out of the DOM;
+ * End-to-end "Invite a friend" through the real UI + link (not the worker API):
+ *   - the sharer opens the invite sheet from the Friends page FAB, which
+ *     auto-starts the rendezvous — no "Start the process" button — and the QR
+ *     link appears in a readonly input we read out of the DOM;
  *   - a SECOND, genuinely-cold browser opens that link directly — AddFriendPage's
  *     doReceive() runs on mount, so the receiver's worker/keyhive may still be
  *     booting (the real-world race the worker-level rendezvous.spec never hits,
  *     because its peers are pre-booted at '/').
  *
- * Both browsers must end up mutual contacts, and — since two fresh browsers have
+ * Both browsers must end up mutual friends, and — since two fresh browsers have
  * no name set — each side must raise a prompt to name the (nameless) other.
  */
 
@@ -62,13 +62,12 @@ async function coldOpenLink(browser: Browser, name: string, url: string, promptA
   return { name, context, page, call, close: () => context.close() };
 }
 
-/** Sharer opens the Add Friend sheet, which auto-starts the exchange, and returns the QR/link URL. */
+/** Sharer opens the invite sheet, which auto-starts the exchange, and returns the QR/link URL. */
 async function startShareAndGetLink(alice: Peer): Promise<string> {
-  // Drive it from Contacts (not Settings): the sheet auto-starts on open, so there's
-  // no "Start the process" button, and Contacts has no other "Save" button to collide
-  // with the sheet's contact-name Save used by the naming test below.
-  await alice.page.goto('/#/contacts');
-  await alice.page.getByRole('button', { name: 'Add Friend' }).click();
+  // The Friends page FAB is the primary way in; the sheet auto-starts on open,
+  // so there is no "Start the process" button to click afterwards.
+  await alice.page.goto('/#/friends');
+  await alice.page.getByRole('button', { name: 'Invite a friend' }).click();
 
   // The sheet stages the rendezvous once keyhive + the relay WS are ready; the
   // readonly link input appears when it's staged (the generous timeout covers connect).
@@ -77,7 +76,7 @@ async function startShareAndGetLink(alice: Peer): Promise<string> {
   return linkInput.inputValue();
 }
 
-test('two fresh browsers become mutual contacts via the add-friend link', async ({ browser }) => {
+test('two fresh browsers become mutual friends via the add-friend link', async ({ browser }) => {
   let alice: Peer | undefined;
   let bob: Peer | undefined;
   try {
@@ -89,7 +88,7 @@ test('two fresh browsers become mutual contacts via the add-friend link', async 
     // A different, cold browser opens the link — the receiver flow runs itself.
     bob = await coldOpenLink(browser, 'bob', url, 'Alice');
 
-    // Each peer's own user-group id (the id a contact is keyed by).
+    // Each peer's own user-group id (the id a friend is keyed by).
     const { userGroupId: aliceGroup } = await alice.call('ensureUserGroup', { create: true });
     const { userGroupId: bobGroup } = await bob.call('ensureUserGroup', { create: true });
     expect(aliceGroup).toBeTruthy();
@@ -97,13 +96,13 @@ test('two fresh browsers become mutual contacts via the add-friend link', async 
 
     // Direction 1: Bob (the one who opened the link) knows Alice.
     await waitFor(
-      () => bob!.call('getKnownContacts', ''),
+      () => bob!.call('getKnownFriends', ''),
       (list) => list.some((c) => c.agentId === aliceGroup),
       { label: 'bob knows alice' },
     );
     // Direction 2: Alice knows Bob — the mutual half, all from one link.
     await waitFor(
-      () => alice!.call('getKnownContacts', ''),
+      () => alice!.call('getKnownFriends', ''),
       (list) => list.some((c) => c.agentId === bobGroup),
       { label: 'alice knows bob' },
     );
@@ -112,7 +111,7 @@ test('two fresh browsers become mutual contacts via the add-friend link', async 
   }
 });
 
-test('each side names a contact who sent no name, via the prompt', async ({ browser }) => {
+test('each side names a friend who sent no name, via the prompt', async ({ browser }) => {
   let alice: Peer | undefined;
   let bob: Peer | undefined;
   try {
@@ -128,14 +127,14 @@ test('each side names a contact who sent no name, via the prompt', async ({ brow
 
     // Receiver side (Bob): the prompt answer is saved against Alice's group.
     await waitFor(
-      () => bob!.call('getAllContactNames'),
+      () => bob!.call('getAllFriendNames'),
       (names) => names[aliceGroup!] === 'Alice (from Bob)',
       { label: 'bob named alice' },
     );
 
     // Sharer side (Alice): she got no name for Bob, so she is prompted too.
     await waitFor(
-      () => alice!.call('getAllContactNames'),
+      () => alice!.call('getAllFriendNames'),
       (names) => names[bobGroup!] === 'Bob (from Alice)',
       { label: 'alice named bob' },
     );

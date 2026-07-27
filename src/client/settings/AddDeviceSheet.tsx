@@ -44,7 +44,7 @@ export function AddDeviceSheet({ open, onOpenChange }: AddDeviceSheetProps) {
         if (cancelled) return;
         if (mode === 'local') {
           const sync = window.confirm(
-            'Sync your settings (contacts, device names, seen state) to the new device?\n\n' +
+            'Sync your settings (friends, device names, seen state) to the new device?\n\n' +
             'If you agree, your settings will sync across your devices from now on (this is permanent). ' +
             'Otherwise each device keeps its own settings.',
           );

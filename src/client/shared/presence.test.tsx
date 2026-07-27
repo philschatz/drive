@@ -8,7 +8,7 @@ jest.mock('../worker-api', () => ({
 import { renderHook, act } from '@testing-library/preact';
 import { peerIdentityKey, peerDisplayName, peerColor, usePresence, type PresenceState } from './presence';
 import { subscribePresence, setPresence } from '../worker-api';
-import { applyContactNamesFromWorker, getContactName } from '../contact-names';
+import { applyFriendNamesFromWorker, getFriendName } from '../friend-names';
 
 // A peerId is `<base64-device-verifying-key>-<suffix>`; base64 never contains '-',
 // so device A and device B of the same user have different peerIds but share a group.
@@ -18,7 +18,7 @@ const PEER_B = 'BBBBdeviceKeyB=-drive';
 
 describe('presence identity helpers', () => {
   beforeEach(() => {
-    applyContactNamesFromWorker({});
+    applyFriendNamesFromWorker({});
   });
 
   describe('peerIdentityKey', () => {
@@ -34,16 +34,16 @@ describe('presence identity helpers', () => {
 
   describe('peerDisplayName', () => {
     it('resolves a contact name via the user-group id (how contact-names is keyed)', () => {
-      applyContactNamesFromWorker({ [GROUP]: 'Alice' });
+      applyFriendNamesFromWorker({ [GROUP]: 'Alice' });
       // Same contact name regardless of which device sent the presence.
       expect(peerDisplayName(PEER_A, GROUP)).toBe('Alice');
       expect(peerDisplayName(PEER_B, GROUP)).toBe('Alice');
     });
 
     it('does NOT resolve when looking up by the device agentId (the old bug)', () => {
-      applyContactNamesFromWorker({ [GROUP]: 'Alice' });
+      applyFriendNamesFromWorker({ [GROUP]: 'Alice' });
       // contact-names is keyed by group id, so an agentId lookup misses → hash fallback.
-      expect(getContactName('AAAAdeviceKeyA=')).toBeUndefined();
+      expect(getFriendName('AAAAdeviceKeyA=')).toBeUndefined();
       expect(peerDisplayName(PEER_A)).not.toBe('Alice');
     });
 

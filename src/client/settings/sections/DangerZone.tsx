@@ -9,7 +9,7 @@ export function DangerZone() {
   const { alerts, setError } = useSectionAlerts();
 
   const handleDeleteAllData = async () => {
-    if (!confirm('Permanently erase ALL local data — every document, your identity/keys, contacts, and settings? Documents not shared with another device are lost forever. This cannot be undone.')) return;
+    if (!confirm('Permanently erase ALL local data — every document, your identity/keys, friends, and settings? Documents not shared with another device are lost forever. This cannot be undone.')) return;
     try {
       await deleteAllData(); // terminates the worker, deletes all IndexedDB + localStorage, reloads
     } catch (err: any) {

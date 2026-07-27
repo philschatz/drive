@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { subscribePresence, setPresence, usePeerTransports } from '../worker-api';
 import type { PeerState } from './automerge';
-import { getContactName } from '../contact-names';
+import { getFriendName } from '../friend-names';
 
 import { MATERIAL_CATEGORICAL as PEER_COLORS } from './categorical-colors';
 
@@ -12,7 +12,7 @@ export interface PresenceState {
    * Base64 keyhive user-group id of the sender. Identifies the *user* across all of
    * their devices (the peerId is per-device). Carried in ephemeral data because the
    * peerId itself cannot be the group id — see plan notes. Contact names and the
-   * local user's own name are keyed by this group id (see contact-names.ts), so it
+   * local user's own name are keyed by this group id (see friend-names.ts), so it
    * is what resolves a peer to a display name; absent only if no group exists yet.
    */
   userGroupId?: string;
@@ -29,7 +29,7 @@ export function peerIdentityKey(peerId: string, userGroupId?: string | null): st
 
 export function peerDisplayName(peerId: string, userGroupId?: string | null): string {
   const key = peerIdentityKey(peerId, userGroupId);
-  return getContactName(key) || `${key.slice(0, 8)}…`;
+  return getFriendName(key) || `${key.slice(0, 8)}…`;
 }
 
 /**

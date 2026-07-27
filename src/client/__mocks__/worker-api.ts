@@ -208,7 +208,7 @@ export function onKeyhiveStateChanged(): () => void { return noop; }
 
 export function getMyAccess(): Promise<string | null> { return Promise.resolve('admin'); }
 export function getDocMembers(): Promise<{ members: any[] }> { return Promise.resolve({ members: [] }); }
-export function getKnownContacts(): Promise<any[]> { return Promise.resolve([]); }
+export function getKnownFriends(): Promise<any[]> { return Promise.resolve([]); }
 export function getMyAccessLevel(): Promise<string | null> { return Promise.resolve('admin'); }
 
 export function usePeerTransports(): Record<string, any> { return {}; }
@@ -227,7 +227,7 @@ export function onDocListUpdated(): () => void { return noop; }
 export function onUnseenChangesUpdated(): () => void { return noop; }
 export function getUnseenChanges(): Record<string, boolean> { return {}; }
 export function onDeviceNamesUpdated(): () => void { return noop; }
-export function onContactNamesUpdated(): () => void { return noop; }
+export function onFriendNamesUpdated(): () => void { return noop; }
 
 export function getIdentity(): Promise<any> { return Promise.resolve({ agentId: 'peer-mock' }); }
 export function getContactCard(): Promise<string> { return Promise.resolve(''); }

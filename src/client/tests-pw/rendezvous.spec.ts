@@ -10,7 +10,7 @@ import { newPeer, waitFor, type Peer } from './support/peer';
  * with its own bundle so both peers end up knowing each other from one scan — no
  * second "add me back" round-trip. Verifies both directions.
  */
-test('rendezvous makes both peers contacts from a single exchange', async ({ browser }) => {
+test('rendezvous makes both peers friends from a single exchange', async ({ browser }) => {
   let alice: Peer | undefined;
   let bob: Peer | undefined;
   try {
@@ -49,7 +49,7 @@ test('rendezvous makes both peers contacts from a single exchange', async ({ bro
 
     // Direction 1: Bob knows Alice.
     await waitFor(
-      () => bob!.call('getKnownContacts', ''),
+      () => bob!.call('getKnownFriends', ''),
       (list) => list.some((c: any) => c.agentId === aliceGroup),
       { label: 'bob knows alice', timeout: 30_000 },
     );
@@ -57,7 +57,7 @@ test('rendezvous makes both peers contacts from a single exchange', async ({ bro
     // Direction 2: Alice knows Bob — the mutual half that used to require a second
     // QR/link exchange now happens automatically over the same rendezvous.
     await waitFor(
-      () => alice!.call('getKnownContacts', ''),
+      () => alice!.call('getKnownFriends', ''),
       (list) => list.some((c: any) => c.agentId === bobGroup),
       { label: 'alice knows bob', timeout: 30_000 },
     );
@@ -65,7 +65,7 @@ test('rendezvous makes both peers contacts from a single exchange', async ({ bro
     // The worker (not the UI) named Bob on Alice's side from the name he replied
     // with — Alice has no UI to name him, so the worker manages it.
     await waitFor(
-      () => alice!.call('getAllContactNames'),
+      () => alice!.call('getAllFriendNames'),
       (names) => names[bobGroup!] === 'Bob',
       { label: 'alice auto-named bob', timeout: 30_000 },
     );
