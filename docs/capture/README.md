@@ -51,10 +51,10 @@ documents in `src/client/home/examples/`, seeded via the empty home page's
 | `settings.png` | The settings index |
 | `todo.png` | A populated task list (*Family Groceries*) |
 | `connections.png` | Connection Debugging, with a second peer connected |
-| `new-doc.gif` | FAB → type picker → naming a new task list → adding a task |
+| `new-doc.gif` | FAB → type picker → kebab → Rename → naming a new task list → adding a task |
 | `timeline.gif` | Editing, then scrubbing the version-history slider |
 | `linking-a-device.gif` | A device with a library of documents links a second one, which then receives them all |
-| `presence-updates.gif` | Two peers in the same task editor; the dot follows the other's field as it moves |
+| `presence-updates.gif` | Two peers in the same task editor; the dot walks down the other's property list — Title, Priority, Description — greying each row they occupy |
 | `add-and-share-with-friend.gif` | Sharing an open document with a new contact by QR, who then opens it |
 | `datagrid-presence.gif` | Two peers panning and selecting in one sheet: each other's tagged cells, a Monte Carlo histogram, a range's aggregates, an edit propagating |
 | `source-presence.gif` | A grid on the left, the same document as JSON on the right: the dot tracks the selected cell, and editing an empty one makes the key appear |
@@ -129,11 +129,21 @@ Three things every screencast gets for free, and one to reach for:
   setup on one page and the recorded flow on a second, and measures the clip window
   from the second page's creation — otherwise every GIF opens with several seconds
   of WASM and keyhive boot.
-- **Native dialogs are load-bearing.** `prompt`/`confirm` gate contact naming, the
-  add-device settings sync, rename and archive. `capturePeer` installs a handler;
-  set the answer with `peer.setPromptAnswer(…)` before triggering one.
+- **Native dialogs are load-bearing.** `confirm` gates archive and deletes, and
+  `prompt` still gates contact naming and the add-device settings sync.
+  `capturePeer` installs a handler; set the answer with `peer.setPromptAnswer(…)`
+  before triggering one. **Renaming is no longer one of them** — documents and
+  spreadsheet sheets rename through `RenameSheet`, a real Material sheet, which
+  is both on-brand and actually visible in a screencast (an OS prompt is not).
 - **`md-*` elements are shadow DOM** — match `md-list-item` by `hasText` substring,
-  never an anchored regex (innerText carries a trailing newline).
+  never an anchored regex (innerText carries a trailing newline). `locator.fill()`
+  throws on an `md-outlined-text-field` host, so reach the inner control:
+  `[data-testid="x"] input` (Playwright's CSS engine pierces open shadow roots).
+- **Item editors are property lists.** Task/counter/event editors show a list of
+  properties and open one field at a time, so a field is only in the DOM after
+  its `<id>-row` has been tapped; `Back` returns to the list. A *new* item opens
+  straight in its title pane. Escape pops detail→list rather than closing, so a
+  flow that used Escape to dismiss now needs a Close click.
 - **Presence dedupe hides your own devices**, and collapses one user's devices into a
   single dot. Two distinct identities are required or `presence-updates.gif` shows
   nothing.

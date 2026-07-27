@@ -433,10 +433,13 @@ test.describe('DataGrid mobile', () => {
     await expect(cond).toBeVisible();
     await expect(sheet).toHaveCount(0);
 
-    // Add a rule: B2:B3 greater than 15 → default yellow fill on B3 (20) only
-    await cond.getByRole('button', { name: 'Add rule' }).click();
-    await page.getByPlaceholder('A1:C10, E1:E20').fill('B2:B3');
-    await page.getByPlaceholder('Enter value...').fill('15');
+    // Add a rule: B2:B3 greater than 15 → default yellow fill on B3 (20) only.
+    // The rule list is md-list now (no implicit button role — @material/web
+    // shims host role/aria into data-*), and the fields are MdTextFields whose
+    // host can't be filled, so reach the inner input.
+    await page.getByTestId('cf-add-rule').click();
+    await page.locator('[data-testid="cf-ranges"] input').fill('B2:B3');
+    await page.locator('[data-testid="cf-value"] input').fill('15');
     await cond.getByRole('button', { name: 'Save' }).click();
     await expect(cell(1, 2)).toHaveCSS('background-color', 'rgb(255, 255, 0)', { timeout: 10_000 });
     await expect(cell(1, 1)).not.toHaveCSS('background-color', 'rgb(255, 255, 0)');

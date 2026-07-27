@@ -324,22 +324,34 @@ test('new-doc.gif', async ({ browser }) => {
 
     // Substring match: shadow-DOM innerText carries a trailing newline.
     await tap(page, sheet.locator('md-list-item', { hasText: 'Task list' }));
-    const title = page.getByTestId('doc-title-input');
-    await expect(title).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByTestId('doc-title')).toBeVisible({ timeout: 30_000 });
     await beat(page, 600);
 
-    await tapAndReplace(page, title, 'Camping trip');
-    await title.press('Enter');
+    // Renaming is deliberate now: kebab -> Rename -> a Material sheet. (This is
+    // why the beat still reads on camera — the old window.prompt was an OS
+    // dialog the recorder couldn't see.)
+    await tap(page, page.getByRole('button', { name: 'More actions' }));
+    await beat(page, 500);
+    await tap(page, page.getByTitle('Rename', { exact: true }));
+    await expect(page.getByTestId('doc-rename-sheet')).toBeVisible({ timeout: 30_000 });
+    await beat(page, 400);
+    await tapAndReplace(page, page.locator('[data-testid="rename-input"] input'), 'Camping trip');
+    await tap(page, page.getByTestId('rename-save'));
+    await expect(page.getByTestId('doc-title')).toHaveText('Camping trip', { timeout: 30_000 });
     await beat(page, 700);
 
+    // A new task opens straight in its Title pane (the editor is a property
+    // list once the item exists).
     await tap(page, page.getByRole('button', { name: 'New task' }));
-    const taskTitle = page.getByTestId('ted-title');
+    const taskTitle = page.locator('[data-testid="ted-title"] input');
     await expect(taskTitle).toBeVisible({ timeout: 30_000 });
     await beat(page, 500);
     await tapAndType(page, taskTitle, 'Book the campsite');
-    // Tasks auto-save on blur — no Save button.
-    await taskTitle.press('Escape');
+    // Tasks auto-save; Enter commits and offers the next blank one.
+    await taskTitle.press('Enter');
     await expect(page.getByTestId('task-row')).toHaveCount(1, { timeout: 30_000 });
+    await beat(page, 500);
+    await tap(page, page.getByRole('button', { name: 'Close' }));
   }, { url: '/#/' });
 
   await toGif('new-doc.gif', clip);
@@ -491,34 +503,47 @@ test('presence-updates.gif', async ({ browser }) => {
       await expect(l.getByTestId('peer-dot').first()).toBeVisible({ timeout: 60_000 });
       await beat(l, 1200);
 
-      // Both open the *same* task, so Phil is watching the per-field dots
-      // rather than a single row marker.
+      // Both open the *same* task. The editor is a property list, so Phil sees
+      // Sam's dot walk down labelled rows — Title, then Priority, then
+      // Description — and the occupied row greys out. That reads far better at
+      // 430px than dots pinned to a flat form's labels.
       const TASK = 'Plan the meals';
       await tap(l, l.getByRole('button', { name: `Edit ${TASK}` }));
-      await expect(l.getByTestId('ted-title')).toBeVisible({ timeout: 30_000 });
+      await expect(l.getByTestId('ted-title-row')).toBeVisible({ timeout: 30_000 });
       await beat(l, 900);
 
       await tap(r, r.getByRole('button', { name: `Edit ${TASK}` }));
-      const title = r.getByTestId('ted-title');
-      await expect(title).toBeVisible({ timeout: 30_000 });
+      await expect(r.getByTestId('ted-title-row')).toBeVisible({ timeout: 30_000 });
       await beat(r, 900);
 
-      // Sam moves between fields; on Phil's side the dot follows, because
-      // presence is a path into the document rather than a cursor position.
-      // Only the title has a testid — the rest are identified by input type.
-      await tap(r, title);
+      // Sam edits one property at a time, returning to the list between each;
+      // on Phil's side the dot follows, because presence is a path into the
+      // document rather than a cursor position.
+      const back = (p: typeof r) => tap(p, p.getByRole('button', { name: 'Back' }));
+
+      await tap(r, r.getByTestId('ted-title-row'));
+      const title = r.locator('[data-testid="ted-title"] input');
+      await expect(title).toBeVisible({ timeout: 30_000 });
       await beat(r, 500);
       await title.press('End');
       await typeText(r, ' — burgers + salad', 85);
       await beat(l, 1400);
+      await back(r);
+      await beat(l, 600);
 
-      await tap(r, r.locator('input[type="number"]'));
+      await tap(r, r.getByTestId('ted-priority-row'));
+      const priority = r.locator('[data-testid="ted-priority"] input');
+      await expect(priority).toBeVisible({ timeout: 30_000 });
       await beat(r, 400);
       await r.keyboard.press('ControlOrMeta+a');
       await typeText(r, '2', 120);
       await beat(l, 1400);
+      await back(r);
+      await beat(l, 600);
 
-      await tap(r, r.locator('textarea'));
+      await tap(r, r.getByTestId('ted-desc-row'));
+      const desc = r.locator('[data-testid="ted-desc"] textarea');
+      await expect(desc).toBeVisible({ timeout: 30_000 });
       await beat(r, 400);
       await typeText(r, 'Two dinners, one packed lunch.', 70);
       await beat(l, 1600);
@@ -877,7 +902,9 @@ test('device-permissions.gif', async ({ browser }) => {
       await beat(r, 900);
       const held = await bottomCount(r);
       await tap(r, titleOf(bottomRow(r)));
-      await expect(r.getByTestId('ced-title')).toHaveCount(0);
+      // The editor opens on its property list, so "no editor" is the absence of
+      // the Title *row* (the field itself only exists once that row is tapped).
+      await expect(r.getByTestId('ced-title-row')).toHaveCount(0);
       await beat(r, 1200);
       expect(await bottomCount(r)).toBe(held);
       await beat(r, 1200);

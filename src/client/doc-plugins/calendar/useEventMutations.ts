@@ -3,6 +3,12 @@ import { updateDoc, deepAssign } from '../../worker-api';
 import type { CalendarEvent } from './schema';
 import type { EditorState } from './calendar-utils';
 
+/**
+ * Saving does NOT close the editor: the event editor auto-saves, so a commit
+ * arrives on every field blur/change while the sheet stays open (dismissing it
+ * is the only "done" gesture). Only the deletes close it, since their subject
+ * is gone.
+ */
 export function useEventMutations(setEditorState: (s: EditorState | null) => void) {
   const saveEvent = useCallback((uid: string, eventData: CalendarEvent, docId: string) => {
     updateDoc(docId, (d: any, deepAssign: any, uid: string, eventData: any) => {
@@ -16,8 +22,7 @@ export function useEventMutations(setEditorState: (s: EditorState | null) => voi
         deepAssign(d.events[uid], eventData);
       }
     }, deepAssign, uid, eventData);
-    setEditorState(null);
-  }, [setEditorState]);
+  }, []);
 
   const saveOverride = useCallback((uid: string, recurrenceDate: string, overrideData: any, docId: string) => {
     updateDoc(docId, (d: any, deepAssign: any, uid: string, recurrenceDate: string, overrideData: any) => {
@@ -28,17 +33,18 @@ export function useEventMutations(setEditorState: (s: EditorState | null) => voi
         deepAssign(d.events[uid].recurrenceOverrides[recurrenceDate], overrideData);
       }
     }, deepAssign, uid, recurrenceDate, overrideData);
-    setEditorState(null);
-  }, [setEditorState]);
+  }, []);
 
   const deleteEvent = useCallback((uid: string, docId: string) => {
     updateDoc(docId, (d: any, uid: string) => { delete d.events[uid]; }, uid);
     setEditorState(null);
   }, [setEditorState]);
 
+  // Deleting an occurrence is an override write, but it IS terminal — close.
   const deleteOccurrence = useCallback((uid: string, recurrenceDate: string, docId: string) => {
     saveOverride(uid, recurrenceDate, { excluded: true }, docId);
-  }, [saveOverride]);
+    setEditorState(null);
+  }, [saveOverride, setEditorState]);
 
   return { saveEvent, saveOverride, deleteEvent, deleteOccurrence };
 }

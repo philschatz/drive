@@ -128,7 +128,8 @@ export async function createDocViaUI(
 export async function renameDocViaUI(app: App, name: string): Promise<void> {
   const page = app.page;
   await page.getByRole('button', { name: 'More actions' }).click();
-  await page.getByTitle('Rename').click();
+  // exact: getByTitle is substring-matching, and "Rename sheet" exists elsewhere.
+  await page.getByTitle('Rename', { exact: true }).click();
   await expect(page.getByTestId('doc-rename-sheet')).toBeVisible({ timeout: 10_000 });
   await mdField(page, 'rename-input').fill(name);
   await page.getByTestId('rename-save').click();

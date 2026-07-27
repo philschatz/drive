@@ -240,16 +240,21 @@ function PropertySheetBody({
 
         {detail ? (
           <div ref={paneRef} data-testid={testId ? `${testId}-detail` : undefined} className="mt-4">
-            {/* The field's own title carries the peer dot, and the pane greys out
-                while a peer is in it — a visible "someone else is here", without
-                disabling anything. Concurrent edits are safe; this is a hint. */}
-            <div className="flex items-center gap-1.5 mb-2">
-              <span className="md-label-large text-on-surface-variant">{detail.label}</span>
-              <PresenceDot
-                fieldIds={detail.presenceIds ?? [detail.id]}
-                peerFocusedFields={peerFocusedFields}
-              />
-            </div>
+            {/* A title line above the field, carrying the peer dot. Shown for a
+                grouped pane (where it names the cluster) and whenever a peer is
+                present (so the dot has a home) — but not for a lone field with
+                no peer, where it would just repeat the field's floating label. */}
+            {(peerOn(detail) || (detail.presenceIds?.length ?? 0) > 1) && (
+              <div className="flex items-center gap-1.5 mb-2">
+                <span className="md-label-large text-on-surface-variant">{detail.label}</span>
+                <PresenceDot
+                  fieldIds={detail.presenceIds ?? [detail.id]}
+                  peerFocusedFields={peerFocusedFields}
+                />
+              </div>
+            )}
+            {/* Greyed while a peer is in it, never disabled — Automerge merges
+                concurrent edits, so this is a heads-up, not a lock. */}
             <div style={{ opacity: peerOn(detail) ? 0.5 : undefined }}>
               {detail.render?.({ back })}
             </div>

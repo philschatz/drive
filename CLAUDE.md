@@ -66,6 +66,17 @@ Documents follow JSCalendar (RFC 8984) with modifications for CRDT collaboration
 
 `src/shared/schemas/core.ts` defines a functional DSL for schema validation: `str()`, `num()`, `bool()`, `obj()`, `record()`, `union()`, `arr()`. Each document type has a schema definition and dependency checker in its own file under `schemas/`. Validators return `ValidationError[]` with paths and messages.
 
+### Item Editors (PropertySheet)
+
+Every doc-item editor (`TaskEditor`, `CounterEditor`, `EventEditor`, `CalendarSettings`) is built from `src/client/shared/PropertySheet.tsx`: a Material bottom sheet showing a **property list** (`md-list-item` per property — icon, label, current value as supporting text) that swaps to a **single focused field** when a row is tapped. One thing is edited at a time.
+
+- **Auto-save everywhere.** Fields commit on blur/change; the X is the only "done" gesture. There are no Save/Cancel buttons in any editor.
+- **`initialDetailId`** opens a brand-new item straight in its title pane, which is what makes Enter-to-add-another a continuous flow (Tasks/Counters).
+- **Grouped rows** (`presenceIds`) collapse interdependent fields that would otherwise pop in and out of the list: the event editor's *When* (date/all-day/time/duration) and *Repeat* (the whole RRULE).
+- **Escape pops detail→list**, and only closes from the list — via `Sheet`'s `onEscape` hook, which also skips an Escape an open `md-menu` already handled.
+- **Presence** shows at both levels: a dot in the row's trailing slot and beside the field title in the detail pane, with the affected UI greyed to 0.5 but never disabled.
+- Destructive/secondary actions are `SheetActionItem` rows (error-toned `md-list-item`), not buttons. Renaming anything goes through `shared/RenameSheet.tsx`, never `window.prompt`.
+
 ### Presence System
 
 `src/client/shared/presence.tsx` provides real-time peer awareness using Automerge's native Presence API. All editors share a unified `PresenceState` type: `{ viewing: boolean, focusedField: (string | number)[] | null, userGroupId?: string }`. The focused field path encodes what a peer is editing (e.g., `['events', uid, 'title']`). Each `PresenceState` key is broadcast as its own channel and **encrypted with the document's keyhive key** in the worker, so the ephemeral channel (plaintext on the wire) never leaks what a peer is viewing/editing.
@@ -106,7 +117,9 @@ The backend implements CalDAV (RFC 4791) at `/dav/`. `src/backend/parser.ts` con
 
 **Playwright is reserved for tests that need two browsers/tabs (or a genuinely browser-only runtime); single-browser tests belong in Jest (jsdom).**
 
-- **Jest** (`jest.config.js`; `*.test.ts` = node project, `*.test.tsx` = jsdom `ui` project): unit + UI component/container tests. Editor containers (Tasks, Counters, …) run in jsdom via `jest.mock('../../worker-api')` (two levels up from a `doc-plugins/<type>/` dir), which picks up `src/client/__mocks__/worker-api.ts` — it backs `subscribeQuery`/`updateDoc` with an in-memory doc projected through the real jq engine (`src/shared/jq.ts`) and stubs the rest. Seed with `__setDoc(id, doc)`; assert store state with `__getDoc(id)`; reset in `beforeEach` with `__reset()`. It projects against a **clone** so each result has fresh refs (else `setState` bails on `Object.is` and nothing re-renders). `shared/keyhive-api` re-exports worker-api, so this one mock also covers access/presence. Components that read `Temporal` need `import 'temporal-polyfill/global'` first; the Radix `Select` popover can't be opened in jsdom, so seed variety via `__setDoc` rather than driving it.
+- **Jest** (`jest.config.js`; `*.test.ts` = node project, `*.test.tsx` = jsdom `ui` project): unit + UI component/container tests. Editor containers (Tasks, Counters, …) run in jsdom via `jest.mock('../../worker-api')` (two levels up from a `doc-plugins/<type>/` dir), which picks up `src/client/__mocks__/worker-api.ts` — it backs `subscribeQuery`/`updateDoc` with an in-memory doc projected through the real jq engine (`src/shared/jq.ts`) and stubs the rest. Seed with `__setDoc(id, doc)`; assert store state with `__getDoc(id)`; reset in `beforeEach` with `__reset()`. It projects against a **clone** so each result has fresh refs (else `setState` bails on `Object.is` and nothing re-renders). `shared/keyhive-api` re-exports worker-api, so this one mock also covers access/presence. Components that read `Temporal` need `import 'temporal-polyfill/global'` first.
+
+**Material form fields.** The `md-*` custom elements are registered only in `main.tsx`, so under jsdom they never upgrade — which is why editor tests work at all (rows are inert hosts, handlers still fire). A raw `md-outlined-text-field` would break them outright: testing-library's `fireEvent.input` needs a `value` *setter* and throws without one. So use the two-mode wrappers `components/ui/md-text-field.tsx` and `md-select.tsx`, which fall back to a real `input`/`textarea`/`select` when the element isn't defined. Bind `input`, never `change` — preact/compat rewrites `onChange` to an input listener on form elements. The `MdSelect` fallback is a native `<select>`, so selects *can* now be driven in jsdom with `fireEvent.input`.
 - **Playwright** (`src/client/tests-pw/`): two-peer sync (`support/peer.ts`, `window.__drive`), multi-tab (Web Locks), real-worker/IndexedDB behavior, and heavy browser-only rendering (schedule-x calendar, HyperFormula datagrid).
 
 ## Key Conventions

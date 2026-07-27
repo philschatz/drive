@@ -271,7 +271,7 @@ export async function openDocNamed(page: Page, name: string): Promise<string> {
   await page.goto('/#/');
   await page.getByTestId('doc-row').filter({ hasText: name }).first().click();
   await expect(page).toHaveURL(/#\/d\//, { timeout: 30_000 });
-  await expect(page.getByTestId('doc-title-input')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByTestId('doc-title')).toBeVisible({ timeout: 30_000 });
   return /#\/d\/([^/?]+)/.exec(page.url())![1];
 }
 

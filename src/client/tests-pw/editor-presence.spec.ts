@@ -31,7 +31,9 @@ test('editors opened at different times see each other without re-broadcast loop
     // Alice opens the editor first; her viewing:true broadcast fires now,
     // while bob has no editor mounted.
     await alice.page.goto(`/#/d/${docId}`);
-    await expect(alice.page.locator('.datagrid-cell, input, h1').first()).toBeVisible({ timeout: 15_000 });
+    // The title bar is the one thing every editor mounts (as static text now —
+    // it used to be an input, which is what this locator was matching on).
+    await expect(alice.page.getByTestId('doc-title')).toBeVisible({ timeout: 15_000 });
     await alice.page.waitForTimeout(3_000); // ensure her broadcast is long gone
 
     // Bob joins later. He must see alice (via her newcomer re-flush), and she

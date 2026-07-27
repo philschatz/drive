@@ -66,6 +66,7 @@ export function RenameSheet({
             <MdTextField
               ref={fieldRef}
               label={label}
+              id="rename-input"
               data-testid="rename-input"
               value={name}
               onInput={setName}
