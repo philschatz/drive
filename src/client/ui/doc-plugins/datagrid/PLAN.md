@@ -389,7 +389,7 @@ Three flavors: `cell-ctx`, `row-ctx`, `col-ctx` — determined by which element 
 ## 19. File Map
 
 ```
-src/client/doc-plugins/datagrid/
+src/client/ui/doc-plugins/datagrid/
   DataGrid.tsx        Main component — state, events, JSX rendering
   commands.ts         Plugin registry, useGridCommands hook, commitReorder
   CommandBar.tsx      CommandMenuBar, CommandToolbar, CommandContextMenu renderers
@@ -400,8 +400,10 @@ src/client/doc-plugins/datagrid/
                       generateAutofillValues, updateFormulasForDeletion
   datagrid.css        All grid-specific styles
 
-src/shared/
+src/client/ui/common/
   useUndoRedo.ts      Head-based undo/redo via Automerge view()
+
+src/shared/
   schemas/datagrid.ts DataGridDocument type + validation schema + dependency checker
 
 tests/

@@ -40,7 +40,7 @@ npm run test:pw:open # Playwright UI mode
 **Type checking** (two separate tsconfigs):
 
 ```bash
-npx tsc --noEmit                          # Backend (src/backend/)
+npx tsc --noEmit                          # Node side (src/relay, src/bitrot-caldav, src/cli)
 npx tsc -p tsconfig.client.json --noEmit  # Frontend (src/client/ + src/shared/)
 ```
 
@@ -54,12 +54,23 @@ npx tsc -p tsconfig.client.json --noEmit  # Frontend (src/client/ + src/shared/)
 
 ```
 src/
-  backend/     Express server, CalDAV handler, REST routes
-  client/      Preact SPA: calendar/, tasks/, datagrid/, source/, home/
-  shared/      Shared between client features: automerge, presence, schemas, history
-tests/                 Jest tests
-src/client/tests-pw/   Playwright E2E (editor UI + two-peer sync)
+  relay/           WebSocket relay + production SPA host + Vite dev plugin
+  bitrot-caldav/   CalDAV bridge: RFC 4791 handler, /dav routes, ICS↔JMAP
+  cli/             Headless drive peer (npm run cli)
+  client/
+    ui/            Preact SPA: doc-plugins/, home/, source/, settings/, common/
+    worker/        The Automerge + keyhive Web Worker
+    shared/        Used by BOTH threads: idb-storage, webrtc-chunk, worker-client
+    assets/        globals.css + public/ (index.html stays at client/, Vite's root)
+    tests-pw/      Playwright E2E (editor UI + two-peer sync)
+  shared/          Portable — no DOM, no Preact. Used by the browser AND Node:
+                   drive-engine, keyhive-*, jq, worker-protocol, schemas/
+tests/             Jest tests
 ```
+
+`src/shared` never imports from `src/client`, and `client/ui` and `client/worker`
+never import each other (they run on different threads). Both rules are enforced
+by `tests/layering.test.ts`.
 
 ### Document Types
 

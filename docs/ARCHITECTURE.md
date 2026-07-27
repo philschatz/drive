@@ -12,8 +12,10 @@ Three source trees, two TypeScript projects:
 
 | Tree | Role | TS project | Module system |
 |------|------|-----------|---------------|
-| `src/backend/` | Express servers: web/SPA host, WebSocket relay (+ optional CalDAV server, §3a) | `tsconfig.json` | CommonJS → `dist/` |
-| `src/client/` | Preact SPA + Web Worker (Automerge repo + Keyhive crypto) | `tsconfig.client.json` | ESNext, `noEmit` (Vite bundles) |
+| `src/relay/` | WebSocket relay + production web/SPA host + Vite dev plugin | `tsconfig.json` | CommonJS → `dist/` |
+| `src/bitrot-caldav/` | CalDAV server (§3a): RFC 4791 handler, `/dav` routes, ICS↔JMAP | `tsconfig.json` | CommonJS → `dist/` |
+| `src/cli/` | Headless drive peer (`npm run cli`) + Node KVStore/WASM shim | `tsconfig.json` | CommonJS → `dist/` |
+| `src/client/` | Browser, split by thread: `ui/` (Preact SPA), `worker/` (Automerge repo + Keyhive crypto), `shared/` (both threads), `assets/` | `tsconfig.client.json` | ESNext, `noEmit` (Vite bundles) |
 | `src/shared/` | Schema DSL, deep-assign, jq, relay identity, rendezvous protocol | both | — |
 
 **Key separation of concerns:** the entire Automerge repo + Keyhive crypto lives in a **Web Worker** (`automerge-worker.ts`). The main thread never holds a full document — it issues queries (jq filters) and mutations through `worker-api.ts`. This keeps the UI thread responsive and isolates WASM-heavy work.
@@ -26,7 +28,7 @@ Three source trees, two TypeScript projects:
 
 ## 2. Document Model (JSCalendar / RFC 8984-derived)
 
-Schemas live with their plugin under `src/client/doc-plugins/`: `calendar/schema.ts`, `tasks/schema.ts`, `datagrid/schema.ts`, `counters/schema.ts`.
+Schema cores live under `src/shared/schemas/` — `calendar.ts`, `tasks.ts`, `datagrid.ts`, `counters.ts`, `sentences.ts`, `drive-settings.ts` — so the worker and the Node programs can validate without pulling in Preact. The UI half of each plugin (`plugin.tsx` + views) stays in `src/client/ui/doc-plugins/<type>/`.
 
 ### Calendar
 ```ts
@@ -69,7 +71,7 @@ interface Sheet {
 
 ---
 
-## 3. Backend (`src/backend/`)
+## 3. Node programs (`src/relay/`, `src/bitrot-caldav/`, `src/cli/`)
 
 | File | Responsibility |
 |------|----------------|
@@ -140,7 +142,7 @@ validateNode(value, schema, path, errors): void   // depth-first, accumulates Va
 
 ---
 
-## 6. Frontend (`src/client/`)
+## 6. Frontend (`src/client/ui/`, `src/client/worker/`)
 
 ### Bootstrap & routing
 - Entry `main.tsx`: imports `temporal-polyfill/global`, `globals.css`, renders `<App/>` into `#app`, imports `test-bridge` (exposes `window.__drive` — **always**, even in prod, for Playwright).
@@ -185,13 +187,13 @@ validateNode(value, schema, path, errors): void   // depth-first, accumulates Va
   5. `versionJsonPlugin` (build only) — emits `dist/version.json` (git SHA + timestamp).
   Plus `relayPlugin()` (attaches WS relay to dev server, skips `vite-hmr` protocol), `VitePWA` (autoUpdate, 5MB cache, navigate-fallback denylist for `/api /dav /automerge /docs`), `resolve.dedupe: [preact, @preact/signals, @preact/signals-core]`, `@/`→`src/client`, `root: 'src/client'`, `outDir: dist`, ES-format worker.
 - **Preact preset** filters out the `transform-hook-names` plugin (zimmerframe resolution failure under Vite 8).
-- **tsconfig.json** (backend): ES2022/CommonJS → `dist`, excludes client/shared. **tsconfig.client.json**: ES2020/ESNext, `moduleResolution: bundler`, `jsx: react-jsx` + `jsxImportSource: preact`, `react`/`react-dom`→`preact/compat`, `@/*`→`src/client/*`, `noEmit`.
+- **tsconfig.json** (node side): ES2022/CommonJS → `dist`, excludes `src/client`/`src/shared`. **tsconfig.client.json**: ES2020/ESNext, `moduleResolution: bundler`, `jsx: react-jsx` + `jsxImportSource: preact`, `react`/`react-dom`→`preact/compat`, `@/*`→`src/client/ui/*` and `@client/*`→`src/client/*`, `noEmit`.
 
 ### Scripts
 `dev` (vite :3000, HMR :PORT+1), `build` (→dist), `start` (ts-node serve.ts), `start:relay`, `start:caldav`/`dev:caldav`/`serve:caldav`, `test` (jest+pw), `test:unit`, `test:watch`, `test:coverage`, `test:pw`, `test:pw:open`. Type-check: `npx tsc --noEmit` (backend) and `npx tsc -p tsconfig.client.json --noEmit` (frontend).
 
 ### Tests
-- **Jest** two projects: `server` (node env, `.data-jest`, subduction WASM setup, shims keyhive/repo-keyhive) and `ui` (jsdom, `@testing-library/preact`, CSS mock). Specs in `tests/` (caldav, parser, snapshots) and `src/shared` (deep-assign, jq, relay-identity, schema), plus `src/client/components/ui/components.test.tsx`.
+- **Jest** two projects: `server` (node env, `.data-jest`, subduction WASM setup, shims keyhive/repo-keyhive) and `ui` (jsdom, `@testing-library/preact`, CSS mock). Specs in `tests/` (caldav, parser, snapshots) and `src/shared` (deep-assign, jq, relay-identity, schema), plus `src/client/ui/components/ui/components.test.tsx`. `tests/layering.test.ts` enforces the directory boundaries (src/shared ↛ src/client; client/ui ↮ client/worker).
 - **Playwright** (`src/client/tests-pw/`): serial, 1 worker, builds+serves prod; **two isolated BrowserContexts** as peers, driven via `window.__drive` `peer.call(method,...)`. Specs: `ui/*` (calendar/datagrid/tasks) + two-peer (`device-link`, `friend-share`, `rendezvous`, `revoke-self`, `revoke-user`, `presence` — asserts one peer's `focusedField` arrives **decrypted** at the other and stays stable). Coverage intentionally **not** wired (instrumented build too slow/flaky).
 
 ### Env vars
@@ -340,4 +342,4 @@ To validate this document against the live tree:
 - `npm run test:unit` — exercises parser, schema DSL, deep-assign, jq, components.
 - `npm run dev` then open `/`, create one of each doc type, confirm editors + presence.
 - `npm run test:pw` — two-peer sync/sharing/rendezvous/revoke flows.
-- Cross-check the document type definitions against `src/client/{calendar,tasks,datagrid}/schema.ts` and the schema DSL against `src/shared/schemas/core.ts`.
+- Cross-check the document type definitions against `src/shared/schemas/{calendar,tasks,datagrid}.ts` and the schema DSL against `src/shared/schemas/core.ts`.

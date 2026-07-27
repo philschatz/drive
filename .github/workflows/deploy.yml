@@ -31,6 +31,12 @@ jobs:
       - name: Type check (frontend)
         run: npx tsc -p tsconfig.client.json --noEmit
 
+      # The node-side programs (src/relay, src/bitrot-caldav, src/cli). Without
+      # this, only the non-blocking e2e job ever executes them, so a broken
+      # backend import or package.json script path would deploy green.
+      - name: Type check (backend)
+        run: npx tsc --noEmit
+
       - name: Unit tests
         run: npm run test:unit
 
