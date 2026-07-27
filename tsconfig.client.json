@@ -19,6 +19,6 @@
       "@/*": ["./src/client/*"]
     }
   },
-  "include": ["src/client/**/*", "src/shared/**/*", "src/lib/**/*"],
+  "include": ["src/client/**/*", "src/shared/**/*"],
   "exclude": ["**/*.test.ts", "**/*.test.tsx"]
 }

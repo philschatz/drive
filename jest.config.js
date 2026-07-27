@@ -1,6 +1,6 @@
 process.env.AUTOMERGE_DATA_DIR = '.data-jest';
 // Silence the relay's per-message firehose + info logs under the test runner
-// (mirrors playwright.config.ts). See src/backend/relay-log.ts — this also gates
+// (mirrors playwright.config.ts). See src/relay/relay-log.ts — this also gates
 // the expected-hardening relayWarn/relayError lines, leaving genuine internal
 // failures (raw console.error) still visible. Workers inherit this env.
 process.env.RELAY_QUIET = '1';

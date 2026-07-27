@@ -15,7 +15,7 @@ import { WebSocketClientAdapter } from '@automerge/automerge-repo-network-websoc
 import { NodeFSStorageAdapter } from '@automerge/automerge-repo-storage-nodefs';
 import { KeyhiveOps } from '../shared/keyhive-ops';
 import { createKeyhiveRepo } from '../shared/keyhive-repo';
-import { ensureKeyhiveNodeShim, initSubductionNode } from './keyhive-node-shim';
+import { ensureKeyhiveNodeShim, initSubductionNode } from '../cli/keyhive-node-shim';
 
 export interface CaldavKeyhive {
   repo: any;

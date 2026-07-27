@@ -5,7 +5,7 @@ import path from 'path';
 import { Repo } from '@automerge/automerge-repo';
 import { WebSocketServerAdapter } from '@automerge/automerge-repo-network-websocket';
 import { NodeFSStorageAdapter } from '@automerge/automerge-repo-storage-nodefs';
-import { WebSocketRelay, createRelayWebSocketServer } from './relay';
+import { WebSocketRelay, createRelayWebSocketServer } from '../relay/relay';
 import { CalDAVHandler } from './caldav-handler';
 import { createDavRoutes } from './routes/dav';
 import { createAdminRoutes } from './routes/admin';

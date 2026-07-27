@@ -15,7 +15,7 @@
       "type": "node",
       "request": "launch",
       "runtimeArgs": ["-r", "ts-node/register", "-r", "tsconfig-paths/register"],
-      "args": ["src/backend/caldav-server.ts"],
+      "args": ["src/bitrot-caldav/caldav-server.ts"],
       "console": "integratedTerminal",
       "skipFiles": ["<node_internals>/**"]
     },

@@ -6,7 +6,7 @@ import { VitePWA } from 'vite-plugin-pwa';
 import { resolve } from 'path';
 import { execSync } from 'child_process';
 import { writeFileSync } from 'fs';
-import { relayPlugin } from './src/backend/relay-plugin';
+import { relayPlugin } from './src/relay/relay-plugin';
 
 const automergeEntry = resolve(__dirname, 'node_modules/@automerge/automerge/dist/mjs/entrypoints/fullfat_base64.js');
 
