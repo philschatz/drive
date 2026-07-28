@@ -14,28 +14,19 @@ title: Drive — Signal for documents
 
 ---
 
-# Links
-
-Try it now:
-- [philschatz.com/drive](https://philschatz.com/drive/)
-- [philschatz.com/drive/slides](https://philschatz.com/drive/slides/)
-
-![bg right:38% fit](tour.gif)
-
-<!--
-- Static files on GitHub Pages, installable as a PWA, runs offline on a phone
-- A new install offers the bundled examples, so there is something to look at before there is anything to sync
-- The clip ends on a QR because that is the only way anything else joins: another device, or a friend
--->
-
----
-
 # Tech
 
 - [PWA](https://web.dev/learn/pwa/progressive-web-apps/)
 - [Automerge](https://automerge.org/) (& [Peritext](https://www.inkandswitch.com/peritext/))
 - [Keyhive](https://www.inkandswitch.com/project/keyhive/)
 - relay
+
+Links
+
+- [philschatz.com/drive](https://philschatz.com/drive/)
+- [philschatz.com/drive/slides](https://philschatz.com/drive/slides/)
+
+![bg right:38% fit](tour.gif)
 
 <!--
 - Automerge is the CRDT; Peritext is the rich-text half of it, which is what makes a caret survive someone else's edit
