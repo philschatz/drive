@@ -37,8 +37,6 @@ Try it now:
 - [Keyhive](https://www.inkandswitch.com/project/keyhive/)
 - relay
 
-![bg right:38% fit](linking-a-device.gif)
-
 <!--
 - Automerge is the CRDT; Peritext is the rich-text half of it, which is what makes a caret survive someone else's edit
 - Keyhive is the encryption and access layer: devices, groups, documents, roles
@@ -54,7 +52,7 @@ Try it now:
 - QR Codes for invites
 - Document Schemas
 
-![bg right:38% fit](new-doc.gif)
+![bg right:38% fit](linking-a-device.gif)
 
 <!--
 - Peers upgrade to a direct WebRTC channel when they can, and fall back to the relay when they cannot
