@@ -268,6 +268,108 @@ describe('KeyhiveOps', () => {
     });
   });
 
+  describe('contact card size', () => {
+    /**
+     * Give `ops` a user-group and `docCount` shared documents, encrypting into
+     * each one a few times so every doc accumulates several CGKA (BeeKEM) epochs
+     * — the same thing normal editing does in the app.
+     */
+    async function seedDocs(ops: KeyhiveOps, docCount: number) {
+      await ops.ensureUserGroup({ create: true });
+      for (let i = 0; i < docCount; i++) {
+        const { khDocId } = await ops.enableSharing(`doc-${i}`);
+        for (let n = 0; n < 3; n++) {
+          const doc = await ops.kh.getDocument(ops.khDocuments.get(khDocId)!.doc_id);
+          const ref = new ChangeId(crypto.getRandomValues(new Uint8Array(32)));
+          await ops.kh.tryEncryptArchive(doc!, ref, [], new TextEncoder().encode(`edit ${i}.${n}`));
+        }
+      }
+    }
+
+    /**
+     * Bucket a bundle's groupEvents by StaticEvent variant. bincode 1.3's free
+     * `serialize` uses fixint encoding, so an event's first 4 bytes are the
+     * variant index as u32-LE; the order is fixed by
+     * keyhive_core/src/event/static_event.rs:18-33.
+     */
+    const VARIANTS = ['PrekeysExpanded', 'PrekeyRotated', 'CgkaOperation', 'Delegated', 'Revoked'];
+    function breakdown(cardJson: string) {
+      const events: string[] = JSON.parse(cardJson).groupEvents ?? [];
+      const byVariant: Record<string, { count: number; bytes: number }> = {};
+      for (const b64 of events) {
+        const bytes = base64ToBytes(b64);
+        const tag = bytes[1] === 0 && bytes[2] === 0 && bytes[3] === 0 ? bytes[0] : -1;
+        const name = VARIANTS[tag] ?? `unknown(${tag})`;
+        byVariant[name] ??= { count: 0, bytes: 0 };
+        byVariant[name].count++;
+        byVariant[name].bytes += bytes.length;
+      }
+      return byVariant;
+    }
+
+    it('does not grow with the number of documents', async () => {
+      const { ops: opsOne } = await createOps();
+      await seedDocs(opsOne, 1);
+      const one = await opsOne.getContactCard();
+
+      const { ops: opsMany } = await createOps();
+      await seedDocs(opsMany, 10);
+      const many = await opsMany.getContactCard();
+
+      // Surfaced so a regression shows *which* op family regrew.
+      console.log('1 doc:', one.length, 'bytes', breakdown(one));
+      console.log('10 docs:', many.length, 'bytes', breakdown(many));
+
+      // 10× the documents must not mean a materially larger card. The card
+      // conveys who the sender is, not what they have.
+      expect(many.length).toBeLessThan(one.length * 2);
+    });
+
+    it('stays small for an established account', async () => {
+      const { ops } = await createOps();
+      await seedDocs(ops, 10);
+      expect((await ops.getContactCard()).length).toBeLessThan(32 * 1024);
+    });
+
+    it('carries no CGKA ops (the receiver is not a member of our docs)', async () => {
+      const { ops } = await createOps();
+      await seedDocs(ops, 5);
+      const byVariant = breakdown(await ops.getContactCard());
+
+      expect(byVariant.CgkaOperation).toBeUndefined();
+      // Guard the tag decoding itself: if a keyhive bump changes the bincode
+      // layout every event lands in `unknown` and the assertion above passes
+      // vacuously. A real bundle always carries the delegation defining our group.
+      expect(byVariant.Delegated?.count ?? 0).toBeGreaterThan(0);
+    });
+
+    /**
+     * The assertions above only prove the card got smaller — they cannot catch an
+     * over-trim. This proves the remaining events are still *sufficient*: the
+     * whole point of shipping groupEvents is that a receiver can name the
+     * sender's user-group as a share target, which goes through the same
+     * `addMember` the Sharing page calls.
+     */
+    it('still lets a receiver share a doc with the sender\'s user-group', async () => {
+      const { ops: opsA } = await createOps();
+      const { ops: opsB } = await createOps();
+      await seedDocs(opsA, 5); // A has history — the case that used to bloat the card
+
+      const aGroupId = JSON.parse(await opsA.getContactCard()).groupId as string;
+      const received = await opsB.receiveContactCard(await opsA.getContactCard());
+      expect(received.groupId).toBe(aGroupId);
+
+      // B shares one of its own docs with A's *group* (never a bare individual).
+      const { khDocId: bDocId } = await opsB.enableSharing('b-doc');
+      await expect(opsB.addMember(aGroupId, bDocId, 'edit')).resolves.toBe(true);
+
+      // A's group really is a member of B's doc, with the role B granted.
+      const members = await opsB.getDocMembers(bDocId);
+      expect(members.map((m) => m.agentId)).toContain(aGroupId);
+      expect(members.find((m) => m.agentId === aGroupId)?.role).toBe('edit');
+    });
+  });
+
   describe('enableSharing', () => {
     it('creates a keyhive document and returns khDocId', async () => {
       const { ops, fx } = await createOps();

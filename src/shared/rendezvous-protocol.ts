@@ -8,9 +8,9 @@
  * Flow: a sharer picks a random `rendezvousId` + symmetric `key`, encodes them in
  * a QR/link, and subscribes to the id. The receiver subscribes to the same id;
  * the relay notifies both sides (`rdv-peer`), the sharer encrypts the payload
- * under `key` and sends it (`rdv-msg`), and the receiver decrypts it. This lets
- * arbitrarily large payloads (e.g. a 25 KB keyhive contact bundle) travel between
- * two peers while the QR stays tiny.
+ * under `key` and sends it (`rdv-msg`), and the receiver decrypts it. This keeps
+ * the QR tiny no matter how big the payload is — a keyhive contact bundle runs a
+ * few KB, and the channel caps inbound frames at RDV_MAX_DATA_BYTES.
  */
 
 export const RDV_SUB = 'rdv-sub' as const;

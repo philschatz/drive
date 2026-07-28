@@ -32,9 +32,10 @@ interface ContactBundle {
 
 /**
  * Bounds on an inbound bundle's `groupEvents` before any base64 decode or
- * keyhive ingest work. A legitimate bundle is a handful of membership/CGKA ops
- * totaling ~25 KB; an attacker-supplied bundle (pasted link, hostile rendezvous
- * peer) must not force unbounded parsing/CPU.
+ * keyhive ingest work. A legitimate bundle is the sender's group delegation plus
+ * their devices' prekey ops — a few KB, and flat in the sender's document count
+ * (see {@link KeyhiveOps.contactBundleEvents}). An attacker-supplied bundle
+ * (pasted link, hostile rendezvous peer) must not force unbounded parsing/CPU.
  */
 const MAX_BUNDLE_GROUP_EVENTS = 1024;
 const MAX_BUNDLE_GROUP_EVENTS_BYTES = 1024 * 1024; // base64 chars across all events
@@ -434,22 +435,82 @@ export class KeyhiveOps {
     const bundle: ContactBundle = { __kind: CONTACT_BUNDLE_KIND, card: rawCard };
     const group = await this.getUserGroup();
     if (group) {
-      bundle.groupId = bytesToBase64(group.groupId.toBytes());
+      const groupId = bytesToBase64(group.groupId.toBytes());
+      bundle.groupId = groupId;
       // The delegation that defines our group (and names us its admin) lives in
       // our *Individual's* membership ops — NOT in the group agent's events — so
-      // we union events for both: the individual (carries the group delegation)
-      // and the group (its membership/CGKA ops). This is the same payload the
-      // network adapter would sync; see keyhive-ops.test.ts "per-agent sync
-      // delivers Bob group ops to Alice".
+      // we gather events for both: the individual (carries the group delegation)
+      // and the group (its own membership ops).
       const me = await this.kh.individual;
-      const byHash = new Map<string, Uint8Array>();
-      for (const agent of [me.toAgent(), group.toAgent()]) {
-        const ev: Map<Uint8Array, Uint8Array> = await this.kh.eventsForAgent(agent);
-        ev.forEach((value, hash) => byHash.set(bytesToBase64(hash), value));
-      }
-      bundle.groupEvents = [...byHash.values()].map(bytesToBase64);
+      bundle.groupEvents = await this.contactBundleEvents(
+        new Set([bytesToBase64(me.id.toBytes()), groupId]),
+      );
     }
     return JSON.stringify(bundle);
+  }
+
+  /**
+   * The events a receiver needs to resolve us as a share target: the membership
+   * ops defining our user-group (and naming our devices in it) plus the prekey
+   * ops needed to encrypt to those devices.
+   *
+   * Deliberately NOT `eventsForAgent`, which also returns
+   * `cgka_ops_reachable_by_agent` — every CGKA epoch of every document we can
+   * reach, never pruned. Those are per-document BeeKEM secrets for *our* docs: a
+   * receiver is not a member of them and can never use them, but they made the
+   * card grow without bound with our document count and editing history (a fresh
+   * account's card was ~3 KB, an established one 350 KB — past the rendezvous
+   * wire cap). When we later share a doc with this contact, `addMember` mints
+   * that doc's CGKA ops and they arrive over normal keyhive sync.
+   *
+   * `allAgentEvents()` keeps membership, prekey and CGKA ops in separate indices
+   * over one deduplicated hash→bytes map, so we simply never walk the CGKA one.
+   * It still *computes* them inside the wasm; a narrow binding that skips that
+   * work is a follow-up — this only stops us putting them on the wire.
+   */
+  private async contactBundleEvents(agentIds: Set<string>): Promise<string[]> {
+    const all = await this.kh.allAgentEvents();
+    // Every map here is keyed by a Uint8Array *object*, so `get()` by value can
+    // never match (reference identity). Re-key each one through base64 once.
+    const rekey = (m: Map<any, any>): Map<string, any> => {
+      const out = new Map<string, any>();
+      m.forEach((value, key) => out.set(bytesToBase64(key), value));
+      return out;
+    };
+
+    const hashes = new Set<string>();
+    const collect = (agentIndex: Map<any, any>, sources: Map<any, any>, keepSource?: (id: string) => boolean) => {
+      const byAgent = rekey(agentIndex);
+      const bySource = rekey(sources);
+      for (const agentId of agentIds) {
+        for (const sourceId of byAgent.get(agentId) ?? []) {
+          const source = bytesToBase64(sourceId);
+          if (keepSource && !keepSource(source)) continue;
+          for (const hash of bySource.get(source) ?? []) {
+            hashes.add(bytesToBase64(hash));
+          }
+        }
+      }
+    };
+    // Membership sources are keyed by group id, document id, or (for revocations)
+    // agent id. Keep only our own group and device: a per-document ACL delegation
+    // tells the receiver which docs we own, which they do not need to add our
+    // group to *their* doc — and shipping them made this term scale with our
+    // document count too. Our group's source carries the full proof closure of
+    // the delegations that define it, including any parent groups.
+    collect(all.agentMembershipSources, all.membershipSources, (id) => agentIds.has(id));
+    // Prekey sources are our devices and our groups' transitive members — bounded
+    // by who we are, not by what we have, so they need no filtering.
+    collect(all.agentPrekeySources, all.prekeySources);
+    // all.agentCgkaSources / all.cgkaSources are deliberately never traversed.
+
+    const events = rekey(all.events);
+    const out: string[] = [];
+    for (const hash of hashes) {
+      const bytes: Uint8Array | undefined = events.get(hash);
+      if (bytes) out.push(bytesToBase64(bytes));
+    }
+    return out;
   }
 
   async receiveContactCard(cardJson: string): Promise<{ agentId: string; isOwnCard: boolean; groupId?: string }> {

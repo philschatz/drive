@@ -86,10 +86,14 @@ const RDV_RECEIVE_TIMEOUT_MS = 120_000;
 /**
  * Upper bound on an inbound encrypted rendezvous payload. Anyone who learns a
  * topic id (or a hostile relay) can push bytes at it, so cap the size BEFORE
- * any decrypt/parse work. Legitimate payloads — contact bundles — run ~25 KB;
- * 256 KiB leaves generous headroom.
+ * any decrypt/parse work. A legitimate payload is a contact bundle — a few KB,
+ * and flat in the sender's document count (see `KeyhiveOps.contactBundleEvents`)
+ * — so 256 KiB is generous headroom rather than a working limit.
  */
 export const RDV_MAX_DATA_BYTES = 256 * 1024;
+
+/** AES-GCM framing added by `encryptString`: a 12-byte IV plus the 16-byte tag. */
+const RDV_FRAME_OVERHEAD_BYTES = 28;
 
 /** See OPEN_DOCS_IN_BACKGROUND in the original worker. */
 const OPEN_DOCS_IN_BACKGROUND = true;
@@ -1424,8 +1428,22 @@ export class DriveEngine {
   private rdvEvent(rendezvousId: string, status: RendezvousStatus, message?: string, extra?: { friendGroupId?: string; friendHasName?: boolean }): void {
     this.emit({ type: 'kh-rdv-event', rendezvousId, status, ...(message !== undefined ? { message } : {}), ...(extra ?? {}) });
   }
+  /**
+   * Refuse a payload the peer would be forced to throw away.
+   * {@link handleRendezvousFrame} drops anything over {@link RDV_MAX_DATA_BYTES}
+   * before decrypting, so sending one anyway leaves the receiver waiting out
+   * RDV_RECEIVE_TIMEOUT_MS and then blaming the other device's QR — a diagnosis
+   * no amount of retrying can fix. Fail on this side, where we know the reason.
+   */
+  private assertRdvPayloadFits(byteLength: number): void {
+    if (byteLength <= RDV_MAX_DATA_BYTES) return;
+    throw new Error(
+      `This device's contact card is too large to exchange (${formatBytes(byteLength)}, limit ${formatBytes(RDV_MAX_DATA_BYTES)}).`,
+    );
+  }
   private async rdvSendPayload(rendezvousId: string, key: string, plaintext: string): Promise<void> {
     const framed = await encryptString(key, plaintext);
+    this.assertRdvPayloadFits(framed.length);
     this.rdvEvent(rendezvousId, 'sending', formatBytes(framed.length));
     this.rdvSend({ type: RDV_MSG, rendezvousId, data: framed });
   }
@@ -1441,6 +1459,12 @@ export class DriveEngine {
       const data: Uint8Array = msg.data instanceof Uint8Array ? msg.data : new Uint8Array(msg.data);
       if (data.byteLength > RDV_MAX_DATA_BYTES) {
         console.warn(`[engine] dropping oversized rendezvous payload (${data.byteLength} bytes, max ${RDV_MAX_DATA_BYTES})`);
+        // Say what happened rather than leaving the user to wait out
+        // RDV_RECEIVE_TIMEOUT_MS and be told to check the other device's QR. The
+        // session deliberately stays open: anyone who learns a topic id can push
+        // bytes at it, so tearing down here would hand them a way to cancel a
+        // legitimate exchange. The frame is still dropped before any decrypt work.
+        this.rdvEvent(rid, 'error', `The other device sent ${formatBytes(data.byteLength)}, over the ${formatBytes(RDV_MAX_DATA_BYTES)} limit.`);
         return;
       }
       decryptString(session.key, data)
@@ -2484,6 +2508,8 @@ export class DriveEngine {
         // the on-wire framed size adds only ~28 bytes of IV+GCM tag). Surfaced to the
         // sender's QR page so they can see how much is being transferred up front.
         const payloadBytes = new TextEncoder().encode(plaintext).length;
+        // Check before minting a rendezvous, so we never show a QR that cannot work.
+        this.assertRdvPayloadFits(payloadBytes + RDV_FRAME_OVERHEAD_BYTES);
         const { rendezvousId, key } = generateRendezvous();
         // Bidirectional: after sending our bundle we STAY subscribed to ingest the
         // receiver's reply (their card + display name) so both peers end up knowing
@@ -2610,6 +2636,7 @@ export class DriveEngine {
         });
         // See kh-rdv-create-share: approximate payload size for the sender's QR page.
         const payloadBytes = new TextEncoder().encode(myPayload).length;
+        this.assertRdvPayloadFits(payloadBytes + RDV_FRAME_OVERHEAD_BYTES);
         const { rendezvousId, key } = generateRendezvous();
         this.rdvSessions.set(rendezvousId, {
           key,
