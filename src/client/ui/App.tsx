@@ -12,7 +12,6 @@ import { Toaster } from './components/ui/toast';
 // components work unchanged.
 const Settings = lazyView(() => import('./settings/Settings').then(m => m.Settings));
 const SettingsSection = lazyView(() => import('./settings/SettingsSection').then(m => m.SettingsSection));
-const ConnectionDebug = lazyView(() => import('./debug/ConnectionDebug').then(m => m.ConnectionDebug));
 const Friends = lazyView(() => import('./friends/Friends').then(m => m.Friends));
 const LinkDevicePage = lazyView(() => import('./settings/LinkDevicePage').then(m => m.LinkDevicePage));
 const AddFriendPage = lazyView(() => import('./settings/AddFriendPage').then(m => m.AddFriendPage));
@@ -34,7 +33,6 @@ export function App() {
         <Home path="/" />
         <Settings path="/settings" />
         <SettingsSection path="/settings/:section" />
-        <ConnectionDebug path="/connection" />
         <Friends path="/friends" />
         <LinkDevicePage path="/link-device/:cardData" />
         <AddFriendPage path="/add-friend/:cardData" />

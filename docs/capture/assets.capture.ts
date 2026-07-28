@@ -291,7 +291,7 @@ test('connections.png', async ({ browser }) => {
   ).catch(() => null);
   if (!direct) console.warn('  ! no direct WebRTC channel — connections.png will show "via relay"');
 
-  await phil.page.goto('/#/connection');
+  await phil.page.goto('/#/settings/debugging');
   await expect(phil.page.getByText(/Peer devices connected: [1-9]/)).toBeVisible({ timeout: 60_000 });
   // Sam is a friend, not a linked device, so their device name never travelled
   // to Phil — the peer row would read as a truncated agent id. The row's field

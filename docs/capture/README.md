@@ -50,7 +50,7 @@ documents in `src/client/home/examples/`, seeded via the empty home page's
 | `homepage.png` | The document list, seeded with all the bundled examples |
 | `settings.png` | The settings index |
 | `todo.png` | A populated task list (*Family Groceries*) |
-| `connections.png` | Connection Debugging, with a second peer connected |
+| `connections.png` | The Debugging settings screen, with a second peer connected |
 | `new-doc.gif` | FAB → type picker → kebab → Rename → naming a new task list → adding a task |
 | `timeline.gif` | Editing, then scrubbing the version-history slider |
 | `linking-a-device.gif` | A device with a library of documents links a second one, which then receives them all |
