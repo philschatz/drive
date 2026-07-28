@@ -178,12 +178,11 @@ const IMPACT_OF_HOURS = JSON.parse(
   )
 );
 
-// Two fixture tweaks for the capture, both about phone width. The example freezes
-// the `Way of helping` column, which at 430px means a 300px sticky pane sitting on
-// top of wherever a tap lands — cells to its right cannot be selected at all. With
-// the freeze off, the labels simply pan away like any other column. Narrowing them
-// as well is what puts more than one estimate column on screen at a time.
-IMPACT_OF_HOURS.sheets.compare.frozenCols = 0;
+// One fixture tweak, about phone width: narrowing the `Way of helping` labels is
+// what puts more than one estimate column on screen at a time. This used to also
+// set `frozenCols = 0` — the examples no longer freeze a column at all, precisely
+// because at 430px a frozen one is a sticky pane sitting on top of wherever a tap
+// lands, and cells to its right cannot be selected.
 IMPACT_OF_HOURS.sheets.compare.columns.c1.width = 150;
 
 /**
@@ -202,6 +201,36 @@ const HOURS_PER_SESSION: [number, number] = [2, 1]; // a plain 1.5 — the edit 
 
 const cellAt = (page: Page, [col, row]: [number, number]) =>
   page.locator(`td[data-cell-col="${col}"][data-cell-row="${row}"]`);
+
+/**
+ * Cells on *Home Spending*'s Summary sheet, for the tour's spreadsheet beat.
+ *
+ * Column B is the money column, and all of these are on screen at 430px without
+ * panning — the summary's own labels are column A. The range is the category block
+ * (Housing … Fun), chosen because a multi-cell selection is what swaps the bottom
+ * bar over to aggregates.
+ */
+/**
+ * Open a document from the home list by name, and confirm it is the one that opened.
+ *
+ * `tap()` measures the target's box and presses ~450ms later, which is fine for a
+ * button and not fine for a row in a scrollable list: a row that had to be scrolled
+ * into view is often still gliding when the box is read, so the press lands on
+ * whichever row slid into that spot. Recorded exactly that — a tap aimed at *Tahoe
+ * trip* opened *Birthday Gifts*. Settling the scroll first fixes it; asserting the
+ * title makes any recurrence a failure rather than a clip of the wrong document.
+ */
+async function openRow(page: Page, name: string): Promise<void> {
+  const row = page.getByTestId('doc-row').filter({ hasText: name });
+  await row.scrollIntoViewIfNeeded();
+  await beat(page, 500);
+  await tap(page, row);
+  await expect(page.getByTestId('doc-title')).toContainText(name, { timeout: 30_000 });
+}
+
+const TOTAL_SPENT: [number, number] = [1, 2]; // B3, "$ 6,042.51"
+const CATEGORIES_FROM: [number, number] = [1, 10]; // B11, Housing
+const CATEGORIES_TO: [number, number] = [1, 19]; // B20, Fun
 
 /**
  * A Counters document for the permissions capture.
@@ -362,15 +391,6 @@ test('settings.png', async ({ browser }) => {
   await phil.close();
 });
 
-test('todo.png', async ({ browser }) => {
-  const phil = await capturePeer(browser, 'phil');
-  await seedExamples(phil.page);
-  await openDocNamed(phil.page, 'Family Groceries');
-  await expect(phil.page.getByTestId('task-row').first()).toBeVisible();
-  await still(phil.page, 'todo.png');
-  await phil.close();
-});
-
 // ---------------------------------------------------------------- stills, two peers
 
 test('connections.png', async ({ browser }) => {
@@ -462,6 +482,119 @@ test('new-doc.gif', async ({ browser }) => {
   }, { url: '/#/' });
 
   await toGif('new-doc.gif', clip);
+  await phil.close();
+});
+
+test('tour.gif', async ({ browser }) => {
+  const phil = await capturePeer(browser, 'phil', { video: true });
+  await setDisplayName(phil.page, 'Phil');
+  // Deliberately no seedExamples: the offer only renders on an empty home page, and
+  // tapping it is the first beat of this clip rather than setup for it.
+
+  const clip = await take(
+    phil,
+    async (page) => {
+      // A brand new install offers to fill itself with the bundled examples.
+      const offer = page.getByTestId('create-examples');
+      await expect(offer).toBeVisible({ timeout: 30_000 });
+      await beat(page, 800);
+      await tap(page, offer);
+      await expect(page.getByTestId('doc-row')).toHaveCount(EXAMPLE_COUNT, { timeout: 120_000 });
+      await beat(page, 900);
+      // Dismiss the "Created 11 example documents" banner by hand. Elsewhere that
+      // is a seeding artifact to be cleaned up off camera; here it is the reply to
+      // the tap that just happened, so it is worth a beat and a real dismissal.
+      const dismiss = page.locator('button').filter({ hasText: /^×$/ });
+      if (await dismiss.count()) await tap(page, dismiss.first());
+      await beat(page, 700);
+
+      // A spreadsheet, opened from the list. Wait for a *value*, not for the first
+      // `td`: the grid mounts empty while HyperFormula spins up, so anything that
+      // merely counts cells (an absent `#REF!` included) is satisfied by a blank
+      // screen and the hold lands on one.
+      await openRow(page, 'Home Spending');
+      await expect(cellAt(page, TOTAL_SPENT)).toContainText('$', { timeout: 60_000 });
+      // And a painted grid is not an evaluated one — cross-sheet references read
+      // `#REF!` for a beat, which reads as a broken app.
+      await expect
+        .poll(() => page.locator('td', { hasText: '#REF!' }).count(), {
+          timeout: 30_000,
+          intervals: [250],
+        })
+        .toBe(0);
+      await beat(page, 900);
+
+      // Tap one figure, then sweep the category column: selecting a range swaps the
+      // bottom bar from the cell's own value to the range's aggregates.
+      await tapCell(page, TOTAL_SPENT);
+      await beat(page, 1100);
+      await dragSelect(page, CATEGORIES_FROM, CATEGORIES_TO);
+      await beat(page, 1600);
+      // Selecting a cell puts the grid in focus mode, and that swaps the title
+      // bar's Back link for a Done checkmark (the same affordance the sentences
+      // editor uses in edit mode) — so leaving takes two taps, not one.
+      await tap(page, page.getByLabel('Done'));
+      await beat(page, 300);
+      await tap(page, page.getByLabel('Back'));
+
+      // Then a prose document, and an edit in it: a phrase selected and typed over.
+      //
+      // Both ends of the phrase are deliberately mid-block. A caret at the *end* of
+      // a block that is not the document's last one currently inserts into the
+      // FOLLOWING block, so the two obvious ways to film adding text both record a
+      // bug: clicking at the end of this list item and typing put the sentence in
+      // the next bullet, and Enter-then-type left an empty block behind and did the
+      // same ("AAA"/"BBB" → Enter after AAA → typing X gives "AAA"/""/"XBBB").
+      // Mid-block replacement is the path peritext-presence.gif already asserts.
+      await openRow(page, 'Tahoe trip');
+      await expect(page.getByTestId('rt-editor')).toContainText('Pinecrest', { timeout: 60_000 });
+      await beat(page, 1300);
+      await tap(page, page.getByLabel('Edit sentences'));
+      await expect(page.getByTestId('format-bar')).toBeVisible({ timeout: 30_000 });
+      await beat(page, 400);
+      const grip = await phraseGrips(page, 'the downstairs room');
+      await selectPhrase(page, grip.word, grip.end);
+      await hideCursor(page);
+      await typeText(page, 'the loft', 80);
+      // Assert across both edges of the replacement, so a selection one word out is
+      // a failure rather than a clip with a mangled sentence in it.
+      await expect(page.getByTestId('rt-editor')).toContainText(
+        'Grandma has the loft when she arrives',
+        { timeout: 30_000 }
+      );
+      await beat(page, 1200);
+
+      // Out of edit mode (the checkmark), back to the list.
+      await tap(page, page.getByLabel('Done'));
+      await beat(page, 400);
+      await tap(page, page.getByLabel('Back'));
+      await expect(page.getByTestId('doc-row').first()).toBeVisible({ timeout: 30_000 });
+      await beat(page, 700);
+
+      // And the tour stops where the deck picks up: a QR waiting to be scanned by
+      // a second device. Routed to rather than walked to through the overflow menu —
+      // the menu and the settings index are two more full screens on the deck's
+      // longest clip, and the button being tapped is the part worth filming.
+      await page.goto('/#/settings/devices');
+      await expect(page.getByRole('button', { name: 'Link Device' })).toBeVisible({
+        timeout: 30_000,
+      });
+      await beat(page, 700);
+      await tap(page, page.getByRole('button', { name: 'Link Device' }));
+      const qr = page.locator('div[title="Click to copy link"] svg');
+      await expect(qr).toBeVisible({ timeout: 60_000 });
+      await glide(page, qr);
+      await beat(page, 1000);
+    },
+    { url: '/#/', tail: 1500 }
+  );
+
+  // The deck's longest clip by a distance — eleven documents being created plus four
+  // different screens — and the one that established that fps is not the lever that
+  // matters here: 8fps came out at 5.6 MB, and it is the palette and the decimation
+  // (now every asset's default, see gif.ts) that take it under three. 6fps on top,
+  // because this clip is mostly held screens.
+  await toGif('tour.gif', clip, { fps: 6 });
   await phil.close();
 });
 
@@ -563,14 +696,24 @@ test('linking-a-device.gif', async ({ browser }) => {
       }
       await beat(r, 1500);
 
-      // And the new device shows as Online back on the first one, under the
-      // name it announced during the handshake.
-      await l.goto('/#/settings/devices');
+      // Back on the first device, dismiss the invite by hand rather than by
+      // navigating away: the QR has done its job, and a pane still showing one
+      // reads as "waiting" next to a device that has already finished. The new
+      // device is then listed as Online, under the name it announced.
+      await tap(l, l.getByRole('button', { name: 'Close' }).first());
       await expect(l.getByText(/^Online/).first()).toBeVisible({ timeout: 60_000 });
       await expect(l.getByTitle(iosAgentId)).toHaveValue(IOS, { timeout: 30_000 });
-      await beat(l, 800);
+      await beat(l, 1000);
+
+      // Then back to the documents, so the clip closes on the claim it is making —
+      // one library, two devices — rather than on a settings screen.
+      await l.goto('/#/');
+      await expect(l.getByTestId('doc-row').first()).toBeVisible({ timeout: 30_000 });
+      await beat(l, 1200);
     },
-    { leftUrl: '/#/', rightUrl: '/#/' }
+    // A long tail: the payoff is eleven documents sitting on a device that had none
+    // a moment ago, and that takes a beat to read on both sides at once.
+    { leftUrl: '/#/', rightUrl: '/#/', tail: 2800 }
   );
 
   // The longest of the pair clips, and mostly static screens waiting on a

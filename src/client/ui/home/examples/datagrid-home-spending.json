@@ -378,7 +378,6 @@
           "value": "=SUM({R[r24]C[c2]}:{R[r28]C[c2]})/{R[r3]C[c2]}"
         }
       },
-      "frozenCols": 1,
       "formats": {
         "title": {
           "index": 0,

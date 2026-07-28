@@ -347,7 +347,6 @@
         }
       },
       "frozenRows": 1,
-      "frozenCols": 1,
       "formats": {
         "header": {
           "index": 0,
@@ -690,7 +689,6 @@
         }
       },
       "frozenRows": 1,
-      "frozenCols": 1,
       "formats": {
         "header": {
           "index": 0,

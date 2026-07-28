@@ -55,8 +55,8 @@ documents in `src/client/home/examples/`, seeded via the empty home page's
 |---|---|
 | `homepage.png` | The document list, seeded with all the bundled examples |
 | `settings.png` | The settings index |
-| `todo.png` | A populated task list (*Family Groceries*) |
 | `connections.png` | The Debugging settings screen, with a second peer connected |
+| `tour.gif` | A first run end to end: an empty home page fills itself with the examples, a sheet gets a cell and a range selected, a phrase in a prose document is typed over, and it stops on the QR that adds a second device |
 | `new-doc.gif` | FAB → type picker → kebab → Rename → naming a new task list → adding a task |
 | `timeline.gif` | Editing, then scrubbing the version-history slider |
 | `linking-a-device.gif` | A device with a library of documents links a second one, which then receives them all |
@@ -75,19 +75,23 @@ And the two diagrams, from `npm run docs:diagrams` rather than `docs:capture`:
 | `add-device.png` | The device-link rendezvous as a sequence: QR → both sides subscribe → the sealed bundles cross in both directions → the laptop adds the phone to the user group |
 | `after-link.png` | The same two devices afterwards: relay watch → introduction → keyhive ops → `reachableDocs()` → document content |
 
-Every asset above is on a slide — the deck references all sixteen, so a stale capture
-is always visible somewhere. Keep it that way when adding one: an asset nothing embeds
-is an asset nobody notices has rotted. To check:
+Every asset above is on a slide — the deck references all of them, so a stale capture is
+always visible somewhere. Keep it that way when adding one: an asset nothing embeds is an
+asset nobody notices has rotted, and an asset the deck outgrows should go rather than
+linger. To check:
 
 ```bash
 cd docs && for f in *.png *.gif; do grep -q "$f" slides.md || echo "UNREFERENCED: $f"; done
 ```
 
 Two of the GIFs adjust their fixture before recording, and both tweaks are about the
-430px frame rather than cosmetics: `datagrid-presence.gif` unfreezes and narrows the
-label column (a 300px *sticky* column sits on top of every tap target to its right),
-and `device-permissions.gif` hand-writes its counters document because the bundled example's
-completion keys are `{{today-6d@…}}` templates that only the importer expands.
+430px frame rather than cosmetics: `datagrid-presence.gif` narrows the label column so
+more than one estimate column fits on screen, and `device-permissions.gif` hand-writes
+its counters document because the bundled example's completion keys are
+`{{today-6d@…}}` templates that only the importer expands. `datagrid-presence.gif` used
+to unfreeze a column here too — the examples themselves no longer freeze one, precisely
+because at 430px a frozen column is a sticky pane sitting on top of every tap target to
+its right.
 
 ## Layout
 
@@ -95,7 +99,7 @@ completion keys are `{{today-6d@…}}` templates that only the importer expands.
 |---|---|
 | `playwright.config.ts` | Phone viewport (430×932), video on, its own `testMatch` |
 | `cursor.ts` | The injected pointer overlay, plus `tap` / `glide` / `type` / `scanFlash` / `selectPhrase` / `hideCursor` |
-| `gif.ts` | ffmpeg wrappers: `toGif`, `hstackGif`, and the shared `LEAD_IN` hold |
+| `gif.ts` | ffmpeg wrappers: `toGif`, `hstackGif`, the shared `LEAD_IN` hold, and the palette/decimation defaults |
 | `support.ts` | `capturePeer`, `take` / `takePair`, `seedExamples`, `still`, `befriend`, `share`, `setDisplayName` / `setDeviceName` |
 | `assets.capture.ts` | One test per asset |
 
@@ -186,6 +190,17 @@ Three things every screencast gets for free, and one to reach for:
 - **Presence dedupe hides your own devices**, and collapses one user's devices into a
   single dot. Two distinct identities are required or `presence-updates.gif` shows
   nothing.
+- **A caret at the end of a non-final block types into the *next* block.** Live bug, so
+  do not film adding text that way: clicking at the end of a list item and typing put the
+  sentence in the following bullet, and Enter-then-type left an empty block behind and did
+  the same ("AAA"/"BBB" → Enter after AAA → typing X gives "AAA"/""/"XBBB"). Filming an
+  edit mid-block — select a phrase and type over it — is the path that works, and it is
+  what `tour.gif` and `peritext-presence.gif` both do.
+- **Taps on list rows need the scroll to settle first.** `tap()` measures the target's box
+  and presses ~450ms later, which is fine for a button and not for a row that had to be
+  scrolled into view: it is often still gliding, so the press lands on whatever slid into
+  that spot. Recorded exactly that — a tap aimed at *Tahoe trip* opened *Birthday Gifts*.
+  `openRow()` settles the scroll and then asserts the title that opened.
 - **Do not film a text selection as a press-and-drag.** It is the obvious way to show
   one and it does not survive a collaborator: there is no consistent selection while
   the button is down, so a remote cursor push arriving mid-sweep makes the editor's
@@ -206,6 +221,13 @@ Three things every screencast gets for free, and one to reach for:
   start from a fresh context.
 - **Direct WebRTC is opportunistic.** `connections.png` prefers a `direct (P2P)` dot
   but falls back to `via relay` with a warning rather than failing.
+- **The palette is the size lever; `width` and `fps` are not.** Every asset is encoded
+  at 64 colours with identical frames decimated away (`gif.ts`), which is worth far more
+  than either knob: `tour.gif` measured 5.6 MB at 8fps/256 colours, 3.9 MB at 128, and
+  3.0 MB at 64, with no visible loss on text, spreadsheet fills, or the 25%-opacity peer
+  tints. `source-presence.gif` came down 3.5 MB → 2.1 MB on the same change. Raise
+  `maxColors` per asset if something ever bands; reach for it before touching the two
+  below.
 - **Neither `width` nor `fps` is a reliable size lever, so measure before believing
   either.** Downscaling usually *costs* bytes — lanczos turns crisp UI text into
   anti-aliased gradients and a GIF cannot compress those; `add-and-share-with-friend.gif`
