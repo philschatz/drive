@@ -75,7 +75,6 @@ Links
 
 # Design
 
-- Invitations
 - Relay
 - UI/Worker
 - Doc format
