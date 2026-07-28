@@ -221,13 +221,17 @@ Three things every screencast gets for free, and one to reach for:
   start from a fresh context.
 - **Direct WebRTC is opportunistic.** `connections.png` prefers a `direct (P2P)` dot
   but falls back to `via relay` with a warning rather than failing.
-- **The palette is the size lever; `width` and `fps` are not.** Every asset is encoded
-  at 64 colours with identical frames decimated away (`gif.ts`), which is worth far more
-  than either knob: `tour.gif` measured 5.6 MB at 8fps/256 colours, 3.9 MB at 128, and
-  3.0 MB at 64, with no visible loss on text, spreadsheet fills, or the 25%-opacity peer
-  tints. `source-presence.gif` came down 3.5 MB → 2.1 MB on the same change. Raise
-  `maxColors` per asset if something ever bands; reach for it before touching the two
-  below.
+- **The palette is the size lever; `width` and `fps` are not.** Every asset is encoded at
+  64 colours (`gif.ts`), which is worth far more than either knob: `tour.gif` measured
+  5.6 MB at 8fps/256 colours, 3.9 MB at 128 and 3.0 MB at 64, with no visible loss on
+  text, spreadsheet fills, or the 25%-opacity peer tints. It roughly halved the whole
+  deck. Raise `maxColors` per asset if something ever bands.
+- **Do not decimate frames.** `mpdecimate` + `-fps_mode vfr` collapses a run of identical
+  frames into one long frame and saves a further ~11%, and it was tried and reverted:
+  "identical" is a count of changed 8x8 blocks, and a frame where only the 26px pointer
+  ring moved is a fraction of a percent of the frame. Every threshold that collapses the
+  real pauses also eats the pointer travel, so the clips play as a jumpy slideshow with
+  the beats gone.
 - **Neither `width` nor `fps` is a reliable size lever, so measure before believing
   either.** Downscaling usually *costs* bytes — lanczos turns crisp UI text into
   anti-aliased gradients and a GIF cannot compress those; `add-and-share-with-friend.gif`

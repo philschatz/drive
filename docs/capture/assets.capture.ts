@@ -590,11 +590,11 @@ test('tour.gif', async ({ browser }) => {
   );
 
   // The deck's longest clip by a distance — eleven documents being created plus four
-  // different screens — and the one that established that fps is not the lever that
-  // matters here: 8fps came out at 5.6 MB, and it is the palette and the decimation
-  // (now every asset's default, see gif.ts) that take it under three. 6fps on top,
-  // because this clip is mostly held screens.
-  await toGif('tour.gif', clip, { fps: 6 });
+  // different screens — and the one that established that fps is not the size lever
+  // here (8fps 5.6 MB against 6fps 5.0): the palette is, and it is now every asset's
+  // default. 8fps like the other long clips, because this one has a typed edit and two
+  // cell gestures in it and 6 makes those jerky.
+  await toGif('tour.gif', clip, { fps: 8 });
   await phil.close();
 });
 

@@ -169,8 +169,8 @@ The rest of slides are screencaps
 
 <!-- _class: tight diagram -->
 
-- A device is a keyhive identity; a **user is a group of their devices**
-- The QR carries a rendezvous id plus the key to decrypt it — the keyhive material goes over that channel
+- A **user** is a group of devices, each its own keyhive key
+- The QR carries a rendezvous id and the key to decrypt it
 
 ![h:440](add-device.png)
 
@@ -189,10 +189,10 @@ The rest of slides are screencaps
 
 <!-- _class: tight diagram -->
 
-- Same QR, other direction: the invite carries the **document** instead of a device
-- Sharing always names a role, and the member list *is* the access — every row is a live delegation
+- Same QR, other direction: the invite carries a **document**
+- Sharing names a role; the member list *is* the access
 
-![h:360](after-link.png)
+![h:400](after-link.png)
 
 ![bg right:34% fit](add-and-share-with-friend.gif)
 
