@@ -41,7 +41,7 @@ Links
 - Direct P2P or Offline
 - Multiple Devices
 - QR Codes for invites
-- Document Schemas
+- Document Validation
 
 ![bg right:38% fit](linking-a-device.gif)
 
