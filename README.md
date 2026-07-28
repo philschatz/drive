@@ -1,104 +1,32 @@
 # Drive
 
-Real-time collaborative document editor built on [Automerge](https://automerge.org/) CRDTs.
+Real-time collaborative document editor that's installable on your phone.
 
 ## Features
 
-- **Multiple document types**: Calendar, Task List, and DataGrid (spreadsheet)
+<img src="docs/tour.gif" alt="tour" align="right" width="240">
+
+- **Installable PWA** for mobile and desktop
+- **Multiple document types**: Calendar, Spreadsheet, Task List
 - **Real-time collaboration** via automerge-repo WebSocket connections
 - **Offline editing** with conflict-free merge on reconnect
-- **Version history** with slider to browse, view, and revert to any past version
-- **Installable PWA** for mobile and desktop
-- **JSON source editor** with jq query panel for inspecting document internals
-- **CalDAV support** server for syncing calendars with standard clients (Apple Calendar, Thunderbird, etc.)
 - **Schema validation** with dependency checking across document structures
+- **Command-line** tool to do sync/backups
 
-## Upcoming
+### Quick Start
 
-- End-to-end encryption (thanks [subduction](https://github.com/inkandswitch/subduction))
-- Access Control (thanks [keyhive](https://www.inkandswitch.com/project/keyhive/))
+Visit [philschatz.com/drive/](https://philschatz.com/drive/) (GitHub Pages)
 
-## Quick Start
+Check out the [slides](https://philschatz.com/drive/slides/) for more
+
+Or, start it locally:
 
 ```bash
 npm install
 npm run dev    # Start dev server on port 3000
 ```
 
-## Commands
-
-```bash
-npm run dev          # Backend dev server with auto-reload
-npm run build        # Vite production build (frontend -> dist/)
-npm run test:unit    # Jest unit tests
-npm run test:watch   # Jest watch mode
-npm test             # Jest + Playwright (full suite)
-npm run test:pw      # Playwright E2E
-npm run test:pw:open # Playwright UI mode
-```
-
-**Type checking** (two separate tsconfigs):
-
-```bash
-npx tsc --noEmit                          # Node side (src/relay, src/bitrot-caldav, src/cli)
-npx tsc -p tsconfig.client.json --noEmit  # Frontend (src/client/ + src/shared/)
-```
-
-## Architecture
-
-- **Frontend**: Preact SPA with Tailwind CSS v4, schedule-x calendar, CodeMirror editors
-- **Backend**: Express server with CalDAV handler, ICS/JMAP parser/serializer
-- **Sync**: Automerge CRDT documents synced via WebSocket (automerge-repo)
-
-### Directory Layout
-
-```
-src/
-  relay/           WebSocket relay + production SPA host + Vite dev plugin
-  bitrot-caldav/   CalDAV bridge: RFC 4791 handler, /dav routes, ICS↔JMAP
-  cli/             Headless drive peer (npm run cli)
-  client/
-    ui/            Preact SPA: doc-plugins/, home/, source/, settings/, common/
-    worker/        The Automerge + keyhive Web Worker
-    shared/        Used by BOTH threads: idb-storage, webrtc-chunk, worker-client
-    assets/        globals.css + public/ (index.html stays at client/, Vite's root)
-    tests-pw/      Playwright E2E (editor UI + two-peer sync)
-  shared/          Portable — no DOM, no Preact. Used by the browser AND Node:
-                   drive-engine, keyhive-*, jq, worker-protocol, schemas/
-tests/             Jest tests
-```
-
-`src/shared` never imports from `src/client`, and `client/ui` and `client/worker`
-never import each other (they run on different threads). Both rules are enforced
-by `tests/layering.test.ts`.
-
-### Document Types
-
-Each document has an `@type` discriminator and uses `Record<string, Item>` maps (not arrays) for conflict-free concurrent edits:
-
-- **Calendar** - Events following JSCalendar (RFC 8984), with recurrence, alarms, participants
-- **TaskList** - Tasks with completion status, due dates, priority
-- **DataGrid** - Multi-sheet spreadsheet with formulas, column/row management, cell references
-
-## CalDAV
-
-The backend implements CalDAV (RFC 4791) at `/dav/`, enabling standard calendar clients to sync.
-
-**Base URL:** `http://localhost:3000/dav/`
-
-```bash
-# Discover calendars
-curl -X PROPFIND http://localhost:3000/dav/ -H "Depth: 1"
-
-# Create a calendar
-curl -X MKCALENDAR http://localhost:3000/dav/my-calendar/
-
-# Add an event
-curl -X PUT http://localhost:3000/dav/default/event.ics \
-  -H "Content-Type: text/calendar" --data-binary @event.ics
-```
-
-Supported methods: PROPFIND, MKCALENDAR, GET, PUT, DELETE, REPORT.
+<br clear="right">
 
 ## Headless CLI
 
@@ -114,17 +42,27 @@ npm run cli -- diff <docId> [from] [to] # print Automerge patch ops between two 
 npm run cli -- sync                    # keep the recent docs open and sync continuously (Ctrl-C to stop)
 ```
 
-Run once with `accept-invite` to link the device; the identity is stored under
-`--data-dir` (default `./.data/cli`, or `$AUTOMERGE_DATA_DIR`) and reused afterwards.
-Diagnostics go to stderr, so `show <docId> > doc.json` yields clean JSON. Use
-`--help` on any subcommand for its options (`--relay`, `--data-dir`, and the
-`sync` tuning flags with their defaults).
-
-## Environment Variables
+### Environment Variables
 
 - `PORT` - Server port (default 3000)
 - `AUTOMERGE_DATA_DIR` - Persistent storage directory (default `.data`)
 - `NODE_ENV=production` - Disables request logging, serves built frontend
+
+### Directory Layout
+
+```
+src/
+  relay/           WebSocket relay + production SPA host + Vite dev plugin
+  bitrot-caldav/   CalDAV bridge: RFC 4791 handler, /dav routes, ICS↔JMAP
+  cli/             Headless peer
+  client/
+    ui/            Preact SPA: doc-plugins/, home/, source/, settings/, common/
+    worker/        The Automerge + keyhive Web Worker
+    shared/        Used by BOTH threads: idb-storage, webrtc-chunk, worker-client
+    assets/        globals.css + public/ (index.html stays at client/, Vite's root)
+    tests-pw/      Playwright E2E (editor UI + two-peer sync)
+tests/             Jest tests
+```
 
 ## Standards
 
