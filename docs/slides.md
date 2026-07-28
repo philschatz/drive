@@ -121,8 +121,6 @@ Try it now:
     - all state
     - network, opens docs, sends qupdate
 
-![bg right:44% fit](presence-updates.gif)
-
 <!--
 - The main thread is only UI; a worker owns local and remote updates (automerge, keyhive, transports)
 - The UI subscribes to small jq query slices, so it never holds a whole document in memory
