@@ -95,16 +95,12 @@ Try it now:
 
 # Design:Relay
 
-- 2 channels
-    - peer-matched (keyhive)
-    - rendezvous (invites)
-- evolved:
-    1. public
-    1. all-to-all (let peers decide)
-    1. match groupid & watch list
-    1. future: HMAC rotation
+- A **user** is a group of devices, each its own keyhive key
+- The QR carries a rendezvous id and the key to decrypt it
 
-![bg right:38% fit](connections.png)
+![h:440](add-device.png)
+
+![bg right:34% fit](linking-a-device.gif)
 
 <!--
 - Each device declares its own user group plus the groups it knows (friends, doc co-members); the relay only introduces same-group devices and mutual watchers
@@ -167,12 +163,16 @@ The rest of slides are screencaps
 
 <!-- _class: tight diagram -->
 
-- A **user** is a group of devices, each its own keyhive key
-- The QR carries a rendezvous id and the key to decrypt it
+- 2 channels
+    - peer-matched (keyhive)
+    - rendezvous (invites)
+- evolved:
+    1. public
+    1. all-to-all (let peers decide)
+    1. match groupid & watch list
+    1. future: HMAC rotation
 
-![h:440](add-device.png)
-
-![bg right:34% fit](linking-a-device.gif)
+![bg right:38% fit](connections.png)
 
 <!--
 - The relay routes rendezvous by channel id and never sees plaintext; this is the one path a device with no group yet can use, since it has nothing to be introduced by
