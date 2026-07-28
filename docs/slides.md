@@ -84,16 +84,31 @@ Links
 
 # Design:Relay
 
-- A **user** is a group of devices, each its own keyhive key
-- The QR carries a rendezvous id and the key to decrypt it
+- 2 channels
+    - peer-matched (keyhive)
+    - rendezvous (invites)
+- evolved:
+    1. public
+    1. all-to-all (let peers decide)
+    1. match groupid & watch list
+    1. future: HMAC rotation
 
-![bg right:34% fit](linking-a-device.gif)
+![bg right:38% fit](connections.png)
 
 ---
 
 # Adding a Device
 
-![bg right:50% fit h:440](add-device.png)
+- A **user** is a group of devices, each its own keyhive key
+- The QR carries a rendezvous id and the key to decrypt it
+
+---
+
+# Adding a Device
+
+![h:440](add-device.png)
+![bg right:34% fit](linking-a-device.gif)
+
 
 <!--
 - Each device declares its own user group plus the groups it knows (friends, doc co-members); the relay only introduces same-group devices and mutual watchers
