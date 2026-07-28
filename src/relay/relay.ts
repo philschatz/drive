@@ -2,7 +2,7 @@ import type { IncomingMessage } from 'http';
 import { WebSocket, WebSocketServer } from 'ws';
 import { Encoder, decode } from 'cbor-x';
 import { logMessage, relayInfo, relayError, shortId } from './relay-log';
-import { RELAY_PEER_ID, RELAY_LEAVE } from '../shared/relay-identity';
+import { RELAY_PEER_ID, RELAY_LEAVE, RELAY_WATCH, isRelayWatchFrame } from '../shared/relay-identity';
 import { RDV_SUB, RDV_UNSUB, RDV_MSG, RDV_PEER } from '../shared/rendezvous-protocol';
 import { WRTC_SIGNAL } from '../shared/webrtc-signal';
 
@@ -53,25 +53,80 @@ function clientIp(request?: IncomingMessage): string | undefined {
  * Stateless WebSocket relay for identity-based message routing.
  *
  * When a peer connects the relay:
- *  1. Completes the automerge-repo peer handshake (join → peer).
- *  2. Announces all currently connected peers to the newcomer (extra "peer"
- *     messages) so each client discovers the others directly.
- *  3. Announces the newcomer to each existing peer symmetrically.
+ *  1. Completes the automerge-repo peer handshake (join → peer ack). A bare
+ *     join announces nobody.
+ *  2. Waits for the client's `watch` declaration (RELAY_WATCH): its own
+ *     user-group id plus the group ids it knows (friends + doc co-members).
+ *  3. Introduces two sockets (the same symmetric "peer" frames as the
+ *     handshake) only when they announce the same group — one user's devices —
+ *     or when each one's watch list names the other's group (mutual friends).
+ *     A later watch update that withdraws the match dissolves the pair with
+ *     synthetic "leave" frames.
  *
- * After discovery, all messages are forwarded verbatim:
- *  - If a message has a targetId that matches a known peer → unicast.
- *  - Otherwise (targetId is the relay or absent) → broadcast to all others.
+ * After discovery, messages are forwarded verbatim, but only between sockets
+ * that have been introduced:
+ *  - targetId matches a peer this socket was introduced to → unicast.
+ *  - No targetId (or the target is gone) → forward to the sender's introduced
+ *    peers only. There is no relay-wide broadcast.
  *
  * The relay never interprets message content. The `data` field is treated as
  * opaque encrypted bytes and logged only by size.
  *
+ * ── Discovery privacy: current limits, and the planned HMAC-token fix ──────
+ *
+ * `group` and `watch` are self-asserted routing hints, exactly like peerIds:
+ * nothing proves a socket belongs to the group it announces. Group ids are
+ * unguessable (32-byte keys), so a true stranger can name nobody — but anyone
+ * who ever LEARNED a group id (an ex-friend; anyone once shown a contact
+ * bundle) can announce it as their own group, or impersonate a group that two
+ * victims mutually watch, and get introduced at the transport level. Keyhive
+ * verifies identity and encrypts everything above, so an impostor reads
+ * nothing — but they gain a live connection, the target's online status, and
+ * (via the automatic WebRTC upgrade's ICE exchange) potentially its public IP.
+ *
+ * The agreed fix is daily HMAC rendezvous tokens, deferred until DriveSettings
+ * is something every device reliably has:
+ *
+ *  - Each socket presents opaque tokens `HMAC(secret, 'relay-discovery:' +
+ *    utcDay)` — one per secret it holds — and the relay introduces sockets
+ *    sharing at least one token, by pure string equality. It decrypts nothing
+ *    and learns nothing durable: no group ids, no social-graph shape, and
+ *    tokens are unlinkable across days. Presenting today's AND yesterday's
+ *    token bridges midnight rollover and clock skew.
+ *  - The secrets: a per-group "discovery secret" proving own-device
+ *    membership (stored in the keyhive-encrypted DriveSettings doc and handed
+ *    to a brand-new device inside the device-link rendezvous payload), and a
+ *    per-friendship "pair secret" exchanged inside the contact bundle.
+ *    Possession IS the proof, so mutuality stops being an honor-system rule;
+ *    removing a device and rotating the stored secret locks that device out
+ *    at the next daily rotation.
+ *  - Why HMAC over a STORED secret rather than "encrypt today's date with the
+ *    current group key": CGKA keys advance per epoch, so a device that was
+ *    offline holds an older epoch and would compute a mismatched token — yet
+ *    it needs to be paired before it can sync up to the current epoch.
+ *    Proof-of-latest-key deadlocks bootstrap; a stable stored secret has no
+ *    epoch race.
+ *  - Why deferred: the discovery secret and every friendship pair secret must
+ *    be computable on ALL of a user's devices, which makes the synced
+ *    DriveSettings doc (plus one field in the device-link payload and the
+ *    contact bundle) a hard dependency of transport bootstrap. Not ready to
+ *    commit to that yet.
+ *
  * Threat model: the relay is exposed to the public internet and every client
  * is untrusted. Malformed frames must be dropped (never crash the process),
- * peerIds are unauthenticated routing hints (anyone can claim any id), and
- * per-connection resource use must stay bounded.
+ * peerIds and group ids are unauthenticated routing hints (anyone can claim
+ * any id), and per-connection resource use must stay bounded.
  */
 export class WebSocketRelay {
   private sockets = new Map<string, WebSocket>();
+  /** Announced own user-group id per joined socket (from its watch frame). */
+  private groups = new Map<WebSocket, string>();
+  /** User-group ids each joined socket declared it knows (from its watch frame). */
+  private watches = new Map<WebSocket, Set<string>>();
+  /** peerIds each socket has been introduced to — the only peers it may route to. */
+  private introduced = new Map<WebSocket, Set<string>>();
+  /** Protocol version negotiated at join, echoed in later intro frames. */
+  private versions = new Map<WebSocket, string>();
   /**
    * Encrypted rendezvous topics: rendezvousId → sockets currently listening.
    * Used to hand a large encrypted payload between two peers who only share a
@@ -160,16 +215,22 @@ export class WebSocketRelay {
         clearInterval(this.heartbeatTimer);
         this.heartbeatTimer = null;
       }
+      this.groups.delete(ws);
+      this.watches.delete(ws);
+      this.versions.delete(ws);
+      this.introduced.delete(ws);
       // Only unregister if this socket still owns the id — a rejected duplicate
       // or replaced stale socket closing later must not evict the live one.
       if (myPeerId && this.sockets.get(myPeerId) === ws) {
         this.sockets.delete(myPeerId);
         relayInfo(`[relay] peer left: ${shortId(myPeerId)} (${this.sockets.size} remaining)`);
 
-        // Notify remaining peers of the departure
+        // Notify the departed peer's introduced partners — only they know it
+        // exists — and prune it from their routing sets in the same pass.
         const leaveMsg = { type: RELAY_LEAVE, senderId: myPeerId };
         const leaveBytes = encoder.encode(leaveMsg);
         for (const [pid, peerWs] of this.sockets) {
+          if (!this.introduced.get(peerWs)?.delete(myPeerId)) continue;
           if (this.safeSend(peerWs, leaveBytes, pid)) logMessage('→', pid, leaveMsg);
         }
       }
@@ -239,8 +300,12 @@ export class WebSocketRelay {
       relayInfo(`[relay] ${this.sockets.size} peers connected`);
 
       const version = (message.supportedProtocolVersions as string[])?.[0] ?? '1';
+      // Stash for later: introductions happen when watch frames arrive, and
+      // each intro frame must echo the version its recipient negotiated here.
+      this.versions.set(ws, version);
 
-      // Required handshake: relay acknowledges the new peer
+      // Required handshake: relay acknowledges the new peer. Discovery then
+      // waits for the client's watch declaration — a bare join announces nobody.
       const ack = {
         type: 'peer',
         senderId: RELAY_PEER_ID,
@@ -249,37 +314,23 @@ export class WebSocketRelay {
         selectedProtocolVersion: version,
       };
       if (this.safeSend(ws, encoder.encode(ack), myPeerId)) logMessage('→', myPeerId, ack);
-
-      // Mutual peer discovery between the newcomer and all existing peers
-      for (const [existingId, existingWs] of this.sockets) {
-        if (existingId === myPeerId || existingWs.readyState !== WebSocket.OPEN) continue;
-
-        // Introduce the existing peer to the newcomer
-        const introToNewcomer = {
-          type: 'peer',
-          senderId: existingId,
-          targetId: myPeerId,
-          peerMetadata: {},
-          selectedProtocolVersion: version,
-        };
-        if (this.safeSend(ws, encoder.encode(introToNewcomer), myPeerId)) {
-          logMessage('→', myPeerId, introToNewcomer);
-        }
-
-        // Introduce the newcomer to the existing peer
-        const introToExisting = {
-          type: 'peer',
-          senderId: myPeerId,
-          targetId: existingId,
-          peerMetadata: {},
-          selectedProtocolVersion: version,
-        };
-        if (this.safeSend(existingWs, encoder.encode(introToExisting), existingId)) {
-          logMessage('→', existingId, introToExisting);
-        }
-      }
     } else if (message.type === RDV_SUB || message.type === RDV_UNSUB || message.type === RDV_MSG) {
       this.handleRendezvous(ws, message);
+    } else if (message.type === RELAY_WATCH) {
+      // Discovery declaration (see the class doc comment). Join must have
+      // completed — and this socket must still own its id — before it can
+      // steer discovery. Bounds mirror the peerId/rendezvousId checks: ids are
+      // untrusted strings used as Map keys, and the list length is capped so a
+      // hostile frame can't balloon per-socket state.
+      if (!myPeerId || this.sockets.get(myPeerId) !== ws) return;
+      if (!isRelayWatchFrame(message)) return;
+      const saneId = (s: unknown) => typeof s === 'string' && s.length > 0 && (s as string).length <= 256;
+      if (!saneId(message.group)) return;
+      if (message.watch.length > 1024 || !message.watch.every(saneId)) return;
+      logMessage('←', myPeerId, message);
+      this.groups.set(ws, message.group);
+      this.watches.set(ws, new Set(message.watch));
+      this.reevaluatePairs(ws, myPeerId);
     } else if (message.type === WRTC_SIGNAL) {
       // WebRTC signaling (SDP offer/answer + ICE candidates). Unicast verbatim
       // to the named peer so two peers can negotiate a direct data channel.
@@ -290,7 +341,9 @@ export class WebSocketRelay {
       if (!myPeerId || message.senderId !== myPeerId) return;
       const targetId = typeof message.targetId === 'string' ? message.targetId : undefined;
       logMessage('←', myPeerId, message);
-      if (targetId && this.sockets.has(targetId)) {
+      // Signaling reaches only introduced peers: a client the discovery rules
+      // didn't pair with the target must not be able to drive its RTC stack.
+      if (targetId && this.introduced.get(ws)?.has(targetId) && this.sockets.has(targetId)) {
         const targetWs = this.sockets.get(targetId)!;
         if (this.safeSend(targetWs, buf, targetId)) logMessage('→', targetId, message);
       }
@@ -302,19 +355,93 @@ export class WebSocketRelay {
         // Addressed to the relay's own identity. The relay is not a real
         // participant — keyhive peers probe it (e.g. sync-request-contact-card)
         // because it now decodes as a normal Identifier — so drop it rather
-        // than broadcasting a message nobody can act on.
+        // than forwarding a message nobody can act on.
       } else if (targetId && this.sockets.has(targetId)) {
-        // Unicast: deliver raw bytes to the named peer
+        // Unicast — but only between introduced peers: a client must not be
+        // able to reach a peer the discovery rules didn't pair it with.
+        if (!this.introduced.get(ws)?.has(targetId)) return;
         const targetWs = this.sockets.get(targetId)!;
         if (this.safeSend(targetWs, buf, targetId)) logMessage('→', targetId, message);
       } else {
-        // Broadcast: message has no specific target (or the target is gone)
-        for (const [pid, peerWs] of this.sockets) {
-          if (pid === myPeerId) continue;
+        // No specific target (or the target is gone): forward to the sender's
+        // introduced peers only — there is no relay-wide broadcast.
+        for (const pid of this.introduced.get(ws) ?? []) {
+          const peerWs = this.sockets.get(pid);
+          if (!peerWs) continue;
           if (this.safeSend(peerWs, buf, pid)) logMessage('→', pid, message);
         }
       }
     }
+  }
+
+  /**
+   * Discovery rule (see the class doc comment): one user's devices always pair
+   * (same announced group); different users pair only when each side's watch
+   * list names the other's group. Everything here is self-asserted — see the
+   * "Discovery privacy" section above for what that does and doesn't protect.
+   */
+  private shouldPair(a: WebSocket, b: WebSocket): boolean {
+    const groupA = this.groups.get(a);
+    const groupB = this.groups.get(b);
+    if (groupA === undefined || groupB === undefined) return false;
+    if (groupA === groupB) return true;
+    return (this.watches.get(a)?.has(groupB) ?? false)
+      && (this.watches.get(b)?.has(groupA) ?? false);
+  }
+
+  /** Apply the discovery rule between `ws` and every joined socket: introduce
+   *  newly matching pairs, dissolve pairs its watch update no longer allows. */
+  private reevaluatePairs(ws: WebSocket, myPeerId: string): void {
+    for (const [otherId, otherWs] of this.sockets) {
+      if (otherId === myPeerId || otherWs.readyState !== WebSocket.OPEN) continue;
+      const paired = this.introduced.get(ws)?.has(otherId) ?? false;
+      const want = this.shouldPair(ws, otherWs);
+      if (want && !paired) this.introducePair(ws, myPeerId, otherWs, otherId);
+      else if (!want && paired) this.dissolvePair(ws, myPeerId, otherWs, otherId);
+    }
+  }
+
+  private introducedSet(ws: WebSocket): Set<string> {
+    let set = this.introduced.get(ws);
+    if (!set) { set = new Set(); this.introduced.set(ws, set); }
+    return set;
+  }
+
+  /**
+   * Send both sides the same symmetric "peer" frames the join handshake uses.
+   * The pairing is recorded before sending: if a send terminates a slow
+   * socket, its close handler must already know whom to notify of the leave.
+   */
+  private introducePair(aWs: WebSocket, aId: string, bWs: WebSocket, bId: string): void {
+    this.introducedSet(aWs).add(bId);
+    this.introducedSet(bWs).add(aId);
+    const introToA = {
+      type: 'peer',
+      senderId: bId,
+      targetId: aId,
+      peerMetadata: {},
+      selectedProtocolVersion: this.versions.get(aWs) ?? '1',
+    };
+    const introToB = {
+      type: 'peer',
+      senderId: aId,
+      targetId: bId,
+      peerMetadata: {},
+      selectedProtocolVersion: this.versions.get(bWs) ?? '1',
+    };
+    if (this.safeSend(aWs, encoder.encode(introToA), aId)) logMessage('→', aId, introToA);
+    if (this.safeSend(bWs, encoder.encode(introToB), bId)) logMessage('→', bId, introToB);
+  }
+
+  /** Un-pair two sockets (a watch update withdrew the match) with synthetic
+   *  leaves so both repos drop the peer — un-friending disconnects. */
+  private dissolvePair(aWs: WebSocket, aId: string, bWs: WebSocket, bId: string): void {
+    this.introduced.get(aWs)?.delete(bId);
+    this.introduced.get(bWs)?.delete(aId);
+    const leaveToA = { type: RELAY_LEAVE, senderId: bId };
+    const leaveToB = { type: RELAY_LEAVE, senderId: aId };
+    if (this.safeSend(aWs, encoder.encode(leaveToA), aId)) logMessage('→', aId, leaveToA);
+    if (this.safeSend(bWs, encoder.encode(leaveToB), bId)) logMessage('→', bId, leaveToB);
   }
 
   /**

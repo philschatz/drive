@@ -183,7 +183,9 @@ describe('one-way opt-in (local → shared)', () => {
     // Stub the keyhive create path: install a fake shared handle + a docId pointer.
     let shared: any = { '@type': 'DriveSettings', friends: {}, deviceNames: {}, archivedDocIds: {} };
     engine.Automerge = Automerge;
-    engine.khOps = {}; // truthy: passes the "keyhive available" check
+    // Truthy: passes the "keyhive available" check. getUserGroupId is what the
+    // debounced relay-watch refresh reads after any settings write.
+    engine.khOps = { getUserGroupId: async () => null };
     engine.ensureDriveSettingsDoc = async () => {
       engine.driveSettingsHandle = {
         doc: () => shared,
@@ -206,7 +208,7 @@ describe('one-way opt-in (local → shared)', () => {
     await engine.ensureLocalSettings();
     await engine.putFriendName(ID, 'Alice');
 
-    engine.khOps = {};
+    engine.khOps = { getUserGroupId: async () => null };
     engine.ensureDriveSettingsDoc = async () => null; // keyhive/doc unavailable
 
     await engine.handleMessage({ type: 'enable-settings-sync', id: 1 });
@@ -230,6 +232,7 @@ describe('one-way opt-in (local → shared)', () => {
       // The doc is reachable but NOT in accessibleKhIds (its group/CGKA ops
       // haven't fully synced) — the exact case the old permission-gated discovery missed.
       enumerateUserDocs: async () => ({ reachableKhIds: ['kh'], accessibleKhIds: [] }),
+      getUserGroupId: async () => null,
     };
     engine.amDocIdFromBytes = () => EXISTING;
     // findReachableDriveSettingsDocs reads @type off the loaded handle.
@@ -269,7 +272,7 @@ describe('one-way opt-in (local → shared)', () => {
 
     let shared: any = { '@type': 'DriveSettings', friends: {}, deviceNames: {}, archivedDocIds: {} };
     engine.Automerge = Automerge;
-    engine.khOps = { enumerateUserDocs: async () => ({ reachableKhIds: [], accessibleKhIds: [] }) };
+    engine.khOps = { enumerateUserDocs: async () => ({ reachableKhIds: [], accessibleKhIds: [] }), getUserGroupId: async () => null };
     engine.amDocIdFromBytes = () => DOC;
     let created = false;
     engine.ensureDriveSettingsDoc = async () => {

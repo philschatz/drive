@@ -35,3 +35,41 @@ export const RELAY_LEAVE = 'leave';
 export function isRelayLeaveFrame(decoded: any): decoded is { type: 'leave'; senderId: string } {
   return decoded?.type === RELAY_LEAVE && typeof decoded.senderId === 'string';
 }
+
+/**
+ * Relay-protocol extension: a client's discovery declaration, sent right after
+ * `join` and re-sent whenever the socket reopens or the roster changes (each
+ * frame fully replaces the previous one). The relay introduces two sockets to
+ * each other only when they announce the same `group` (one user's devices) or
+ * when each one's `watch` names the other's `group` (mutual friends) — it
+ * never announces peers beyond that, so strangers sharing a relay stay
+ * invisible to each other. A device with no user group yet has nothing to
+ * announce and simply doesn't send the frame (it can never pair anyway).
+ * See the WebSocketRelay doc comment for the discovery rules and the known
+ * limits of self-asserted group ids.
+ */
+export const RELAY_WATCH = 'watch';
+
+export interface RelayWatchFrame {
+  type: typeof RELAY_WATCH;
+  /** Sender's own keyhive user-group id (base64). */
+  group: string;
+  /** User-group ids of known users: friends plus every group sharing a doc. */
+  watch: string[];
+}
+
+export function isRelayWatchFrame(decoded: any): decoded is RelayWatchFrame {
+  return decoded?.type === RELAY_WATCH
+    && typeof decoded.group === 'string'
+    && Array.isArray(decoded.watch);
+}
+
+/**
+ * Build the discovery declaration from the group ids the engine knows: dedupe,
+ * drop self and empties, and sort — a stable serialization is what makes the
+ * engine's sent-frame diff guard meaningful.
+ */
+export function buildRelayWatchFrame(group: string, knownGroupIds: Iterable<string>): RelayWatchFrame {
+  const watch = [...new Set(knownGroupIds)].filter((g) => !!g && g !== group).sort();
+  return { type: RELAY_WATCH, group, watch };
+}

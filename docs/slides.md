@@ -55,13 +55,14 @@ Try it!
 <!-- _class: tight -->
 
 - introduces peers
-- use group id to match
+- use group id to match (mutual)
 - peers upgrade to WebRTC
 
 ![bg right:38% fit](connections.png)
 
 <!--
-- The relay does discovery and forwards opaque bytes by target id
+- Each device declares its user group + the groups it knows (friends, doc co-members); the relay only introduces same-group devices and mutual watchers, then forwards opaque bytes by target id
+- Un-friending withdraws the match — the relay actively disconnects the pair
 - Once two peers know about each other, they upgrade to a direct WebRTC channel
 - Same peer ids, same messages either way — the upgrade is invisible above the transport
 - A pair that can't punch through NAT just stays on the relay
@@ -189,10 +190,21 @@ Try it!
 
 ---
 
+## Future
+
+<!-- _class: tight -->
+
+- Relay: HMAC tokens
+- Schema changes
+- Real app?
+
+![bg right:38% fit](todo.png)
+
+---
+
 ## Future: A real mobile app?
 
 - Better notifications — a PWA can't reliably wake up to say "someone edited this"
 - Background sync, so a phone stays current without the app open
 - Access to phone features: contacts, calendar, camera, files
 
-![bg right:38% fit](todo.png)

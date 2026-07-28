@@ -201,6 +201,13 @@ async function startEngine(
       return origReceive(bytes);
     };
 
+    // Notify the engine on every socket (re)open so it re-sends its RELAY_WATCH
+    // declaration — the relay's discovery state is per-socket. The adapter's own
+    // onOpen (which sends `join`) runs first, same pattern as the browser worker.
+    let socketOpenHandler: (() => void) | null = null;
+    const origOnOpen = wsAdapter.onOpen;
+    wsAdapter.onOpen = () => { origOnOpen(); socketOpenHandler?.(); };
+
     network = {
       networkAdapter: wsAdapter,
       sendOverlayFrame: (frame) => {
@@ -210,6 +217,7 @@ async function startEngine(
         if (sock && sock.readyState === 1) sock.send(rdvEncoder.encode(frame));
       },
       onRendezvousFrame: (handler) => { rdvHandler = handler; },
+      onSocketOpen: (handler) => { socketOpenHandler = handler; },
     };
   } else {
     // Local-only: no relay socket, no rendezvous overlay. The OfflineNetworkAdapter

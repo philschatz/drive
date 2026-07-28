@@ -11,6 +11,7 @@
  */
 import type { SettingName, SettingsSchema } from './storage-keys';
 import type { WorkerToMain } from './worker-protocol';
+import type { RelayWatchFrame } from './relay-identity';
 
 /**
  * The persistence surface the engine needs (the browser gets this from
@@ -26,18 +27,18 @@ export interface KVStore {
   settingSet<K extends SettingName>(name: K, value: SettingsSchema[K]): Promise<void>;
 }
 
-/** A rendezvous/overlay frame as the engine produces it (host CBOR-encodes it). */
-export interface OverlayFrame {
-  type: string;
-  rendezvousId: string;
-  data?: Uint8Array;
-}
+/** A frame the engine sends over the raw relay socket (host CBOR-encodes it):
+ *  rendezvous control/data, or the relay discovery declaration (RELAY_WATCH). */
+export type OverlayFrame =
+  | { type: string; rendezvousId: string; data?: Uint8Array }
+  | RelayWatchFrame;
 
 /**
  * Transport abstraction. The host owns the actual socket and the automerge-repo
  * network adapter; the engine only needs to (a) hand the adapter to the repo,
- * (b) send rendezvous frames, and (c) receive inbound rendezvous frames.
- * WebRTC-signaling frames (browser only) are handled entirely inside the host.
+ * (b) send rendezvous/discovery frames, and (c) receive inbound rendezvous
+ * frames. WebRTC-signaling frames (browser only) are handled entirely inside
+ * the host.
  */
 export interface EngineNetwork {
   /**
@@ -46,10 +47,18 @@ export interface EngineNetwork {
    * relay socket, so this is absent and the repo is built with no network.
    */
   networkAdapter?: any;
-  /** Send a rendezvous control/data frame over the raw relay socket (no-op when local-only). */
+  /** Send a rendezvous/discovery frame over the raw relay socket (no-op when local-only). */
   sendOverlayFrame(frame: OverlayFrame): void;
   /** Register the engine's inbound-rendezvous-frame handler (no-op when local-only). */
   onRendezvousFrame(handler: (frame: any) => void): void;
+  /**
+   * Register a callback fired every time the relay socket opens — the first
+   * connect AND each reconnect. The adapter sends `join` from its own open
+   * handler first, so frames sent from here follow the handshake on the same
+   * socket. The engine uses this to (re)send its RELAY_WATCH declaration,
+   * which the relay keeps per-socket. Optional: absent when local-only.
+   */
+  onSocketOpen?(handler: () => void): void;
 }
 
 export interface EngineHost {

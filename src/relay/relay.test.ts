@@ -42,8 +42,27 @@ function join(relay: WebSocketRelay, peerId: string): FakeSocket {
   return ws;
 }
 
+/** Send a discovery declaration: own group + the groups this socket knows. */
+function watch(ws: FakeSocket, group: string, watchList: string[] = []): void {
+  ws.frame({ type: 'watch', group, watch: watchList });
+}
+
+/** Join two peers and declare them mutual friends so the relay pairs them. */
+function joinFriends(relay: WebSocketRelay, aId: string, bId: string): [FakeSocket, FakeSocket] {
+  const a = join(relay, aId);
+  const b = join(relay, bId);
+  watch(a, `g-${aId}`, [`g-${bId}`]);
+  watch(b, `g-${bId}`, [`g-${aId}`]);
+  return [a, b];
+}
+
 function sentTypes(ws: FakeSocket): string[] {
   return ws.send.mock.calls.map(([bytes]) => (decode(bytes) as any).type);
+}
+
+/** Decoded frames of a given type that `ws` received. */
+function sentOfType(ws: FakeSocket, type: string): any[] {
+  return ws.send.mock.calls.map(([bytes]) => decode(bytes) as any).filter((m) => m.type === type);
 }
 
 afterEach(() => {
@@ -55,16 +74,23 @@ afterEach(() => {
 });
 
 describe('handshake (must keep working)', () => {
-  it('completes join → peer ack and mutual discovery', () => {
+  it('completes join → peer ack, with no discovery until watch frames match', () => {
     const relay = new WebSocketRelay();
     const alice = join(relay, 'alice');
     expect(sentTypes(alice)).toEqual(['peer']); // relay ack
 
+    // A bare join announces nobody: strangers on a relay stay invisible.
     const bob = join(relay, 'bob');
-    expect(sentTypes(bob)).toEqual(['peer', 'peer']); // ack + intro of alice
-    expect(sentTypes(alice)).toEqual(['peer', 'peer']); // ack + intro of bob
+    expect(sentTypes(bob)).toEqual(['peer']); // ack only
+    expect(sentTypes(alice)).toEqual(['peer']); // unchanged
 
-    // Unicast routing still works
+    // Mutual watch pairs them: each side gets one intro naming the other.
+    watch(alice, 'gA', ['gB']);
+    watch(bob, 'gB', ['gA']);
+    expect(sentOfType(alice, 'peer').map((m) => m.senderId)).toContain('bob');
+    expect(sentOfType(bob, 'peer').map((m) => m.senderId)).toContain('alice');
+
+    // Unicast routing works between the introduced pair.
     alice.send.mockClear();
     bob.frame({ type: 'sync', senderId: 'bob', targetId: 'alice', data: new Uint8Array([1]) });
     expect(alice.send).toHaveBeenCalledTimes(1);
@@ -100,8 +126,10 @@ describe('C1: malformed frames must not crash the process', () => {
     // A bogus join gets no handshake ack and no discovery intros are pushed.
     expect(bogus.send).not.toHaveBeenCalled();
     expect(alice.send).not.toHaveBeenCalled();
-    // Nothing was evicted: alice is still routable.
+    // Nothing was evicted: alice is still routable (once paired).
     const carol = join(relay, 'carol');
+    watch(alice, 'gA', ['gC']);
+    watch(carol, 'gC', ['gA']);
     alice.send.mockClear();
     carol.frame({ type: 'sync', senderId: 'carol', targetId: 'alice', data: new Uint8Array([1]) });
     expect(alice.send).toHaveBeenCalledTimes(1);
@@ -132,6 +160,8 @@ describe('C2: peerId squatting must not evict a live peer', () => {
 
     // Incumbent is still routable after the squat attempt.
     const bob = join(relay, 'bob');
+    watch(alice, 'gA', ['gB']);
+    watch(bob, 'gB', ['gA']);
     alice.send.mockClear();
     bob.frame({ type: 'sync', senderId: 'bob', targetId: 'alice', data: new Uint8Array([1]) });
     expect(alice.send).toHaveBeenCalledTimes(1);
@@ -152,8 +182,7 @@ describe('C2: peerId squatting must not evict a live peer', () => {
 describe('C2: backpressure', () => {
   it('disconnects a peer that is too far behind instead of buffering unboundedly', () => {
     const relay = new WebSocketRelay();
-    const alice = join(relay, 'alice');
-    const bob = join(relay, 'bob');
+    const [alice, bob] = joinFriends(relay, 'alice', 'bob');
 
     bob.send.mockClear();
     bob.bufferedAmount = 2 * relayMaxPayloadBytes() + 1;
@@ -201,9 +230,9 @@ describe('C2: connection caps', () => {
 describe('C2: WebRTC signaling senderId must not be spoofable', () => {
   it('forwards a WRTC_SIGNAL only when senderId matches the joined peer', () => {
     const relay = new WebSocketRelay();
-    const alice = join(relay, 'alice');
-    const bob = join(relay, 'bob');
+    const [alice, bob] = joinFriends(relay, 'alice', 'bob');
     const mallory = join(relay, 'mallory');
+    watch(mallory, 'gM', ['g-alice', 'g-bob']); // one-sided: pairs with nobody
     bob.send.mockClear();
 
     // Spoof: mallory claims to be alice. Signaling drives RTCPeerConnection
@@ -211,12 +240,17 @@ describe('C2: WebRTC signaling senderId must not be spoofable', () => {
     mallory.frame({ type: WRTC_SIGNAL, senderId: 'alice', targetId: 'bob', signal: { kind: 'offer', sdp: 'v=0' } });
     expect(bob.send).not.toHaveBeenCalled();
 
+    // Truthful senderId but no pairing: mallory was never introduced to bob,
+    // so it must not be able to drive bob's RTC stack either.
+    mallory.frame({ type: WRTC_SIGNAL, senderId: 'mallory', targetId: 'bob', signal: { kind: 'offer', sdp: 'v=0' } });
+    expect(bob.send).not.toHaveBeenCalled();
+
     // A socket that never joined has no identity to speak as.
     const anon = connect(relay);
     anon.frame({ type: WRTC_SIGNAL, senderId: 'alice', targetId: 'bob', signal: { kind: 'offer', sdp: 'v=0' } });
     expect(bob.send).not.toHaveBeenCalled();
 
-    // The truthful frame still goes through.
+    // The truthful frame between introduced peers still goes through.
     alice.frame({ type: WRTC_SIGNAL, senderId: 'alice', targetId: 'bob', signal: { kind: 'offer', sdp: 'v=0' } });
     expect(bob.send).toHaveBeenCalledTimes(1);
     expect((decode(bob.send.mock.calls[0][0]) as any).type).toBe(WRTC_SIGNAL);
@@ -239,27 +273,24 @@ describe('C2: maxPayload wiring', () => {
 });
 
 describe('peer departure', () => {
-  /** Decoded frames of a given type that `ws` received. */
-  function sentOfType(ws: FakeSocket, type: string): any[] {
-    return ws.send.mock.calls.map(([bytes]) => decode(bytes) as any).filter((m) => m.type === type);
-  }
-
-  it('broadcasts a leave to remaining peers when a socket closes', () => {
+  it('sends a leave to introduced partners when a socket closes — and only to them', () => {
     const relay = new WebSocketRelay();
-    const alice = join(relay, 'alice');
-    const bob = join(relay, 'bob');
+    const [alice, bob] = joinFriends(relay, 'alice', 'bob');
+    const stranger = join(relay, 'carol');
+    watch(stranger, 'gC', []);
 
     bob.emit('close');
 
     expect(sentOfType(alice, 'leave')).toEqual([{ type: 'leave', senderId: 'bob' }]);
+    // A peer that was never introduced to bob learns nothing of its departure.
+    expect(sentOfType(stranger, 'leave')).toEqual([]);
     // The departed socket itself gets nothing extra.
     expect(sentOfType(bob, 'leave')).toEqual([]);
   });
 
-  it('does not broadcast a leave when a rejected duplicate socket closes', () => {
+  it('does not send a leave when a rejected duplicate socket closes', () => {
     const relay = new WebSocketRelay();
-    const alice = join(relay, 'alice');
-    const bob = join(relay, 'bob');
+    const [alice, bob] = joinFriends(relay, 'alice', 'bob');
     const squatter = join(relay, 'bob'); // rejected — bob's socket still owns the id
 
     alice.send.mockClear();
@@ -267,9 +298,144 @@ describe('peer departure', () => {
     squatter.emit('close');
     expect(sentOfType(alice, 'leave')).toEqual([]);
 
-    // The real bob closing still broadcasts exactly one leave.
+    // The real bob closing still sends exactly one leave.
     bob.emit('close');
     expect(sentOfType(alice, 'leave')).toEqual([{ type: 'leave', senderId: 'bob' }]);
+  });
+});
+
+describe('watch-scoped discovery', () => {
+  it('never introduces watch-less strangers, and drops their traffic', () => {
+    const relay = new WebSocketRelay();
+    const alice = join(relay, 'alice');
+    const bob = join(relay, 'bob');
+
+    // No intros either way…
+    expect(sentTypes(alice)).toEqual(['peer']); // own ack only
+    expect(sentTypes(bob)).toEqual(['peer']);
+
+    // …and neither unicast nor target-less frames cross the gap.
+    alice.send.mockClear();
+    bob.frame({ type: 'sync', senderId: 'bob', targetId: 'alice', data: new Uint8Array([1]) });
+    bob.frame({ type: 'sync', senderId: 'bob', data: new Uint8Array([1]) });
+    expect(alice.send).not.toHaveBeenCalled();
+  });
+
+  it('introduces two devices announcing the same group', () => {
+    const relay = new WebSocketRelay();
+    const phone = join(relay, 'phone');
+    const laptop = join(relay, 'laptop');
+    watch(phone, 'gMe', []);
+    watch(laptop, 'gMe', []);
+
+    expect(sentOfType(phone, 'peer').map((m) => m.senderId)).toContain('laptop');
+    expect(sentOfType(laptop, 'peer').map((m) => m.senderId)).toContain('phone');
+  });
+
+  it('requires the watch to be mutual — one-sided pairs with nobody', () => {
+    const relay = new WebSocketRelay();
+    const alice = join(relay, 'alice');
+    const bob = join(relay, 'bob');
+    watch(alice, 'gA', ['gB']);
+    watch(bob, 'gB', []); // bob has not (yet) processed alice's contact bundle
+
+    expect(sentOfType(alice, 'peer').map((m) => m.senderId)).not.toContain('bob');
+    expect(sentOfType(bob, 'peer').map((m) => m.senderId)).not.toContain('alice');
+
+    // The moment bob's roster includes alice's group, the pair forms.
+    watch(bob, 'gB', ['gA']);
+    expect(sentOfType(alice, 'peer').map((m) => m.senderId)).toContain('bob');
+    expect(sentOfType(bob, 'peer').map((m) => m.senderId)).toContain('alice');
+  });
+
+  it('re-sending an identical watch does not re-introduce (keyhive re-syncs are not free)', () => {
+    const relay = new WebSocketRelay();
+    const [alice, bob] = joinFriends(relay, 'alice', 'bob');
+
+    alice.send.mockClear();
+    bob.send.mockClear();
+    watch(alice, 'g-alice', ['g-bob']);
+    watch(bob, 'g-bob', ['g-alice']);
+    expect(sentOfType(alice, 'peer')).toEqual([]);
+    expect(sentOfType(bob, 'peer')).toEqual([]);
+  });
+
+  it('a watch update that drops the friend dissolves the pair with leaves both ways', () => {
+    const relay = new WebSocketRelay();
+    const [alice, bob] = joinFriends(relay, 'alice', 'bob');
+    alice.send.mockClear();
+    bob.send.mockClear();
+
+    // Alice un-friends bob: her next declaration no longer names his group.
+    watch(alice, 'g-alice', []);
+
+    expect(sentOfType(alice, 'leave')).toEqual([{ type: 'leave', senderId: 'bob' }]);
+    expect(sentOfType(bob, 'leave')).toEqual([{ type: 'leave', senderId: 'alice' }]);
+
+    // And routing between them is gone in both directions.
+    alice.send.mockClear();
+    bob.send.mockClear();
+    bob.frame({ type: 'sync', senderId: 'bob', targetId: 'alice', data: new Uint8Array([1]) });
+    alice.frame({ type: 'sync', senderId: 'alice', targetId: 'bob', data: new Uint8Array([1]) });
+    expect(alice.send).not.toHaveBeenCalled();
+    expect(bob.send).not.toHaveBeenCalled();
+  });
+
+  it('scopes target-less frames to the sender\'s introduced peers', () => {
+    const relay = new WebSocketRelay();
+    const [alice, bob] = joinFriends(relay, 'alice', 'bob');
+    const stranger = join(relay, 'carol');
+    watch(stranger, 'gC', []);
+
+    bob.send.mockClear();
+    stranger.send.mockClear();
+    alice.frame({ type: 'sync', senderId: 'alice', data: new Uint8Array([1]) });
+
+    expect(bob.send).toHaveBeenCalledTimes(1);
+    expect(stranger.send).not.toHaveBeenCalled();
+  });
+
+  it('drops malformed or out-of-bounds watch frames without crashing', () => {
+    const relay = new WebSocketRelay();
+    const alice = join(relay, 'alice');
+    const bob = join(relay, 'bob');
+    watch(bob, 'gB', ['gA']);
+
+    // Pre-join watch: no identity yet, no discovery state to steer.
+    const anon = connect(relay);
+    expect(() => anon.frame({ type: 'watch', group: 'gA', watch: ['gB'] })).not.toThrow();
+
+    // Malformed shapes and hostile bounds are all dropped.
+    expect(() => alice.frame({ type: 'watch', watch: ['gB'] })).not.toThrow(); // no group
+    expect(() => alice.frame({ type: 'watch', group: 7, watch: ['gB'] })).not.toThrow();
+    expect(() => alice.frame({ type: 'watch', group: 'gA', watch: 'gB' })).not.toThrow();
+    expect(() => alice.frame({ type: 'watch', group: 'gA', watch: [{ evil: true }] })).not.toThrow();
+    expect(() => alice.frame({ type: 'watch', group: 'x'.repeat(300), watch: ['gB'] })).not.toThrow();
+    expect(() => alice.frame({ type: 'watch', group: 'gA', watch: ['x'.repeat(300)] })).not.toThrow();
+    expect(() => alice.frame({ type: 'watch', group: 'gA', watch: Array(1025).fill('gB') })).not.toThrow();
+
+    // None of those counted as a declaration: alice remains unpaired.
+    expect(sentOfType(alice, 'peer').map((m) => m.senderId)).not.toContain('bob');
+    expect(sentOfType(bob, 'peer').map((m) => m.senderId)).not.toContain('alice');
+  });
+
+  it('ignores a watch from a replaced stale socket (it cannot steer the live id)', () => {
+    const relay = new WebSocketRelay();
+    const stale = join(relay, 'alice');
+    stale.readyState = 3; // dead but its close event never processed
+    const fresh = connect(relay);
+    fresh.frame({ type: 'join', senderId: 'alice', supportedProtocolVersions: ['1'] });
+    const bob = join(relay, 'bob');
+    watch(bob, 'gB', ['gA']);
+
+    // The zombie must not be able to pair "alice" with bob…
+    watch(stale, 'gA', ['gB']);
+    expect(sentOfType(bob, 'peer').map((m) => m.senderId)).not.toContain('alice');
+
+    // …but the live socket can.
+    watch(fresh, 'gA', ['gB']);
+    expect(sentOfType(bob, 'peer').map((m) => m.senderId)).toContain('alice');
+    expect(sentOfType(fresh, 'peer').map((m) => m.senderId)).toContain('bob');
   });
 });
 
@@ -279,8 +445,7 @@ describe('heartbeat reaper', () => {
   it('pings connected sockets and terminates one that stops answering', () => {
     jest.useFakeTimers();
     const relay = new WebSocketRelay({ heartbeatMs: 1_000 });
-    const alice = join(relay, 'alice');
-    const bob = join(relay, 'bob');
+    const [alice, bob] = joinFriends(relay, 'alice', 'bob');
 
     // Tick 1: both were alive → both get pinged, nobody terminated.
     jest.advanceTimersByTime(1_000);
@@ -297,12 +462,9 @@ describe('heartbeat reaper', () => {
     expect(alice.terminate).not.toHaveBeenCalled();
     expect(bob.terminate).toHaveBeenCalledTimes(1);
 
-    // A real `ws` terminate fires 'close', which broadcasts the leave.
+    // A real `ws` terminate fires 'close', which notifies introduced partners.
     bob.emit('close');
-    const leaves = alice.send.mock.calls
-      .map(([bytes]) => decode(bytes) as any)
-      .filter((m) => m.type === 'leave');
-    expect(leaves).toEqual([{ type: 'leave', senderId: 'bob' }]);
+    expect(sentOfType(alice, 'leave')).toEqual([{ type: 'leave', senderId: 'bob' }]);
   });
 
   it('skips sockets that are no longer OPEN instead of pinging them', () => {

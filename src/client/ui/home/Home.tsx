@@ -373,7 +373,7 @@ export function Home({ path }: { path?: string }) {
       {/* Top app bar */}
       <div className="flex items-center gap-2 min-h-14 pl-2">
         <h1 className="md-title-large font-bold flex-1 min-w-0 truncate">Documents</h1>
-        <ConnectionStatus hideDots peers={repoPeers.map(peerId => ({ peerId }))} />
+        <ConnectionStatus peers={repoPeers.map(peerId => ({ peerId }))} />
         <OverflowMenu aria-label="Menu" items={homeMenuItems} />
       </div>
 

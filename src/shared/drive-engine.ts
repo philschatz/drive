@@ -24,7 +24,7 @@ import {
   type QueryCacheEntry,
 } from './storage-keys';
 import { createKeyhiveRepo } from './keyhive-repo';
-import { RELAY_PEER_ID } from './relay-identity';
+import { RELAY_PEER_ID, buildRelayWatchFrame } from './relay-identity';
 import type { EngineHost } from './engine-host';
 import type { MainToWorker, WorkerToMain } from './worker-protocol';
 import { applyRichTextOps, richTextAwareStringSync, type RichTextOp } from './rich-text-ops';
@@ -173,6 +173,10 @@ export class DriveEngine {
   private PresenceClass: any = null;
   private amDocIdFromBytes: ((bytes: Uint8Array) => string) | null = null;
   private setNextDocId: ((bytes: Uint8Array) => void) | null = null;
+
+  /** Serialized last-sent RELAY_WATCH frame (diff guard) and its debounce timer. */
+  private lastRelayWatch: string | null = null;
+  private relayWatchTimer: ReturnType<typeof setTimeout> | null = null;
 
   // Doc registry + subscriptions.
   private docRegistry = new Map<string, DocEntry>();
@@ -554,10 +558,13 @@ export class DriveEngine {
     if (typeof handle.on === 'function') handle.on('doc', onChange);
   }
 
-  /** Rebroadcast names (called on load + on remote edit). */
+  /** Rebroadcast names (called on load + on any local or remote edit). */
   private refreshFromSettingsDoc(): void {
     this.broadcastFriendNames(this.getFriendNamesMap());
     this.broadcastDeviceNames(this.getDeviceNamesMap());
+    // The friends roster feeds the relay watch list, and this fires for every
+    // settings-doc change — local writes AND edits synced from other devices.
+    this.scheduleRelayWatchRefresh();
   }
 
   /**
@@ -1335,6 +1342,48 @@ export class DriveEngine {
   }
 
   // ── Rendezvous ─────────────────────────────────────────────────────────────
+  // ── Relay discovery declaration (RELAY_WATCH) ───────────────────────────────
+
+  /**
+   * Recompute and (re)send the relay discovery declaration: this device's own
+   * user-group id plus every group it knows (friends roster + doc co-member
+   * groups). The relay introduces only mutually-declared peers — see
+   * WebSocketRelay's doc comment for the rules, the limits of self-asserted
+   * group ids, and the planned HMAC-token upgrade — so keeping this fresh is
+   * what makes friends discoverable at all. Debounced + diffed, so it is cheap
+   * to schedule from every roster-affecting site.
+   */
+  private scheduleRelayWatchRefresh(): void {
+    if (this.relayWatchTimer !== null) return;
+    this.relayWatchTimer = setTimeout(() => {
+      this.relayWatchTimer = null;
+      void this.refreshRelayWatch();
+    }, 500);
+    // Node only (browser timers are numbers): a pending debounce must not hold
+    // a short-lived CLI command open.
+    (this.relayWatchTimer as any).unref?.();
+  }
+
+  private async refreshRelayWatch(): Promise<void> {
+    if (!this.khOps) return;
+    try {
+      const group = await this.khOps.getUserGroupId();
+      if (!group) return; // no user group yet — nothing to declare, nobody to pair with
+      const friendGroupIds = Object.keys(this.driveSettingsDoc()?.friends ?? {});
+      const known = await this.khOps.getKnownFriends(undefined, friendGroupIds);
+      const frame = buildRelayWatchFrame(
+        group,
+        known.filter((m) => m.type === 'group' && !m.isMe).map((m) => m.agentId),
+      );
+      const serialized = JSON.stringify(frame);
+      if (serialized === this.lastRelayWatch) return;
+      this.lastRelayWatch = serialized;
+      this.host.network.sendOverlayFrame(frame);
+    } catch (err) {
+      console.warn('[engine] relay watch refresh failed:', errMsg(err));
+    }
+  }
+
   private rdvSend(frame: { type: string; rendezvousId: string; data?: Uint8Array }): void {
     this.host.network.sendOverlayFrame(frame);
   }
@@ -1485,6 +1534,8 @@ export class DriveEngine {
           // ahead of driveSettingsDocId being set.
           void this.ensureDriveSettingsDoc();
           void this.reconcileHomeDocs();
+          // Remote ops can add doc co-member groups the relay watch must name.
+          this.scheduleRelayWatchRefresh();
           this.emit({ type: 'kh-state-changed' });
         },
       });
@@ -1497,8 +1548,28 @@ export class DriveEngine {
       this.amDocIdFromBytes = kh.amDocIdFromBytes;
       this.setNextDocId = kh.setNextDocId;
 
+      // Creating or adopting the user group changes what this device announces
+      // to the relay, and not every path that does so also touches the settings
+      // doc — wrap the two group-shaping ops so no call site is missed.
+      for (const method of ['ensureUserGroup', 'linkDevice'] as const) {
+        const orig = (this.khOps as any)[method].bind(this.khOps);
+        (this.khOps as any)[method] = async (...args: unknown[]) => {
+          const result = await orig(...args);
+          this.scheduleRelayWatchRefresh();
+          return result;
+        };
+      }
+
       // Route inbound rendezvous frames from the host's socket into the engine.
       this.host.network.onRendezvousFrame((frame) => this.handleRendezvousFrame(frame));
+
+      // Declare (and on every reconnect re-declare) whom the relay may pair us
+      // with. Its discovery state is per-socket, so a fresh socket starts
+      // undeclared — and an undeclared device is invisible to everyone.
+      this.host.network.onSocketOpen?.(() => {
+        this.lastRelayWatch = null;
+        void this.refreshRelayWatch();
+      });
 
       const ns = this.repo.networkSubsystem;
       ns.on('peer', () => this.postStatus());
@@ -1529,6 +1600,9 @@ export class DriveEngine {
       this.emitUnseen();
       this.broadcastFriendNames(await this.getFriendNames());
       this.broadcastDeviceNames(await this.getDeviceNames());
+      // Initial relay discovery declaration (settings doc + keyhive are ready;
+      // if the socket isn't open yet, the onSocketOpen re-send covers it).
+      void this.refreshRelayWatch();
       this.emit({ type: 'kh-ready' });
     } catch (khErr: any) {
       console.error('[engine] keyhive init failed:', khErr);

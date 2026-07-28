@@ -75,6 +75,8 @@ let p2pAdapter: WebRTCRelayAdapter | null = null;
 let pendingWebrtcPort: MessagePort | null = null;
 /** The engine's inbound-rendezvous-frame handler (registered during engine.init). */
 let rdvHandler: ((frame: any) => void) | null = null;
+/** The engine's socket-(re)open handler — it re-sends the RELAY_WATCH declaration. */
+let socketOpenHandler: (() => void) | null = null;
 /** The underlying relay WebSocket; rendezvous/signal frames bypass the repo adapter. */
 let rdvSocket: WebSocket | undefined;
 
@@ -128,10 +130,17 @@ try {
   });
   if (pendingWebrtcPort) { p2pAdapter.attachPort(pendingWebrtcPort); pendingWebrtcPort = null; }
 
-  // Surface raw socket open/close as ws-status.
+  // Surface raw socket open/close as ws-status. The open patch also notifies
+  // the engine (after the adapter's own handler has sent `join` on the new
+  // socket) so it re-sends its RELAY_WATCH declaration — the relay's discovery
+  // state is per-socket, so every reconnect starts undeclared.
   const origSecureOpen = secureWs.onOpen;
   const origSecureClose = secureWs.onClose;
-  secureWs.onOpen = () => { origSecureOpen(); (self as any).postMessage({ type: 'ws-status', connected: true } satisfies WorkerToMain); };
+  secureWs.onOpen = () => {
+    origSecureOpen();
+    socketOpenHandler?.();
+    (self as any).postMessage({ type: 'ws-status', connected: true } satisfies WorkerToMain);
+  };
   secureWs.onClose = () => { origSecureClose(); (self as any).postMessage({ type: 'ws-status', connected: false } satisfies WorkerToMain); };
 
   const network: EngineNetwork = {
@@ -142,6 +151,7 @@ try {
       }
     },
     onRendezvousFrame: (handler) => { rdvHandler = handler; },
+    onSocketOpen: (handler) => { socketOpenHandler = handler; },
   };
 
   const host: EngineHost = {
