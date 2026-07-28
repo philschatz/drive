@@ -1,14 +1,20 @@
 # Regenerating the deck's images
 
 Every `.png` and `.gif` in `docs/` is produced by this directory — nothing here is
-hand-captured. `docs/slides.md` embeds all thirteen of them, and `npm run slides`
+hand-captured. `docs/slides.md` embeds all sixteen of them, and `npm run slides`
 copies the whole set into `dist/slides/`.
 
+Fourteen are captures of the running app; two are rendered mermaid diagrams. They
+have separate commands.
+
 ```bash
-npm run docs:capture                      # all thirteen assets
+npm run docs:capture                      # all fourteen captured assets
 npm run docs:capture -- -g homepage.png   # just one (each asset is one test)
 npm run docs:capture -- -g '\.gif'        # only the screencasts
 npm run docs:capture -- --headed          # watch it happen
+
+npm run docs:diagrams                     # both diagrams, from docs/*.mmd
+npm run docs:diagrams -- add-device       # just the ones matching a substring
 ```
 
 Two-peer GIFs used to die intermittently in `finishRecording` with `ENOENT … .webm`.
@@ -57,11 +63,19 @@ documents in `src/client/home/examples/`, seeded via the empty home page's
 | `presence-updates.gif` | Two peers in the same task editor; the dot walks down the other's property list — Title, Priority, Description — greying each row they occupy |
 | `add-and-share-with-friend.gif` | Sharing an open document with a new contact by QR, who then opens it |
 | `datagrid-presence.gif` | Two peers panning and selecting in one sheet: each other's tagged cells, a Monte Carlo histogram, a range's aggregates, an edit propagating |
+| `peritext-presence.gif` | Two peers holding selections in one document: Phil types over his, nine characters longer than what it replaced, and Sam's selection stays on the same *words* — then Sam types and replaces exactly those |
 | `source-presence.gif` | A grid on the left, the same document as JSON on the right: the dot tracks the selected cell, and editing an empty one makes the key appear |
 | `validation.gif` | A task list beside its JSON: deleting an optional field regroups the task, and an invalid enum raises a schema error in both panes |
 | `device-permissions.gif` | One user's two devices on the same counters document; the second device is walked admin → edit → read → edit → admin from Settings → Devices, and its write affordances vanish and return live |
 
-Every asset above is on a slide — the deck references all thirteen, so a stale capture
+And the two diagrams, from `npm run docs:diagrams` rather than `docs:capture`:
+
+| Asset | Shows |
+|---|---|
+| `add-device.png` | The device-link rendezvous as a sequence: QR → both sides subscribe → the sealed bundles cross in both directions → the laptop adds the phone to the user group |
+| `after-link.png` | The same two devices afterwards: relay watch → introduction → keyhive ops → `reachableDocs()` → document content |
+
+Every asset above is on a slide — the deck references all sixteen, so a stale capture
 is always visible somewhere. Keep it that way when adding one: an asset nothing embeds
 is an asset nobody notices has rotted. To check:
 
@@ -80,7 +94,7 @@ completion keys are `{{today-6d@…}}` templates that only the importer expands.
 | File | Role |
 |---|---|
 | `playwright.config.ts` | Phone viewport (430×932), video on, its own `testMatch` |
-| `cursor.ts` | The injected pointer overlay, plus `tap` / `glide` / `type` / `scanFlash` |
+| `cursor.ts` | The injected pointer overlay, plus `tap` / `glide` / `type` / `scanFlash` / `selectPhrase` / `hideCursor` |
 | `gif.ts` | ffmpeg wrappers: `toGif`, `hstackGif`, and the shared `LEAD_IN` hold |
 | `support.ts` | `capturePeer`, `take` / `takePair`, `seedExamples`, `still`, `befriend`, `share`, `setDisplayName` / `setDeviceName` |
 | `assets.capture.ts` | One test per asset |
@@ -88,6 +102,30 @@ completion keys are `{{today-6d@…}}` templates that only the importer expands.
 Tests are named `*.capture.ts`, and this directory is outside the root config's
 `testDir` — so `npm run test:pw` never runs them, and a capture run never drags the
 test suite along.
+
+## Adding a diagram
+
+Write a `docs/<name>.mmd` and run `npm run docs:diagrams`; `render-mermaid.mjs` globs
+`docs/*.mmd` and writes a same-named transparent PNG, so there is nothing to register.
+It drives the same system Chromium the capture config resolves, with mermaid's
+self-contained `dist/mermaid.min.js` injected into a blank page — deliberately not
+`@mermaid-js/mermaid-cli`, whose `puppeteer` peer dependency downloads a Chromium that
+will not run on NixOS. A parse error exits non-zero rather than leaving the old PNG in
+place; three ways to get one:
+
+- **`;` is a statement separator** and cannot appear in label text at all.
+- **`#` must be written `#35;`.** A bare `#` reads as the start of an entity code and
+  mermaid *silently drops the rest of the label* — `QR — #/link-device/…` rendered as
+  `QR —` and still exited zero.
+- Put the slide's own title in the `## ` heading, not a mermaid `title:` — the deck's
+  headings are styled by `slides-theme.css` and a diagram title would compete.
+
+Height is the only thing that governs legibility. A diagram scaled onto a 16:9 slide is
+always height-bound, never width-bound, so apparent text size is roughly
+`slideHeight / rowCount` no matter what font size the SVG uses — widening it or bumping
+`fontSize` changes nothing. About 13 rows is the ceiling for a slide someone reads from
+the back of a room, which is why `add-device.mmd` and `after-link.mmd` are two files:
+as one 22-row diagram it rendered at 7px.
 
 ## Adding an asset
 
@@ -148,6 +186,22 @@ Three things every screencast gets for free, and one to reach for:
 - **Presence dedupe hides your own devices**, and collapses one user's devices into a
   single dot. Two distinct identities are required or `presence-updates.gif` shows
   nothing.
+- **Do not film a text selection as a press-and-drag.** It is the obvious way to show
+  one and it does not survive a collaborator: there is no consistent selection while
+  the button is down, so a remote cursor push arriving mid-sweep makes the editor's
+  caret-restore effect re-apply the half-finished selection it last recorded, which
+  re-anchors the drag. Measured in `peritext-presence.gif`: an anchor at offset 41
+  became 22 mid-move and the clip selected 19 characters that were never swept. Use
+  `selectPhrase()` — double-click then shift-click, each atomic, with a real
+  selection in between — and assert what the gesture caught, because a selection one
+  word off still records a perfectly plausible-looking clip.
+- **Peer colours are a dice roll.** A peer's colour is hashed from their keyhive
+  identity, which is minted fresh every run, so a two-peer clip draws two of the
+  eight `MATERIAL_CATEGORICAL` hues at random: both peers land on the same one about
+  one run in eight, and indigo is a poor draw whatever the other peer got — at the
+  25% opacity the selection overlay uses it is nearly the editor's own selection
+  tint. `peritext-presence.gif` warns on both and keeps going (the name tips still
+  disambiguate); re-run for a cleaner pair before putting the asset on a slide.
 - **`create-examples` only renders on an empty home page**, so anything using it must
   start from a fresh context.
 - **Direct WebRTC is opportunistic.** `connections.png` prefers a `direct (P2P)` dot

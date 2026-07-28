@@ -1,0 +1,34 @@
+%% Rendered to add-device.png by `npm run docs:diagrams`. Edit this, not the PNG.
+%%
+%% The laptop is the already-linked device and the phone is the joiner, because
+%% that is the direction the gesture runs: the laptop displays the QR, the phone
+%% is the thing with a camera. Don't flip it.
+%%
+%% Split from after-link.mmd on purpose: height is what binds a diagram scaled
+%% onto a 16:9 slide, so ~13 rows is the most that stays legible from the back of
+%% a room. Both phases on one slide rendered at 7px text.
+%%
+%% `#` must be written `#35;` — mermaid reads a bare `#` as the start of an
+%% entity code and silently drops the rest of the label (the QR line rendered as
+%% just "QR —" until this was escaped). `;` is a statement separator, so it
+%% cannot appear in label text at all.
+sequenceDiagram
+  participant A as Laptop (linked)
+  participant R as Relay
+  participant B as Phone (new)
+
+  A->>A: user group + contact card<br/>fresh channel id + AES-256-GCM key
+  A->>R: rdv-sub(id)
+  A-->>B: QR — #35;/link-device/r.{id}.{key}
+  B->>R: rdv-sub(id)
+  R->>A: rdv-peer — someone joined
+  A->>R: rdv-msg — sealed {card, group id,<br/>group ops, settings doc id}
+  R->>B: forwarded verbatim — opaque to the relay
+  B->>B: ingest card + ops,<br/>adopt the group id
+  B->>R: rdv-msg — sealed {its own card}
+  R->>A: forwarded verbatim
+  B->>R: rdv-unsub
+  rect rgb(197, 213, 240)
+    A->>A: addMember(phone → user group, admin)
+  end
+  A->>R: rdv-unsub

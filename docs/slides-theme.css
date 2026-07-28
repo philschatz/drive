@@ -76,6 +76,19 @@ section.tight li {
   margin: 0.2em 0;
 }
 
+/* A diagram slide is a rendered mermaid sequence rather than bullets
+   (docs/*.mmd → docs/*.png, `npm run docs:diagrams`). The PNG is transparent so
+   it sits on the tint; centre it and give it the whole stage below the heading. */
+section.diagram p {
+  margin: 0;
+  text-align: center;
+}
+
+section.diagram h2 {
+  font-size: 30px;
+  margin-bottom: 0.2em;
+}
+
 /* Screenshots and screencasts are split backgrounds. Inset them from the slide
    edge and trace them with a soft shadow — drop-shadow follows the contained
    bitmap rather than the figure box, so the shadow hugs the screenshot itself

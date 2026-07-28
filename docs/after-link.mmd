@@ -1,0 +1,17 @@
+%% Rendered to after-link.png by `npm run docs:diagrams`. Edit this, not the PNG.
+%%
+%% The second half of add-device.mmd — see the note there for why the two phases
+%% are separate files (height is what binds a diagram scaled onto a 16:9 slide).
+%% Same participants, same order, so the two slides read as one continuous trace.
+sequenceDiagram
+  participant A as Laptop (linked)
+  participant R as Relay
+  participant B as Phone (new)
+
+  Note over A,B: the rendezvous is closed, the socket stays open
+  B->>R: relay-watch(group)
+  R->>A: peer introduced
+  R->>B: peer introduced
+  A->>B: keyhive ops + sealed document keys
+  B->>B: reachableDocs() → doc ids → Home
+  A->>B: automerge sync — encrypted content

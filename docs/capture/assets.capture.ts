@@ -1,7 +1,18 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { readFileSync } from 'fs';
 import path from 'path';
-import { beat, glide, scanFlash, tap, tapAndReplace, tapAndType, type as typeText } from './cursor';
+import {
+  beat,
+  glide,
+  hideCursor,
+  scanFlash,
+  selectPhrase,
+  tap,
+  tapAndReplace,
+  tapAndType,
+  type as typeText,
+  type Pt,
+} from './cursor';
 import { hstackGif, toGif } from './gif';
 import {
   befriend,
@@ -53,6 +64,105 @@ const SHARED_TASKS = {
     t4: { '@type': 'Task', title: 'Check the weather', progress: 'needs-action' },
   },
 };
+
+/**
+ * The prose the cursor capture edits, and the two phrases each peer selects.
+ *
+ * Phil's phrase sits before Sam's, and his replacement is *nine characters
+ * longer* than what it replaces — deliberately, because that shift is the whole
+ * claim. An equal-length replacement would leave every index after it unchanged
+ * and a caret that had not been rebased would look perfectly fine.
+ */
+const PROSE = 'We hike in on Friday and pitch the tents by the lake before dark.';
+const PHIL_PHRASE = 'hike in on Friday';
+const PHIL_TYPES = 'drive up on Thursday night';
+const SAM_PHRASE = 'by the lake';
+const SAM_TYPES = 'at the ridge';
+const PROSE_FINAL = 'We drive up on Thursday night and pitch the tents at the ridge before dark.';
+
+/**
+ * The document both peers open, as Markdown — the paragraph above plus enough
+ * around it to fill a 932px frame.
+ *
+ * The length is the point: one sentence in a phone-tall word processor leaves two
+ * thirds of the pane empty, which on a slide reads as a bug rather than a
+ * document. Both edited phrases stay in the *first* paragraph so the two panes can
+ * be compared at a glance, and each phrase appears exactly once in the whole
+ * document — `phraseGrips` finds them by text, so a second occurrence would be
+ * measured instead.
+ *
+ * Each paragraph is one long line: a single newline inside one is a Markdown soft
+ * break, and whether that becomes one block or two is the parser's business, not
+ * something this capture should depend on.
+ */
+const PROSE_DOC = [
+  PROSE,
+  'Sam is bringing the big tent and the stove. I have the tarp, the water filter and both sleeping mats, so nobody carries two of anything.',
+  '## Packing',
+  'Warm layers for the evening — it drops below freezing once the sun is off the water. Boots, not trainers: the last mile up is loose rock the whole way.',
+  'Breakfast is oats and coffee, and we can eat the rest cold on the walk out. Rain is forecast for Sunday morning, so we should be packed and moving by eight.',
+].join('\n\n');
+
+/**
+ * The two points `selectPhrase` needs to select `needle` in the rich-text editor:
+ * the middle of its first word (to double-click) and its far end (to shift-click).
+ *
+ * A paragraph renders as a single `<span data-from>` run, so a word inside it has
+ * no element and no Locator — the only way to point at one is to measure it. Walk
+ * the editor's text nodes, find the phrase in the concatenated text, and take
+ * client rects of Ranges over it.
+ *
+ * `end` is the *last* rect's right edge, so a phrase that wraps across lines still
+ * yields its true end, and it is used exactly rather than inset: a rect edge
+ * already sits on the character boundary Chromium's hit-test snaps to. Inset it by
+ * a pixel and the selection can come up one character short — which here would
+ * mean typing over "by the lak" and leaving a stray "e" behind.
+ */
+async function phraseGrips(page: Page, needle: string): Promise<{ word: Pt; end: Pt }> {
+  return page.evaluate((needle) => {
+    const root = document.querySelector('[data-testid="rt-editor"]');
+    if (!root) throw new Error('phraseGrips: no rt-editor');
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    const nodes: Text[] = [];
+    let all = '';
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+      nodes.push(n as Text);
+      all += (n as Text).data;
+    }
+    const at = all.indexOf(needle);
+    if (at < 0) throw new Error(`phraseGrips: ${JSON.stringify(needle)} not in ${JSON.stringify(all)}`);
+
+    /** Global text offset → (text node, offset within it). */
+    const point = (off: number): [Text, number] => {
+      let seen = 0;
+      for (const n of nodes) {
+        if (off <= seen + n.data.length) return [n, off - seen];
+        seen += n.data.length;
+      }
+      const last = nodes[nodes.length - 1];
+      return [last, last.data.length];
+    };
+    const rectsFor = (from: number, to: number) => {
+      const range = document.createRange();
+      const [sn, so] = point(from);
+      const [en, eo] = point(to);
+      range.setStart(sn, so);
+      range.setEnd(en, eo);
+      const rects = Array.from(range.getClientRects()).filter((r) => r.width > 0 && r.height > 0);
+      if (rects.length === 0) throw new Error(`phraseGrips: no rects for ${from}..${to}`);
+      return rects;
+    };
+
+    const firstWordLen = (needle.split(' ')[0] ?? needle).length;
+    const word = rectsFor(at, at + firstWordLen)[0];
+    const phrase = rectsFor(at, at + needle.length);
+    const last = phrase[phrase.length - 1];
+    return {
+      word: { x: word.left + word.width / 2, y: word.top + word.height / 2 },
+      end: { x: last.right, y: last.top + last.height / 2 },
+    };
+  }, needle);
+}
 
 /**
  * The *Where My Hours Help Most* example, read from the bundled examples rather
@@ -564,6 +674,142 @@ test('presence-updates.gif', async ({ browser }) => {
   // flow longer than it was under auto-save, and `width` is the wrong lever (see
   // the note in gif.ts — downscaling costs bytes here rather than saving them).
   await hstackGif('presence-updates.gif', clips.left, clips.right);
+  await Promise.all([phil.close(), sam.close()]);
+});
+
+test('peritext-presence.gif', async ({ browser }) => {
+  const phil = await capturePeer(browser, 'phil', { video: true });
+  const sam = await capturePeer(browser, 'sam', { video: true });
+  await setDisplayName(phil.page, 'Phil');
+  await setDisplayName(sam.page, 'Sam');
+  const { bGroup } = await befriend(phil, sam);
+
+  const { docId } = await phil.call('createDoc', {
+    '@type': 'Sentences',
+    name: 'Trip notes',
+    content: '',
+  });
+  await share(phil, sam, bGroup, docId, 'edit');
+  // Both sides, or the name tip above a caret renders a truncated agent id.
+  await nameContact(phil, 0, 'Sam');
+  await nameContact(sam, 0, 'Phil');
+
+  // Seed the document off camera through the app's own Markdown import — the
+  // hidden picker behind the "Import Markdown" overflow action, driven directly
+  // because the menu itself is not what is being documented. Handing `content` to
+  // createDoc would be cheaper, but the asset is entirely about cursors *into*
+  // Peritext spans, so the text is built by the same `updateSpans` op a real
+  // import uses. (The confirm() guard only fires on a document that already has
+  // content; this one is empty.)
+  await phil.page.goto(`/#/d/${docId}`);
+  await expect(phil.page.getByTestId('rt-editor')).toBeVisible({ timeout: 60_000 });
+  await phil.page.setInputFiles('[data-testid="import-md-input"]', {
+    name: 'trip-notes.md',
+    mimeType: 'text/markdown',
+    buffer: Buffer.from(PROSE_DOC, 'utf8'),
+  });
+  await expect(phil.page.getByTestId('rt-editor')).toContainText(PROSE, { timeout: 30_000 });
+
+  // Both workers must hold the document before either editor mounts, and Sam must
+  // actually have the text — a cold worker races the first presence broadcast and
+  // no carets appear at all.
+  await warmDoc(phil, docId, 'Trip notes');
+  await warmDoc(sam, docId, 'Trip notes');
+  await sam.page.goto(`/#/d/${docId}`);
+  await expect(sam.page.getByTestId('rt-editor')).toContainText(PROSE, { timeout: 60_000 });
+
+  const clips = await takePair(
+    phil,
+    sam,
+    async (l, r) => {
+      // Phil enters edit mode and selects a phrase near the start.
+      await tap(l, l.getByLabel('Edit sentences'));
+      await expect(l.getByTestId('format-bar')).toBeVisible({ timeout: 30_000 });
+      await beat(l, 450);
+      const philSel = await phraseGrips(l, PHIL_PHRASE);
+      await selectPhrase(l, philSel.word, philSel.end);
+      // Assert what the gesture actually caught. A selection one character short
+      // would still record a perfectly plausible-looking clip — and then leave a
+      // stray letter behind when it is typed over.
+      expect(await l.evaluate(() => window.getSelection()?.toString())).toBe(PHIL_PHRASE);
+
+      // It reaches Sam as a coloured block with Phil's name above it.
+      await expect(r.getByTestId('peer-tip')).toHaveText('Phil', { timeout: 60_000 });
+      await expect(r.getByTestId('peer-highlight').first()).toBeVisible();
+      await beat(r, 800);
+
+      // Sam selects a phrase further along, and Phil sees that one the same way.
+      await tap(r, r.getByLabel('Edit sentences'));
+      await expect(r.getByTestId('format-bar')).toBeVisible({ timeout: 30_000 });
+      await beat(r, 450);
+      const samSel = await phraseGrips(r, SAM_PHRASE);
+      await selectPhrase(r, samSel.word, samSel.end);
+      expect(await r.evaluate(() => window.getSelection()?.toString())).toBe(SAM_PHRASE);
+      await expect(l.getByTestId('peer-tip')).toHaveText('Sam', { timeout: 60_000 });
+      await expect(l.getByTestId('peer-highlight').first()).toBeVisible();
+
+      // A peer's colour is hashed from their keyhive identity, which is minted
+      // fresh for every run, so which two of the eight the clip draws is a dice
+      // roll: both peers can land on the same one (1 in 8), and indigo is a poor
+      // draw whatever the other peer got, because a 25%-opacity indigo highlight
+      // is nearly the editor's own selection tint. Neither is wrong — the name
+      // tips still tell the peers apart — so this warns rather than fails. Re-run
+      // for a cleaner pair before putting the asset on a slide.
+      const INDIGO = 'rgb(63, 81, 181)';
+      const tipColour = (p: Page) =>
+        p.getByTestId('peer-tip').evaluate((el) => getComputedStyle(el).backgroundColor);
+      const [samColour, philColour] = [await tipColour(l), await tipColour(r)];
+      if (samColour === philColour) {
+        console.warn(`  ! both peers hashed to ${samColour} — re-run for two distinct colours`);
+      } else if (samColour === INDIGO || philColour === INDIGO) {
+        console.warn('  ! a peer hashed to indigo, which reads as the local selection — re-run');
+      }
+      // Hold with both selections up on both panes: the "before" frame the payoff
+      // is read against. Both hands come off the mouse first — from here on every
+      // frame that matters is a frame of text, and a 26px ring parked on the words
+      // covers the ones being edited.
+      await hideCursor(r);
+      await hideCursor(l);
+      await beat(l, 1300);
+
+      // Phil types over his selection, nine characters longer than what it
+      // replaced, so every index past it moves.
+      await typeText(l, PHIL_TYPES, 85);
+      await expect(r.getByTestId('rt-editor')).toContainText(PHIL_TYPES, { timeout: 60_000 });
+      // The claim: Sam has not touched his selection, and after the text in front
+      // of it grew it still holds the same words — not the same offsets. This is
+      // sentences-local-caret.spec.ts's assertion made through what is on screen
+      // instead of through the next keystroke.
+      await expect
+        .poll(() => r.evaluate(() => window.getSelection()?.toString() ?? ''), { timeout: 30_000 })
+        .toBe(SAM_PHRASE);
+      await beat(r, 1500);
+
+      // And because it is still his selection, typing replaces exactly it.
+      await typeText(r, SAM_TYPES, 85);
+      await expect(l.getByTestId('rt-editor')).toContainText(PROSE_FINAL, { timeout: 60_000 });
+      await beat(l, 800);
+    },
+    {
+      leftUrl: `/#/d/${docId}`,
+      rightUrl: `/#/d/${docId}`,
+      // The opening frame is frozen for LEAD_IN, so both panes must already show
+      // the paragraph — an empty editor is what a viewer would otherwise stare at.
+      settle: async (l, r) => {
+        for (const p of [l, r]) {
+          await expect(p.getByTestId('rt-editor')).toContainText(PROSE, { timeout: 90_000 });
+        }
+      },
+    }
+  );
+
+  // fps 8, as the other long two-peer clips use, and measured rather than assumed:
+  // a pane full of prose costs real bytes, and 10fps came out at 3.2 MB against
+  // 2.7 at 8 (the same ~15% the raw clips showed). `width` is the wrong lever here
+  // for the reason gif.ts records — downscaling body text costs more than it saves.
+  // The typing cadence is 85ms to suit it: at 8fps a faster one lands two
+  // characters per frame and reads as a paste rather than as typing.
+  await hstackGif('peritext-presence.gif', clips.left, clips.right, { fps: 8 });
   await Promise.all([phil.close(), sam.close()]);
 });
 

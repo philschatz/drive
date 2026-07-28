@@ -160,6 +160,68 @@ export async function scanFlash(page: Page, target: Locator, hold = 600): Promis
   await beat(page, 520);
 }
 
+/** A viewport point, as `page.mouse` takes them. */
+export interface Pt {
+  x: number;
+  y: number;
+}
+
+/**
+ * Select a phrase of prose: double-click its first word, then shift-click the far
+ * end. Both points are viewport coordinates — a phrase inside a paragraph is a run
+ * of characters with no element of its own, so it has to be measured (see
+ * `phraseGrips` in assets.capture.ts). The spreadsheet's equivalent selects
+ * between two *cells*, which do have elements, so it stays local to
+ * assets.capture.ts as `dragSelect`.
+ *
+ * Deliberately NOT a press-and-drag, which is the obvious way to film a selection
+ * and does not survive a collaborator. A drag has no consistent selection while
+ * the button is down, so a remote cursor push arriving mid-sweep makes the
+ * editor's caret-restore effect re-apply the half-finished selection it last
+ * recorded — that re-anchors the drag, and the rest of the sweep then extends from
+ * the wrong end (measured: an anchor at offset 41 became 22 mid-move, selecting 19
+ * characters that were never swept). Double-click and shift-click are each atomic,
+ * and the state between them is a real selection, so a push landing at any point
+ * restores exactly what is already there.
+ *
+ * Two gestures also read *better* at 8–10fps than a sweep whose intermediate
+ * frames are mostly dropped: the word highlights, then the selection snaps out.
+ */
+export async function selectPhrase(page: Page, word: Pt, end: Pt): Promise<void> {
+  await page.mouse.move(word.x, word.y, { steps: 12 });
+  await beat(page, 260);
+  await page.mouse.dblclick(word.x, word.y);
+  await beat(page, 420);
+  await page.mouse.move(end.x, end.y, { steps: 14 });
+  await beat(page, 240);
+  // Shift-click extends the selection. Aimed at the phrase's exact end edge,
+  // which is right under both granularities Blink might keep from the
+  // double-click: a character boundary, and the last word's own edge.
+  await page.keyboard.down('Shift');
+  await page.mouse.down();
+  await beat(page, 200);
+  await page.mouse.up();
+  await page.keyboard.up('Shift');
+  await beat(page, 260);
+}
+
+/**
+ * Fade the synthetic pointer out, for beats where the hand is not the story.
+ *
+ * Typing is the case that needs it: the ring is 26px of opaque grey, and left
+ * wherever the last gesture ended it sits on top of the very characters being
+ * typed. A real hand has left the mouse by then, so drawing one is both ugly and
+ * a lie.
+ *
+ * Self-restoring — the overlay adds `pw-visible` back on the next real
+ * `mousemove`, so any following `tap`/`glide` fades it in again as it travels.
+ */
+export async function hideCursor(page: Page): Promise<void> {
+  await page.evaluate(() => document.getElementById('pw-cursor')?.classList.remove('pw-visible'));
+  // Let the overlay's own 150ms opacity transition finish before anything moves.
+  await beat(page, 220);
+}
+
 /** Type into the focused element at a readable, human cadence. */
 export async function type(page: Page, text: string, delay = 55): Promise<void> {
   await page.keyboard.type(text, { delay });

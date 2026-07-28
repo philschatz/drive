@@ -70,24 +70,17 @@ Try it!
 
 ---
 
-## E2EZ
+## E2Easy Keyhive
 
 <!-- _class: tight -->
 
-- Keyhive wraps a **single** network adapter — everything below it is interchangeable transport
-- Document changes, membership ops, and presence are all encrypted before they leave the device
-- The relay sees ciphertext plus an address; it is never a member of anything
-- Every share or revoke rotates the document key to a new epoch — so a role change lands on the other screen as it happens
+- manages roles for devices, groups, docs
+- role/membership changes cause a new doc sync key
+- all keyhive/doc syncs are sealed
+- relay just sees encrypted messages
+
 
 ![bg right:44% fit](device-permissions.gif)
-
----
-
-## The ask
-
-- I'd rather help someone build theirs than duplicate the work
-- If you're already building local-first, E2E-encrypted collaborative documents, I'd like to contribute
-- So: tell me who to talk to
 
 ---
 
@@ -101,6 +94,43 @@ Try it!
 - The QR carries a rendezvous channel id plus the key to decrypt it; the keyhive material is exchanged over that encrypted channel
 
 ![bg right:44% fit](linking-a-device.gif)
+
+---
+
+## Linking a device
+
+<!-- _class: diagram -->
+
+![h:560](add-device.png)
+
+![bg right:34% fit](linking-a-device.gif)
+
+<!--
+- The same eight steps, one layer down, with the relay drawn in
+- The relay routes rendezvous by channel id and never sees plaintext; this is the one path a device with no group yet can use, since it has nothing to be introduced by
+- Both directions are sealed under the same key — the bundle crossing back is the phone's own card
+- The highlighted row is step 8, the moment the new device has access to anything
+-->
+
+---
+
+## Then it is just a peer
+
+<!-- _class: tight diagram -->
+
+1. phone **announces group id** to relay
+1. relay **pairs** laptop and phone
+1. phone gets **keyhive** updates
+1. document list is the reachability
+
+![h:400](after-link.png)
+
+<!--
+- Nothing here is device-linking code — this is the ordinary sync path, which is the point
+- The phone re-announces its group, so the relay's same-group rule pairs the two sockets and they become normal peers
+- Document ids were never in the QR payload: the phone asks keyhive what it can reach and the answer is now the whole library
+- Content only flows because keyhive says the phone may have it — the relay is forwarding ciphertext it cannot read either way
+-->
 
 ---
 
@@ -151,6 +181,19 @@ Try it!
 - Retype one input and every figure derived from it moves on both screens
 
 ![bg right:44% fit](datagrid-presence.gif)
+
+---
+
+## Cursors in prose
+
+<!-- _class: tight -->
+
+- A caret is an **Automerge cursor**, not an offset — it names a character, so it survives someone else's edit
+- Both peers select; each sees the other's selection tagged with their name, in that peer's own colour
+- Phil edits *ahead* of Sam and Sam's selection stays on the same words — then Sam types and replaces exactly those
+- Positions resolve in the **same worker push** as the text they describe, so a caret is never a frame stale
+
+![bg right:44% fit](peritext-presence.gif)
 
 ---
 
@@ -208,3 +251,10 @@ Try it!
 - Background sync, so a phone stays current without the app open
 - Access to phone features: contacts, calendar, camera, files
 
+---
+
+## The ask
+
+- I'd rather help someone build theirs than duplicate the work
+- If you're already building local-first, E2E-encrypted collaborative documents, I'd like to contribute
+- So: tell me who to talk to
