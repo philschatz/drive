@@ -80,8 +80,6 @@ Links
 - UI/Worker
 - Doc format
 
-![bg right:38% fit](settings.png)
-
 ---
 
 # Design:Relay
