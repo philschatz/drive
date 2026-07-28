@@ -24,7 +24,7 @@ import {
 import type { MemberInfo, MemberRole } from '../../../shared/keyhive-types';
 import { getFriendName, setFriendName, mergeCachedFriends } from '../friend-names';
 import { useDeviceStatuses, mostConnectedStatus, type DeviceStatus } from '../common/use-devices';
-import { StatusDot } from '../common/presence';
+import { PeerDot } from '../common/PeerDot';
 import { docUrl } from '../common/doc-urls';
 import { AddFriendSheet } from '../settings/AddFriendSheet';
 import { AddPeopleSheet } from './AddPeopleSheet';
@@ -229,7 +229,11 @@ export function SharingPage({ docId }: { docId?: string; path?: string }) {
             onClick={() => setOptionsFor(member)}
           >
             <span slot="start" className="inline-flex items-center justify-center w-6">
-              <StatusDot
+              {/* member.agentId IS the identity key: for a group it is byte-identical
+                  to the userGroupId peers broadcast in presence, so this dot is exactly
+                  the colour the editor paints for the same person. */}
+              <PeerDot
+                identityKey={member.agentId}
                 online={status.online}
                 direct={status.transport === 'direct'}
                 label={name || member.agentId}

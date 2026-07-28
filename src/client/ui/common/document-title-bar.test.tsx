@@ -25,7 +25,10 @@ jest.mock('./presence', () => ({
       return true;
     });
   },
-  PeerDot: ({ peerId, label }: any) => <span title={label ?? `Peer ${peerId}`} />,
+}));
+
+jest.mock('./PeerDot', () => ({
+  PeerDot: ({ identityKey, label }: any) => <span title={label ?? `Peer ${identityKey}`} />,
 }));
 
 jest.mock('../worker-api', () => ({

@@ -27,7 +27,8 @@ import {
   setDebugEnabled,
   clearAllCaches,
 } from '../../worker-api';
-import { PeerDot } from '../../common/presence';
+import { peerIdentityKey } from '../../common/presence';
+import { PeerDot } from '../../common/PeerDot';
 import { EditableDeviceName } from '@/components/EditableDeviceName';
 import { PRODUCTION_RELAY_URL } from '../../../../shared/relay-identity';
 import { isDebugEnabled } from '../../../shared/idb-storage';
@@ -136,7 +137,7 @@ export function DebuggingSettings() {
           <ul className="flex flex-col gap-1">
             {peers.map((peerId) => (
               <li key={peerId} className="flex items-center gap-2 text-sm">
-                <PeerDot peerId={peerId} direct={transports[peerId] === 'direct'} />
+                <PeerDot identityKey={peerIdentityKey(peerId)} direct={transports[peerId] === 'direct'} />
                 {/* peerId is "<base64 agentId>-drive"; the prefix is the device
                     agentId. The device name is editable here too (a name for a
                     peer we didn't learn at link time is a local label). */}

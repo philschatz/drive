@@ -28,7 +28,7 @@
 import { useState, useRef, useLayoutEffect, useCallback } from 'preact/hooks';
 import type { ComponentChildren } from 'preact';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
-import { PresenceDot } from './presence';
+import { PresenceDot } from './PeerDot';
 import type { PeerFieldInfo } from './presence';
 
 /**

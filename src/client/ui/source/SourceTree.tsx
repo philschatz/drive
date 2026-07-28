@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from 'preact/hooks';
 
 import type { ValidationError } from '../../../shared/schemas';
-import { peerDisplayName, PeerDot } from '../common/presence';
+import { peerDisplayName, peerIdentityKey } from '../common/presence';
+import { PeerDot } from '../common/PeerDot';
 import { usePeerTransports, type PeerTransport } from '../worker-api';
 
 type Path = (string | number)[];
@@ -273,7 +274,7 @@ function SourceNode({ name, value, path, depth, editable, onEdit, onDelete, onAd
             <span className="source-bracket">{bracket[0]}</span>
           )}
           {exactFocusPeers.map((p, i) => (
-            <PeerDot key={i} peerId={p.peerId} userGroupId={p.userGroupId}
+            <PeerDot key={i} identityKey={peerIdentityKey(p.peerId, p.userGroupId)}
               direct={transports[p.peerId] === 'direct'}
               label={`${peerDisplayName(p.peerId, p.userGroupId)} is editing`}
               sizeClass="w-2 h-2 ml-1.5 align-middle" />
@@ -366,7 +367,7 @@ function SourceNode({ name, value, path, depth, editable, onEdit, onDelete, onAd
           </span>
         )}
         {exactFocusPeers.map((p, i) => (
-          <PeerDot key={i} peerId={p.peerId} userGroupId={p.userGroupId}
+          <PeerDot key={i} identityKey={peerIdentityKey(p.peerId, p.userGroupId)}
             direct={transports[p.peerId] === 'direct'}
             label={`${peerDisplayName(p.peerId, p.userGroupId)} is editing`}
             sizeClass="w-2 h-2 ml-1.5 align-middle" />

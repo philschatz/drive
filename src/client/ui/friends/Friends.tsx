@@ -14,7 +14,7 @@ import { getDocMembers, getKnownFriends, getIdentity } from '../common/keyhive-a
 import { keyhiveReady } from '../common/automerge';
 import { fetchDocList } from '../worker-api';
 import { getFriendName, getAllFriendNames, removeFriendName, setFriendName } from '../friend-names';
-import { StatusDot } from '../common/presence';
+import { PeerDot } from '../common/PeerDot';
 import { BarIconButton } from '../common/DocumentTitleBar';
 import { useDeviceStatuses, mostConnectedStatus } from '../common/use-devices';
 import { FriendOptionsSheet } from './FriendOptionsSheet';
@@ -202,7 +202,10 @@ export function Friends({ path }: { path?: string }) {
               onClick={() => setOptionsFor(friend)}
             >
               <span slot="start" className="inline-flex items-center justify-center w-6">
-                <StatusDot
+                {/* friend.agentId is their user-group id — the same key the
+                    editor and the sharing panel colour by. */}
+                <PeerDot
+                  identityKey={friend.agentId}
                   online={status.online}
                   direct={status.transport === 'direct'}
                   label={name || friend.agentId}

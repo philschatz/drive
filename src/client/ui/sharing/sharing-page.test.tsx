@@ -49,9 +49,14 @@ jest.mock('../common/use-devices', () => ({
   },
 }));
 
-jest.mock('../common/presence', () => ({
-  StatusDot: ({ online, direct }: any) => (
-    <span data-testid="status-dot" data-online={String(!!online)} data-direct={String(!!direct)} />
+jest.mock('../common/PeerDot', () => ({
+  PeerDot: ({ identityKey, online, direct }: any) => (
+    <span
+      data-testid="peer-dot"
+      data-identity={identityKey}
+      data-online={String(!!online)}
+      data-direct={String(!!direct)}
+    />
   ),
 }));
 
@@ -160,10 +165,14 @@ describe('SharingPage — member list', () => {
       .toEqual(['P2P', 'Via relay', 'Offline']);
     // Sorted by connection, not by name — Xavi/Yan/Zoe happens to be alphabetical
     // here, so assert the dots instead: only the first is a filled (direct) dot.
-    expect(screen.queryAllByTestId('status-dot').map(n => n.getAttribute('data-direct')))
+    expect(screen.queryAllByTestId('peer-dot').map(n => n.getAttribute('data-direct')))
       .toEqual(['true', 'false', 'false']);
-    expect(screen.queryAllByTestId('status-dot').map(n => n.getAttribute('data-online')))
+    expect(screen.queryAllByTestId('peer-dot').map(n => n.getAttribute('data-online')))
       .toEqual(['true', 'true', 'false']);
+    // Keyed by the member's agentId — for a group that is byte-identical to the
+    // userGroupId presence broadcasts, so this row is the editor's colour.
+    expect(screen.queryAllByTestId('peer-dot').map(n => n.getAttribute('data-identity')))
+      .toEqual(['direct', 'relayed', 'offline']);
   });
 
   it('shows each member\'s role, defaulting to read', async () => {

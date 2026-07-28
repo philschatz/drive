@@ -2,7 +2,8 @@ import { useState } from 'preact/hooks';
 import { useWsStatus, usePeerTransports, getWorkerPeerId } from './automerge';
 import { getWorkerUserGroupId } from '../worker-api';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
-import { dedupePeers, peerDisplayName, peerIdentityKey, PeerDot, type PresenceState } from './presence';
+import { dedupePeers, peerDisplayName, peerIdentityKey, type PresenceState } from './presence';
+import { PeerDot } from './PeerDot';
 
 interface PeerLike {
   peerId: string;
@@ -67,8 +68,7 @@ export function ConnectionStatus<P extends PeerLike>({
             {visible.map(peer => (
               <PeerDot
                 key={peerIdentityKey(peer.peerId, peer.value?.userGroupId)}
-                peerId={peer.peerId}
-                userGroupId={peer.value?.userGroupId}
+                identityKey={peerIdentityKey(peer.peerId, peer.value?.userGroupId)}
                 direct={transports[peer.peerId] === 'direct'}
                 label={peerTitle ? peerTitle(peer) : peerDisplayName(peer.peerId, peer.value?.userGroupId)}
                 sizeClass="w-3 h-3"
@@ -112,8 +112,7 @@ export function ConnectionStatus<P extends PeerLike>({
               return (
                 <div key={peer.peerId} className="flex items-center gap-3 py-2 border-b border-border">
                   <PeerDot
-                    peerId={peer.peerId}
-                    userGroupId={peer.value?.userGroupId}
+                    identityKey={peerIdentityKey(peer.peerId, peer.value?.userGroupId)}
                     direct={direct}
                     label={peerTitle ? peerTitle(peer) : peerDisplayName(peer.peerId, peer.value?.userGroupId)}
                     sizeClass="w-3 h-3"

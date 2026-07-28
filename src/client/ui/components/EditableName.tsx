@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'preact/hooks';
-import { StatusDot } from '../common/presence';
+import { PeerDot } from '../common/PeerDot';
 import type { DeviceStatus } from '../common/use-devices';
 
 /**
@@ -56,7 +56,7 @@ export function EditableName({ agentId, get, set, subscribe, placeholder, title,
   return (
     <span className="flex items-center flex-1 gap-1">
       {status && (
-        <StatusDot online={status.online} direct={status.transport === 'direct'} label={draft || placeholder} />
+        <PeerDot identityKey={agentId} online={status.online} direct={status.transport === 'direct'} label={draft || placeholder} />
       )}
       <input
         className="text-sm flex-1 bg-transparent outline-none px-0 min-w-0"

@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'preact/hooks';
 import { subscribeQuery, updateDoc } from '../../worker-api';
-import { peerColor, peerDisplayName, usePresence, PresenceDot, type PeerFieldInfo } from '../../common/presence';
+import { peerColor, peerDisplayName, usePresence, type PeerFieldInfo } from '../../common/presence';
+import { PresenceDot } from '../../common/PeerDot';
 import { DocumentTitleBar } from '../../common/DocumentTitleBar';
 import { useDocumentHistory } from '../../common/useDocumentHistory';
 import { useEditorUndoRedo } from '../../common/useUndoRedo';

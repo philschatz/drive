@@ -5,15 +5,17 @@
  * blurb, the empty state, and a row per device (icon, truncated agent id, role,
  * "This device" badge, and a remove button for non-self devices).
  *
- * Role editing parallels the document Sharing page (`sharing/SharingPage`):
- * an admin device sees a Read/Edit/Admin Select per device (with a self-demotion
- * confirmation); a non-admin device sees a static role label with no controls.
+ * Role editing parallels the document Sharing page (`sharing/SharingPage`): an
+ * admin device sees a Read/Edit/Admin Select on *other* devices. Your own role
+ * is always a static label — self-demotion is hard to undo (without admin you
+ * can no longer manage devices or restore your own access from here), so the
+ * control simply isn't offered rather than being guarded by a confirm.
  */
 
 import { DeleteButton } from '@/components/ui/delete-button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { EditableDeviceName } from '@/components/EditableDeviceName';
-import { StatusDot } from '@/common/presence';
+import { PeerDot } from '@/common/PeerDot';
 import type { DeviceInfo } from '@/common/keyhive-api';
 import type { DeviceStatus } from '@/common/use-devices';
 
@@ -28,19 +30,6 @@ export function DeviceList({ devices, onRemove, onChangeRole, statuses }: {
   // The current device is the "me" row; only an admin device can manage access —
   // mirrors the Sharing page's `myAccess === 'admin'` gate.
   const isAdmin = devices.find(d => d.isMe)?.role === 'admin';
-
-  const handleChangeRole = (dev: DeviceInfo, newRole: string) => {
-    // Self-demotion from admin is hard to undo: without admin you can no longer
-    // manage devices (or restore your own access from here). Make it deliberate.
-    if (dev.isMe && dev.role === 'admin' && newRole !== 'admin') {
-      const ok = confirm(
-        `Reduce this device's access from admin to ${newRole}? ` +
-        'You will no longer be able to manage devices or restore your own access from here.'
-      );
-      if (!ok) return; // controlled Select snaps back to the current role
-    }
-    onChangeRole(dev.agentId, newRole);
-  };
 
   return (
     <>
@@ -62,18 +51,24 @@ export function DeviceList({ devices, onRemove, onChangeRole, statuses }: {
               <EditableDeviceName agentId={dev.agentId} isMe={dev.isMe} />
               {statuses && !dev.isMe && (
                 <span className="flex items-center gap-1">
-                  <StatusDot
+                  <PeerDot
+                    identityKey={dev.agentId}
                     online={statuses[dev.agentId]?.online ?? false}
                     direct={statuses[dev.agentId]?.transport === 'direct'}
                   />
-                  <span className="text-xs text-muted-foreground">
-                    {statuses[dev.agentId]?.online ? 'Online' : 'Offline'}
+                  {/* Name the transport, not just reachability — same wording as
+                      the Sharing page, since the dot's fill alone can't say
+                      which of two online devices is direct. */}
+                  <span className="text-xs text-muted-foreground whitespace-nowrap" data-testid="device-transport">
+                    {!statuses[dev.agentId]?.online ? 'Offline'
+                      : statuses[dev.agentId]?.transport === 'direct' ? 'P2P'
+                      : 'Via relay'}
                   </span>
                 </span>
               )}
-              {isAdmin ? (
+              {isAdmin && !dev.isMe ? (
                 <div className="flex items-center gap-1">
-                  <Select value={dev.role} onValueChange={(val: string) => handleChangeRole(dev, val)}>
+                  <Select value={dev.role} onValueChange={(val: string) => onChangeRole(dev.agentId, val)}>
                     <SelectTrigger className="h-7 text-xs w-20">
                       <SelectValue />
                     </SelectTrigger>
@@ -83,13 +78,11 @@ export function DeviceList({ devices, onRemove, onChangeRole, statuses }: {
                       <SelectItem value="admin">Admin</SelectItem>
                     </SelectContent>
                   </Select>
-                  {!dev.isMe && (
-                    <DeleteButton
-                      tooltip="Remove device"
-                      confirmMessage={`Remove device ${dev.agentId.slice(0, 16)}…?`}
-                      onConfirm={() => onRemove(dev.agentId)}
-                    />
-                  )}
+                  <DeleteButton
+                    tooltip="Remove device"
+                    confirmMessage={`Remove device ${dev.agentId.slice(0, 16)}…?`}
+                    onConfirm={() => onRemove(dev.agentId)}
+                  />
                 </div>
               ) : (
                 <span className="text-xs text-muted-foreground capitalize">{dev.role}</span>

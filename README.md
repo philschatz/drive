@@ -4,7 +4,7 @@ Real-time collaborative document editor that's installable on your phone.
 
 ## Features
 
-<img src="docs/tour.gif" alt="tour" align="right" width="240">
+<a href="https://philschatz.com/drive/"><img src="docs/tour.gif" alt="tour" align="right" width="240"></a>
 
 - **Installable PWA** for mobile and desktop
 - **Multiple document types**: Calendar, Spreadsheet, Task List

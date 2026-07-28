@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks';
-import { subscribePresence, setPresence, usePeerTransports } from '../worker-api';
+import { subscribePresence, setPresence } from '../worker-api';
 import type { PeerState } from './automerge';
 import { getFriendName } from '../friend-names';
 
@@ -27,9 +27,13 @@ export function peerIdentityKey(peerId: string, userGroupId?: string | null): st
   return userGroupId || peerId.split('-')[0];
 }
 
-export function peerDisplayName(peerId: string, userGroupId?: string | null): string {
-  const key = peerIdentityKey(peerId, userGroupId);
+/** The name to show for a stable identity key (see peerIdentityKey). */
+export function displayNameForKey(key: string): string {
   return getFriendName(key) || `${key.slice(0, 8)}…`;
+}
+
+export function peerDisplayName(peerId: string, userGroupId?: string | null): string {
+  return displayNameForKey(peerIdentityKey(peerId, userGroupId));
 }
 
 /**
@@ -174,91 +178,3 @@ export interface PeerFieldInfo {
   userGroupId?: string;
 }
 
-/**
- * A peer indicator dot. A FILLED dot means a direct WebRTC (peer-to-peer)
- * channel is open to that peer; a HOLLOW ring means the peer is reachable only
- * through the relay server. Hollow is the default so a relayed connection is
- * never mistaken for a direct one. The transport is also named in the tooltip.
- */
-export function PeerDot({ peerId, userGroupId, direct, label, sizeClass = 'w-2 h-2' }: {
-  peerId: string;
-  /** User-group id of the peer, if known — drives color + name resolution. */
-  userGroupId?: string;
-  direct: boolean;
-  /** Base tooltip text; the transport ("direct"/"via relay") is appended. */
-  label?: string;
-  /** Tailwind size classes for the dot (default 8px). */
-  sizeClass?: string;
-}) {
-  const color = peerColor(peerId, userGroupId);
-  const base = label ?? peerDisplayName(peerId, userGroupId);
-  return (
-    <span
-      data-testid="peer-dot"
-      className={`${sizeClass} rounded-full inline-block shrink-0`}
-      style={{
-        boxSizing: 'border-box',
-        backgroundColor: direct ? color : 'transparent',
-        border: direct ? 'none' : `2px solid ${color}`,
-      }}
-      title={`${base} — ${direct ? 'direct (P2P)' : 'via relay'}`}
-    />
-  );
-}
-
-/**
- * Online/offline status dot, following the PeerDot convention: a FILLED green
- * dot means a direct WebRTC (P2P) channel is open, a HOLLOW green ring means the
- * peer is reachable only via the relay, and a muted gray dot means offline — so a
- * relayed connection is never mistaken for P2P. The transport is named in the
- * tooltip. Unlike PeerDot this is a plain green/gray indicator (not per-peer
- * colored) since it answers "is this device/user reachable, and how".
- */
-export function StatusDot({ online, direct, label, sizeClass = 'w-2 h-2' }: {
-  online: boolean;
-  /** True only when a direct (P2P) channel is open; ignored when offline. */
-  direct?: boolean;
-  /** Optional prefix for the tooltip (e.g. a device/user name). */
-  label?: string;
-  sizeClass?: string;
-}) {
-  const cls = !online ? 'bg-muted-foreground/30'
-    : direct ? 'bg-green-500'
-    : 'border-2 border-green-500';
-  const state = online ? `Online — ${direct ? 'direct (P2P)' : 'via relay'}` : 'Offline';
-  return (
-    <span
-      className={`${sizeClass} rounded-full inline-block shrink-0 box-border ${cls}`}
-      title={label ? `${label} — ${state}` : state}
-    />
-  );
-}
-
-/**
- * The "a peer is editing this" dot for a single form field or property row.
- *
- * Pass `fieldId` for one field, or `fieldIds` for a row that stands in for a
- * group of them (PropertySheet's grouped rows — a calendar event's "When" row
- * covers ed-date/ed-time/ed-allday/ed-duration). Broadcast granularity is
- * unchanged either way: peers still announce a document path, and the container's
- * PATH_PROP_TO_FIELDS map fans that out to input ids.
- */
-export function PresenceDot({ fieldId, fieldIds, peerFocusedFields }: {
-  fieldId?: string;
-  fieldIds?: string[];
-  peerFocusedFields?: Record<string, PeerFieldInfo>;
-}) {
-  const transports = usePeerTransports();
-  const info = fieldId
-    ? peerFocusedFields?.[fieldId]
-    : (fieldIds ?? []).map(id => peerFocusedFields?.[id]).find(Boolean);
-  if (!info) return null;
-  return (
-    <PeerDot
-      peerId={info.peerId}
-      userGroupId={info.userGroupId}
-      direct={transports[info.peerId] === 'direct'}
-      label={`${peerDisplayName(info.peerId, info.userGroupId)} is editing`}
-    />
-  );
-}
