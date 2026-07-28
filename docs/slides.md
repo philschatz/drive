@@ -157,6 +157,15 @@ Links
 
 ---
 
+# Thanks!
+
+Links
+
+- [philschatz.com/drive](https://philschatz.com/drive/)
+- [philschatz.com/drive/slides](https://philschatz.com/drive/slides/)
+
+---
+
 # Screen caps
 
 The rest of slides are screencaps
