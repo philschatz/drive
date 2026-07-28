@@ -25,6 +25,7 @@ Links
 
 - [philschatz.com/drive](https://philschatz.com/drive/)
 - [philschatz.com/drive/slides](https://philschatz.com/drive/slides/)
+- [github.com/philschatz/drive](https://github.com/philschatz/drive)
 
 ![bg right:38% fit](tour.gif)
 
@@ -162,6 +163,7 @@ Links
 
 - [philschatz.com/drive](https://philschatz.com/drive/)
 - [philschatz.com/drive/slides](https://philschatz.com/drive/slides/)
+- [github.com/philschatz/drive](https://github.com/philschatz/drive)
 
 ---
 
