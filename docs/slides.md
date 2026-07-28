@@ -91,10 +91,7 @@ Links
 
 ---
 
-# Design:Relay
-
-- A **user** is a group of devices, each its own keyhive key
-- The QR carries a rendezvous id and the key to decrypt it
+# Adding a Device
 
 ![bg right:50% fit h:440](add-device.png)
 
