@@ -98,9 +98,16 @@ Try it now:
 - A **user** is a group of devices, each its own keyhive key
 - The QR carries a rendezvous id and the key to decrypt it
 
-![h:440](add-device.png)
-
 ![bg right:34% fit](linking-a-device.gif)
+
+---
+
+# Design:Relay
+
+- A **user** is a group of devices, each its own keyhive key
+- The QR carries a rendezvous id and the key to decrypt it
+
+![bg right:50% fit h:440](add-device.png)
 
 <!--
 - Each device declares its own user group plus the groups it knows (friends, doc co-members); the relay only introduces same-group devices and mutual watchers
