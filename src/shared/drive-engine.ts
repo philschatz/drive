@@ -54,6 +54,7 @@ interface SubInfo {
   // spans sub also posts whenever the serialized spans change.
   spansPath?: (string | number)[];
   lastSpansJson?: string;
+  lastCursorsJson?: string;
 }
 
 interface DocEntry {
@@ -182,6 +183,12 @@ export class DriveEngine {
   private docRegistry = new Map<string, DocEntry>();
   private subIdToDocId = new Map<number, string>();
   private pendingSubs = new Map<string, Map<number, SubInfo>>();
+  // Cursor tokens to resolve into positions on every push: docId → stableJson(path)
+  // → tokens (peers' carets plus the local one). Set wholesale by
+  // 'subscribe-cursors'. Deliberately NOT on DocEntry: a registration routinely
+  // arrives before the doc handle has loaded (same reason pendingSubs exists), and
+  // hanging it off the entry would silently drop it on a cold page load.
+  private cursorSubs = new Map<string, Map<string, string[]>>();
 
   // Presence subscriptions still waiting for the doc/keyhive to be ready:
   // docId → retry timer (null while an attempt is in flight). Present iff a
@@ -1171,16 +1178,43 @@ export class DriveEngine {
         // cursor, which counts deliveries.
         let spans: any;
         let spansChanged = false;
+        let cursors: Record<string, number | null> | undefined;
+        let cursorsChanged = false;
         if (sub.spansPath) {
           spans = this.Automerge.spans(activeDoc, sub.spansPath);
           const spansJson = stableJson(spans);
           spansChanged = spansJson !== sub.lastSpansJson;
           sub.lastSpansJson = spansJson;
+
+          // Resolving the registered cursor tokens here is what keeps caret
+          // positions in the SAME message as the spans they describe — a peer
+          // caret drawn from a separately-fetched index is always a tick stale,
+          // and the local caret rendered against fresher text splices at the
+          // wrong offset on the next keystroke.
+          const tokens = this.cursorSubs.get(docId)?.get(stableJson(sub.spansPath));
+          if (tokens?.length) {
+            cursors = {};
+            for (const t of tokens) {
+              // A foreign/malformed token, or one pointing at text a pinned
+              // version doesn't have, resolves to null rather than failing.
+              try { cursors[t] = this.Automerge.getCursorPosition(activeDoc, sub.spansPath, t); }
+              catch { cursors[t] = null; }
+            }
+          }
+          const cursorsJson = stableJson(cursors ?? null);
+          cursorsChanged = cursorsJson !== sub.lastCursorsJson;
+          sub.lastCursorsJson = cursorsJson;
         }
         // meta subs still get the post so their heads/lastModified stay fresh even
         // when the jq projection is byte-identical (Home's relative-time).
-        if (!changed && !spansChanged && !sub.meta) continue;
-        sub.post({ type: 'query-result', subId, result, heads, lastModified, ...(sub.spansPath ? { spans } : {}) });
+        // `cursorsChanged` is what makes a freshly-registered peer caret render
+        // right away instead of waiting for somebody to type.
+        if (!changed && !spansChanged && !cursorsChanged && !sub.meta) continue;
+        sub.post({
+          type: 'query-result', subId, result, heads, lastModified,
+          ...(sub.spansPath ? { spans } : {}),
+          ...(cursors ? { cursors } : {}),
+        });
       } catch (err: any) {
         sub.post({ type: 'query-result', subId, result: null, heads, error: errMsg(err) });
       }
@@ -1746,6 +1780,7 @@ export class DriveEngine {
     if (!entry) return;
     if (entry.subscriptions.size > 0 || entry.validationSubscribed || entry.presence) return;
     this.docRegistry.delete(docId);
+    this.cursorSubs.delete(docId);
   }
 
   private async runWatchLoop(opts: StartWatchingOptions): Promise<void> {
@@ -2212,19 +2247,22 @@ export class DriveEngine {
       return;
     }
 
-    if (msg.type === 'text-cursor-positions') {
-      try {
-        const handle = await this.getOrLoadHandle(msg.docId);
-        const doc = handle.doc();
-        if (!doc) throw new Error('Document not ready');
-        // A malformed/foreign cursor resolves to null rather than failing the batch.
-        const result = msg.cursors.map((c: string) => {
-          try { return this.Automerge.getCursorPosition(doc, msg.path, c); } catch { return null; }
-        });
-        emit({ type: 'result', id: msg.id, result });
-      } catch (err: any) {
-        emit({ type: 'result', id: msg.id, error: errMsg(err) });
+    if (msg.type === 'subscribe-cursors') {
+      // Fire-and-forget: replace the token set for this path, then push so the
+      // caller gets positions immediately instead of waiting for someone to type
+      // (pushToSubscriptions treats a changed cursor map as a reason to post).
+      // Stored regardless of load state — resolution is lazy, so a registration
+      // that arrives before the handle is ready still takes effect on first push.
+      const key = stableJson(msg.path);
+      let byPath = this.cursorSubs.get(msg.docId);
+      if (msg.tokens.length === 0) {
+        byPath?.delete(key);
+        if (byPath && byPath.size === 0) this.cursorSubs.delete(msg.docId);
+      } else {
+        if (!byPath) { byPath = new Map(); this.cursorSubs.set(msg.docId, byPath); }
+        byPath.set(key, [...msg.tokens]);
       }
+      await this.pushToSubscriptions(msg.docId);
       return;
     }
 
@@ -2296,6 +2334,7 @@ export class DriveEngine {
           for (const subId of entry.subscriptions.keys()) this.subIdToDocId.delete(subId);
           this.docRegistry.delete(msg.docId);
         }
+        this.cursorSubs.delete(msg.docId);
         this.queryResultCache.deletePrefix(docCachePrefix(msg.docId));
         await this.host.kv.delPrefix(docCachePrefix(msg.docId));
         this.pruneSeenState(msg.docId);

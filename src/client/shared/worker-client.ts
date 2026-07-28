@@ -19,7 +19,13 @@ export interface WorkerLike {
   postMessage(message: any, transfer?: Transferable[]): void;
 }
 
-type QueryResultCb = (result: any, heads: string[], lastModified?: number, spans?: any[]) => void;
+type QueryResultCb = (
+  result: any, heads: string[], lastModified?: number,
+  spans?: any[],
+  // Registered cursor tokens → their current flat-text position (see
+  // subscribeCursors). Rides the same message as `spans` on purpose.
+  cursors?: Record<string, number | null>,
+) => void;
 type QueryErrorCb = (error: string) => void;
 type PresenceCb = (peers: Record<string, PeerState<PresenceState>>) => void;
 type ValidationCb = (errors: ValidationError[]) => void;
@@ -231,7 +237,7 @@ export class WorkerClient {
             if (cb.onError) cb.onError(msg.error);
             else console.warn('[worker-api] query-result error subId=%d:', msg.subId, msg.error);
           } else {
-            cb.onResult(msg.result, msg.heads, msg.lastModified, msg.spans);
+            cb.onResult(msg.result, msg.heads, msg.lastModified, msg.spans, msg.cursors);
           }
         }
         return true;
@@ -371,6 +377,11 @@ export class WorkerClient {
       this.queryCallbacks.delete(subId);
       this.fire('unsubscribe-query', { subId });
     };
+  }
+
+  /** Replace the cursor tokens resolved into positions on every query-result. */
+  subscribeCursors(docId: string, path: (string | number)[], tokens: string[]): void {
+    this.fire('subscribe-cursors', { docId, path, tokens });
   }
 
   subscribePresence(docId: string, onUpdate: PresenceCb): () => void {

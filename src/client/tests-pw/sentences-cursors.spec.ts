@@ -7,9 +7,9 @@ import { waitFor } from './support/peer';
  * `focusedField` as ['content', <fromCursor>, <toCursor>] with Automerge
  * Cursors (Peritext convention — stable positions across concurrent edits),
  * resolved back to indices on the receiving side by the real worker, and drawn
- * as a colored vertical line. This exercises the text-cursors /
- * text-cursor-positions engine handlers end-to-end, which the jsdom container
- * test only emulates.
+ * as a colored vertical line. This exercises the text-cursors minting handler
+ * plus the subscribe-cursors registration whose positions ride the spans push,
+ * end-to-end, which the jsdom container test only emulates.
  */
 test('a collaborator\'s caret renders as a line and tracks their moves', async ({ browser }) => {
   test.setTimeout(180_000);

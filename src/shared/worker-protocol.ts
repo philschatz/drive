@@ -101,11 +101,17 @@ export type MainToWorker =
   | { type: 'kh-rdv-link-create'; id: number; deviceName?: string }
   | { type: 'kh-rdv-link-join'; id: number; rendezvousId: string; key: string; deviceName?: string }
   | { type: 'kh-rdv-cancel'; rendezvousId: string }
-  // Automerge Cursors ↔ flat-text positions for a Peritext field. Presence
+  // Mint Automerge Cursors for flat-text positions in a Peritext field. Presence
   // shares carets as cursors (stable across concurrent edits, per Peritext
-  // convention); the doc lives in the worker, so conversion happens here.
+  // convention); the doc lives in the worker, so minting happens here. This is
+  // the ONLY cursor round trip — resolution rides the query-result push below.
   | { type: 'text-cursors'; id: number; docId: string; path: (string | number)[]; positions: number[] }
-  | { type: 'text-cursor-positions'; id: number; docId: string; path: (string | number)[]; cursors: string[] }
+  // Cursor tokens to resolve into flat-text positions on every change, delivered
+  // with the spans push. Replaces the whole set for this doc+path (an empty list
+  // clears it), so a missed unregister cannot leak a token. Peers' carets come
+  // from presence; the local caret registers its own token so it can be rebased
+  // across concurrent remote edits before its spans render.
+  | { type: 'subscribe-cursors'; docId: string; path: (string | number)[]; tokens: string[] }
   | { type: 'open-doc'; id: number; docId: string }
   | { type: 'subscribe-validation'; docId: string }
   | { type: 'unsubscribe-validation'; docId: string }
@@ -132,7 +138,10 @@ export type WorkerToMain =
   | { type: 'p2p-status'; peerId: string; transport: 'direct' | 'relay' }
   // New worker-owned doc API responses
   | { type: 'result'; id: number; result?: any; error?: string }
-  | { type: 'query-result'; subId: number; result: any; heads: string[]; lastModified?: number; error?: string; spans?: RichTextSpan[] }
+  // `cursors` = the resolved position of every token registered via
+  // 'subscribe-cursors' for this sub's spansPath; null for a token that no
+  // longer resolves (foreign, malformed, or absent from a pinned version).
+  | { type: 'query-result'; subId: number; result: any; heads: string[]; lastModified?: number; error?: string; spans?: RichTextSpan[]; cursors?: Record<string, number | null> }
   | { type: 'update-presence'; docId: string; peers: Record<string, any> }
   // Document loading progress
   | { type: 'open-doc-progress'; id: number; pct: number; message: string }

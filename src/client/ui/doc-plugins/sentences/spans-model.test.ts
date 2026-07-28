@@ -6,7 +6,7 @@
  */
 import * as A from '@automerge/automerge';
 import { applyRichTextOps, type RichTextOp, type RichTextSpan } from '../../../../shared/rich-text-ops';
-import { applyOpsToSpans, flatTextFromSpans, spansFromFlatText } from './spans-model';
+import { applyOpsToSpans, flatTextFromSpans, shiftPositionThroughOps, spansFromFlatText } from './spans-model';
 
 /** Real-Automerge reference: fresh doc, apply all ops, read spans back. */
 function automergeApply(ops: RichTextOp[]): RichTextSpan[] {
@@ -129,6 +129,95 @@ describe('spans-model parity with Automerge', () => {
       { op: 'splitBlock', index: 7, block: { type: 'paragraph', parents: [] } },
       { op: 'splice', index: 8, del: 0, text: 'below' },
     ]);
+  });
+});
+
+/**
+ * The jsdom mock rebases carets with shiftPositionThroughOps, so if it disagrees
+ * with getCursorPosition the container tests would green-light a broken rebase.
+ * Mint a real cursor, apply ops, and compare.
+ */
+describe('cursor-position parity with Automerge', () => {
+  // '￼hello world' — a block marker at 0 so positions cross one, length 12.
+  const SEED: RichTextOp[] = [
+    { op: 'splitBlock', index: 0, block: { type: 'paragraph', parents: [] } },
+    { op: 'splice', index: 1, del: 0, text: 'hello world' },
+  ];
+
+  function automergeShift(pos: number, ops: RichTextOp[]): number | null {
+    let doc = A.from({ content: '' });
+    doc = A.change(doc, d => applyRichTextOps(A, d, ['content'], SEED));
+    const cursor = A.getCursor(doc, ['content'], pos);
+    doc = A.change(doc, d => applyRichTextOps(A, d, ['content'], ops));
+    try { return A.getCursorPosition(doc, ['content'], cursor); } catch { return null; }
+  }
+
+  const expectCursorParity = (pos: number, ops: RichTextOp[]) =>
+    expect(shiftPositionThroughOps(pos, ops)).toBe(automergeShift(pos, ops));
+
+  it('remote insert before the caret shifts it', () => {
+    expectCursorParity(7, [{ op: 'splice', index: 1, del: 0, text: 'XY' }]);
+  });
+
+  it('remote insert exactly at the caret pushes it right', () => {
+    expectCursorParity(7, [{ op: 'splice', index: 7, del: 0, text: 'XY' }]);
+  });
+
+  it('remote insert after the caret leaves it alone', () => {
+    expectCursorParity(7, [{ op: 'splice', index: 9, del: 0, text: 'XY' }]);
+  });
+
+  it('remote delete before the caret shifts it back', () => {
+    expectCursorParity(7, [{ op: 'splice', index: 1, del: 3 }]);
+  });
+
+  it('deleting the character under the caret keeps the index', () => {
+    expectCursorParity(7, [{ op: 'splice', index: 7, del: 1 }]);
+  });
+
+  it('a delete spanning the caret collapses it to the range start', () => {
+    expectCursorParity(7, [{ op: 'splice', index: 5, del: 4 }]);
+  });
+
+  it('replacing the text under the caret', () => {
+    expectCursorParity(7, [{ op: 'splice', index: 6, del: 2, text: 'ZZZ' }]);
+  });
+
+  it('splitBlock before the caret counts as one character', () => {
+    expectCursorParity(7, [{ op: 'splitBlock', index: 4, block: { type: 'paragraph', parents: [] } }]);
+  });
+
+  it('joinBlock before the caret removes one character', () => {
+    expectCursorParity(2, [{ op: 'joinBlock', index: 0 }]);
+  });
+
+  it('marks and block updates move nothing', () => {
+    expectCursorParity(7, [
+      { op: 'mark', start: 1, end: 6, name: 'strong', value: true, expand: 'after' },
+      { op: 'updateBlock', index: 0, block: { type: 'heading', parents: [], attrs: { level: 1 } } },
+    ]);
+  });
+
+  it('caret at position 0 is unmoved by a later insert', () => {
+    expectCursorParity(0, [{ op: 'splice', index: 5, del: 0, text: 'XY' }]);
+  });
+
+  // Documented divergences — asserted so they cannot drift silently.
+  it('updateSpans is pessimistic in the emulation but tracked by Automerge', () => {
+    const ops: RichTextOp[] = [{ op: 'updateSpans', spans: [{ type: 'text', value: 'XY￼hello world' }] }];
+    expect(shiftPositionThroughOps(7, ops)).toBeNull();
+    expect(automergeShift(7, ops)).toBe(9); // minimal diff keeps the character
+  });
+
+  it('a caret at end-of-content mints a sticky end cursor', () => {
+    // getCursor(pos >= length) silently returns 'e', which always resolves to the
+    // new length — so an end-of-document caret follows a remote append. The mock
+    // models this separately from the shifter (see __mocks__/worker-api.ts).
+    let doc = A.from({ content: '' });
+    doc = A.change(doc, d => applyRichTextOps(A, d, ['content'], SEED));
+    expect(A.getCursor(doc, ['content'], 12)).toBe('e');
+    doc = A.change(doc, d => applyRichTextOps(A, d, ['content'], [{ op: 'splice', index: 12, del: 0, text: '!!' }]));
+    expect(A.getCursorPosition(doc, ['content'], 'e')).toBe(14);
   });
 });
 

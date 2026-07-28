@@ -175,6 +175,108 @@ describe('SentencesView container', () => {
     confirmSpy.mockRestore();
   });
 
+  /**
+   * The caret is an Automerge cursor, so a peer editing before it must not shift
+   * it. Asserting through the NEXT KEYSTROKE is the point: the editor feeds the
+   * restored index into opsForInsertText, so a stale caret does not merely look
+   * wrong, it splices text at the wrong offset.
+   */
+  const enterEditWithCaret = async (md: string, runText: string, offset: number) => {
+    seed(md);
+    render(<SentencesView docId={DOC} />);
+    await waitFor(() => expect(screen.getByText(runText)).toBeTruthy());
+    fireEvent.click(screen.getByLabelText('Edit sentences'));
+    await waitFor(() => expect(screen.getByTestId('format-bar')).toBeTruthy());
+    editor().focus();
+    selectText(runText, offset, offset);
+    // The caret's cursor token is minted through the worker; it is registered
+    // for resolution once it lands.
+    await waitFor(() => expect(mock.__getCursorSubs(DOC, ['content']).length).toBe(2));
+  };
+
+  const typeChar = (ch: string) => fireEvent(editor(), new InputEvent('beforeinput', {
+    inputType: 'insertText', data: ch, bubbles: true, cancelable: true,
+  }));
+
+  it('rebases the local caret when a peer inserts before it', async () => {
+    // Flat text '￼hello world'; offset 8 in the run = flat 9, i.e. "hello wo|rld".
+    await enterEditWithCaret('hello world', 'hello world', 8);
+
+    // A peer inserts at the start of the paragraph (flat index 1).
+    mock.__applyRemoteOps(DOC, ['content'], [{ op: 'splice', index: 1, del: 0, text: 'XY' }]);
+    await waitFor(() => expect(currentMarkdown()).toBe('XYhello world'));
+
+    typeChar('!');
+    // Rebased 9 → 11. Without it the caret would still be 9 and produce
+    // 'XYhello !world'.
+    await waitFor(() => expect(currentMarkdown()).toBe('XYhello wo!rld'));
+  });
+
+  it('rebases the local caret when a peer deletes before it', async () => {
+    await enterEditWithCaret('hello world', 'hello world', 8);
+
+    mock.__applyRemoteOps(DOC, ['content'], [{ op: 'splice', index: 1, del: 6 }]); // drop "hello "
+    await waitFor(() => expect(currentMarkdown()).toBe('world'));
+
+    typeChar('!');
+    await waitFor(() => expect(currentMarkdown()).toBe('wo!rld'));
+  });
+
+  it('leaves the caret alone when the peer edits after it', async () => {
+    await enterEditWithCaret('hello world', 'hello world', 5); // flat 6, "hello| world"
+
+    mock.__applyRemoteOps(DOC, ['content'], [{ op: 'splice', index: 12, del: 0, text: '!!' }]);
+    await waitFor(() => expect(currentMarkdown()).toBe('hello world!!'));
+
+    typeChar('X');
+    await waitFor(() => expect(currentMarkdown()).toBe('helloX world!!'));
+  });
+
+  it('rebases again on a second remote edit (tokens are re-keyed, not re-minted)', async () => {
+    await enterEditWithCaret('hello world', 'hello world', 8); // flat 9
+
+    mock.__applyRemoteOps(DOC, ['content'], [{ op: 'splice', index: 1, del: 0, text: 'XY' }]);
+    await waitFor(() => expect(currentMarkdown()).toBe('XYhello world'));
+    mock.__applyRemoteOps(DOC, ['content'], [{ op: 'splice', index: 1, del: 0, text: 'ZW' }]);
+    await waitFor(() => expect(currentMarkdown()).toBe('ZWXYhello world'));
+
+    typeChar('!');
+    // 9 → 11 → 13. If the second push had been refused as stale the caret would
+    // still be 11, giving 'ZWXYhello !world'.
+    await waitFor(() => expect(currentMarkdown()).toBe('ZWXYhello wo!rld'));
+  });
+
+  it('rebases a selection, keeping formatting on the same characters', async () => {
+    seed('hello world');
+    render(<SentencesView docId={DOC} />);
+    await waitFor(() => expect(screen.getByText('hello world')).toBeTruthy());
+    fireEvent.click(screen.getByLabelText('Edit sentences'));
+    await waitFor(() => expect(screen.getByTestId('format-bar')).toBeTruthy());
+    editor().focus();
+
+    selectText('hello world', 6, 11); // "world" → flat [7, 12)
+    await waitFor(() => expect(mock.__getCursorSubs(DOC, ['content']).length).toBe(2));
+
+    mock.__applyRemoteOps(DOC, ['content'], [{ op: 'splice', index: 1, del: 0, text: 'XY' }]);
+    await waitFor(() => expect(currentMarkdown()).toBe('XYhello world'));
+
+    fireEvent.click(screen.getByTestId('fmt-format_bold'));
+    // Both ends moved by 2, so "world" is still what got bolded.
+    await waitFor(() => expect(currentMarkdown()).toBe('XYhello **world**'));
+  });
+
+  it('does not touch the caret when the editor is not focused', async () => {
+    seed('hello world');
+    render(<SentencesView docId={DOC} />);
+    await waitFor(() => expect(screen.getByText('hello world')).toBeTruthy());
+
+    // View mode: no local cursor is registered at all, so a remote edit is a
+    // plain spans replacement.
+    mock.__applyRemoteOps(DOC, ['content'], [{ op: 'splice', index: 1, del: 0, text: 'XY' }]);
+    await waitFor(() => expect(currentMarkdown()).toBe('XYhello world'));
+    expect(mock.__getCursorSubs(DOC, ['content'])).toEqual([]);
+  });
+
   it('renders peer carets from cursor presence (and clears them)', async () => {
     seed('hello world');
     render(<SentencesView docId={DOC} />);

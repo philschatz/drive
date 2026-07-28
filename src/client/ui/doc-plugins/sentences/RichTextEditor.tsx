@@ -71,6 +71,18 @@ export interface RichTextEditorApi {
   outdent(): void;
   insertDivider(): void;
   getSelection(): { from: number; to: number } | null;
+  /** True when the caret genuinely lives in this editor. `getSelection` falls
+   *  back to the last known selection, so an unfocused editor must not be taken
+   *  to own a caret. */
+  isFocused(): boolean;
+  /**
+   * Move the caret to `next` for the spans about to be committed — the rebase
+   * for a concurrent remote edit, resolved from an Automerge cursor. Applies only
+   * if the editor still believes it is at `expect`; a resolution the local user
+   * has since typed past must lose to the pending local caret. Returns whether
+   * it applied.
+   */
+  rebaseCaret(expect: { from: number; to: number }, next: { from: number; to: number }): boolean;
   focus(): void;
 }
 
@@ -463,6 +475,26 @@ export function RichTextEditor({
       if (sel) emitEdit(insertDividerOps(blocksRef.current, sel.from, sel.to));
     },
     getSelection: () => readSelection() ?? lastSelectionRef.current,
+    isFocused: () => !!rootRef.current?.contains(document.activeElement),
+    rebaseCaret(expect, next) {
+      // Refuse if the caret has moved on since the position was resolved: the
+      // local user typing past it makes the resolution describe an older caret,
+      // and the pending local caret is then the correct one.
+      const cur = pendingCaretRef.current ?? lastSelectionRef.current;
+      if (!cur || cur.from !== expect.from || cur.to !== expect.to) return false;
+      // IME owns the DOM until compositionend; moving the caret would kill it.
+      if (composingRef.current) return false;
+      // Deliberately NOT clamped to the current contentLength: `next` addresses
+      // the spans about to render, which are longer/shorter than what blocksRef
+      // still holds (clamping here truncated a selection ending at end-of-text).
+      // domPointAt clamps against the fresh blocks when the restore effect runs.
+      const target = { from: next.from, to: next.to };
+      lastSelectionRef.current = target;
+      // Only claim the DOM selection when the caret really lives here — writing
+      // pendingCaretRef while unfocused would make the restore effect steal focus.
+      if (rootRef.current?.contains(document.activeElement)) pendingCaretRef.current = target;
+      return true;
+    },
     focus() {
       rootRef.current?.focus();
     },

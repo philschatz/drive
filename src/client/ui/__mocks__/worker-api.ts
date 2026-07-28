@@ -26,10 +26,13 @@
 import { compile } from '../../../shared/jq';
 import { deepAssign as realDeepAssign } from '../../../shared/deep-assign';
 import type { RichTextOp, RichTextSpan } from '../../../shared/rich-text-ops';
-import { applyOpsToSpans, flatTextFromSpans, spansFromFlatText } from '../doc-plugins/sentences/spans-model';
+import { applyOpsToSpans, flatTextFromSpans, shiftPositionThroughOps, spansFromFlatText } from '../doc-plugins/sentences/spans-model';
 
 type Doc = any;
-type QueryCb = (result: any, heads: string[], lastModified?: number, spans?: RichTextSpan[]) => void;
+type QueryCb = (
+  result: any, heads: string[], lastModified?: number,
+  spans?: RichTextSpan[], cursors?: Record<string, number | null>,
+) => void;
 interface QuerySub { docId: string; filter: string; cb: QueryCb; spansPath?: (string | number)[]; }
 
 const docs = new Map<string, Doc>();
@@ -62,6 +65,54 @@ function setSpans(docId: string, path: (string | number)[], spans: RichTextSpan[
   parent[path[path.length - 1]] = flatTextFromSpans(spans);
 }
 
+// Automerge text cursors, emulated faithfully enough to exercise the real thing:
+// a token is an opaque handle whose position SHIFTS as ops are applied (a real
+// cursor tracks a character's identity), which is what lets a container test
+// inject a remote edit and assert the caret was rebased. `pos: 'end'` mirrors
+// getCursor(pos >= length) silently minting a sticky end cursor. The shifting
+// itself lives in spans-model.ts and is pinned against real Automerge by
+// spans-model.test.ts.
+interface MockCursor { key: string; pos: number | 'end' }
+const cursors = new Map<string, MockCursor>();
+/** Token sets registered via subscribeCursors, keyed docId + path. */
+const cursorSubs = new Map<string, string[]>();
+let nextCursorId = 0;
+
+const cursorKey = (docId: string, path: (string | number)[]) => docId + '|' + pathKey(path);
+const flatLength = (docId: string, path: (string | number)[]) =>
+  flatTextFromSpans(getSpans(docId, path)).length;
+
+function shiftCursors(docId: string, path: (string | number)[], ops: RichTextOp[]): void {
+  const key = cursorKey(docId, path);
+  for (const [token, c] of cursors) {
+    if (c.key !== key || c.pos === 'end') continue; // end cursors resolve to the live length
+    const next = shiftPositionThroughOps(c.pos, ops);
+    if (next === null) cursors.delete(token); // unresolvable — resolves to null below
+    else c.pos = next;
+  }
+}
+
+/** Apply rich-text ops to a doc's spans, rebasing every cursor into that field. */
+function applyOpsToField(docId: string, path: (string | number)[], ops: RichTextOp[]): void {
+  shiftCursors(docId, path, ops);
+  setSpans(docId, path, applyOpsToSpans(getSpans(docId, path), ops));
+}
+
+function resolveCursors(docId: string, path: (string | number)[]): Record<string, number | null> | undefined {
+  const key = cursorKey(docId, path);
+  const tokens = cursorSubs.get(key);
+  if (!tokens?.length) return undefined;
+  const len = flatLength(docId, path);
+  const out: Record<string, number | null> = {};
+  for (const t of tokens) {
+    const c = cursors.get(t);
+    if (c && c.key === key) out[t] = c.pos === 'end' ? len : c.pos;
+    // Legacy static 'c:<n>' tokens, so tests that hand-write a cursor still work.
+    else out[t] = t.startsWith('c:') ? Number(t.slice(2)) : null;
+  }
+  return out;
+}
+
 // Presence: subscribable so container tests can inject peers (__setPresence).
 const presenceSubs = new Map<string, Set<(peers: Record<string, any>) => void>>();
 
@@ -74,6 +125,8 @@ export function __reset(): void {
   querySubs.clear();
   spansStore.clear();
   presenceSubs.clear();
+  cursors.clear();
+  cursorSubs.clear();
 }
 /** Push a presence peer map ({ peerId: { peerId, value } }) to subscribers. */
 export function __setPresence(docId: string, peers: Record<string, any>): void {
@@ -87,6 +140,20 @@ export function __setSpans(docId: string, path: (string | number)[], spans: Rich
 /** Read the current spans (for assertions). */
 export function __getSpans(docId: string, path: (string | number)[]): RichTextSpan[] {
   return getSpans(docId, path);
+}
+/** The cursor tokens currently registered for a field (for assertions). */
+export function __getCursorSubs(docId: string, path: (string | number)[]): string[] {
+  return cursorSubs.get(cursorKey(docId, path)) ?? [];
+}
+/**
+ * Apply ops as if a PEER had made the edit: spans change and every cursor in the
+ * field is rebased, then subscribers are notified — but no local write is
+ * registered, so the container's in-flight-write deferral does not swallow it.
+ * This is how a test drives a concurrent remote edit.
+ */
+export function __applyRemoteOps(docId: string, path: (string | number)[], ops: RichTextOp[]): void {
+  applyOpsToField(docId, path, ops);
+  __notify(docId);
 }
 /** Seed (or replace) a document and notify its subscribers. */
 export function __setDoc(docId: string, doc: Doc): void {
@@ -114,6 +181,7 @@ function deliver(s: QuerySub): void {
   s.cb(
     project(s.filter, docs.get(s.docId)), ['h'], undefined,
     s.spansPath ? getSpans(s.docId, s.spansPath) : undefined,
+    s.spansPath ? resolveCursors(s.docId, s.spansPath) : undefined,
   );
 }
 function __notify(docId: string): void {
@@ -154,8 +222,7 @@ export function updateDoc(
   // deepAssign is passed by identity and works on plain objects as-is; richText
   // is substituted with the docId-bound spans emulation (like the worker does).
   const bound = args.map(a => a === richText
-    ? (_d: Doc, path: (string | number)[], ops: RichTextOp[]) =>
-        setSpans(docId, path, applyOpsToSpans(getSpans(docId, path), ops))
+    ? (_d: Doc, path: (string | number)[], ops: RichTextOp[]) => applyOpsToField(docId, path, ops)
     : a);
   fn(doc, ...bound);
   __notify(docId);
@@ -199,13 +266,23 @@ export function subscribePresence(docId: string, cb: (peers: Record<string, any>
 }
 export function setPresence(): void {}
 
-// Automerge text cursors, emulated as index-encoding strings ('c:<n>'). Real
-// cursors are opaque and shift with edits; mock docs are static per test.
-export function getTextCursors(_docId: string, _path: (string | number)[], positions: number[]): Promise<string[]> {
-  return Promise.resolve(positions.map(p => 'c:' + p));
+/** Mint cursor tokens for flat-text positions (see the MockCursor notes above). */
+export function getTextCursors(docId: string, path: (string | number)[], positions: number[]): Promise<string[]> {
+  const key = cursorKey(docId, path);
+  const len = flatLength(docId, path);
+  return Promise.resolve(positions.map(p => {
+    const token = 'a' + (++nextCursorId);
+    cursors.set(token, { key, pos: p >= len ? 'end' : Math.max(0, p) });
+    return token;
+  }));
 }
-export function getTextCursorPositions(_docId: string, _path: (string | number)[], cursors: string[]): Promise<(number | null)[]> {
-  return Promise.resolve(cursors.map(c => (c.startsWith('c:') ? Number(c.slice(2)) : null)));
+
+/** Replace the set of tokens resolved into positions on every query-result. */
+export function subscribeCursors(docId: string, path: (string | number)[], tokens: string[]): void {
+  const key = cursorKey(docId, path);
+  if (tokens.length === 0) cursorSubs.delete(key);
+  else cursorSubs.set(key, [...tokens]);
+  __notify(docId); // a new subscription needs its first positions
 }
 export function setPresenceTiming(): Promise<void> { return Promise.resolve(); }
 

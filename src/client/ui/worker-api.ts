@@ -643,10 +643,11 @@ export function updateDoc(
 // ── Rich-text cursors ───────────────────────────────────────────────────────
 
 /**
- * Automerge Cursors for flat-text positions in a Peritext field. Presence
- * shares carets as cursors (Peritext convention — a cursor keeps pointing at
- * the same character across concurrent edits); the doc lives in the worker,
- * so both conversions are worker requests.
+ * Mint Automerge Cursors for flat-text positions in a Peritext field. Presence
+ * shares carets as cursors (Peritext convention — a cursor keeps pointing at the
+ * same character across concurrent edits); the doc lives in the worker, so
+ * minting is a request. It is the ONLY cursor round trip, and it happens when
+ * the caret moves — never per change.
  */
 export function getTextCursors(
   docId: string,
@@ -656,13 +657,20 @@ export function getTextCursors(
   return request('text-cursors', { docId, path, positions });
 }
 
-/** Resolve peers' cursors back to positions; null for unresolvable cursors. */
-export function getTextCursorPositions(
+/**
+ * Replace the set of cursor tokens the worker resolves into positions on every
+ * change; the results ride `subscribeQuery`'s `cursors` argument. Resolving in
+ * the push is what keeps a caret position in the same message as the spans it
+ * describes — fetching it separately always lands a tick late, and a caret
+ * rendered against fresher text splices at the wrong offset on the next
+ * keystroke. An empty list clears the registration.
+ */
+export function subscribeCursors(
   docId: string,
   path: (string | number)[],
-  cursors: string[],
-): Promise<(number | null)[]> {
-  return request('text-cursor-positions', { docId, path, cursors });
+  tokens: string[],
+): void {
+  client.subscribeCursors(docId, path, tokens);
 }
 
 // ── Query subscriptions ─────────────────────────────────────────────────────
@@ -679,7 +687,11 @@ export function getTextCursorPositions(
 export function subscribeQuery(
   docId: string,
   filter: string,
-  onResult: (result: any, heads: string[], lastModified?: number, spans?: RichTextSpan[]) => void,
+  onResult: (
+    result: any, heads: string[], lastModified?: number,
+    spans?: RichTextSpan[],
+    cursors?: Record<string, number | null>,
+  ) => void,
   onError?: (error: string) => void,
   opts?: { peek?: boolean; meta?: boolean; spansPath?: (string | number)[] },
 ): () => void {

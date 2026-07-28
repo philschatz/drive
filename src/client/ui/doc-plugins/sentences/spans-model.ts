@@ -135,6 +135,54 @@ export function applyOpsToSpans(spans: RichTextSpan[], ops: RichTextOp[]): RichT
   return spansFromAtoms(atoms);
 }
 
+/**
+ * Where a cursor at `pos` lands after `ops` are applied — the emulation of
+ * `Automerge.getCursorPosition` that lets the jsdom mock rebase a caret.
+ * Mirrors Automerge's default `move: 'after'`, which the parity test pins:
+ *
+ * - insert of `L` at `i` shifts when `i <= pos` (text inserted *at* a cursor
+ *   lands before it, so the cursor is pushed right)
+ * - delete of `[i, i+d)` leaves `pos <= i` alone, shifts `pos >= i+d` back, and
+ *   collapses a position inside the range to `i` (resolve toward `length`)
+ * - a block marker is one character, so splitBlock/joinBlock are insert/delete of 1
+ *
+ * Returns null for `updateSpans`, which is a DELIBERATE divergence: Automerge
+ * diffs it minimally and so really does keep the cursor (a 3-char prefix moves
+ * 6 → 9), but reproducing that diff here is not worth it. The emulation is
+ * pessimistic — a jsdom test sees "caret not rebased" where the real engine
+ * rebases. `updateSpans` only fires on Markdown import and version restore.
+ */
+export function shiftPositionThroughOps(pos: number, ops: RichTextOp[]): number | null {
+  let p = pos;
+  const del = (i: number, d: number) => {
+    if (d <= 0) return;
+    if (p <= i) return;
+    p = p >= i + d ? p - d : i;
+  };
+  const ins = (i: number, len: number) => {
+    if (len > 0 && i <= p) p += len;
+  };
+  for (const o of ops) {
+    switch (o.op) {
+      case 'splice':
+        // Automerge deletes at `index` first, then inserts there.
+        del(o.index, o.del);
+        ins(o.index, (o.text ?? '').length);
+        break;
+      case 'splitBlock':
+        ins(o.index, 1);
+        break;
+      case 'joinBlock':
+        del(o.index, 1);
+        break;
+      case 'updateSpans':
+        return null;
+      // mark/unmark/updateBlock change no positions.
+    }
+  }
+  return p;
+}
+
 /** Spans for a flat string that carries `￼` block markers but no mark info —
  * how the mock seeds spans for a doc set via plain `__setDoc`. */
 export function spansFromFlatText(text: string): RichTextSpan[] {

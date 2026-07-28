@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import './sentences.css';
 import {
-  subscribeQuery, updateDoc, richText, getTextCursors, getTextCursorPositions,
+  subscribeQuery, updateDoc, richText, getTextCursors, subscribeCursors,
   getWorkerPeerId, getWorkerUserGroupId,
   type RichTextOp, type RichTextSpan,
 } from '../../worker-api';
@@ -50,6 +50,11 @@ export function SentencesView({ docId, readOnly }: { docId?: string; rest?: stri
   // writes drain (it then equals the optimistic state, plus any remote merge).
   const pendingWritesRef = useRef(0);
   const skippedSpansRef = useRef<RichTextSpan[] | null>(null);
+  const skippedCursorsRef = useRef<Record<string, number | null> | undefined>(undefined);
+  // Registered cursor tokens → their position in the spans currently in state.
+  // Delivered by the same push as the spans, which is what lets a peer caret be
+  // drawn (and the local caret rebased) against exactly the text being rendered.
+  const [cursorPositions, setCursorPositions] = useState<Record<string, number | null> | undefined>(undefined);
 
   // Losing edit rights (revocation, time travel) drops back to the viewer.
   const editMode = editing && canEdit;
@@ -63,13 +68,43 @@ export function SentencesView({ docId, readOnly }: { docId?: string; rest?: stri
     requestAnimationFrame(() => editorApiRef.current?.focus());
   }, []);
 
+  /**
+   * Apply a push from the worker. The caret rebase lands BEFORE setSpans on
+   * purpose: the editor's restore effect runs on the spans render, so text
+   * rendered against a stale caret index would make the next keystroke splice at
+   * the wrong offset. Nothing can interleave between the two calls.
+   */
+  const applyRemoteSpans = useCallback((next: RichTextSpan[], cursors?: Record<string, number | null>) => {
+    const held = localCursorRef.current;
+    const api = editorApiRef.current;
+    // localCursorRef is only populated in edit mode, and isFocused() keeps an
+    // unfocused editor from claiming a caret it doesn't own.
+    if (held && cursors && api?.isFocused()) {
+      const from = cursors[held.tokens[0]];
+      const to = cursors[held.tokens[1]];
+      if (typeof from === 'number' && typeof to === 'number') {
+        const sel = { from: Math.min(from, to), to: Math.max(from, to) };
+        // The tokens still point at the same characters, so re-key them to the
+        // rebased selection rather than re-minting — back-to-back remote pushes
+        // then each get rebased instead of tripping the staleness guard.
+        if (api.rebaseCaret(held.sel, sel)) localCursorRef.current = { tokens: held.tokens, sel };
+      }
+    }
+    setSpans(next);
+    setCursorPositions(cursors);
+  }, []);
+
   useEffect(() => {
     if (!docId) return;
     let mounted = true;
-    const unsubscribe = subscribeQuery(docId, DOC_QUERY, (result, heads, _lastModified, docSpans) => {
+    const unsubscribe = subscribeQuery(docId, DOC_QUERY, (result, heads, _lastModified, docSpans, cursors) => {
       if (!mounted || !result) return;
-      if (pendingWritesRef.current > 0) skippedSpansRef.current = docSpans ?? [];
-      else setSpans(docSpans ?? []);
+      if (pendingWritesRef.current > 0) {
+        skippedSpansRef.current = docSpans ?? [];
+        skippedCursorsRef.current = cursors;
+      } else {
+        applyRemoteSpans(docSpans ?? [], cursors);
+      }
       onHeads(heads);
       if (result.name) {
         setName(result.name);
@@ -90,42 +125,59 @@ export function SentencesView({ docId, readOnly }: { docId?: string; rest?: stri
         pendingWritesRef.current--;
         if (pendingWritesRef.current === 0 && skippedSpansRef.current) {
           const s = skippedSpansRef.current;
+          const c = skippedCursorsRef.current;
           skippedSpansRef.current = null;
-          setSpans(s);
+          skippedCursorsRef.current = undefined;
+          applyRemoteSpans(s, c);
         }
       });
-  }, [docId]);
+  }, [docId, applyRemoteSpans]);
 
-  // ── Cursor presence (Peritext convention) ─────────────────────────────────
-  // The local caret is broadcast in `focusedField` as ['content', from, to]
-  // where from/to are Automerge Cursors, not indices — a cursor keeps pointing
-  // at the same character across concurrent edits, so peers render it in the
-  // right place even while both sides type. Conversion runs in the worker
-  // (the doc lives there); requests are FIFO behind our own updateDoc calls,
-  // so the cursors are computed against a doc that includes the selection's
-  // optimistic edits.
+  // ── Cursors (Peritext convention) ─────────────────────────────────────────
+  // Carets travel as Automerge Cursor tokens, not indices — a cursor keeps
+  // pointing at the same character across concurrent edits. The local caret is
+  // broadcast in `focusedField` as ['content', fromToken, toToken]; peers'
+  // tokens arrive the same way.
+  //
+  // Minting a token is the only round trip, and it happens when the caret
+  // MOVES. Resolving tokens back to indices is registered with the worker
+  // (subscribeCursors) and rides the spans push, so every position arrives in
+  // the same message as the text it describes. Requests are FIFO behind our own
+  // updateDoc calls, so a token is minted against a doc that already includes
+  // the selection's optimistic edits.
   const [cursorPath, setCursorPath] = useState<(string | number)[] | null>(null);
+  // Which selection the current tokens describe. If the user types past it
+  // before the mint returns, a resolution from those tokens describes an older
+  // caret — the editor's rebaseCaret guard refuses it.
+  const localCursorRef = useRef<{ tokens: [string, string]; sel: { from: number; to: number } } | null>(null);
   useEffect(() => {
-    if (!docId || !editMode || !selState) { setCursorPath(null); return; }
+    if (!docId || !editMode || !selState) {
+      localCursorRef.current = null;
+      setCursorPath(null);
+      return;
+    }
     let cancelled = false;
-    getTextCursors(docId, ['content'], [selState.from, selState.to])
-      .then(([from, to]) => { if (!cancelled) setCursorPath(['content', from, to]); })
+    const sel = { from: selState.from, to: selState.to };
+    getTextCursors(docId, ['content'], [sel.from, sel.to])
+      .then(([from, to]) => {
+        if (cancelled) return;
+        localCursorRef.current = { tokens: [from, to], sel };
+        setCursorPath(['content', from, to]);
+      })
       .catch(() => { /* doc not ready — next selection change retries */ });
     return () => { cancelled = true; };
   }, [docId, editMode, selState?.from, selState?.to]);
 
   useFocusPathSync(editMode ? (cursorPath ?? ['content']) : null, broadcast);
 
-  // Peers' cursors → indices (re-resolved when peers broadcast or the doc
-  // changes, so the lines track surrounding edits) → colored carets in the
-  // editor. One caret per user; the local user's own devices are skipped.
-  const [remoteCursors, setRemoteCursors] = useState<RemoteCursor[]>([]);
-  useEffect(() => {
-    if (!docId) return;
+  // Peers whose presence carries a cursor pair, one entry per user (a user's
+  // several devices collapse to one identity; own devices are skipped). Derived
+  // synchronously — only the token→index resolution needs the worker.
+  const peerCursors = useMemo(() => {
     const myPeerId = getWorkerPeerId();
     const myGroup = getWorkerUserGroupId();
     const seen = new Set<string>();
-    const entries: { id: string; color: string; label: string; from: string; to: string }[] = [];
+    const out: { id: string; color: string; label: string; from: string; to: string }[] = [];
     for (const peer of Object.values(peers)) {
       if (myPeerId && peer.peerId === myPeerId) continue;
       const ug = peer.value?.userGroupId;
@@ -135,29 +187,45 @@ export function SentencesView({ docId, readOnly }: { docId?: string; rest?: stri
       const id = peerIdentityKey(peer.peerId, ug);
       if (seen.has(id)) continue;
       seen.add(id);
-      entries.push({ id, color: peerColor(peer.peerId, ug), label: peerDisplayName(peer.peerId, ug), from: pf[1], to: pf[2] });
+      out.push({ id, color: peerColor(peer.peerId, ug), label: peerDisplayName(peer.peerId, ug), from: pf[1], to: pf[2] });
     }
-    if (entries.length === 0) {
-      setRemoteCursors(prev => (prev.length > 0 ? [] : prev));
-      return;
+    return out;
+  }, [peers]);
+
+  // Register every token we need resolved: the peers' (to draw their carets) and
+  // our own (so a concurrent remote edit rebases our caret before its spans
+  // render). Keyed on the token strings, so this only fires when the set changes.
+  const trackedTokens = useMemo(
+    () => [...peerCursors.flatMap(e => [e.from, e.to]), ...(cursorPath?.slice(1) as string[] ?? [])],
+    [peerCursors, cursorPath],
+  );
+  const trackedKey = trackedTokens.join(',');
+  useEffect(() => {
+    if (!docId) return;
+    // A replacing set, so no cleanup between changes — clearing and re-adding on
+    // every caret move would blink every peer caret off and back on.
+    subscribeCursors(docId, ['content'], trackedTokens);
+  }, [docId, trackedKey]);
+  // Drop the registration only when leaving the document.
+  useEffect(() => {
+    if (!docId) return;
+    return () => { subscribeCursors(docId, ['content'], []); };
+  }, [docId]);
+
+  // Peer carets, built by looking their tokens up in the positions delivered
+  // with the spans (see the subscription below) — no request, no extra render.
+  const remoteCursors = useMemo<RemoteCursor[]>(() => {
+    if (!cursorPositions) return [];
+    const out: RemoteCursor[] = [];
+    for (const e of peerCursors) {
+      const from = cursorPositions[e.from];
+      const to = cursorPositions[e.to];
+      if (typeof from === 'number' && typeof to === 'number') {
+        out.push({ id: e.id, from, to, color: e.color, label: e.label });
+      }
     }
-    let cancelled = false;
-    getTextCursorPositions(docId, ['content'], entries.flatMap(e => [e.from, e.to]))
-      .then(positions => {
-        if (cancelled) return;
-        const out: RemoteCursor[] = [];
-        entries.forEach((e, i) => {
-          const from = positions[i * 2];
-          const to = positions[i * 2 + 1];
-          if (typeof from === 'number' && typeof to === 'number') {
-            out.push({ id: e.id, from, to, color: e.color, label: e.label });
-          }
-        });
-        setRemoteCursors(out);
-      })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  }, [docId, peers, spans]);
+    return out;
+  }, [peerCursors, cursorPositions]);
 
   // Import: replace the document body with the parsed Markdown. One updateSpans
   // op — the worker diffs minimally, and a single change means one undo step.

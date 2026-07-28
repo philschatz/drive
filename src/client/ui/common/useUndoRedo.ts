@@ -26,8 +26,16 @@ export function useEditorUndoRedo(
   history: { onNewHeads: (heads: string[]) => void },
 ) {
   const { undo, redo, canUndo, canRedo, onHeadsUpdate } = useUndoRedo(docId);
+  // The undo cursor advances per DELIVERY, so a subscription push that carries no
+  // new change must not reach it — the editor's sub is also posted to when only
+  // the resolved cursor positions change (peer caret registration), and counting
+  // those as edits walked the cursor past the real history.
+  const lastHeadsRef = useRef<string | null>(null);
   const latestRef = useRef<(heads: string[]) => void>(() => {});
   latestRef.current = (heads: string[]) => {
+    const key = heads.join(',');
+    if (lastHeadsRef.current === key) return;
+    lastHeadsRef.current = key;
     history.onNewHeads(heads);
     onHeadsUpdate(heads);
   };
