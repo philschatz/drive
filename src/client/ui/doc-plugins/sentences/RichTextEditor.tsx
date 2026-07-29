@@ -88,6 +88,16 @@ export interface RichTextEditorApi {
 
 // ── DOM point ↔ global offset ────────────────────────────────────────────────
 
+/**
+ * A selection in global offsets, always normalized so `from <= to` (every op
+ * builder wants it that way), plus the DOM direction it was made in.
+ * `backward` = the anchor sits at `to` and the focus at `from`, i.e. the user
+ * selected right-to-left. Restoring such a selection forward moves the anchor to
+ * the other end, so the browser's next shift-arrow or drag-step extends from the
+ * wrong side and the highlight collapses.
+ */
+interface Sel { from: number; to: number; backward: boolean }
+
 function posFromDomPoint(root: HTMLElement, node: Node, offset: number): number | null {
   if (node.nodeType === Node.TEXT_NODE) {
     const el = (node.parentElement)?.closest('[data-from]') as HTMLElement | null;
@@ -97,13 +107,33 @@ function posFromDomPoint(root: HTMLElement, node: Node, offset: number): number 
     return null;
   }
   if (!(node instanceof Element) || !root.contains(node)) return null;
-  const el = node.closest('[data-bfrom]') as HTMLElement | null;
-  if (!el) return null;
-  let pos = Number(el.dataset.bfrom);
-  // Element point: sum the text before the child at `offset`.
-  const kids = Array.from(node.childNodes).slice(0, offset);
-  for (const k of kids) pos += runTextLength(k);
-  return pos;
+  // Element point: a base index plus the text of the children before `offset`.
+  const before = (base: number) => {
+    let pos = base;
+    for (const k of Array.from(node.childNodes).slice(0, offset)) pos += runTextLength(k);
+    return pos;
+  };
+  // A point on a run element is based at that RUN, not at its block — basing it
+  // at the block mismapped every point inside a second or later run.
+  const runEl = node.closest('[data-from]') as HTMLElement | null;
+  if (runEl && root.contains(runEl)) return before(Number(runEl.dataset.from));
+  const blockEl = node.closest('[data-bfrom]') as HTMLElement | null;
+  if (blockEl) return before(Number(blockEl.dataset.bfrom));
+  // Root-level point: the editor root carries no data-* of its own, and the
+  // browser produces one for Ctrl+A, a click in the padding, and a drag that
+  // leaves the text. Resolve it to a block edge — returning null instead left
+  // `lastSelectionRef` stale (so the next render yanked the selection back) and
+  // made select-all + type a silent no-op.
+  if (node !== root) return null;
+  const kids = Array.from(root.childNodes);
+  const isBlock = (k: Node): k is HTMLElement =>
+    k instanceof HTMLElement && k.dataset.bfrom !== undefined;
+  for (let i = Math.min(offset, kids.length) - 1; i >= 0; i--) {
+    const k = kids[i];
+    if (isBlock(k)) return Number(k.dataset.bfrom) + runTextLength(k);
+  }
+  const first = kids.find(isBlock);
+  return first ? Number(first.dataset.bfrom) : null;
 }
 
 function runTextLength(node: Node): number {
@@ -233,36 +263,43 @@ export function RichTextEditor({
   }
   // Caret (global offsets) to restore after the next spans render; while set,
   // it IS the selection (the DOM hasn't caught up yet).
-  const pendingCaretRef = useRef<{ from: number; to: number } | null>(null);
+  const pendingCaretRef = useRef<Sel | null>(null);
   // Last known selection, so remote-edit re-renders don't drop the caret.
-  const lastSelectionRef = useRef<{ from: number; to: number } | null>(null);
+  const lastSelectionRef = useRef<Sel | null>(null);
   const pendingMarksRef = useRef<PendingMarks>({});
   const composingRef = useRef(false);
 
-  const readSelection = (): { from: number; to: number } | null => {
-    if (pendingCaretRef.current) return { ...pendingCaretRef.current };
+  /** The live DOM selection, direction included. */
+  const readDomSelection = (): Sel | null => {
     const root = rootRef.current;
     const sel = window.getSelection();
-    if (!root || !sel || sel.rangeCount === 0) return null;
-    const a = posFromDomPoint(root, sel.anchorNode!, sel.anchorOffset);
-    const f = posFromDomPoint(root, sel.focusNode!, sel.focusOffset);
+    if (!root || !sel || sel.rangeCount === 0 || !sel.anchorNode || !sel.focusNode) return null;
+    const a = posFromDomPoint(root, sel.anchorNode, sel.anchorOffset);
+    const f = posFromDomPoint(root, sel.focusNode, sel.focusOffset);
     if (a === null || f === null) return null;
-    return { from: Math.min(a, f), to: Math.max(a, f) };
+    return { from: Math.min(a, f), to: Math.max(a, f), backward: a > f };
   };
 
-  const setDomSelection = (from: number, to: number) => {
+  const readSelection = (): Sel | null => {
+    if (pendingCaretRef.current) return { ...pendingCaretRef.current };
+    return readDomSelection();
+  };
+
+  const sameSel = (a: Sel | null, b: Sel | null): boolean =>
+    !!a && !!b && a.from === b.from && a.to === b.to && a.backward === b.backward;
+
+  const setDomSelection = (target: Sel) => {
     const root = rootRef.current;
     if (!root) return;
-    const start = domPointAt(root, blocksRef.current, from);
-    const end = from === to ? start : domPointAt(root, blocksRef.current, to);
+    const start = domPointAt(root, blocksRef.current, target.from);
+    const end = target.from === target.to ? start : domPointAt(root, blocksRef.current, target.to);
     if (!start || !end) return;
     const sel = window.getSelection();
     if (!sel) return;
-    const range = document.createRange();
-    range.setStart(start.node, start.offset);
-    range.setEnd(end.node, end.offset);
-    sel.removeAllRanges();
-    sel.addRange(range);
+    // setBaseAndExtent, not addRange: a Range is inherently forward, so restoring
+    // through one silently flipped every right-to-left selection.
+    const [anchor, focus] = target.backward ? [end, start] : [start, end];
+    sel.setBaseAndExtent(anchor.node, anchor.offset, focus.node, focus.offset);
   };
 
   const reportSelection = () => {
@@ -298,18 +335,18 @@ export function RichTextEditor({
 
   const emitEdit = (edit: Edit) => {
     if (edit.ops.length === 0) return;
-    pendingCaretRef.current = { from: edit.caret, to: edit.caret };
+    pendingCaretRef.current = { from: edit.caret, to: edit.caret, backward: false };
     pendingMarksRef.current = {};
     advanceLiveModel(edit.ops);
     onOps(edit.ops);
   };
 
   /** Formatting ops keep the selection; caret-only cases keep the caret. */
-  const emitFormat = (ops: RichTextOp[], sel: { from: number; to: number }) => {
+  const emitFormat = (ops: RichTextOp[], sel: Sel) => {
     if (ops.length === 0) return;
     // Marker inserts before the selection shift it by one.
     const shift = ops.filter(o => o.op === 'splitBlock' && o.index <= sel.from).length;
-    pendingCaretRef.current = { from: sel.from + shift, to: sel.to + shift };
+    pendingCaretRef.current = { from: sel.from + shift, to: sel.to + shift, backward: sel.backward };
     advanceLiveModel(ops);
     onOps(ops);
   };
@@ -488,7 +525,9 @@ export function RichTextEditor({
       // the spans about to render, which are longer/shorter than what blocksRef
       // still holds (clamping here truncated a selection ending at end-of-text).
       // domPointAt clamps against the fresh blocks when the restore effect runs.
-      const target = { from: next.from, to: next.to };
+      // The tokens still describe the same characters, so the direction the user
+      // selected in carries over untouched.
+      const target: Sel = { from: next.from, to: next.to, backward: cur.backward };
       lastSelectionRef.current = target;
       // Only claim the DOM selection when the caret really lives here — writing
       // pendingCaretRef while unfocused would make the restore effect steal focus.
@@ -510,7 +549,11 @@ export function RichTextEditor({
       (root.contains(document.activeElement) ? lastSelectionRef.current : null);
     pendingCaretRef.current = null;
     if (!target) return;
-    setDomSelection(target.from, target.to);
+    // Registering a cursor token re-pushes IDENTICAL spans (the push exists to
+    // carry resolved peer caret positions), so most renders here need no write at
+    // all. Writing anyway reset the browser's drag anchor and selection
+    // granularity mid-gesture, which collapsed the highlight on every drag step.
+    if (!sameSel(readDomSelection(), target)) setDomSelection(target);
     reportSelection();
   }, [spans, editable]);
 

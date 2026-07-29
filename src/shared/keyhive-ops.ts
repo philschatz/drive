@@ -418,20 +418,59 @@ export class KeyhiveOps {
     return devices;
   }
 
+  /**
+   * A contact bundle for a real exchange.
+   *
+   * MINTS a fresh prekey: `kh.contactCard()` picks one of our live prekeys,
+   * rotates it to produce the key the card publishes, then rotates again so that
+   * published key leaves our advertised pool immediately. That is the point —
+   * the key in a card is issued to exactly one contact and never handed to
+   * another, so a leaked card burns only that one channel. Call this only when an
+   * exchange is actually happening; use {@link previewContactCard} to show a size
+   * without minting.
+   */
   async getContactCard(): Promise<string> {
-    const card = await this.kh.contactCard();
+    return this.buildContactBundle(await this.kh.contactCard());
+  }
+
+  /**
+   * A stand-in bundle the same shape and (near enough) size as the real one,
+   * built WITHOUT minting a prekey — for showing a transfer size before anyone
+   * has joined. Never send this: `kh.getExistingContactCard()` returns an
+   * already-published prekey op rather than rotating, so it conveys no key
+   * reserved for the receiver.
+   *
+   * Returns the bundle rather than a byte count so the caller can wrap it in the
+   * same envelope it will really send and measure that exactly — the envelope
+   * nests this string as a JSON *string*, so its overhead scales with the card's
+   * quote count and is not a constant.
+   *
+   * Approximate by ~120 bytes, and only ever shown as "~N": the existing card is
+   * typically an `AddKeyOp` (one share key) from the init-time prekey pool while a
+   * real card is a `RotateKeyOp` (old + new), and a 32-byte key renders as a JSON
+   * array of decimal numbers. `groupEvents` — the part that used to vary by orders
+   * of magnitude — is exact. The authoritative figure is the one `rdvSendPayload`
+   * reports at the 'sending' step.
+   */
+  async previewContactCard(): Promise<string> {
+    return this.buildContactBundle(await this.kh.getExistingContactCard());
+  }
+
+  /**
+   * Wrap a contact card in a self-describing "contact bundle". Sharing is
+   * group-only, so a friend needs the receiver to be able to resolve our
+   * *user-group* — but a raw contact card only conveys this device's Individual.
+   * Attach the user-group's ops (when one exists) so the receiver can ingest them
+   * and resolve the group as a share target without waiting on relay reachability
+   * (a group never syncs to a non-member otherwise). We never create a group
+   * here — only bundle one that already exists.
+   */
+  private async buildContactBundle(card: any): Promise<string> {
     const json = card.toJson();
     // toJson() may return a parsed object depending on the WASM binding version;
     // ensure we always have a JSON string for URL encoding / postMessage.
     const rawCard = typeof json === 'string' ? json : JSON.stringify(json);
 
-    // Wrap in a self-describing "contact bundle". Sharing is group-only, so a
-    // friend needs the sharer to be able to resolve their *user-group* — but the
-    // raw contact card only conveys this device's Individual. Attach the
-    // user-group's ops (when one exists) so the receiver can ingest them and
-    // resolve the group as a share target without waiting on relay reachability
-    // (a group never syncs to a non-member otherwise). We never create a group
-    // here — only bundle one that already exists.
     const bundle: ContactBundle = { __kind: CONTACT_BUNDLE_KIND, card: rawCard };
     const group = await this.getUserGroup();
     if (group) {
@@ -441,10 +480,8 @@ export class KeyhiveOps {
       // our *Individual's* membership ops — NOT in the group agent's events — so
       // we gather events for both: the individual (carries the group delegation)
       // and the group (its own membership ops).
-      const me = await this.kh.individual;
-      bundle.groupEvents = await this.contactBundleEvents(
-        new Set([bytesToBase64(me.id.toBytes()), groupId]),
-      );
+      const myId = bytesToBase64((await this.kh.individual).id.toBytes());
+      bundle.groupEvents = await this.contactBundleEvents(new Set([myId, groupId]), myId);
     }
     return JSON.stringify(bundle);
   }
@@ -467,8 +504,16 @@ export class KeyhiveOps {
    * over one deduplicated hash→bytes map, so we simply never walk the CGKA one.
    * It still *computes* them inside the wasm; a narrow binding that skips that
    * work is a follow-up — this only stops us putting them on the wire.
+   *
+   * `skipPrekeysFor` drops one agent's prekey ops. Pass our own device id: every
+   * `kh.contactCard()` call runs `generate_private_prekey`, which rotates twice
+   * and leaves two permanent ops in our prekey history — so this term grew by
+   * ~480 B on every single visit to the invite screen, exchange or not, forever.
+   * They are also redundant: our current prekey rides in the bundle's `card`,
+   * which `receiveContactCard` ingests. Other agents' prekey ops are kept — a
+   * receiver adding our *group* to a doc must encrypt to our other devices too.
    */
-  private async contactBundleEvents(agentIds: Set<string>): Promise<string[]> {
+  private async contactBundleEvents(agentIds: Set<string>, skipPrekeysFor?: string): Promise<string[]> {
     const all = await this.kh.allAgentEvents();
     // Every map here is keyed by a Uint8Array *object*, so `get()` by value can
     // never match (reference identity). Re-key each one through base64 once.
@@ -499,9 +544,11 @@ export class KeyhiveOps {
     // document count too. Our group's source carries the full proof closure of
     // the delegations that define it, including any parent groups.
     collect(all.agentMembershipSources, all.membershipSources, (id) => agentIds.has(id));
-    // Prekey sources are our devices and our groups' transitive members — bounded
-    // by who we are, not by what we have, so they need no filtering.
-    collect(all.agentPrekeySources, all.prekeySources);
+    // Prekey sources are keyed by agent: our own device, our other devices, and
+    // our groups' transitive members. Drop our own (see `skipPrekeysFor` above) —
+    // the rest are bounded by who we are rather than by what we have or how often
+    // we have opened the invite screen.
+    collect(all.agentPrekeySources, all.prekeySources, (id) => id !== skipPrekeysFor);
     // all.agentCgkaSources / all.cgkaSources are deliberately never traversed.
 
     const events = rekey(all.events);

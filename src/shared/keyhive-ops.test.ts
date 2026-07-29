@@ -292,6 +292,18 @@ describe('KeyhiveOps', () => {
      * variant index as u32-LE; the order is fixed by
      * keyhive_core/src/event/static_event.rs:18-33.
      */
+    /**
+     * Total bytes of a card's `groupEvents`. Asserted instead of the whole card
+     * length because `ContactCard.toJson()` renders keys as arrays of decimal
+     * numbers, so a fresh random key jitters the card by a few characters —
+     * noise that would make an exact size assertion flaky. `groupEvents` is the
+     * term that actually accumulated.
+     */
+    async function groupEventBytes(ops: KeyhiveOps): Promise<number> {
+      const events: string[] = JSON.parse(await ops.getContactCard()).groupEvents ?? [];
+      return events.reduce((n, e) => n + e.length, 0);
+    }
+
     const VARIANTS = ['PrekeysExpanded', 'PrekeyRotated', 'CgkaOperation', 'Delegated', 'Revoked'];
     function breakdown(cardJson: string) {
       const events: string[] = JSON.parse(cardJson).groupEvents ?? [];
@@ -323,6 +335,100 @@ describe('KeyhiveOps', () => {
       // 10× the documents must not mean a materially larger card. The card
       // conveys who the sender is, not what they have.
       expect(many.length).toBeLessThan(one.length * 2);
+    });
+
+    /**
+     * The bug Phil hit: open the invite screen, close it, open it again, and the
+     * size under the QR keeps climbing. Every getContactCard() runs
+     * generate_private_prekey, which rotates twice and leaves two permanent ops
+     * in our own prekey history — and we used to ship all of them, so each visit
+     * cost ~480 B forever whether or not anyone scanned.
+     */
+    /** Prekey ops keyhive holds for our own device — the set that used to grow. */
+    async function myPrekeyOpCount(ops: KeyhiveOps): Promise<number> {
+      const all = await ops.kh.allAgentEvents();
+      const myId = bytesToBase64((await ops.kh.individual).id.toBytes());
+      let n = 0;
+      (all.prekeySources as Map<any, any>).forEach((hashes: any[], src: any) => {
+        if (bytesToBase64(src) === myId) n = hashes.length;
+      });
+      return n;
+    }
+
+    it('previewContactCard mints nothing, so staging a QR costs no prekey', async () => {
+      const { ops } = await createOps();
+      await ops.ensureUserGroup({ create: true });
+      await ops.enableSharing('doc');
+
+      const before = await myPrekeyOpCount(ops);
+      for (let i = 0; i < 5; i++) await ops.previewContactCard();
+      expect(await myPrekeyOpCount(ops)).toBe(before);
+
+      // A real exchange still mints — that is the point of the card.
+      await ops.getContactCard();
+      expect(await myPrekeyOpCount(ops)).toBeGreaterThan(before);
+    });
+
+    it('the preview is close enough to the real payload to show as "~N"', async () => {
+      const { ops } = await createOps();
+      await ops.ensureUserGroup({ create: true });
+      await ops.enableSharing('doc');
+
+      const preview = (await ops.previewContactCard()).length;
+      const real = (await ops.getContactCard()).length;
+      // Under by roughly one 32-byte key rendered as decimal numbers (AddKeyOp vs
+      // RotateKeyOp), never wildly off — a bad estimate would mislead the user.
+      expect(real - preview).toBeGreaterThan(0);
+      expect(real - preview).toBeLessThan(200);
+    });
+
+    it('does not grow when the invite screen is opened repeatedly', async () => {
+      const { ops } = await createOps();
+      await ops.ensureUserGroup({ create: true });
+      await ops.enableSharing('doc');
+
+      const first = await groupEventBytes(ops);
+      for (let i = 0; i < 5; i++) await ops.getContactCard();
+      expect(await groupEventBytes(ops)).toBe(first);
+    });
+
+    it('does not grow while a document is edited', async () => {
+      const { ops } = await createOps();
+      await ops.ensureUserGroup({ create: true });
+      const { khDocId } = await ops.enableSharing('doc');
+      const before = await groupEventBytes(ops);
+
+      // Editing derives an application secret from the doc's existing PCS key; it
+      // mints a CGKA op only when has_pcs_key() is false (a membership change).
+      for (let i = 0; i < 20; i++) {
+        const doc = await ops.kh.getDocument(ops.khDocuments.get(khDocId)!.doc_id);
+        const ref = new ChangeId(crypto.getRandomValues(new Uint8Array(32)));
+        await ops.kh.tryEncryptArchive(doc!, ref, [], new TextEncoder().encode(`edit ${i}`));
+      }
+      expect(await groupEventBytes(ops)).toBe(before);
+    });
+
+    /**
+     * The number under the QR is the whole preview envelope, not just
+     * `groupEvents` — so pin that too, or the assertions above could hold while
+     * the figure Phil actually reads still crept up via the `card` term.
+     * `getExistingContactCard()` returns an op already in our prekey state, and
+     * editing inserts no prekey ops, so it must come back byte-identical.
+     */
+    it('shows an identical size across edits, envelope and all', async () => {
+      const { ops } = await createOps();
+      await ops.ensureUserGroup({ create: true });
+      const { khDocId } = await ops.enableSharing('doc');
+      const before = (await ops.previewContactCard()).length;
+
+      for (let i = 0; i < 20; i++) {
+        const doc = await ops.kh.getDocument(ops.khDocuments.get(khDocId)!.doc_id);
+        const ref = new ChangeId(crypto.getRandomValues(new Uint8Array(32)));
+        await ops.kh.tryEncryptArchive(doc!, ref, [], new TextEncoder().encode(`edit ${i}`));
+        // Re-read every iteration: a per-edit drift of a few bytes would average
+        // out to nothing if we only compared the first and last reading.
+        expect((await ops.previewContactCard()).length).toBe(before);
+      }
     });
 
     it('stays small for an established account', async () => {

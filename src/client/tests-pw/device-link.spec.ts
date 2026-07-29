@@ -222,9 +222,13 @@ test('linking a new device via rendezvous converges both onto one user-group', a
       { label: 'deviceB sees deviceA online' },
     );
 
-    // …and the Settings device list renders it: deviceB's row shows "Online".
+    // …and the Settings device list renders it. The row names the *transport*
+    // rather than saying "Online" (see DeviceList.tsx: 'P2P' | 'Via relay' |
+    // 'Offline'), since a dot's fill alone can't say which online device is
+    // direct — so assert on that label, via the testid it carries for this.
     await deviceA.page.evaluate(() => { location.hash = '#/settings/devices'; });
-    await expect(deviceA.page.getByText(/^Online/).first()).toBeVisible({ timeout: 15_000 });
+    await expect(deviceA.page.getByTestId('device-transport').first())
+      .toHaveText(/^(P2P|Via relay)$/, { timeout: 15_000 });
 
     // Disconnect deviceB entirely: the relay broadcasts a leave, deviceA's
     // worker translates it into peer-disconnected, and the row flips to Offline.

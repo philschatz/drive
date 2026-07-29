@@ -21,6 +21,12 @@ const executablePath = existsSync(chromiumPath) ? chromiumPath : undefined;
 
 // Run against the built app served by the production server, on a non-3000 port
 // so it never collides with a running `npm run dev`.
+//
+// `npm run test:pw` pins PW_PORT=4446 — a port nothing else in this repo serves,
+// which matters because of `reuseExistingServer` below: anything already
+// listening makes Playwright skip the build and test a stale dist/, which
+// invents convincing failures. The 4445 default is the deliberate opt-in to that
+// reuse (see the webServer comment).
 const PORT = Number(process.env.PW_PORT) || 4445;
 const baseURL = `http://localhost:${PORT}`;
 
@@ -60,7 +66,9 @@ export default defineConfig({
   // Build the frontend, then serve the built app (dist/) via the production
   // server — which also attaches the in-memory WebSocket relay the peers sync
   // through. `reuseExistingServer` lets a developer pre-run
-  // `PORT=4445 npm start` (after a build) to skip the rebuild while iterating.
+  // `PORT=4445 npm start` (after a build) and then `PW_PORT=4445 playwright test`
+  // to skip the rebuild while iterating. That shortcut is opt-in by port:
+  // `npm run test:pw` uses 4446 precisely so it always rebuilds.
   webServer: {
     // VITE_SYNC_INTERVAL_MS shrinks keyhive's cross-peer sync round from the 2000ms
     // production default so the two-peer specs converge in a fraction of the time

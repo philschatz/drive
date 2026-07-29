@@ -82,16 +82,19 @@ export function contentLength(blocks: BlockNode[]): number {
 }
 
 /**
- * The block whose text contains the caret position `index` (caret may sit at
- * `textTo`). A caret exactly on a marker belongs to the block that marker
- * opens.
+ * The block whose text contains the caret position `index`.
+ *
+ * Boundaries are ambiguous by construction: block N's `textTo` IS block N+1's
+ * `markerIndex`, since the marker occupies that one position. The op builders
+ * resolve that index as the END of block N — backspace there deletes N's last
+ * character, Enter there splits N, delete-forward there joins N+1 in — so this
+ * scans FORWARD and returns the first block whose text ends at or after `index`.
+ * (Scanning backwards instead returned N+1, which walked the caret into the next
+ * paragraph and made Enter inherit the following block's type.)
  */
 export function blockIndexAt(blocks: BlockNode[], index: number): number {
-  for (let i = blocks.length - 1; i >= 0; i--) {
-    const b = blocks[i];
-    if (index >= (b.markerIndex ?? b.textFrom)) return i;
-  }
-  return 0;
+  for (let i = 0; i < blocks.length; i++) if (index <= blocks[i].textTo) return i;
+  return blocks.length - 1;
 }
 
 /**

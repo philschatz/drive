@@ -15,6 +15,11 @@ import type { RichTextSpan } from '../../../../shared/rich-text-ops';
 const docOf = (md: string): RichTextSpan[] => markdownToSpans(md);
 const mdOf = (spans: RichTextSpan[]): string => spansToMarkdown(spans);
 const blocksOf = (spans: RichTextSpan[]) => blocksFromSpans(spans);
+const typesOf = (spans: RichTextSpan[]) => blocksOf(spans).map(b => b.block?.type);
+// Markdown can't express an empty list item (`- ` loses its trailing space), so
+// structural fixtures that need one are built span by span.
+const blockSpan = (type: string): RichTextSpan => ({ type: 'block', value: { type, parents: [] } });
+const textSpan = (value: string): RichTextSpan => ({ type: 'text', value });
 
 describe('typing', () => {
   it('inserts text at the caret', () => {
@@ -103,6 +108,10 @@ describe('delete forward', () => {
     const spans = docOf('one\n\ntwo');
     const { ops } = opsForDeleteForward(blocksOf(spans), 4, 4); // end of "one"
     expect(mdOf(applyOpsToSpans(spans, ops))).toBe('onetwo');
+    // Op shape matters here (unusually): index 4 is both "end of one" and the
+    // second marker's position, and resolving it to the LATTER produced a raw
+    // splice over the marker instead of a structural join.
+    expect(ops).toEqual([{ op: 'joinBlock', index: 4 }]);
   });
 
   it('does nothing at the end of the document', () => {
@@ -142,6 +151,36 @@ describe('Enter', () => {
     const second = opsForInsertParagraph(blocksOf(mid), first.caret, first.caret);
     const blocks = blocksOf(applyOpsToSpans(mid, second.ops));
     expect(blocks.map(b => b.block?.type)).toEqual(['unordered-list-item', 'paragraph']);
+  });
+
+  // The new block continues the type of the block being SPLIT. At a block's end
+  // that index is also the next block's marker, so resolving it forward is what
+  // keeps Enter from inheriting whatever happens to follow the list.
+  it('at the end of a list item followed by a paragraph makes another list item', () => {
+    const spans = docOf('- a\n\nplain'); // ￼a￼plain — caret at end of "a"
+    const { ops, caret } = opsForInsertParagraph(blocksOf(spans), 2, 2);
+    expect(typesOf(applyOpsToSpans(spans, ops)))
+      .toEqual(['unordered-list-item', 'unordered-list-item', 'paragraph']);
+    expect(caret).toBe(3);
+  });
+
+  it('at the end of a list item followed by a heading makes another list item', () => {
+    const spans = docOf('- a\n\n# Title');
+    const { ops } = opsForInsertParagraph(blocksOf(spans), 2, 2);
+    expect(typesOf(applyOpsToSpans(spans, ops)))
+      .toEqual(['unordered-list-item', 'unordered-list-item', 'heading']);
+  });
+
+  it('on an empty list item followed by another block still exits the list', () => {
+    // ￼a￼￼plain — the empty item is b1, its only caret position is 3.
+    const spans = [
+      blockSpan('unordered-list-item'), textSpan('a'),
+      blockSpan('unordered-list-item'),
+      blockSpan('paragraph'), textSpan('plain'),
+    ];
+    const { ops } = opsForInsertParagraph(blocksOf(spans), 3, 3);
+    expect(typesOf(applyOpsToSpans(spans, ops)))
+      .toEqual(['unordered-list-item', 'paragraph', 'paragraph']);
   });
 });
 
@@ -214,6 +253,21 @@ describe('block formatting', () => {
     expect(mdOf(out1)).toBe('- a\n- b');
     const out2 = applyOpsToSpans(out1, outdentOps(blocksOf(out1), 3, 3));
     expect(mdOf(out2)).toBe('- a\n\nb');
+  });
+
+  // Block formatting applies to every block the selection touches, and a
+  // boundary index belongs to the block that ENDS there — not to the next block,
+  // whose marker shares that index.
+  it('with the caret at a paragraph end, retypes only that paragraph', () => {
+    const spans = docOf('one\n\ntwo');
+    const ops = setBlockTypeOps(blocksOf(spans), 4, 4, 'heading', { level: 1 });
+    expect(mdOf(applyOpsToSpans(spans, ops))).toBe('# one\n\ntwo');
+  });
+
+  it('over a whole paragraph, leaves the following paragraph alone', () => {
+    const spans = docOf('one\n\ntwo');
+    const ops = toggleListOps(blocksOf(spans), 1, 4, 'unordered-list-item');
+    expect(mdOf(applyOpsToSpans(spans, ops))).toBe('- one\n\ntwo');
   });
 
   it('inserts a divider and lands in a fresh paragraph', () => {

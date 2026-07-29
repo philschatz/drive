@@ -105,6 +105,21 @@ describe('spans-model parity with Automerge', () => {
     ]);
   });
 
+  it('replacing a selection that spans several markers (select-all + type)', () => {
+    // Ctrl+A yields [first block's textFrom, contentLength], so typing over it is
+    // one splice deleting every later marker at once — the widest structural
+    // delete the editor can emit.
+    expectParity([
+      { op: 'splitBlock', index: 0, block: { type: 'paragraph', parents: [] } },
+      { op: 'splice', index: 1, del: 0, text: 'one' },
+      { op: 'splitBlock', index: 4, block: { type: 'unordered-list-item', parents: [] } },
+      { op: 'splice', index: 5, del: 0, text: 'two' },
+      { op: 'splitBlock', index: 8, block: { type: 'heading', parents: [], attrs: { level: 1 } } },
+      { op: 'splice', index: 9, del: 0, text: 'three' },
+      { op: 'splice', index: 1, del: 13, text: 'x' },
+    ]);
+  });
+
   it('updateSpans replaces the whole field (Markdown import)', () => {
     expectParity([
       { op: 'splice', index: 0, del: 0, text: 'old plain text' },

@@ -223,7 +223,8 @@ The rest of slides are screencaps
 <!-- _class: tight -->
 
 - Both peers pan and select freely; each sees the other's cell outlined and tagged, in that peer's own colour
-- Retype one input and every figure derived from it moves on both screens
+- Whole rows highlight from the headers; a formula, opened, outlines every cell it depends on in the colour of its own token
+- Edit that formula and every figure derived from it moves on both screens — formatting and conditional formatting are one sheet away
 
 ![bg right:44% fit](datagrid-presence.gif)
 
@@ -234,8 +235,8 @@ The rest of slides are screencaps
 <!-- _class: tight -->
 
 - A caret is an **Automerge cursor**, not an offset — it names a character, so it survives someone else's edit
-- Both peers select; each sees the other's selection tagged with their name
-- Phil edits *ahead* of Sam and Sam's selection stays on the same words — then Sam types and replaces exactly those
+- Both peers select, and the two selections **overlap** — each sees the other's tagged with their name
+- Alice types over hers, destroying the words they shared: Bob is left holding the ones that survived, not a collapsed caret
 - Positions resolve in the **same worker push** as the text they describe, so a caret is never a frame stale
 
 ![bg right:44% fit](peritext-presence.gif)

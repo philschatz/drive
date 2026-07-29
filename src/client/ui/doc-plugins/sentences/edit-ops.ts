@@ -120,8 +120,13 @@ export function setLinkOps(_blocks: BlockNode[], from: number, to: number, href:
     : [{ op: 'unmark', start: from, end: to, name: 'link', expand: 'none' }];
 }
 
+/** Every block a selection touches. A collapsed caret touches exactly one, and a
+ * range reaches into the next block only when it covers some of that block's
+ * TEXT — comparing against its `markerIndex` instead pulled in the following
+ * block for any selection ending at a block boundary. */
 function intersectingBlocks(blocks: BlockNode[], from: number, to: number): BlockNode[] {
-  return blocks.filter(b => from <= b.textTo && to >= (b.markerIndex ?? b.textFrom));
+  if (from === to) return [blocks[blockIndexAt(blocks, from)]];
+  return blocks.filter(b => from <= b.textTo && to >= b.textFrom);
 }
 
 /**

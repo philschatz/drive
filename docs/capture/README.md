@@ -62,8 +62,8 @@ documents in `src/client/home/examples/`, seeded via the empty home page's
 | `linking-a-device.gif` | A device with a library of documents links a second one, which then receives them all |
 | `presence-updates.gif` | Two peers in the same task editor; the dot walks down the other's property list — Title, Priority, Description — greying each row they occupy |
 | `add-and-share-with-friend.gif` | Sharing an open document with a new contact by QR, who then opens it |
-| `datagrid-presence.gif` | Two peers panning and selecting in one sheet: each other's tagged cells, a Monte Carlo histogram, a range's aggregates, an edit propagating |
-| `peritext-presence.gif` | Two peers holding selections in one document: Phil types over his, nine characters longer than what it replaced, and Sam's selection stays on the same *words* — then Sam types and replaces exactly those |
+| `datagrid-presence.gif` | Two peers in one sheet: each other's tagged cells, a Monte Carlo histogram, three rows highlighted from the headers, a formula opened so its referenced cells light up and then edited on both screens, and the formatting / conditional-formatting sheets opened without being used |
+| `peritext-presence.gif` | Two peers holding **overlapping** selections in one document: Alice types over hers, destroying the two words the selections shared, and Bob is left holding the words that survived — then Bob types and replaces exactly those |
 | `source-presence.gif` | A grid on the left, the same document as JSON on the right: the dot tracks the selected cell, and editing an empty one makes the key appear |
 | `validation.gif` | A task list beside its JSON: deleting an optional field regroups the task, and an invalid enum raises a schema error in both panes |
 | `device-permissions.gif` | One user's two devices on the same counters document; the second device is walked admin → edit → read → edit → admin from Settings → Devices, and its write affordances vanish and return live |
@@ -190,6 +190,45 @@ Three things every screencast gets for free, and one to reach for:
 - **Presence dedupe hides your own devices**, and collapses one user's devices into a
   single dot. Two distinct identities are required or `presence-updates.gif` shows
   nothing.
+- **A row/column header selection is broadcast to nobody.** `handleRowHeaderClick`
+  clears the selected *cell*, and the grid's presence payload is a cell path — so
+  while a header band is up that peer announces nothing and their tag disappears
+  from the other pane. `datagrid-presence.gif` films the band anyway (it is a real
+  selection with real commands behind it) and takes a cell again straight after to
+  get the tag back. Do not write a beat that expects the far side to show the band.
+  And a body row header is a **`td`**, not a `th` — only the corner one is a `th`,
+  and it shares the `datagrid-row-header` class, so address rows by
+  `td.datagrid-row-header[data-row-index="N"]` rather than counting.
+- **Getting a group of cells into one frame is its own problem.** `panToCell` stops
+  as soon as *its* cell is inside the viewport, and it treats `x >= 0` as visible —
+  but the row header is `position: sticky; left: 0`, so a cell at x=0 is behind it.
+  The formula beat needs three cells at once, which is what `panToShow` is for, and
+  it only fits because the fixture narrows C and D: at their shipped widths
+  C+D+E is 390px against 382px of grid, and one reference sat just off the edge
+  every time. That was only caught by pulling a frame out of the finished GIF —
+  the count assertion passed, because both refs were in the DOM.
+- **Formula reference highlights only exist while a cell is being edited.**
+  `refHighlightMap` returns empty unless `editingCell` is set, so the coloured
+  dashed borders appear when the bottom bar's editor takes focus and vanish on
+  commit — the hold has to sit between the two. CodeMirror is also lazy-loaded and
+  the bar only mounts in focus mode, so wait for `.bottom-editor-cm .cm-content`
+  rather than tapping where it is about to be. Walking the caret across the formula
+  moves the *active* ref, which fills its cell instead of only outlining it.
+- **A phrase's own edges are a dice roll too.** `selectPhrase` shift-clicks the
+  character boundary at the phrase's right edge, and when the next character is a
+  space Chromium rounds to either side of it: the same `and pitch` came back
+  `"and pitch"` on one run and `"and pitch "` on the next, failing an exact
+  assertion. Insetting the click is the cure that causes the worse disease (a
+  character short — see `phraseGrips`), so `selectAndRead` asserts the phrase
+  `trim()`ed, which still fails a selection a whole word out, and hands back the
+  real string so `padLike` can type that boundary space back.
+- **A rebased selection's exact extent is measured, not assumed.**
+  `peritext-presence.gif` films two *overlapping* selections and then destroys the
+  shared words, and where the surviving anchor lands relative to the space in front
+  of the next word is the editor's business. `sentences-local-caret.spec.ts` owns
+  that assertion ("a selection overlapping a peer edit keeps the words that
+  survive") and prints the survivor; the capture asserts it `trim()`ed and carries
+  whatever leading space it actually found into the text it types over it.
 - **A caret at the end of a non-final block types into the *next* block.** Live bug, so
   do not film adding text that way: clicking at the end of a list item and typing put the
   sentence in the following bullet, and Enter-then-type left an empty block behind and did
@@ -225,7 +264,11 @@ Three things every screencast gets for free, and one to reach for:
   64 colours (`gif.ts`), which is worth far more than either knob: `tour.gif` measured
   5.6 MB at 8fps/256 colours, 3.9 MB at 128 and 3.0 MB at 64, with no visible loss on
   text, spreadsheet fills, or the 25%-opacity peer tints. It roughly halved the whole
-  deck. Raise `maxColors` per asset if something ever bands.
+  deck. Raise `maxColors` per asset if something ever bands — and it goes the other way
+  too: `peritext-presence.gif` passes 32, measured on one pair of recordings at 3068 KB
+  (64), 2815 (48) and 2432 (32), with the frame it exists for — two stacked tints and a
+  10px name tip — unchanged. Trimming holds is not an alternative lever: a held frame is
+  nearly free, so the bytes live in the typed runs and the gestures.
 - **Do not decimate frames.** `mpdecimate` + `-fps_mode vfr` collapses a run of identical
   frames into one long frame and saves a further ~11%, and it was tried and reverted:
   "identical" is a count of changed 8x8 blocks, and a frame where only the 26px pointer
@@ -235,7 +278,11 @@ Three things every screencast gets for free, and one to reach for:
 - **Neither `width` nor `fps` is a reliable size lever, so measure before believing
   either.** Downscaling usually *costs* bytes — lanczos turns crisp UI text into
   anti-aliased gradients and a GIF cannot compress those; `add-and-share-with-friend.gif`
-  went 1.3 MB → 2.7 MB at `width: 720`. Dropping `fps` is no safer on a busy clip, where
+  went 1.3 MB → 2.7 MB at `width: 720`. But "usually" is doing real work in that
+  sentence: re-encoding the *peritext* pair at 48 colours came out 1875 KB at
+  `width: 720` against 2733 KB native — a 31% saving in the opposite direction. Which
+  way it goes is a property of the clip, so measure the pair you have rather than
+  reasoning from this list. Dropping `fps` is no safer on a busy clip, where
   fewer frames each carry a bigger delta: `device-permissions.gif` at 6fps came out
   *bigger* than at 8. Three assets still pass `width: 720`
   (`datagrid-presence`, `validation`, `source-presence`) from before that measurement and
@@ -249,7 +296,7 @@ Three things every screencast gets for free, and one to reach for:
   device locally and the *other* device never learns it. Only the second device needs a
   name (`📱 iOS`) — the first keeps its browser-derived one and is already marked by the
   `This device` badge — but it has to be set up front. And a *friend's* name never travels
-  at all, so `connections.png` relabels Sam's row locally on Phil's own page instead.
+  at all, so `connections.png` relabels Bob's row locally on Alice's own page instead.
 - **Roles are per-person on a document, per-device only in Settings.** The Sharing page
   is group-only by construction — adding a friend adds every device they own — so
   `device-permissions.gif` drives Settings → Devices instead. It works on documents anyway:

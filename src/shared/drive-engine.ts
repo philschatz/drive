@@ -2502,12 +2502,16 @@ export class DriveEngine {
       try {
         if (!this.khOps) throw new Error('Keyhive not available');
         const myUserGroupId = await this.khOps.ensureUserGroup({ create: true });
-        const myCard = await this.khOps.getContactCard();
-        const plaintext = JSON.stringify({ card: myCard, displayName: msg.displayName, userGroupId: myUserGroupId ?? undefined });
         // Approximate size of what we'll send once the peer joins (plaintext bytes;
         // the on-wire framed size adds only ~28 bytes of IV+GCM tag). Surfaced to the
         // sender's QR page so they can see how much is being transferred up front.
-        const payloadBytes = new TextEncoder().encode(plaintext).length;
+        // Estimated rather than measured because building the real payload would
+        // MINT a prekey — see the deferred getContactCard() in onPeer below. The
+        // envelope is the real one, so only the card body is approximate.
+        const payloadBytes = new TextEncoder().encode(JSON.stringify({
+          card: await this.khOps.previewContactCard(),
+          displayName: msg.displayName, userGroupId: myUserGroupId ?? undefined,
+        })).length;
         // Check before minting a rendezvous, so we never show a QR that cannot work.
         this.assertRdvPayloadFits(payloadBytes + RDV_FRAME_OVERHEAD_BYTES);
         const { rendezvousId, key } = generateRendezvous();
@@ -2519,8 +2523,16 @@ export class DriveEngine {
           key,
           onPeer: () => {
             this.rdvEvent(rendezvousId, 'peer-joined');
-            this.rdvSendPayload(rendezvousId, key, plaintext)
-              .catch((err) => this.rdvEvent(rendezvousId, 'error', errMsg(err)));
+            // Mint the card HERE, not at stage time: every getContactCard() rotates
+            // a prekey out of our advertised pool, and that key is meant for one
+            // contact. Staging a QR nobody scans must not consume one — otherwise
+            // just opening the invite screen grows our prekey history forever.
+            (async () => {
+              const myCard = await this.khOps!.getContactCard();
+              await this.rdvSendPayload(rendezvousId, key, JSON.stringify({
+                card: myCard, displayName: msg.displayName, userGroupId: myUserGroupId ?? undefined,
+              }));
+            })().catch((err) => this.rdvEvent(rendezvousId, 'error', errMsg(err)));
           },
           onData: (pt) => {
             void (async () => {
@@ -2629,21 +2641,24 @@ export class DriveEngine {
         // Ensure our DriveSettings doc exists so we can hand its id to the joining
         // device (the trusted channel that propagates the pointer — never a scan).
         await this.ensureDriveSettingsDoc({ create: true });
-        const myCard = await this.khOps.getContactCard();
-        const myPayload = JSON.stringify({
-          card: myCard, userGroupId: myUserGroupId, deviceName: msg.deviceName,
+        // The envelope our card will travel in. Built here for the size estimate
+        // with a non-minting card, and again in onPeer with the real one.
+        const envelope = (card: string) => JSON.stringify({
+          card, userGroupId: myUserGroupId, deviceName: msg.deviceName,
           driveSettingsDocId: this.driveSettingsDocId ?? undefined,
         });
         // See kh-rdv-create-share: approximate payload size for the sender's QR page.
-        const payloadBytes = new TextEncoder().encode(myPayload).length;
+        const payloadBytes = new TextEncoder().encode(envelope(await this.khOps.previewContactCard())).length;
         this.assertRdvPayloadFits(payloadBytes + RDV_FRAME_OVERHEAD_BYTES);
         const { rendezvousId, key } = generateRendezvous();
         this.rdvSessions.set(rendezvousId, {
           key,
           onPeer: () => {
             this.rdvEvent(rendezvousId, 'peer-joined');
-            this.rdvSendPayload(rendezvousId, key, myPayload).catch(err =>
-              this.rdvEvent(rendezvousId, 'error', errMsg(err)));
+            // Mint only for a real exchange — see kh-rdv-create-share's onPeer.
+            (async () => {
+              await this.rdvSendPayload(rendezvousId, key, envelope(await this.khOps!.getContactCard()));
+            })().catch(err => this.rdvEvent(rendezvousId, 'error', errMsg(err)));
           },
           onData: (pt) => {
             (async () => {
