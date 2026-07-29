@@ -3,7 +3,9 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-    <meta name="theme-color" content="#415F91" />
+    <!-- Matches --md-sys-color-primary (light) / --md-sys-color-surface (dark). -->
+    <meta name="theme-color" content="#415F91" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#111318" media="(prefers-color-scheme: dark)" />
     <meta
       name="description"
       content="Collaborative document editor with offline support"

@@ -5,6 +5,7 @@ import type { PeerState } from '../../common/automerge';
 import { openDoc, subscribeQuery, updateDoc, queryDoc, deepAssign, fetchDocList } from '../../worker-api';
 import { initPresence, colorForKey, type PresenceState } from '../../common/presence';
 import { DocumentTitleBar } from '../../common/DocumentTitleBar';
+import { onThemeChange } from '../../common/theme';
 import type { CalendarEvent } from '../../../../shared/schemas/calendar';
 import { mapMultiCalToSXEvents, createMultiCalSXCalendar } from './schedule-x';
 import type { MultiCalEventLookupMap, CalendarSource } from './schedule-x';
@@ -143,6 +144,11 @@ export function AllCalendars({ path }: { path?: string }) {
     let mounted = true;
     const unsubscribes: (() => void)[] = [];
     let dragCleanup: (() => void) | null = null;
+
+    // schedule-x doesn't read our CSS tokens, so an OS theme flip has to be
+    // pushed into it. Subscribed here rather than inside the async IIFE below —
+    // it reads the ref at call time, so it can't race the calendar's creation.
+    const unsubTheme = onThemeChange(dark => calendarSXRef.current?.setTheme(dark ? 'dark' : 'light'));
 
     (async () => {
       const allIds = (await fetchDocList()).map(e => e.id);
@@ -293,6 +299,7 @@ export function AllCalendars({ path }: { path?: string }) {
 
     return () => {
       mounted = false;
+      unsubTheme();
       dragCleanup?.();
       for (const unsub of unsubscribes) unsub();
       calendarSXRef.current?.destroy();

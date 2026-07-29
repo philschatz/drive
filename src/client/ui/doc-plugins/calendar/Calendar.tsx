@@ -8,6 +8,7 @@ import { useDocumentHistory } from '../../common/useDocumentHistory';
 import { useEditorUndoRedo } from '../../common/useUndoRedo';
 import { useCanEdit } from '../../common/useCanEdit';
 import { useFocusPathSync } from '../../common/useFocusPathSync';
+import { onThemeChange } from '../../common/theme';
 import { HistorySlider } from '../../common/HistorySlider';
 import type { CalendarEvent } from '../../../../shared/schemas/calendar';
 import { rebuildExpanded } from './recurrence';
@@ -120,6 +121,10 @@ function CalendarInner({ docId, readOnly, initialEventId }: { docId: string; rea
     calendarRef.current = calendar;
     eventsPluginRef.current = eventsPlugin;
 
+    // schedule-x doesn't read our CSS tokens, so an OS theme flip has to be
+    // pushed into it. setTheme() is public API — no re-mount needed.
+    const unsubTheme = onThemeChange(dark => calendarRef.current?.setTheme(dark ? 'dark' : 'light'));
+
     const dragCleanup = initDragDrop(
       calEl,
       () => eventLookupRef.current,
@@ -172,6 +177,7 @@ function CalendarInner({ docId, readOnly, initialEventId }: { docId: string; rea
 
     return () => {
       mounted = false;
+      unsubTheme();
       dragCleanup();
       calendarRef.current?.destroy();
       calendarRef.current = null;

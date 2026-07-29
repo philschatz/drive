@@ -13,10 +13,17 @@
  * onto these same roles, so BOTH the md-* web components and the existing
  * Tailwind-styled components share one palette.
  *
- * Palette: Material Theme Builder, blue seed. Dark values are present but
- * NOT wired to prefers-color-scheme / QA'd this pass (dark-ready only).
+ * Palette: Material Theme Builder, blue seed. `.dark` is applied to <html> by
+ * ui/common/theme.ts, which mirrors the OS `prefers-color-scheme` — there is no
+ * in-app toggle, so nothing else ever touches that class.
  * ------------------------------------------------------------------ */
 :root {
+  /* Follow the OS for the UA-painted surfaces the tokens below can't reach:
+   * the canvas before the bundle runs, scrollbars, and native form controls
+   * (incl. the MdSelect fallback <select>). `light dark` needs no JS; a future
+   * in-app override would split this into `light` here / `dark` in .dark. */
+  color-scheme: light dark;
+
   --md-sys-color-primary: #415F91;
   --md-sys-color-surface-tint: #415F91;
   --md-sys-color-on-primary: #FFFFFF;

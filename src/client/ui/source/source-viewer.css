@@ -33,8 +33,10 @@
 .presence-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
 .presence-count { margin-left: 0.2rem; }
 
-/* Source Tree */
+/* Source Tree — the other always-dark island on this page; same reasoning as
+ * .presence-log, so its scrollbar matches the panel rather than the app theme. */
 .source-tree {
+  color-scheme: dark;
   font-family: 'SF Mono', 'Consolas', 'Menlo', monospace;
   font-size: 0.85rem;
   line-height: 1.5;

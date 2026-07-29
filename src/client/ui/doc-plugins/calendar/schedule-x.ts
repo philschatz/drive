@@ -3,6 +3,7 @@ import { createEventsServicePlugin } from '@schedule-x/events-service';
 import { createCurrentTimePlugin } from '@schedule-x/current-time';
 import type { ExpandedEvent } from './recurrence';
 import { rebuildExpanded, isAllDay } from './recurrence';
+import { isDark } from '../../common/theme';
 import type { CalendarDocument } from '../../../../shared/schemas/calendar';
 
 export interface EventLookupMap {
@@ -79,6 +80,10 @@ export function createSXCalendar(
     defaultView: viewWeek.name,
     timezone: calTZ,
     events: initialEvents,
+    // schedule-x ships its own `.is-dark` stylesheet rather than reading our
+    // MD3 tokens, so the theme has to be handed to it. Later OS flips arrive
+    // via calendar.setTheme() — see the onThemeChange hook in Calendar.tsx.
+    isDark: isDark(),
     plugins: [eventsPlugin, createCurrentTimePlugin()],
     calendars: {
       cal: {
@@ -197,6 +202,7 @@ export function createMultiCalSXCalendar(
     defaultView: viewWeek.name,
     timezone: defaultTimezone,
     events: initialEvents,
+    isDark: isDark(),
     plugins: [eventsPlugin, createCurrentTimePlugin()],
     calendars: sxCalendars,
     callbacks,

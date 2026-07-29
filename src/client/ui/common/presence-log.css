@@ -1,5 +1,11 @@
-/* Presence log */
+/* Presence log — also the source viewer's Operations panel.
+ *
+ * Deliberately always dark: every color here is a literal, so the panel reads the
+ * same in either app theme. `color-scheme: dark` extends that to the parts the UA
+ * paints — chiefly the scrollbar in .presence-log-body — which would otherwise
+ * follow the OS and put a light scrollbar inside a dark panel. */
 .presence-log {
+  color-scheme: dark;
   margin-top: 2rem;
   border: 1px solid #333;
   border-radius: 6px;
