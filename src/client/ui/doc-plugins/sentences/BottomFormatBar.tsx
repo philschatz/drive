@@ -197,9 +197,20 @@ export function BottomFormatBar({
               value={linkDraft}
               onInput={(e: any) => setLinkDraft(e.currentTarget.value)}
             />
-            <div className="flex gap-2 justify-end">
+            {/* MD3 dialog actions: text buttons for the secondary choices, one
+                filled button for the confirming action, all 40px pills on the
+                trailing edge. The destructive one is pushed to the leading edge
+                so Remove is never the button next to Apply. */}
+            <div className="flex items-center gap-2 justify-end mt-1">
               {state?.linkHref && (
                 <>
+                  <button
+                    type="button"
+                    className="md-label-large px-3 h-10 rounded-full state-layer text-error mr-auto"
+                    onClick={() => { api()?.setLink(null); setLinkOpen(false); }}
+                  >
+                    Remove
+                  </button>
                   {/* The document is always editable, so a click in the text
                       places the caret rather than following the link — this is
                       how an editor opens one (and it works on a phone, which a
@@ -207,7 +218,7 @@ export function BottomFormatBar({
                   <button
                     type="button"
                     data-testid="link-open"
-                    className="px-4 h-10 rounded-full state-layer"
+                    className="md-label-large px-3 h-10 rounded-full state-layer text-primary"
                     onClick={() => {
                       window.open(state.linkHref!, '_blank', 'noopener');
                       setLinkOpen(false);
@@ -215,18 +226,11 @@ export function BottomFormatBar({
                   >
                     Open
                   </button>
-                  <button
-                    type="button"
-                    className="px-4 h-10 rounded-full state-layer text-error"
-                    onClick={() => { api()?.setLink(null); setLinkOpen(false); }}
-                  >
-                    Remove
-                  </button>
                 </>
               )}
               <button
                 type="submit"
-                className="px-4 h-10 rounded-full bg-primary text-on-primary"
+                className="md-label-large px-6 h-10 rounded-full bg-primary text-on-primary state-layer"
               >
                 Apply
               </button>

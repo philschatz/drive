@@ -32,7 +32,6 @@ test('the local caret survives a peer editing above it', async ({ browser }) => 
 
     // Alice types a line and parks her caret in the middle of "world".
     await alice.page.goto(`/#/d/${docId}`);
-    await alice.page.getByLabel('Edit sentences').click();
     await alice.page.getByTestId('rt-editor').click();
     await alice.page.keyboard.type('hello world');
     await alice.page.keyboard.press('ArrowLeft');
@@ -42,7 +41,6 @@ test('the local caret survives a peer editing above it', async ({ browser }) => 
     // Bob edits at the very top of the document, before alice's caret.
     await bob.page.goto(`/#/d/${docId}`);
     await expect(bob.page.getByTestId('rt-editor')).toContainText('hello world', { timeout: 30_000 });
-    await bob.page.getByLabel('Edit sentences').click();
     await bob.page.getByTestId('rt-editor').click();
     await bob.page.keyboard.press('ControlOrMeta+Home');
     await bob.page.keyboard.type('XY');
@@ -89,13 +87,11 @@ test('a caret at end-of-document keeps working after a peer appends', async ({ b
     }
 
     await alice.page.goto(`/#/d/${docId}`);
-    await alice.page.getByLabel('Edit sentences').click();
     await alice.page.getByTestId('rt-editor').click();
     await alice.page.keyboard.type('start'); // caret at end of content
 
     await bob.page.goto(`/#/d/${docId}`);
     await expect(bob.page.getByTestId('rt-editor')).toContainText('start', { timeout: 30_000 });
-    await bob.page.getByLabel('Edit sentences').click();
     await bob.page.getByTestId('rt-editor').click();
     await bob.page.keyboard.press('ControlOrMeta+Home');
     await bob.page.keyboard.type('TOP ');
@@ -187,13 +183,14 @@ test('a selection overlapping a peer edit keeps the words that survive', async (
     }
 
     await alice.page.goto(`/#/d/${docId}`);
-    await alice.page.getByLabel('Edit sentences').click();
     await alice.page.getByTestId('rt-editor').click();
     await alice.page.keyboard.type(OVERLAP_PROSE);
 
     await bob.page.goto(`/#/d/${docId}`);
     await expect(bob.page.getByTestId('rt-editor')).toContainText(OVERLAP_PROSE, { timeout: 30_000 });
-    await bob.page.getByLabel('Edit sentences').click();
+    // Focus bob's editor: the rebase only touches a caret the editor owns
+    // (applyRemoteSpans checks isFocused), and nothing focuses it on open.
+    await bob.page.getByTestId('rt-editor').click();
 
     // Two overlapping selections: alice's ends inside bob's, sharing `and pitch`.
     await selectText(alice.page, OVERLAP_ALICE);

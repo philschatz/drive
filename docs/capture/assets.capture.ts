@@ -685,9 +685,9 @@ test('tour.gif', async ({ browser }) => {
       await beat(page, 1100);
       await dragSelect(page, CATEGORIES_FROM, CATEGORIES_TO);
       await beat(page, 1600);
-      // Selecting a cell puts the grid in focus mode, and that swaps the title
-      // bar's Back link for a Done checkmark (the same affordance the sentences
-      // editor uses in edit mode) — so leaving takes two taps, not one.
+      // Selecting a cell puts the grid in focus mode, which swaps the whole title
+      // bar for its own (a Done checkmark where Back was) — so leaving takes two
+      // taps, not one. DataGrid is the only editor with a mode like this.
       await tap(page, page.getByLabel('Done'));
       await beat(page, 300);
       await tap(page, page.getByLabel('Back'));
@@ -703,10 +703,10 @@ test('tour.gif', async ({ browser }) => {
       // Mid-block replacement is the path presence-peritext.gif already asserts.
       await openRow(page, 'Tahoe trip');
       await expect(page.getByTestId('rt-editor')).toContainText('Pinecrest', { timeout: 60_000 });
-      await beat(page, 1300);
-      await tap(page, page.getByLabel('Edit sentences'));
+      // A document you can edit opens editable — the formatting bar is already
+      // docked, so there is no Edit tap to film here, just the edit itself.
       await expect(page.getByTestId('format-bar')).toBeVisible({ timeout: 30_000 });
-      await beat(page, 400);
+      await beat(page, 1600);
       const grip = await phraseGrips(page, 'the downstairs room');
       await selectPhrase(page, grip.word, grip.end);
       await hideCursor(page);
@@ -717,11 +717,9 @@ test('tour.gif', async ({ browser }) => {
         'Grandma has the loft when she arrives',
         { timeout: 30_000 }
       );
-      await beat(page, 1200);
+      await beat(page, 1500);
 
-      // Out of edit mode (the checkmark), back to the list.
-      await tap(page, page.getByLabel('Done'));
-      await beat(page, 400);
+      // Straight back to the list — one tap, since there is no mode to leave.
       await tap(page, page.getByLabel('Back'));
       await expect(page.getByTestId('doc-row').first()).toBeVisible({ timeout: 30_000 });
       await beat(page, 700);
@@ -1020,10 +1018,10 @@ test('presence-peritext.gif', async ({ browser }) => {
     alice,
     bob,
     async (l, r) => {
-      // Alice enters edit mode and selects a phrase near the start.
-      await tap(l, l.getByLabel('Edit sentences'));
+      // Alice selects a phrase near the start. Both panes open editable (both
+      // peers hold the edit role), so the clip starts on the text itself.
       await expect(l.getByTestId('format-bar')).toBeVisible({ timeout: 30_000 });
-      await beat(l, 450);
+      await beat(l, 700);
       const aliceSel = await selectAndRead(l, ALICE_PHRASE);
 
       // It reaches Bob as a coloured block with Alice's name above it.
@@ -1034,9 +1032,8 @@ test('presence-peritext.gif', async ({ browser }) => {
       // Bob selects a phrase that OVERLAPS Alice's by two words, and Alice sees
       // that one the same way. Both panes now show the two tints stacked over
       // `and pitch` — the overlap is the whole setup for what follows.
-      await tap(r, r.getByLabel('Edit sentences'));
       await expect(r.getByTestId('format-bar')).toBeVisible({ timeout: 30_000 });
-      await beat(r, 450);
+      await beat(r, 700);
       await selectAndRead(r, BOB_PHRASE);
       await expect(l.getByTestId('peer-tip')).toHaveText('Bob', { timeout: 60_000 });
       await expect(l.getByTestId('peer-highlight').first()).toBeVisible();

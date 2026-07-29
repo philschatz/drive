@@ -29,7 +29,7 @@ const editor = () => app.page.getByTestId('rt-editor');
 /** Long enough for mint → subscribe-cursors → spans push to land. */
 const ROUND_TRIP_MS = 900;
 
-/** Replace the document with `md` and make sure we're in edit mode. */
+/** Replace the document with `md`, through the app's own Markdown import. */
 async function seed(md: string, expected: string): Promise<void> {
   await app.page.setInputFiles('[data-testid="import-md-input"]', {
     name: 'seed.md',
@@ -37,10 +37,8 @@ async function seed(md: string, expected: string): Promise<void> {
     buffer: Buffer.from(md),
   });
   await expect(editor()).toContainText(expected);
-  if ((await app.page.getByTestId('format-bar').count()) === 0) {
-    await app.page.getByLabel('Edit sentences').click();
-    await expect(app.page.getByTestId('format-bar')).toBeVisible();
-  }
+  // Holding the edit role opens the document editable, bar and all.
+  await expect(app.page.getByTestId('format-bar')).toBeVisible();
 }
 
 /** Which block the caret sits in, by its `data-bi`. */

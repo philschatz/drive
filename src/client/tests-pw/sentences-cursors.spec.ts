@@ -29,12 +29,11 @@ test('a collaborator\'s caret renders as a line and tracks their moves', async (
 
     // Alice edits: her caret ends up after the typed text.
     await alice.page.goto(`/#/d/${docId}`);
-    await alice.page.getByLabel('Edit sentences').click();
     await alice.page.getByTestId('rt-editor').click();
     await alice.page.keyboard.type('hello from alice');
 
-    // Bob opens the doc read-only and sees the text, alice's caret line, and
-    // her name tip riding above it.
+    // Bob opens the doc and, without touching it (no caret of his own), sees the
+    // text, alice's caret line, and her name tip riding above it.
     await bob.page.goto(`/#/d/${docId}`);
     await expect(bob.page.getByTestId('rt-editor')).toContainText('hello from alice', { timeout: 30_000 });
     const caret = bob.page.getByTestId('peer-caret');

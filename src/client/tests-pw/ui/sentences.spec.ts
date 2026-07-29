@@ -41,14 +41,15 @@ test.afterAll(async () => {
   await app.close();
 });
 
-test('opens in view mode; the FAB enters edit mode', async () => {
+test('opens editable, with the formatting bar and no mode to enter', async () => {
   await expect(editor()).toBeVisible();
-  await expect(editor()).not.toHaveAttribute('contenteditable', 'true');
-  await expect(app.page.getByTestId('format-bar')).toHaveCount(0);
-
-  await app.page.getByLabel('Edit sentences').click();
-  await expect(app.page.getByTestId('format-bar')).toBeVisible();
   await expect(editor()).toHaveAttribute('contenteditable', 'true');
+  await expect(app.page.getByTestId('format-bar')).toBeVisible();
+
+  // Nothing to enter and nothing to leave.
+  await expect(app.page.getByLabel('Edit sentences')).toHaveCount(0);
+  await expect(app.page.getByLabel('Done')).toHaveCount(0);
+  await expect(app.page.getByLabel('Back')).toBeVisible();
 });
 
 test('typing inserts text through beforeinput', async () => {
@@ -130,11 +131,9 @@ test('divider inserts and undo (Ctrl+Z) restores', async () => {
   await expect(editor()).not.toContainText('tail');
 });
 
-test('Done returns to the viewer; content survives a reload', async () => {
-  await app.page.getByLabel('Done').click();
-  await expect(app.page.getByTestId('format-bar')).toHaveCount(0);
-  await expect(editor()).not.toHaveAttribute('contenteditable', 'true');
-  // View mode keeps real links.
+test('content survives a reload, and the link is a real anchor', async () => {
+  // Editable renders a real <a> too — it only swallows the click (which places
+  // the caret); the Link sheet's Open is how an editor follows it.
   await expect(editor().locator('a.rt-link')).toHaveAttribute('href', 'https://example.com/docs');
 
   await app.page.reload();
@@ -142,20 +141,15 @@ test('Done returns to the viewer; content survives a reload', async () => {
   await expect(editor().locator('h1')).toContainText('Hello world', { timeout: 30_000 });
   await expect(editor().locator('.rt-li')).toHaveCount(2);
   await expect(editor().locator('.rt-divider hr')).toBeVisible();
-  await expect(editor()).not.toHaveAttribute('contenteditable', 'true');
+  // And it comes back editable, with no gesture in between.
+  await expect(editor()).toHaveAttribute('contenteditable', 'true');
+  await expect(app.page.getByTestId('format-bar')).toBeVisible();
 });
 
-test('double-clicking the viewed text starts editing at that word', async () => {
-  // (Still in view mode after the reload test.)
+test('double-clicking selects a word, and typing replaces it', async () => {
   await editor().locator('h1').dblclick();
-  await expect(app.page.getByTestId('format-bar')).toBeVisible();
-  await expect(editor()).toHaveAttribute('contenteditable', 'true');
-  // The double-clicked word is selected, so typing replaces it in place.
   await app.page.keyboard.type('Howdy');
   await expect(editor().locator('h1')).toContainText('Howdy');
-
-  await app.page.getByLabel('Done').click();
-  await expect(app.page.getByTestId('format-bar')).toHaveCount(0);
 });
 
 test('imports a Markdown file, replacing the content', async () => {
