@@ -1,40 +1,48 @@
 /**
  * Developer: Open Link — paste a URL/hash to navigate to it.
- * Extracted 1:1 from the old single-page Settings.
+ *
+ * The one Settings screen that is a form rather than a list, so it keeps a real
+ * field and a submit button (the same shape `FieldEditor` uses for Cancel/Save) —
+ * a "Go" row in a list has nothing to submit.
  */
 import { useState } from 'preact/hooks';
 import { Button } from '@/components/ui/button';
+import { MdTextField } from '@/components/ui/md-text-field';
+import { showError } from '@/components/ui/toast';
 import { navigateToUrlOrHash } from '../../common/navigate-url';
-import { useSectionAlerts } from '../SettingsSubScreen';
+import { SettingsProse } from '../SettingsGroup';
 
 export function DeveloperSettings() {
-  const { alerts, setError } = useSectionAlerts();
   const [linkUrl, setLinkUrl] = useState('');
 
   const handleNavigateUrl = () => {
+    if (!linkUrl.trim()) return;
     const err = navigateToUrlOrHash(linkUrl);
-    if (err) setError(`Invalid URL — ${err.toLowerCase()}`);
+    if (err) showError(`Invalid URL — ${err.toLowerCase()}`);
   };
 
   return (
     <>
-      {alerts}
-      <section className="mb-6">
-        <p className="text-xs text-muted-foreground mb-2">
-          Paste a link to navigate to it (e.g. document or add-friend links).
-        </p>
-        <div className="flex items-center gap-2">
-          <input
-            className="flex-1 text-sm p-2 rounded border border-border font-mono"
-            value={linkUrl}
-            onInput={(e: any) => setLinkUrl(e.currentTarget.value)}
-            placeholder="Paste URL here..."
-          />
-          <Button size="sm" onClick={handleNavigateUrl} disabled={!linkUrl.trim()}>
-            Go
+      <SettingsProse>
+        Paste a link to navigate to it (e.g. document or add-friend links).
+      </SettingsProse>
+
+      <div className="px-4 pt-2">
+        <MdTextField
+          label="Link"
+          type="url"
+          value={linkUrl}
+          placeholder="https://… or #/…"
+          data-testid="developer-url"
+          onInput={setLinkUrl}
+          onEnter={handleNavigateUrl}
+        />
+        <div className="flex items-center justify-end gap-2 mt-4">
+          <Button data-testid="developer-go" disabled={!linkUrl.trim()} onClick={handleNavigateUrl}>
+            Open
           </Button>
         </div>
-      </section>
+      </div>
     </>
   );
 }

@@ -17,9 +17,13 @@ export interface DeleteButtonProps {
 }
 
 /**
- * Reusable trash-can delete button. Always runs a native confirm() prompt
- * before invoking onConfirm. Used across home, members panel, devices list,
- * and friends so destructive actions look and behave the same.
+ * Trash-can delete button, guarded by a native confirm().
+ *
+ * Everything else has moved to the Material equivalents — an error-toned
+ * `SheetActionItem` row plus `common/ConfirmSheet`. This survives for the one place
+ * a bottom sheet would be wrong: `CompletionsSheet`, whose rows are already inside
+ * an open sheet, so a confirm sheet over them would be the modal-over-modal the
+ * Material redesign removed. Prefer ConfirmSheet anywhere that is not already modal.
  */
 export function DeleteButton({
   onConfirm,

@@ -1,5 +1,6 @@
 import { test, expect, type Browser } from '@playwright/test';
 import { newPeer, waitFor, type Peer } from './support/peer';
+import { mdField } from './ui/support';
 
 /**
  * End-to-end "Invite a friend" through the real UI + link (not the worker API):
@@ -12,20 +13,20 @@ import { newPeer, waitFor, type Peer } from './support/peer';
  *     because its peers are pre-booted at '/').
  *
  * Both browsers must end up mutual friends, and — since two fresh browsers have
- * no name set — each side must raise a prompt to name the (nameless) other.
+ * no name set — each side must be offered a name field for the (nameless) other.
+ *
+ * There are deliberately NO `page.on('dialog')` handlers anywhere in this file:
+ * the flow raises no native dialogs any more (the alert/prompt became a snackbar
+ * and a Material name field). With none registered, Playwright's default
+ * auto-dismiss applies, so a dialog creeping back in would fail the naming waits
+ * loudly rather than being silently answered.
  */
 
-/**
- * Answer the completion dialogs the add-friend flow raises: a prompt asking for
- * the (nameless) friend's name, or an alert when they did send one. Must be
- * attached before the flow can finish. Registering any handler opts out of
- * Playwright's default auto-dismiss, so this has to cover every dialog type.
- */
-function answerNamePrompt(peer: Pick<Peer, 'page'>, name: string) {
-  peer.page.on('dialog', (dialog) => {
-    if (dialog.type() === 'prompt') void dialog.accept(name);
-    else void dialog.accept();
-  });
+/** Fill the name field and save it. Both surfaces expose RenameSheet's fixed testids. */
+async function nameTheFriend(peer: Pick<Peer, 'page'>, name: string) {
+  await expect(mdField(peer.page, 'rename-input')).toBeVisible({ timeout: 30_000 });
+  await mdField(peer.page, 'rename-input').fill(name);
+  await peer.page.getByTestId('rename-save').click();
 }
 
 /**
@@ -35,16 +36,13 @@ function answerNamePrompt(peer: Pick<Peer, 'page'>, name: string) {
  * Unlike newPeer we do NOT await keyhiveReady before returning — that would mask
  * the cold-start race; `call`/`waitFor` below tolerate the not-yet-ready worker.
  */
-async function coldOpenLink(browser: Browser, name: string, url: string, promptAnswer?: string): Promise<Peer> {
+async function coldOpenLink(browser: Browser, name: string, url: string): Promise<Peer> {
   const context = await browser.newContext();
   const page = await context.newPage();
   page.on('console', (msg) => {
     if (msg.type() === 'error') console.log(`[${name}] console.error: ${msg.text()}`);
   });
   page.on('pageerror', (err) => console.log(`[${name}] pageerror: ${err.message}`));
-
-  // Before goto: doReceive() auto-runs on mount, so the dialog can fire early.
-  if (promptAnswer !== undefined) answerNamePrompt({ page }, promptAnswer);
 
   await page.goto(url);
   await page.waitForFunction(() => !!(window as any).__drive, undefined, { timeout: 60_000 });
@@ -71,7 +69,7 @@ async function startShareAndGetLink(alice: Peer): Promise<string> {
 
   // The sheet stages the rendezvous once keyhive + the relay WS are ready; the
   // readonly link input appears when it's staged (the generous timeout covers connect).
-  const linkInput = alice.page.locator('input[readonly]');
+  const linkInput = alice.page.getByTestId('rendezvous-url');
   await expect(linkInput).toHaveValue(/#\/add-friend\/r\./, { timeout: 30_000 });
   return linkInput.inputValue();
 }
@@ -81,12 +79,15 @@ test('two fresh browsers become mutual friends via the add-friend link', async (
   let bob: Peer | undefined;
   try {
     alice = await newPeer(browser, 'alice');
-    // Neither peer has a name set, so both ends finish on a name prompt.
-    answerNamePrompt(alice, 'Bob');
     const url = await startShareAndGetLink(alice);
 
     // A different, cold browser opens the link — the receiver flow runs itself.
-    bob = await coldOpenLink(browser, 'bob', url, 'Alice');
+    bob = await coldOpenLink(browser, 'bob', url);
+
+    // Neither peer has a name set, so both ends land on the name field. Naming is
+    // what closes each side's flow, so it has to happen before the assertions.
+    await nameTheFriend(bob, 'Alice');
+    await nameTheFriend(alice, 'Bob');
 
     // Each peer's own user-group id (the id a friend is keyed by).
     const { userGroupId: aliceGroup } = await alice.call('ensureUserGroup', { create: true });
@@ -111,36 +112,38 @@ test('two fresh browsers become mutual friends via the add-friend link', async (
   }
 });
 
-test('each side names a friend who sent no name, via the prompt', async ({ browser }) => {
+test('each side names a friend who sent no name', async ({ browser }) => {
   let alice: Peer | undefined;
   let bob: Peer | undefined;
   try {
     // Neither peer sets a name, so neither transmits one during the exchange —
-    // which is what makes both ends fall through to the naming prompt.
+    // which is what makes both ends fall through to the naming field.
     alice = await newPeer(browser, 'alice');
-    answerNamePrompt(alice, 'Bob (from Alice)');
     const url = await startShareAndGetLink(alice);
-    bob = await coldOpenLink(browser, 'bob', url, 'Alice (from Bob)');
+    bob = await coldOpenLink(browser, 'bob', url);
+
+    // Receiver side (Bob): AddFriendPage's RenameSheet.
+    await nameTheFriend(bob, 'Alice (from Bob)');
+    // Sharer side (Alice): the invite sheet's own body, swapped in place of the QR.
+    await nameTheFriend(alice, 'Bob (from Alice)');
 
     const { userGroupId: aliceGroup } = await alice.call('ensureUserGroup', { create: true });
     const { userGroupId: bobGroup } = await bob.call('ensureUserGroup', { create: true });
 
-    // Receiver side (Bob): the prompt answer is saved against Alice's group.
     await waitFor(
       () => bob!.call('getAllFriendNames'),
       (names) => names[aliceGroup!] === 'Alice (from Bob)',
       { label: 'bob named alice' },
     );
-
-    // Sharer side (Alice): she got no name for Bob, so she is prompted too.
     await waitFor(
       () => alice!.call('getAllFriendNames'),
       (names) => names[bobGroup!] === 'Bob (from Alice)',
       { label: 'alice named bob' },
     );
 
-    // Both dialogs resolved themselves: Alice's sheet closed behind them.
-    await expect(alice.page.locator('input[readonly]')).toHaveCount(0);
+    // Saving the name resolves the flow: Alice's invite sheet closed behind it.
+    await expect(alice.page.getByTestId('add-friend-sheet')).toHaveCount(0);
+    await expect(alice.page.getByTestId('rendezvous-url')).toHaveCount(0);
   } finally {
     await Promise.all([alice?.close(), bob?.close()].filter(Boolean) as Promise<void>[]);
   }

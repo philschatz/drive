@@ -4,6 +4,7 @@
  */
 import type { ComponentType } from 'preact';
 import { SettingsSubScreen } from './SettingsSubScreen';
+import { SettingsProse } from './SettingsGroup';
 import { ProfileSettings } from './sections/ProfileSettings';
 import { DevicesSettings } from './sections/DevicesSettings';
 import { StorageSettings } from './sections/StorageSettings';
@@ -27,7 +28,7 @@ export function SettingsSection({ section }: { section?: string; path?: string }
   if (!entry) {
     return (
       <SettingsSubScreen title="Settings">
-        <p className="text-sm text-muted-foreground py-4">Unknown settings section.</p>
+        <SettingsProse>Unknown settings section.</SettingsProse>
       </SettingsSubScreen>
     );
   }

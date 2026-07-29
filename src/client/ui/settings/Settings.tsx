@@ -5,8 +5,7 @@
  * `#/settings/:section` via SettingsSection.
  */
 import { Fragment } from 'preact';
-import { useState } from 'preact/hooks';
-import { Alert } from '@/components/ui/alert';
+import { showError } from '@/components/ui/toast';
 import { ScanQrButton } from '@/components/ScanQrButton';
 
 const GROUPS: Array<Array<{ icon: string; label: string; href: string }>> = [
@@ -27,8 +26,6 @@ const GROUPS: Array<Array<{ icon: string; label: string; href: string }>> = [
 ];
 
 export function Settings({ path }: { path?: string }) {
-  const [error, setError] = useState('');
-
   return (
     <div className="max-w-screen-md mx-auto px-2 sm:px-4 pb-8">
       {/* Top app bar */}
@@ -43,15 +40,8 @@ export function Settings({ path }: { path?: string }) {
         <h1 className="md-title-large font-bold flex-1 min-w-0 truncate">Settings</h1>
         {/* The app's single QR entry point — friend invites, device links and
             document URLs all scan from here. */}
-        <ScanQrButton onError={setError} />
+        <ScanQrButton onError={showError} />
       </div>
-
-      {error && (
-        <Alert variant="destructive" className="mb-2 flex items-center justify-between">
-          <span>{error}</span>
-          <button className="ml-2 opacity-50 hover:opacity-100" onClick={() => setError('')}>&times;</button>
-        </Alert>
-      )}
 
       {GROUPS.map((group, gi) => (
         <Fragment key={gi}>

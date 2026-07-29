@@ -1,36 +1,37 @@
 /**
- * Devices — the linked-device list (rename/remove/role) and the Link Device
- * flow. Extracted 1:1 from the old single-page Settings.
+ * Devices — the linked-device list (rename/remove/role) and the Link Device flow.
+ *
+ * The rows and their options sheet live in `components/DeviceList`; this file is
+ * just the page's shell. `useDevices`'s success/failure callbacks go straight to
+ * the snackbar functions, which is why "Device removed." and "Device access
+ * updated." need no wiring here.
  */
 import { useState } from 'preact/hooks';
-import { Button } from '@/components/ui/button';
+import { showToast, showError } from '@/components/ui/toast';
 import { DeviceList } from '@/components/DeviceList';
 import { useDevices, useDeviceStatuses } from '../../common/use-devices';
 import { AddDeviceSheet } from '../AddDeviceSheet';
-import { useSectionAlerts } from '../SettingsSubScreen';
+import { SettingsGroup } from '../SettingsGroup';
 
 export function DevicesSettings() {
-  const { alerts, setMessage, setError } = useSectionAlerts();
   const [addDeviceOpen, setAddDeviceOpen] = useState(false);
 
   // The device list, its live refresh, and removal are owned by the shared hook.
-  const { devices, removeDevice, changeDeviceRole } = useDevices({ onError: setError, onMessage: setMessage });
+  const { devices, removeDevice, changeDeviceRole } = useDevices({ onError: showError, onMessage: showToast });
   const deviceStatuses = useDeviceStatuses();
 
   return (
     <>
-      {alerts}
-      <section className="mb-6">
-        <DeviceList devices={devices} onRemove={removeDevice} onChangeRole={changeDeviceRole} statuses={deviceStatuses} />
+      <DeviceList devices={devices} onRemove={removeDevice} onChangeRole={changeDeviceRole} statuses={deviceStatuses} />
 
-        {/* Link another device — opens the linking sheet */}
-        <div className="mt-4">
-          <Button variant="outline" size="sm" onClick={() => setAddDeviceOpen(true)}>
-            <span className="material-symbols-outlined mr-1" style={{ fontSize: 16 }}>devices</span>
-            Link Device
-          </Button>
-        </div>
-      </section>
+      <SettingsGroup>
+        <md-list-item type="button" data-testid="devices-link" onClick={() => setAddDeviceOpen(true)}>
+          <md-icon slot="start">add_link</md-icon>
+          <div slot="headline">Link a device</div>
+          <div slot="supporting-text">Open a link on your other device to connect it</div>
+          <md-icon slot="end" aria-hidden="true">chevron_right</md-icon>
+        </md-list-item>
+      </SettingsGroup>
 
       <AddDeviceSheet open={addDeviceOpen} onOpenChange={setAddDeviceOpen} />
     </>

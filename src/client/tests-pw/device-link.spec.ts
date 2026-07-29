@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { newPeer, waitFor, type Peer } from './support/peer';
 import { setupSharedDoc } from './support/scenarios';
+import { mdField } from './ui/support';
 
 /**
  * Add a new device: link a second, fresh device into the same identity so both
@@ -112,25 +113,23 @@ test('linking a new device exchanges device names both ways', async ({ browser }
       { label: 'deviceB learns deviceA name' },
     );
 
-    // And the Settings device list renders the learned name in an editable field
-    // (deviceA sees "Phone B" as an input value — every device row is editable).
-    // The list is its own sub-screen; `#/settings` is only a navigation index.
+    // And the Settings device list renders the learned name as the row's headline
+    // (deviceA sees a row for "Phone B"). The list is its own sub-screen;
+    // `#/settings` is only a navigation index.
     await deviceA.page.evaluate(() => { location.hash = '#/settings/devices'; });
-    await expect
-      .poll(
-        () => deviceA!.page.getByRole('textbox').evaluateAll(
-          (els) => els.map((e) => (e as HTMLInputElement).value),
-        ),
-        { timeout: 15_000 },
-      )
-      .toContain(NAME_B);
+    // hasText is a substring match on innerText: an md-list-item's shadow innerText
+    // carries a trailing newline, so an anchored regex would never match.
+    const bRow = deviceA.page.getByTestId('device-row').filter({ hasText: NAME_B });
+    await expect(bRow).toHaveCount(1, { timeout: 15_000 });
 
-    // A remote device row is editable: relabelling deviceB from deviceA's Settings
-    // persists locally (the reported gap — other devices used to be read-only).
+    // A remote device is relabellable: tap the row → Rename → Save. That persists
+    // locally (the reported gap — other devices used to be read-only).
     const RENAMED_B = "Bob's phone";
-    const bInput = deviceA.page.getByTitle(idB.agentId);
-    await bInput.fill(RENAMED_B);
-    await bInput.blur();
+    await bRow.click();
+    await expect(deviceA.page.getByTestId('device-options-sheet')).toBeVisible();
+    await deviceA.page.getByTestId('device-rename').click();
+    await mdField(deviceA.page, 'rename-input').fill(RENAMED_B);
+    await deviceA.page.getByTestId('rename-save').click();
     await waitFor(
       () => deviceA!.call('getAllDeviceNames'),
       (names) => names[idB.agentId] === RENAMED_B,
@@ -239,7 +238,10 @@ test('linking a new device via rendezvous converges both onto one user-group', a
       (peers) => !peers.includes(`${idB.agentId}-drive`),
       { label: 'deviceA drops the departed deviceB' },
     );
-    await expect(deviceA.page.getByText('Offline').first()).toBeVisible({ timeout: 15_000 });
+    // Exact match is safe here: this targets the light-DOM <span>, not the
+    // md-list-item host whose shadow innerText carries a trailing newline.
+    await expect(deviceA.page.getByTestId('device-transport').first())
+      .toHaveText('Offline', { timeout: 15_000 });
   } finally {
     await deviceA?.close();
     await deviceB?.close();

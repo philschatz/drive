@@ -17,62 +17,24 @@ import { QRCodeDisplay } from '@/components/ui/qr-code';
 import { receiveContactCard, linkDevice, getLinkPayload, rendezvousJoinDeviceLink, onRendezvousEvent, getIdentity } from '../common/keyhive-api';
 import { resolveDeviceName } from '../device-names';
 import type { RendezvousStatus } from '../worker-api';
+import { showToast } from '@/components/ui/toast';
 import { RendezvousProgress } from './RendezvousProgress';
-import { parseRendezvousToken, buildRendezvousUrl } from '../../../shared/rendezvous-url';
-import { deflate, inflate } from 'pako';
-
-export function buildLinkDeviceRendezvousUrl(rendezvousId: string, key: string): string {
-  return buildRendezvousUrl(window.location.origin + window.location.pathname, rendezvousId, key);
-}
+import { parseRendezvousToken } from '../../../shared/rendezvous-url';
+import { buildLinkDeviceUrl, decodeLinkData } from './rendezvous-urls';
 
 interface LinkDevicePageProps {
   cardData?: string;
   path?: string;
 }
 
-function b64urlToBytes(b64url: string): Uint8Array {
-  const b64 = b64url.replace(/-/g, '+').replace(/_/g, '/');
-  const bin = atob(b64);
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  return bytes;
-}
-
-function bytesToB64url(bytes: Uint8Array): string {
-  let binary = '';
-  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-}
-
-function decodeStringFromUrl(b64url: string): string {
-  return new TextDecoder().decode(inflate(b64urlToBytes(b64url)));
-}
-
-function encodeStringForUrl(value: string): string {
-  const compressed = deflate(new TextEncoder().encode(value));
-  return bytesToB64url(compressed);
-}
-
-/** Build a device-link URL embedding the contact card and this user's group id. */
-export function buildLinkDeviceUrl(cardJson: string, userGroupId?: string | null): string {
-  const base = window.location.origin + window.location.pathname;
-  const payload = JSON.stringify({ card: cardJson, userGroupId: userGroupId ?? null });
-  return `${base}#/link-device/${encodeStringForUrl(payload)}`;
-}
-
-/** Decode a device-link payload, tolerating the legacy raw-card format. */
-function decodeLinkData(b64url: string): { cardJson: string; userGroupId: string | null } {
-  const raw = decodeStringFromUrl(b64url);
-  try {
-    const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === 'object' && typeof parsed.card === 'string') {
-      return { cardJson: parsed.card, userGroupId: parsed.userGroupId ?? null };
-    }
-  } catch {
-    // Not the wrapper format — old-style raw card JSON
-  }
-  return { cardJson: raw, userGroupId: null };
-}
+/**
+ * Every exit lands on the device *list*, not the settings index. That is the screen
+ * this flow is about, and it shows the result: useDevices refreshes on the `linked`
+ * rendezvous event, so the newly linked device is already there with a live
+ * transport label.
+ */
+const DEVICES_HASH = '#/settings/devices';
+const goToDevices = () => { window.location.hash = '/settings/devices'; };
 
 export function LinkDevicePage({ cardData }: LinkDevicePageProps) {
   const [status, setStatus] = useState('');
@@ -160,33 +122,50 @@ export function LinkDevicePage({ cardData }: LinkDevicePageProps) {
   useEffect(() => { doLink(); }, [doLink]);
 
   return (
-    <div className="max-w-md mx-auto p-8 text-center">
-      <h1 className="text-xl font-bold mb-4">
-        <span className="material-symbols-outlined align-middle mr-1" style={{ fontSize: 24 }}>devices</span>
-        Link Device
-      </h1>
+    <div className="max-w-screen-md mx-auto px-2 sm:px-4 pb-8">
+      {/* Top app bar. `close`, not `arrow_back`: this page is reached by opening a
+          link, so the route IS the first history entry. Rendered always, including
+          mid-handshake — there used to be no exit at all until the flow finished, so
+          a stalled exchange left editing the URL as the only way out. */}
+      <div className="flex items-center gap-1.5 pl-1 min-h-14">
+        <a
+          href={DEVICES_HASH}
+          aria-label="Close"
+          className="inline-flex items-center justify-center h-10 w-10 rounded-full state-layer shrink-0"
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: 24 }}>close</span>
+        </a>
+        <h1 className="md-title-large font-bold flex-1 min-w-0 truncate">Link device</h1>
+      </div>
 
-      {error ? (
-        <div className="text-destructive mb-4">
-          <p className="mb-2">{error}</p>
-          {rdv && (
-            <p className="text-[10px] text-muted-foreground mb-2">
-              Channel: <code className="font-mono">{rdv.rendezvousId.slice(0, 8)}…</code>
-            </p>
-          )}
-          <div className="flex gap-2 justify-center">
-            <Button variant="default" onClick={doLink} disabled={processing}>
-              Retry
-            </Button>
-            <Button variant="outline" onClick={() => { window.location.hash = '/settings'; }}>
-              Back to Settings
-            </Button>
-          </div>
-        </div>
-      ) : (
-        <div>
-          {rdv && !done ? (
-            <div className="mb-4">
+      <div className="px-4 max-w-md">
+        {error ? (
+          <>
+            {/* Inline, not a snackbar: a failure with a Retry has to stay put. */}
+            <div
+              className="flex items-start gap-3 p-3 rounded-xl bg-error-container text-on-error-container"
+              data-testid="link-device-error"
+            >
+              <span className="material-symbols-outlined" style={{ fontSize: 20 }}>error</span>
+              <div className="min-w-0">
+                <p className="md-body-medium">{error}</p>
+                {rdv && (
+                  <p className="text-[10px] opacity-70 mt-1">
+                    Channel: <code className="font-mono">{rdv.rendezvousId.slice(0, 8)}…</code>
+                  </p>
+                )}
+              </div>
+            </div>
+            <div className="flex gap-2 mt-4">
+              <Button onClick={doLink} disabled={processing} data-testid="link-device-retry">
+                Retry
+              </Button>
+              <Button variant="outline" onClick={goToDevices}>Devices</Button>
+            </div>
+          </>
+        ) : (
+          <>
+            {rdv && !done ? (
               <RendezvousProgress
                 phase={phase}
                 rendezvousId={rdv.rendezvousId}
@@ -195,43 +174,64 @@ export function LinkDevicePage({ cardData }: LinkDevicePageProps) {
                 transferDetail={transferDetail}
                 doneLabel="Linked."
               />
-            </div>
-          ) : (
-            <p className="text-sm text-muted-foreground mb-4">{status}</p>
-          )}
-          {done && (
-            <>
-              {myCardUrl ? (
-                <>
-                  <p className="text-sm font-medium mb-4">Almost done — finish on your original device</p>
-                  <div className="mb-4">
-                    <p className="text-xs text-muted-foreground mb-2">
-                      Open this link (or scan this QR code) on your original device to complete the handshake:
+            ) : (
+              <p className="md-body-medium text-on-surface-variant">{status}</p>
+            )}
+
+            {done && (
+              <div className="mt-4">
+                {myCardUrl ? (
+                  <>
+                    <p className="md-title-medium mb-1">Almost done — finish on your original device</p>
+                    <p className="md-body-medium text-on-surface-variant mb-3">
+                      Open this link (or scan this QR code) on your original device to complete the
+                      handshake:
                     </p>
                     <div className="flex justify-center">
                       <QRCodeDisplay url={myCardUrl} />
                     </div>
-                    <input
-                      className="mt-2 text-xs p-2 rounded border border-border font-mono bg-muted w-full"
-                      value={myCardUrl}
-                      readOnly
-                      onClick={(e: any) => e.currentTarget.select()}
-                    />
-                  </div>
-                </>
-              ) : (
-                <p className="text-sm text-green-600 font-medium mb-4">
-                  <span className="material-symbols-outlined align-middle mr-1" style={{ fontSize: 16 }}>check_circle</span>
-                  Linking complete
-                </p>
-              )}
-              <Button variant="outline" onClick={() => { window.location.hash = '/settings'; }}>
-                Done
-              </Button>
-            </>
-          )}
-        </div>
-      )}
+                    {/* The link stays visible: it is the fallback when the payload
+                        overflows QR capacity, and users paste it between devices. */}
+                    <div className="flex items-center gap-1 mt-2">
+                      <input
+                        data-testid="link-device-url"
+                        className="w-full min-w-0 text-xs p-3 rounded-xl font-mono bg-surface-container-highest text-on-surface-variant border border-outline-variant"
+                        value={myCardUrl}
+                        readOnly
+                        onClick={(e: any) => e.currentTarget.select()}
+                      />
+                      <button
+                        aria-label="Copy link"
+                        title="Copy link"
+                        className="inline-flex items-center justify-center h-10 w-10 rounded-full state-layer shrink-0"
+                        onClick={() => navigator.clipboard.writeText(myCardUrl).then(
+                          () => showToast('Link copied to clipboard'),
+                          () => showToast('Failed to copy link'),
+                        )}
+                      >
+                        <span className="material-symbols-outlined" style={{ fontSize: 20 }}>content_copy</span>
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  // MD3 has no "success" role; a completed step is `primary`.
+                  <p className="md-title-medium" style={{ color: 'var(--md-sys-color-primary)' }}>
+                    <span className="material-symbols-outlined align-middle mr-1" style={{ fontSize: 18 }}>
+                      check_circle
+                    </span>
+                    Linking complete
+                  </p>
+                )}
+                <div className="flex gap-2 mt-4">
+                  <Button variant="outline" onClick={goToDevices} data-testid="link-device-done">
+                    Done
+                  </Button>
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </div>
     </div>
   );
 }

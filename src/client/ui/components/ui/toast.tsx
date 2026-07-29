@@ -46,6 +46,20 @@ export function showToast(message: string, spec: Omit<ToastSpec, "message"> = {}
 }
 
 /**
+ * A user action that failed. Error tone and an icon so it isn't mistaken for a
+ * success, and a longer dwell than the 2s default because a failure carries an
+ * exception message the user actually has to read.
+ *
+ * Pair with plain `showToast` for the success half — together they are what
+ * replaced Settings' inline success/error `Alert` banners. Persistent conditions
+ * (a closed relay socket, a crashed worker) are NOT this: they stay inline where
+ * they are, because a toast that auto-dismisses leaves the condition unexplained.
+ */
+export function showError(message: string) {
+  showToast(message, { tone: "destructive", icon: "error", durationMs: 6000 });
+}
+
+/**
  * Create/update (or remove, when `spec` is null) a toast identified by a stable
  * key. Use for persistent, state-driven notices (worker crash, multi-tab, update)
  * so re-renders don't stack duplicates and the notice can be cleared when the

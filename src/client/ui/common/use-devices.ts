@@ -3,9 +3,9 @@
  *
  * Owns the device list: the initial `listDevices()` fetch, a live refresh on
  * rendezvous-link completion and keyhive state changes, and a remove handler.
- * Callers pass `onError`/`onMessage` so each page keeps control of its own
- * alert UI (the Settings page, for instance, shares those alerts with
- * name-saving and the cache toggle, so the hook must not own that state).
+ * Callers pass `onError`/`onMessage` so each page keeps control of how results are
+ * surfaced — the Settings page hands them straight to `showError`/`showToast`, but
+ * the hook must not assume that.
  */
 
 import { useState, useEffect, useCallback, useRef, useMemo } from 'preact/hooks';

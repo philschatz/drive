@@ -1,20 +1,22 @@
 /**
  * Settings Storage — Local (default) vs Shared (one-way opt-in) settings sync.
- * Extracted 1:1 from the old single-page Settings.
  */
 import { useState, useEffect } from 'preact/hooks';
-import { Button } from '@/components/ui/button';
+import { showError } from '@/components/ui/toast';
+import { useConfirm } from '../../common/ConfirmSheet';
 import { getIdentity, type IdentityInfo } from '../../common/keyhive-api';
 import { enableSettingsSync, getReachableSettingsDoc } from '../../worker-api';
 import { idbGet, KEYS } from '../../../shared/idb-storage';
 import { sourceUrl } from '../../common/doc-urls';
-import { useSectionAlerts } from '../SettingsSubScreen';
+import { SettingsGroup, SettingsProse } from '../SettingsGroup';
 
 export function StorageSettings() {
-  const { alerts, setError } = useSectionAlerts();
+  const { confirm, confirmSheet } = useConfirm();
   const [identity, setIdentity] = useState<IdentityInfo | null>(null);
   const [settingsDocId, setSettingsDocId] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
+  // Inline, not a toast: a load failure means the branch below can't be trusted.
+  const [loadError, setLoadError] = useState('');
 
   useEffect(() => {
     (async () => {
@@ -24,13 +26,12 @@ export function StorageSettings() {
         const settingsVal = await idbGet<unknown>(KEYS.driveSettings);
         setSettingsDocId(typeof settingsVal === 'string' ? settingsVal : null);
       } catch (err: any) {
-        setError(err.message);
+        setLoadError(err.message);
       }
     })();
-  }, [setError]);
+  }, []);
 
   const handleEnableSync = async () => {
-    setError('');
     // Probe FIRST (before any prompt): if a synced settings doc already exists and
     // is reachable, just adopt it — no scary "this is permanent" confirmation. Only
     // CREATING a brand-new synced doc is the irreversible step worth confirming.
@@ -38,55 +39,79 @@ export function StorageSettings() {
     try {
       existing = await getReachableSettingsDoc();
     } catch { /* fall through to the confirm+create path */ }
-    if (!existing && !window.confirm(
-      'Sync your settings (friends, device names, seen state) across your devices?\n\n' +
-      "This is permanent — synced settings can't be made device-only again.",
-    )) return;
+    if (!existing && !await confirm({
+      title: 'Sync settings across your devices?',
+      body: (
+        <>
+          Friends, device names and seen state will sync between your devices.{' '}
+          <strong>This is permanent</strong> — synced settings can’t be made device-only again.
+        </>
+      ),
+      confirmLabel: 'Sync settings',
+      confirmIcon: 'sync',
+      // Not `destructive`: irreversible is not destructive, and an error-toned
+      // "yes, sync my settings" would read as "this will break something".
+      'data-testid': 'confirm-enable-sync',
+    })) return;
     setSyncing(true);
     try {
       await enableSettingsSync(); // adopts the existing reachable doc, else creates + migrates
       window.location.reload();
     } catch (err: any) {
-      setError('Could not enable settings sync: ' + (err.message ?? err));
+      showError('Could not enable settings sync: ' + (err.message ?? err));
       setSyncing(false);
     }
   };
 
   return (
     <>
-      {alerts}
-      <section className="mb-6">
-        {settingsDocId ? (
-          <p className="text-xs text-muted-foreground">
+      {loadError && <p className="md-body-medium text-destructive px-4 pt-2">{loadError}</p>}
+
+      {settingsDocId ? (
+        <>
+          <SettingsProse>
             Your settings (friends, device names, seen state) are{' '}
-            <strong>synced across your devices</strong> —{' '}
-            <a href={sourceUrl(settingsDocId)} className="text-primary underline underline-offset-2">
-              inspect them
-            </a>.
-          </p>
-        ) : (
-          <>
-            <p className="text-xs text-muted-foreground mb-2">
-              Your settings are stored <strong>only on this device</strong>. You can sync them across
-              your devices — this is <strong>permanent</strong> and can’t be undone.
-            </p>
-            <Button
-              size="sm"
-              variant="outline"
+            <strong>synced across your devices</strong>.
+          </SettingsProse>
+          <SettingsGroup>
+            <md-list-item type="link" href={sourceUrl(settingsDocId)} data-testid="storage-inspect">
+              <md-icon slot="start">sync</md-icon>
+              <div slot="headline">Inspect synced settings</div>
+              <div slot="supporting-text">Friends, device names, seen state</div>
+              <md-icon slot="end" aria-hidden="true">open_in_new</md-icon>
+            </md-list-item>
+          </SettingsGroup>
+        </>
+      ) : (
+        <>
+          <SettingsProse>
+            Your settings are stored <strong>only on this device</strong>. You can sync them across
+            your devices — this is <strong>permanent</strong> and can’t be undone.
+          </SettingsProse>
+          <SettingsGroup>
+            <md-list-item
+              type="button"
+              data-testid="storage-enable-sync"
+              disabled={syncing || !identity?.userGroupId || undefined}
               onClick={handleEnableSync}
-              disabled={syncing || !identity?.userGroupId}
-              title={identity?.userGroupId ? undefined : 'Add a friend or link a device first to enable synced settings'}
             >
-              {syncing ? 'Enabling…' : 'Sync settings across devices'}
-            </Button>
-            {!identity?.userGroupId && (
-              <p className="text-[11px] text-muted-foreground mt-1">
-                Add a friend or link a device first to enable synced settings.
-              </p>
-            )}
-          </>
-        )}
-      </section>
+              <md-icon slot="start">sync</md-icon>
+              <div slot="headline">Sync settings across devices</div>
+              {/* One statement of the reason, visible on touch — the old page had it
+                  twice, once in a `title` tooltip a phone never shows. */}
+              <div slot="supporting-text">
+                {syncing
+                  ? 'Enabling…'
+                  : identity?.userGroupId
+                    ? 'Permanent — this can’t be undone'
+                    : 'Add a friend or link a device first'}
+              </div>
+            </md-list-item>
+          </SettingsGroup>
+        </>
+      )}
+
+      {confirmSheet}
     </>
   );
 }

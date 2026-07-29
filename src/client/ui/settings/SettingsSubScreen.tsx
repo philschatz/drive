@@ -1,10 +1,16 @@
 /**
  * Shared layout for Settings sub-screens: a Material top app bar with a back
- * button to the Settings index, plus per-section success/error alerts.
+ * button to the Settings index.
+ *
+ * It used to also own `useSectionAlerts`, an inline success/error `Alert` pair each
+ * section rendered as its first child. Those are snackbars now (`showToast` /
+ * `showError` from `components/ui/toast`) — a one-shot result doesn't need a
+ * banner that shifts the page. Only *standing* conditions stay inline, in the
+ * section that owns them: the relay-socket row and the worker-crash banner on the
+ * Debugging page, and load failures that would otherwise leave a blank screen
+ * behind a 6-second toast.
  */
-import { useState } from 'preact/hooks';
 import type { ComponentChildren } from 'preact';
-import { Alert } from '@/components/ui/alert';
 
 export function SettingsSubScreen({ title, children }: { title: string; children?: ComponentChildren }) {
   return (
@@ -19,30 +25,10 @@ export function SettingsSubScreen({ title, children }: { title: string; children
         </a>
         <h1 className="md-title-large font-bold flex-1 min-w-0 truncate">{title}</h1>
       </div>
-      <div className="px-2">{children}</div>
+      {/* No horizontal padding of its own: with the shell's px-2 sm:px-4 plus
+          md-item's internal 16px, rows would sit 24-32px in from the edge. MD3 list
+          rows run close to full width; prose gets its indent from SettingsProse. */}
+      {children}
     </div>
   );
-}
-
-/** Local success/error alert pair used by each settings section. */
-export function useSectionAlerts() {
-  const [message, setMessage] = useState('');
-  const [error, setError] = useState('');
-  const alerts = (
-    <>
-      {message && (
-        <Alert variant="success" className="mb-2 flex items-center justify-between">
-          <span>{message}</span>
-          <button className="ml-2 opacity-50 hover:opacity-100" onClick={() => setMessage('')}>&times;</button>
-        </Alert>
-      )}
-      {error && (
-        <Alert variant="destructive" className="mb-2 flex items-center justify-between">
-          <span>{error}</span>
-          <button className="ml-2 opacity-50 hover:opacity-100" onClick={() => setError('')}>&times;</button>
-        </Alert>
-      )}
-    </>
-  );
-  return { alerts, setMessage, setError };
 }

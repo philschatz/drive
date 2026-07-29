@@ -54,10 +54,11 @@ function StepRow({ state, label }: { state: StepState; label: string }) {
     state === 'done' ? 'check_circle'
     : state === 'active' ? 'progress_activity'
     : 'radio_button_unchecked';
+  // MD3 has no "success" role, so a completed step is `primary` — the same tone the
+  // active step uses, which is what a Material stepper does. (This was
+  // `text-green-600`, a raw Tailwind green that survives nowhere else in the chrome.)
   const color =
-    state === 'done' ? 'text-green-600'
-    : state === 'active' ? 'text-primary'
-    : 'text-muted-foreground/40';
+    state === 'pending' ? 'text-muted-foreground/40' : 'text-primary';
   const textColor = state === 'pending' ? 'text-muted-foreground/60' : 'text-foreground';
   return (
     <div className="flex items-center gap-2">
@@ -93,9 +94,9 @@ export function RendezvousProgress({
   if (errorMessage) {
     return (
       <div className="space-y-1.5">
-        <div className="flex items-center gap-2">
-          <span className="material-symbols-outlined text-destructive" style={{ fontSize: 18 }}>error</span>
-          <span className="text-xs text-destructive">{errorMessage}</span>
+        <div className="flex items-center gap-2" style={{ color: 'var(--md-sys-color-error)' }}>
+          <span className="material-symbols-outlined" style={{ fontSize: 18 }}>error</span>
+          <span className="text-xs">{errorMessage}</span>
         </div>
         {idRow}
       </div>

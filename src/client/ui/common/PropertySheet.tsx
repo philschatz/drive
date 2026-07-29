@@ -31,39 +31,10 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sh
 import { PresenceDot } from './PeerDot';
 import type { PeerFieldInfo } from './presence';
 
-/**
- * A sheet-level action (Delete, Archive) as a Material list row — the same shape
- * the app's other option sheets use (FriendOptionsSheet, MemberOptionsSheet), so
- * a destructive action reads as an error-toned row rather than a stray button.
- *
- * `md-list-item` has no implicit ARIA role while unregistered under jsdom, so
- * these always carry a testid; query them by that, not by `getByRole('button')`.
- */
-export function SheetActionItem({ icon, label, destructive, onClick, 'data-testid': testId }: {
-  icon: string;
-  label: string;
-  destructive?: boolean;
-  onClick: () => void;
-  'data-testid': string;
-}) {
-  const tone = destructive ? { color: 'var(--md-sys-color-error)' } : undefined;
-  return (
-    <md-list-item type="button" data-testid={testId} onClick={onClick}>
-      <md-icon slot="start" style={tone}>{icon}</md-icon>
-      <div slot="headline" style={tone}>{label}</div>
-    </md-list-item>
-  );
-}
-
-/** Divider + list wrapper for a run of {@link SheetActionItem}s. */
-export function SheetActions({ children }: { children: ComponentChildren }) {
-  return (
-    <div className="mt-2">
-      <md-divider role="separator" />
-      <md-list style={{ background: 'transparent' }}>{children}</md-list>
-    </div>
-  );
-}
+// The sheet-action row lives in its own module (ConfirmSheet needs it without
+// this file's worker-api dependency chain); re-exported so the item editors that
+// have always imported it from here keep working.
+export { SheetActionItem, SheetActions } from './SheetActionItem';
 
 export interface PropertyRenderCtx {
   /** Return to the list. Call after a terminal interaction (Enter, picking a value). */

@@ -20,6 +20,12 @@ export interface RenameSheetProps {
   label?: string;
   /** Starting value; re-read each time the sheet opens. */
   value: string;
+  /**
+   * Accept an empty name. For stores where blank means *clear* rather than
+   * "untitled" — `setFriendName('')` removes the name, which is how you unset your
+   * own display name. Documents and sheet tabs keep the non-empty guard.
+   */
+  allowEmpty?: boolean;
   onRename: (name: string) => void;
   onClose: () => void;
   'data-testid'?: string;
@@ -30,6 +36,7 @@ export function RenameSheet({
   title = 'Rename',
   label = 'Name',
   value,
+  allowEmpty,
   onRename,
   onClose,
   'data-testid': testId = 'rename-sheet',
@@ -50,8 +57,9 @@ export function RenameSheet({
       // `rename-save` rather than `doc-rename-sheet-save`.
       fieldTestId="rename"
       // An empty name is a no-op, not an "Untitled": Save disables and Enter does
-      // nothing, so the sheet just stays open.
-      validate={v => !!v.trim()}
+      // nothing, so the sheet just stays open. Unless `allowEmpty`, where blank is
+      // itself the meaningful value (clear the name).
+      validate={v => allowEmpty || !!v.trim()}
       onSave={v => { onRename(v.trim()); onClose(); }}
       onClose={onClose}
     >

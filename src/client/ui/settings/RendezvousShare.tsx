@@ -16,6 +16,7 @@ import { rendezvousCancel, onRendezvousEvent } from '../common/keyhive-api';
 import type { RendezvousStatus } from '../worker-api';
 import { formatBytes } from '../../../shared/format-bytes';
 import { QRCodeDisplay } from '@/components/ui/qr-code';
+import { showToast } from '@/components/ui/toast';
 import { RendezvousProgress } from './RendezvousProgress';
 
 interface RendezvousShareProps {
@@ -96,14 +97,31 @@ export function RendezvousShare({
       <div className="flex justify-center">
         <QRCodeDisplay url={url} />
       </div>
-      <input
-        className="w-full text-xs p-2 rounded border border-border font-mono bg-muted"
-        value={url}
-        readOnly
-        onClick={(e: any) => e.currentTarget.select()}
-      />
+      {/* The link stays visible, not hidden behind a copy button: it is the fallback
+          when the payload overflows QR capacity (QRCodeDisplay says as much), users
+          paste it into a chat app, and a clipboard-only UI would be untestable. */}
+      <div className="flex items-center gap-1">
+        <input
+          data-testid="rendezvous-url"
+          className="w-full min-w-0 text-xs p-3 rounded-xl font-mono bg-surface-container-highest text-on-surface-variant border border-outline-variant"
+          value={url}
+          readOnly
+          onClick={(e: any) => e.currentTarget.select()}
+        />
+        <button
+          aria-label="Copy link"
+          title="Copy link"
+          className="inline-flex items-center justify-center h-10 w-10 rounded-full state-layer shrink-0"
+          onClick={() => navigator.clipboard.writeText(url).then(
+            () => showToast('Link copied to clipboard'),
+            () => showToast('Failed to copy link'),
+          )}
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: 20 }}>content_copy</span>
+        </button>
+      </div>
       {payloadBytes !== undefined && (
-        <p className="text-xs text-muted-foreground text-center">
+        <p className="md-body-medium text-on-surface-variant text-center">
           Sending ~{formatBytes(payloadBytes)} to the other device.
         </p>
       )}

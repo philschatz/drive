@@ -1,17 +1,56 @@
 /**
- * DeviceList: the role controls and the per-device transport label.
+ * DeviceList: which actions each device row offers, and the per-device transport
+ * label.
  *
- * The rule worth pinning is that your OWN device's role is never editable —
- * self-demotion from admin is unrecoverable from this screen, so the control is
- * not offered at all rather than being guarded by a confirm.
+ * The two rules worth pinning are that your OWN device's role is never editable
+ * and your own device is never removable — self-demotion from admin is
+ * unrecoverable from this screen, so the actions are not offered at all rather
+ * than being guarded by a confirm. Those used to read as "the Select/trash isn't
+ * rendered on that row"; now they are "those rows don't exist in the options
+ * sheet", which is what these tests assert.
+ *
+ * Rows are `md-list-item`s, which carry no implicit ARIA role while unregistered
+ * under jsdom — address them by testid, never `getByRole('button')`.
  */
-import { render, screen, within } from '@testing-library/preact';
-import { DeviceList } from './DeviceList';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/preact';
 
-jest.mock('../worker-api', () => ({
-  usePeerTransports: () => ({}),
-  onDeviceNamesUpdated: () => () => {},
+let mockNames: Record<string, string>;
+let mockSetDeviceName: jest.Mock;
+let mockRemoveDeviceName: jest.Mock;
+
+jest.mock('../device-names', () => ({
+  getDeviceName: (id: string) => mockNames[id],
+  setDeviceName: (...args: any[]) => mockSetDeviceName(...args),
+  removeDeviceName: (...args: any[]) => mockRemoveDeviceName(...args),
 }));
+
+// Portal-free sheet stubs so every sheet body is queryable in the same tree.
+jest.mock('@/components/ui/sheet', () => ({
+  Sheet: ({ children, open }: any) => (open ? <div data-testid="sheet">{children}</div> : null),
+  SheetContent: ({ children }: any) => <div>{children}</div>,
+  SheetHeader: ({ children }: any) => <div>{children}</div>,
+  SheetTitle: ({ children }: any) => <div>{children}</div>,
+}));
+
+// PeerDot pulls in presence → worker-api (import.meta / new Worker), which the
+// jsdom jest env can't load.
+jest.mock('@/common/PeerDot', () => ({
+  PeerDot: ({ identityKey, online, direct }: any) => (
+    <span
+      data-testid="peer-dot"
+      data-identity={identityKey}
+      data-online={String(!!online)}
+      data-direct={String(!!direct)}
+    />
+  ),
+}));
+
+jest.mock('@/components/ui/toast', () => ({
+  showToast: jest.fn(),
+  showError: jest.fn(),
+}));
+
+import { DeviceList } from './DeviceList';
 
 const device = (agentId: string, extra: Record<string, any> = {}) =>
   ({ agentId, role: 'admin', isMe: false, ...extra }) as any;
@@ -19,34 +58,116 @@ const device = (agentId: string, extra: Record<string, any> = {}) =>
 const ME = device('me-agent', { isMe: true });
 const OTHER = device('other-agent');
 
-const noop = () => {};
-const roleSelect = (row: HTMLElement) => within(row).queryByRole('combobox');
+let onRemove: jest.Mock;
+let onChangeRole: jest.Mock;
+
+beforeEach(() => {
+  mockNames = {};
+  mockSetDeviceName = jest.fn(() => Promise.resolve());
+  mockRemoveDeviceName = jest.fn(() => Promise.resolve());
+  onRemove = jest.fn();
+  onChangeRole = jest.fn();
+});
 
 function setup(devices: any[], statuses?: Record<string, any>) {
-  render(<DeviceList devices={devices} onRemove={noop} onChangeRole={noop} statuses={statuses} />);
+  render(<DeviceList devices={devices} onRemove={onRemove} onChangeRole={onChangeRole} statuses={statuses} />);
 }
 
-describe('DeviceList roles', () => {
-  it('does not let an admin change its OWN role', () => {
-    setup([ME, OTHER]);
-    const rows = document.querySelectorAll('div.border-b');
-    // Two rows, but only one role Select — and it is not on the "This device" row.
-    expect(rows).toHaveLength(2);
-    expect(screen.queryAllByRole('combobox')).toHaveLength(1);
+/** Tap the row whose text contains `text`, opening its options sheet. */
+const openRow = (text: string) => {
+  const row = screen.getAllByTestId('device-row').find(r => r.textContent?.includes(text));
+  if (!row) throw new Error(`no device row matching ${text}`);
+  fireEvent.click(row);
+};
 
-    const myRow = [...rows].find(r => r.textContent?.includes('This device')) as HTMLElement;
-    expect(roleSelect(myRow)).toBeNull();
-    expect(within(myRow).getByText('admin')).toBeDefined(); // static label instead
+const sheet = () => screen.getByTestId('device-options-sheet');
+
+describe('DeviceList row actions', () => {
+  it('does not let an admin change or remove its OWN device', () => {
+    setup([ME, OTHER]);
+    expect(screen.getAllByTestId('device-row')).toHaveLength(2);
+
+    // "This device" is the me row's own supporting text.
+    openRow('This device');
+    expect(within(sheet()).queryByTestId('device-change-role')).toBeNull();
+    expect(within(sheet()).queryByTestId('device-remove')).toBeNull();
+    // Renaming your own device is still offered.
+    expect(within(sheet()).getByTestId('device-rename')).toBeDefined();
   });
 
-  it('offers no role control at all to a non-admin device', () => {
+  it('offers access + removal on another device to an admin', () => {
+    setup([ME, OTHER]);
+    openRow('other-agent');
+    expect(within(sheet()).getByTestId('device-change-role')).toBeDefined();
+    expect(within(sheet()).getByTestId('device-remove')).toBeDefined();
+  });
+
+  it('offers no access control at all to a non-admin device', () => {
     setup([device('me-agent', { isMe: true, role: 'read' }), OTHER]);
-    expect(screen.queryAllByRole('combobox')).toHaveLength(0);
+    openRow('other-agent');
+    expect(within(sheet()).queryByTestId('device-change-role')).toBeNull();
+    expect(within(sheet()).queryByTestId('device-remove')).toBeNull();
   });
 
-  it('never offers to remove your own device', () => {
+  it("states every device's role on its row, including your own", () => {
     setup([ME, OTHER]);
-    expect(screen.queryAllByTitle('Remove device')).toHaveLength(1);
+    expect(screen.getAllByTestId('device-role').map(n => n.textContent)).toEqual(['admin', 'admin']);
+  });
+
+  it('offers Reset name only once a name has been stored', () => {
+    mockNames = { 'other-agent': 'Bob-phone' };
+    setup([ME, device('other-agent', { name: 'Bob-phone' })]);
+
+    openRow('Bob-phone');
+    fireEvent.click(within(sheet()).getByTestId('device-reset-name'));
+    expect(mockRemoveDeviceName).toHaveBeenCalledWith('other-agent');
+
+    openRow('This device');
+    expect(within(sheet()).queryByTestId('device-reset-name')).toBeNull();
+  });
+});
+
+describe('DeviceList shared sheets', () => {
+  it('routes a role change through the shared role picker', () => {
+    setup([ME, OTHER]);
+    openRow('other-agent');
+    fireEvent.click(screen.getByTestId('device-change-role'));
+
+    expect(screen.getByTestId('role-picker-sheet')).toBeDefined();
+    fireEvent.click(screen.getByTestId('role-edit'));
+    expect(onChangeRole).toHaveBeenCalledWith('other-agent', 'edit');
+  });
+
+  it('renames through the shared rename sheet', () => {
+    setup([ME, OTHER]);
+    openRow('other-agent');
+    fireEvent.click(screen.getByTestId('device-rename'));
+
+    fireEvent.input(screen.getByTestId('rename-input'), { target: { value: "Bob's phone" } });
+    fireEvent.click(screen.getByTestId('rename-save'));
+    expect(mockSetDeviceName).toHaveBeenCalledWith('other-agent', "Bob's phone");
+  });
+
+  it('confirms before removing a device', async () => {
+    setup([ME, OTHER]);
+    openRow('other-agent');
+    fireEvent.click(screen.getByTestId('device-remove'));
+
+    // The confirm is up and nothing has happened yet.
+    expect(await screen.findByTestId('remove-device-confirm')).toBeDefined();
+    expect(onRemove).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId('confirm-accept'));
+    // The confirm resolves a promise, so the removal lands a microtask later.
+    await waitFor(() => expect(onRemove).toHaveBeenCalledWith('other-agent'));
+  });
+
+  it('does not remove when the confirm is declined', async () => {
+    setup([ME, OTHER]);
+    openRow('other-agent');
+    fireEvent.click(screen.getByTestId('device-remove'));
+    fireEvent.click(await screen.findByTestId('confirm-cancel'));
+    expect(onRemove).not.toHaveBeenCalled();
   });
 });
 

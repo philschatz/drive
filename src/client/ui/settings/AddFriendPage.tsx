@@ -8,74 +8,40 @@
  *   /#/add-friend/<base64url-deflated-card> ← legacy: bundle embedded in the URL.
  *
  * Flow: pull the contact card (via rendezvous or the URL), receiveContactCard to
- * add them as a known contact, then settle their name in a native dialog — an
- * alert if they sent one, a prompt to supply one if they didn't — and return
- * Home. Only the failure path stays on screen, so it can offer a retry.
+ * add them as a known contact, then settle their name and go to Friends. Only the
+ * failure path stays on screen, so it can offer a retry.
+ *
+ * **Navigation is a continuation, never a fallthrough.** The naming step used to be
+ * a `prompt()`, and the code relied on it *blocking* before assigning
+ * `location.hash`. A sheet doesn't block, so `doReceive` no longer navigates at all:
+ * it ends by setting `outcome`, and the render (or the sheet's callbacks) decide
+ * what happens next. Leaving from the toast-only branch is safe because <Toaster/>
+ * is mounted in App.tsx *outside* the router, so the snackbar outlives this page's
+ * unmount — which is exactly why toast-then-navigate is legal where
+ * sheet-then-navigate is not.
  */
 
-import { useState, useCallback, useEffect } from 'preact/hooks';
+import { useState, useCallback, useEffect, useRef } from 'preact/hooks';
 import { Button } from '@/components/ui/button';
 import { receiveContactCard, rendezvousReceive, getIdentity, onRendezvousEvent } from '../common/keyhive-api';
 import type { RendezvousStatus } from '../worker-api';
 import { keyhiveReady, whenWsConnected } from '../common/automerge';
 import { setFriendName, getFriendName } from '../friend-names';
+import { RenameSheet } from '../common/RenameSheet';
+import { showToast } from '@/components/ui/toast';
 import { RendezvousProgress } from './RendezvousProgress';
 import { parseRendezvousToken } from '../../../shared/rendezvous-url';
-import { deflate, inflate } from 'pako';
+import { decodeFriendData } from './rendezvous-urls';
 
 interface AddFriendPageProps {
   cardData?: string;
   path?: string;
 }
 
-export function buildAddFriendRendezvousUrl(rendezvousId: string, key: string): string {
-  const base = window.location.origin + window.location.pathname;
-  return `${base}#/add-friend/r.${rendezvousId}.${key}`;
-}
-
-function b64urlToBytes(b64url: string): Uint8Array {
-  const b64 = b64url.replace(/-/g, '+').replace(/_/g, '/');
-  const bin = atob(b64);
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  return bytes;
-}
-
-function bytesToB64url(bytes: Uint8Array): string {
-  let binary = '';
-  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-}
-
-function decodeCardFromUrl(b64url: string): string {
-  return new TextDecoder().decode(inflate(b64urlToBytes(b64url)));
-}
-
-export function encodeCardForUrl(cardJson: string): string {
-  const compressed = deflate(new TextEncoder().encode(cardJson));
-  return bytesToB64url(compressed);
-}
-
-export function buildAddFriendUrl(cardJson: string, displayName?: string, userGroupId?: string | null): string {
-  const payload = (displayName || userGroupId)
-    ? JSON.stringify({ card: cardJson, displayName, userGroupId: userGroupId ?? undefined })
-    : cardJson;
-  const base = window.location.origin + window.location.pathname;
-  return `${base}#/add-friend/${encodeCardForUrl(payload)}`;
-}
-
-function decodeFriendData(b64url: string): { cardJson: string; displayName?: string; userGroupId?: string } {
-  const raw = decodeCardFromUrl(b64url);
-  try {
-    const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === 'object' && typeof parsed.card === 'string') {
-      return { cardJson: parsed.card, displayName: parsed.displayName, userGroupId: parsed.userGroupId };
-    }
-  } catch {
-    // Not the wrapper format — old-style raw card
-  }
-  return { cardJson: raw };
-}
+/** The friend is added; all that's left is deciding what to call them. */
+type Outcome =
+  | { kind: 'named'; groupId: string; displayName: string }
+  | { kind: 'needs-name'; groupId: string };
 
 export function AddFriendPage({ cardData }: AddFriendPageProps) {
   const [status, setStatus] = useState('');
@@ -83,6 +49,12 @@ export function AddFriendPage({ cardData }: AddFriendPageProps) {
   const [processing, setProcessing] = useState(false);
   const [phase, setPhase] = useState<RendezvousStatus | null>(null);
   const [transferDetail, setTransferDetail] = useState<string>();
+  const [outcome, setOutcome] = useState<Outcome | null>(null);
+  // RenameSheet's onSave fires onRename and THEN onClose, so without this a single
+  // Save would toast twice and navigate twice.
+  const settledRef = useRef(false);
+
+  const leave = () => { window.location.hash = '/friends'; };
 
   // Rendezvous receive path (preferred): the tiny QR carries only {id, key}.
   const rdv = cardData ? parseRendezvousToken(cardData) : null;
@@ -150,15 +122,10 @@ export function AddFriendPage({ cardData }: AddFriendPageProps) {
         throw new Error('This friend is not a group \u2014 ask them to open Settings and show a fresh friend QR/link.');
       }
       // Identify the contact by its user-group id, never the individual device id.
-      if (displayName) {
-        alert(`${displayName} was added.`);
-      } else {
-        const trimmed = prompt('Name this friend', '')?.trim();
-        // Inside the try: a storage failure surfaces as the error screen rather
-        // than bouncing the user Home with nothing shown.
-        if (trimmed) await setFriendName(cardResult.userGroupId, trimmed);
-      }
-      window.location.hash = '/';
+      // No navigation here — see the header: the outcome decides, not this function.
+      setOutcome(displayName
+        ? { kind: 'named', groupId: cardResult.userGroupId, displayName }
+        : { kind: 'needs-name', groupId: cardResult.userGroupId });
     } catch (err: any) {
       setError(err.message || 'Failed to add friend');
     } finally {
@@ -171,42 +138,106 @@ export function AddFriendPage({ cardData }: AddFriendPageProps) {
   // Auto-start once when the page mounts with card data.
   useEffect(() => { doReceive(); }, [doReceive]);
 
-  return (
-    <div className="max-w-md mx-auto p-8 text-center">
-      <h1 className="text-xl font-bold mb-4">
-        <span className="material-symbols-outlined align-middle mr-1" style={{ fontSize: 24 }}>person_add</span>
-        Adding friend
-      </h1>
+  // They sent a name, so there is nothing to ask: confirm and go.
+  useEffect(() => {
+    if (outcome?.kind !== 'named' || settledRef.current) return;
+    settledRef.current = true;
+    showToast(`${outcome.displayName} was added.`, { testId: 'friend-added-toast' });
+    leave();
+  }, [outcome]);
 
-      {error ? (
-        <div className="text-destructive mb-4">
-          <p className="mb-2">{error}</p>
-          {rdv && (
-            <p className="text-[10px] text-muted-foreground mb-2">
-              Channel: <code className="font-mono">{rdv.rendezvousId.slice(0, 8)}…</code>
-            </p>
-          )}
-          <div className="flex gap-2 justify-center">
-            <Button variant="default" onClick={doReceive} disabled={processing}>
-              Retry
-            </Button>
-            <Button variant="outline" onClick={() => { window.location.hash = '/'; }}>
-              Home
-            </Button>
-          </div>
-        </div>
-      ) : rdv ? (
-        <RendezvousProgress
-          phase={phase}
-          rendezvousId={rdv.rendezvousId}
-          waitingLabel="Connecting to your friend — keep this open…"
-          transferLabel="Exchanging details…"
-          transferDetail={transferDetail}
-          doneLabel="You're now friends."
-        />
-      ) : (
-        <p className="text-sm text-muted-foreground">{status || 'Processing...'}</p>
-      )}
+  /**
+   * Finish the naming step. `name` undefined means "don't name them" — what
+   * cancelling the old prompt did. A storage failure keeps the user here with the
+   * error visible rather than bouncing them to Friends with nothing shown.
+   */
+  const finishNaming = async (name?: string) => {
+    if (settledRef.current || outcome?.kind !== 'needs-name') return;
+    settledRef.current = true;
+    if (name) {
+      try {
+        await setFriendName(outcome.groupId, name);
+      } catch (err: any) {
+        settledRef.current = false;
+        setError('Could not save the name: ' + (err?.message ?? 'storage error'));
+        setOutcome(null);
+        return;
+      }
+    }
+    showToast(name ? `${name} was added.` : 'Friend added.', { testId: 'friend-added-toast' });
+    leave();
+  };
+
+  return (
+    <div className="max-w-screen-md mx-auto px-2 sm:px-4 pb-8">
+      {/* Top app bar. `close`, not `arrow_back`: this page is reached by opening a
+          link, so the route IS the first history entry and a back arrow would be a
+          lie. Rendered always, including mid-handshake — there used to be no exit
+          at all until the flow finished, so a stalled exchange trapped the user. */}
+      <div className="flex items-center gap-1.5 pl-1 min-h-14">
+        <a
+          href="#/friends"
+          aria-label="Close"
+          className="inline-flex items-center justify-center h-10 w-10 rounded-full state-layer shrink-0"
+        >
+          <span className="material-symbols-outlined" style={{ fontSize: 24 }}>close</span>
+        </a>
+        <h1 className="md-title-large font-bold flex-1 min-w-0 truncate">Add friend</h1>
+      </div>
+
+      <div className="px-4 max-w-md">
+        {error ? (
+          <>
+            {/* Inline, not a snackbar: a failure with a Retry has to stay put. */}
+            <div
+              className="flex items-start gap-3 p-3 rounded-xl bg-error-container text-on-error-container"
+              data-testid="add-friend-error"
+            >
+              <span className="material-symbols-outlined" style={{ fontSize: 20 }}>error</span>
+              <div className="min-w-0">
+                <p className="md-body-medium">{error}</p>
+                {rdv && (
+                  <p className="text-[10px] opacity-70 mt-1">
+                    Channel: <code className="font-mono">{rdv.rendezvousId.slice(0, 8)}…</code>
+                  </p>
+                )}
+              </div>
+            </div>
+            <div className="flex gap-2 mt-4">
+              <Button onClick={doReceive} disabled={processing} data-testid="add-friend-retry">
+                Retry
+              </Button>
+              <Button variant="outline" onClick={() => { window.location.hash = '/friends'; }}>
+                Friends
+              </Button>
+            </div>
+          </>
+        ) : rdv ? (
+          <RendezvousProgress
+            phase={phase}
+            rendezvousId={rdv.rendezvousId}
+            waitingLabel="Connecting to your friend — keep this open…"
+            transferLabel="Exchanging details…"
+            transferDetail={transferDetail}
+            doneLabel="You're now friends."
+          />
+        ) : (
+          <p className="md-body-medium text-on-surface-variant">{status || 'Processing…'}</p>
+        )}
+      </div>
+
+      {/* A page, not a sheet, so RenameSheet works directly here. Both callbacks
+          route through finishNaming, which owns the single navigation. */}
+      <RenameSheet
+        open={outcome?.kind === 'needs-name'}
+        title="Name this friend"
+        label="Name"
+        value=""
+        allowEmpty
+        onRename={name => finishNaming(name || undefined)}
+        onClose={() => finishNaming(undefined)}
+        data-testid="name-friend-sheet"
+      />
     </div>
   );
 }

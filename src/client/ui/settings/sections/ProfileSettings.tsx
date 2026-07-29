@@ -1,26 +1,36 @@
 /**
- * Profile — identity info (User Group / Device IDs, shared-settings link) and
- * the user's display name. Extracted 1:1 from the old single-page Settings.
+ * Profile — your display name plus the identity ids (user group, device, the
+ * shared-settings doc).
+ *
+ * The name is edited through a RenameSheet rather than a live field, which is
+ * what makes `handleSaveName` safe: saving calls `ensureUserGroup({ create: true })`,
+ * so the old always-live input could mint a user group from nothing but an
+ * accidental focus-and-blur. A transactional sheet has no blur path at all — the
+ * only way to commit is Save. (The unchanged-value guard stays anyway; it is free,
+ * and Save can still be tapped on an untouched draft.)
  */
 import { useState, useEffect, useCallback } from 'preact/hooks';
-import { Button } from '@/components/ui/button';
+import { showToast, showError } from '@/components/ui/toast';
 import { getIdentity, ensureUserGroup, type IdentityInfo } from '../../common/keyhive-api';
+import { RenameSheet } from '../../common/RenameSheet';
 import { idbGet, KEYS } from '../../../shared/idb-storage';
 import { getFriendName, setFriendName } from '../../friend-names';
 import { sourceUrl } from '../../common/doc-urls';
 import { AddFriendSheet } from '../AddFriendSheet';
-import { useSectionAlerts } from '../SettingsSubScreen';
+import { SettingsGroup, SettingsProse } from '../SettingsGroup';
+import { CopyRow } from '../CopyRow';
 
 export function ProfileSettings() {
-  const { alerts, setMessage, setError } = useSectionAlerts();
   const [identity, setIdentity] = useState<IdentityInfo | null>(null);
   const [displayName, setDisplayName] = useState('');
-  // The last persisted name, to skip no-op saves (e.g. a blur with no change, which
-  // would otherwise create a user group from an accidental focus).
+  // The last persisted name, to skip no-op saves.
   const [savedName, setSavedName] = useState('');
   const [savingName, setSavingName] = useState(false);
   const [loading, setLoading] = useState(true);
+  // A load failure stays inline: a toast would auto-dismiss and leave a blank page.
+  const [loadError, setLoadError] = useState('');
   const [settingsDocId, setSettingsDocId] = useState<string | null>(null);
+  const [renameOpen, setRenameOpen] = useState(false);
   const [addFriendOpen, setAddFriendOpen] = useState(false);
 
   const refresh = useCallback(async () => {
@@ -36,28 +46,27 @@ export function ProfileSettings() {
       const settingsVal = await idbGet<unknown>(KEYS.driveSettings);
       setSettingsDocId(typeof settingsVal === 'string' ? settingsVal : null);
     } catch (err: any) {
-      setError(err.message);
+      setLoadError(err.message);
     } finally {
       setLoading(false);
     }
-  }, [setError]);
+  }, []);
 
   useEffect(() => { refresh(); }, [refresh]);
 
   // Save your name as a User Group contact, creating the user group if it doesn't
   // exist yet (so the name has a stable, share-able identity to attach to).
-  const handleSaveName = async () => {
-    // No-op if unchanged — avoids creating a user group from an accidental blur.
-    if (displayName.trim() === savedName) return;
+  const handleSaveName = async (next: string) => {
+    if (next === savedName) return;
     setSavingName(true);
     try {
       const { userGroupId } = await ensureUserGroup({ create: true });
       if (!userGroupId) throw new Error('Could not create your user group.');
-      await setFriendName(userGroupId, displayName.trim());
-      setMessage('Name saved.');
+      await setFriendName(userGroupId, next);
+      showToast('Name saved.');
       await refresh();
     } catch (err: any) {
-      setError('Failed to save name: ' + err.message);
+      showError('Failed to save name: ' + err.message);
     } finally {
       setSavingName(false);
     }
@@ -65,87 +74,81 @@ export function ProfileSettings() {
 
   return (
     <>
-      {alerts}
+      {loadError && <p className="md-body-medium text-destructive px-4 pt-2">{loadError}</p>}
 
-      {/* Your name */}
-      <section className="mb-6">
-        <h2 className="text-lg font-semibold mb-2">Your Name</h2>
-        <p className="text-xs text-muted-foreground mb-2">
-          Set the name friends see when you share with them. Saving creates your user group
-          if you don't have one yet.
-        </p>
-        <div className="flex items-center gap-2">
-          <input
-            className="flex-1 text-sm p-2 rounded border border-border"
-            value={displayName}
-            onInput={(e: any) => setDisplayName(e.currentTarget.value)}
-            onBlur={handleSaveName}
-            onKeyDown={(e: any) => { if (e.key === 'Enter') handleSaveName(); }}
-            placeholder="Your name (optional)"
-          />
-          <Button size="sm" onClick={handleSaveName} disabled={savingName}>
-            {savingName ? 'Saving…' : 'Save'}
-          </Button>
-        </div>
-        <div className="mt-3 flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={() => setAddFriendOpen(true)}>
-            <span className="material-symbols-outlined mr-1" style={{ fontSize: 16 }}>person_add</span>
-            Invite a friend
-          </Button>
-        </div>
-      </section>
-
-      {/* Identity */}
-      <section className="mb-6">
-        <h2 className="text-lg font-semibold mb-2">Identity</h2>
-        {loading ? (
-          <p className="text-sm text-muted-foreground">Loading...</p>
-        ) : identity ? (
-          <div className="text-sm space-y-1">
-            <div className="flex items-center gap-2">
-              <span className="text-muted-foreground">User Group ID:</span>
-              {identity.userGroupId ? (
-                <code
-                  className="bg-muted px-1.5 py-0.5 rounded text-xs font-mono cursor-pointer"
-                  title={`${identity.userGroupId} (click to copy)`}
-                  onClick={() => navigator.clipboard.writeText(identity.userGroupId!)}
-                >
-                  {identity.userGroupId.slice(0, 16)}...
-                </code>
-              ) : (
-                <span className="text-xs text-muted-foreground italic">
-                  Not created yet — invite a friend or add a device
-                </span>
-              )}
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-muted-foreground">Device ID:</span>
-              <code
-                className="bg-muted px-1.5 py-0.5 rounded text-xs font-mono cursor-pointer"
-                title={`${identity.deviceId} (click to copy)`}
-                onClick={() => navigator.clipboard.writeText(identity.deviceId)}
-              >
-                {identity.deviceId.slice(0, 16)}...
-              </code>
-            </div>
-            {settingsDocId && (
-              <div className="flex items-center gap-2">
-                <span className="text-muted-foreground">Shared Settings:</span>
-                <a
-                  href={sourceUrl(settingsDocId)}
-                  className="text-xs font-mono text-primary underline underline-offset-2"
-                  title="View / edit your shared settings (friends, device names, seen state)"
-                >
-                  {settingsDocId.slice(0, 16)}…
-                </a>
-              </div>
-            )}
+      <SettingsGroup label="Your name">
+        <md-list-item type="button" data-testid="profile-name" onClick={() => setRenameOpen(true)}>
+          <md-icon slot="start">badge</md-icon>
+          <div slot="headline">Your name</div>
+          <div slot="supporting-text" className={displayName ? undefined : 'opacity-60'}>
+            {savingName ? 'Saving…' : displayName || 'Not set'}
           </div>
-        ) : (
-          <p className="text-sm text-muted-foreground">Keyhive not available.</p>
-        )}
-      </section>
+          <md-icon slot="end" aria-hidden="true">chevron_right</md-icon>
+        </md-list-item>
+      </SettingsGroup>
 
+      <SettingsProse>
+        Set the name friends see when you share with them. Saving creates your user group
+        if you don't have one yet.
+      </SettingsProse>
+
+      <SettingsGroup>
+        <md-list-item type="button" data-testid="profile-invite-friend" onClick={() => setAddFriendOpen(true)}>
+          <md-icon slot="start">person_add</md-icon>
+          <div slot="headline">Invite a friend</div>
+          <div slot="supporting-text">Show them a QR code to start sharing</div>
+          <md-icon slot="end" aria-hidden="true">chevron_right</md-icon>
+        </md-list-item>
+      </SettingsGroup>
+
+      <SettingsGroup label="Identity">
+        {loading ? (
+          <md-list-item type="text" data-testid="profile-identity-loading">
+            <div slot="headline" className="opacity-60">Loading…</div>
+          </md-list-item>
+        ) : identity ? (
+          <>
+            <CopyRow
+              icon="group"
+              label="User group ID"
+              value={identity.userGroupId}
+              empty="Not created yet — invite a friend or add a device"
+              data-testid="profile-user-group"
+            />
+            <CopyRow icon="smartphone" label="Device ID" value={identity.deviceId} data-testid="profile-device-id" />
+            {settingsDocId && (
+              <md-list-item
+                type="link"
+                href={sourceUrl(settingsDocId)}
+                data-testid="profile-shared-settings"
+                title="View / edit your shared settings (friends, device names, seen state)"
+              >
+                <md-icon slot="start">sync</md-icon>
+                <div slot="headline">Shared settings</div>
+                <div slot="supporting-text">Friends, device names, seen state</div>
+                <md-icon slot="end" aria-hidden="true">open_in_new</md-icon>
+              </md-list-item>
+            )}
+          </>
+        ) : (
+          <md-list-item type="text" data-testid="profile-identity-missing">
+            <div slot="headline" className="opacity-60">Keyhive not available.</div>
+          </md-list-item>
+        )}
+      </SettingsGroup>
+
+      {/* allowEmpty: setFriendName('') *removes* the name, so blank is how you
+          unset your display name — not an invalid draft. */}
+      <RenameSheet
+        open={renameOpen}
+        title="Your name"
+        label="Name"
+        value={displayName}
+        allowEmpty
+        onRename={handleSaveName}
+        onClose={() => setRenameOpen(false)}
+        data-testid="profile-name-sheet"
+      />
       <AddFriendSheet open={addFriendOpen} onOpenChange={setAddFriendOpen} />
     </>
   );

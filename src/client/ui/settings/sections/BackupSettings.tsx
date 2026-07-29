@@ -1,16 +1,18 @@
 /**
- * Data Backup — export/import of the doc list and contact/device names.
- * Extracted 1:1 from the old single-page Settings.
+ * Data Backup — export/import of the doc list and friend/device names.
+ *
+ * Both handlers build their file element imperatively and `.click()` it rather than
+ * rendering one: the click has to happen in the same task as the user's gesture,
+ * and a permanently-mounted hidden `<input type="file">` would be a stray
+ * focusable node sitting in a list.
  */
-import { Button } from '@/components/ui/button';
+import { showToast, showError } from '@/components/ui/toast';
 import { idbGet, idbSet, KEYS } from '../../../shared/idb-storage';
 import { getAllFriendNames, setFriendName } from '../../friend-names';
 import { getAllDeviceNames, setDeviceName } from '../../device-names';
-import { useSectionAlerts } from '../SettingsSubScreen';
+import { SettingsGroup, SettingsProse } from '../SettingsGroup';
 
 export function BackupSettings() {
-  const { alerts, setMessage, setError } = useSectionAlerts();
-
   const handleExport = async () => {
     try {
       // Contact/device names now live in the synced DriveSettings doc; read them
@@ -26,9 +28,9 @@ export function BackupSettings() {
       a.download = `drive-backup-${new Date().toISOString().slice(0, 10)}.json`;
       a.click();
       URL.revokeObjectURL(url);
-      setMessage('Data exported successfully.');
+      showToast('Data exported.');
     } catch (err: any) {
-      setError('Export failed: ' + err.message);
+      showError('Export failed: ' + err.message);
     }
   };
 
@@ -63,7 +65,7 @@ export function BackupSettings() {
         ]);
         window.location.reload();
       } catch (err: any) {
-        setError('Import failed: ' + err.message);
+        showError('Import failed: ' + err.message);
       }
     };
     input.click();
@@ -71,17 +73,23 @@ export function BackupSettings() {
 
   return (
     <>
-      {alerts}
-      <section className="mb-6">
-        <p className="text-xs text-muted-foreground mb-2">
-          Export or import your document list and friends.
-          This does not include document contents (those sync via Automerge).
-        </p>
-        <div className="flex items-center gap-2">
-          <Button size="sm" variant="outline" onClick={handleExport}>Export</Button>
-          <Button size="sm" variant="outline" onClick={handleImport}>Import</Button>
-        </div>
-      </section>
+      <SettingsProse>
+        Export or import your document list and friends. Document contents are not included —
+        those sync via Automerge.
+      </SettingsProse>
+
+      <SettingsGroup>
+        <md-list-item type="button" data-testid="backup-export" onClick={handleExport}>
+          <md-icon slot="start">download</md-icon>
+          <div slot="headline">Export backup</div>
+          <div slot="supporting-text">Document list, friend and device names</div>
+        </md-list-item>
+        <md-list-item type="button" data-testid="backup-import" onClick={handleImport}>
+          <md-icon slot="start">upload</md-icon>
+          <div slot="headline">Import backup</div>
+          <div slot="supporting-text">Replaces your document list, then reloads</div>
+        </md-list-item>
+      </SettingsGroup>
     </>
   );
 }
