@@ -6,7 +6,6 @@ import { peerDisplayName, usePresence } from '../../common/presence';
 import { DocumentTitleBar } from '../../common/DocumentTitleBar';
 import { useDocumentHistory } from '../../common/useDocumentHistory';
 import { useEditorUndoRedo } from '../../common/useUndoRedo';
-import { useHideOnScroll } from '../../common/useHideOnScroll';
 import { useCanEdit } from '../../common/useCanEdit';
 import { useFocusPathSync } from '../../common/useFocusPathSync';
 import { HistorySlider } from '../../common/HistorySlider';
@@ -54,7 +53,6 @@ function CalendarInner({ docId, readOnly, initialEventId }: { docId: string; rea
   const { undo, redo, canUndo, canRedo, onHeads } = useEditorUndoRedo(docId, history);
   // The calendar page is fixed-height, so this tracks schedule-x's own grid
   // scroller (the hook listens for scrolls from any element).
-  const hidden = useHideOnScroll();
   const validationErrors = useDocumentValidation(docId);
   const { canEdit, canEditRef, noAccess } = useCanEdit(docId, readOnly, history);
   const eventsRef = useRef<Record<string, CalendarEvent>>({});
@@ -204,7 +202,6 @@ function CalendarInner({ docId, readOnly, initialEventId }: { docId: string; rea
         onRedo={canEdit ? redo : undefined}
         canUndo={canUndo}
         canRedo={canRedo}
-        hidden={hidden}
         hasValidationErrors={validationErrors.length > 0}
         sourcePath={focusPath}
         overflow={canEdit

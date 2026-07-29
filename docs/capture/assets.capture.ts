@@ -237,7 +237,7 @@ IMPACT_OF_HOURS.sheets.compare.columns.c4.width = 110;
 /**
  * How many conditional-format rules the example already ships with.
  *
- * `datagrid-presence.gif` opens that sheet and closes it again without touching
+ * `presence-datagrid.gif` opens that sheet and closes it again without touching
  * anything, and this is what "without touching anything" is asserted against: the
  * list must show exactly the rules the fixture brought, so an accidental tap that
  * created a fifth one fails the capture instead of quietly filming itself. Read
@@ -495,7 +495,7 @@ async function panToShow(page: Page, targets: [number, number][]): Promise<void>
  * side's worker has joined the document is gone for good. `warmDoc` does not cover
  * this: it warms the *setup* page's worker, and `takePair` then records on a fresh
  * page with a fresh worker. Cost of not waiting, measured twice in six runs of
- * `peritext-presence.gif`: Alice selects a phrase, the broadcast lands nowhere,
+ * `presence-peritext.gif`: Alice selects a phrase, the broadcast lands nowhere,
  * nothing on her side changes again while she holds it — and the capture waits 60s
  * for a `peer-tip` that is never coming.
  *
@@ -700,7 +700,7 @@ test('tour.gif', async ({ browser }) => {
       // bug: clicking at the end of this list item and typing put the sentence in
       // the next bullet, and Enter-then-type left an empty block behind and did the
       // same ("AAA"/"BBB" → Enter after AAA → typing X gives "AAA"/""/"XBBB").
-      // Mid-block replacement is the path peritext-presence.gif already asserts.
+      // Mid-block replacement is the path presence-peritext.gif already asserts.
       await openRow(page, 'Tahoe trip');
       await expect(page.getByTestId('rt-editor')).toContainText('Pinecrest', { timeout: 60_000 });
       await beat(page, 1300);
@@ -897,7 +897,7 @@ test('presence-updates.gif', async ({ browser }) => {
     alice,
     bob,
     async (l, r) => {
-      // Staggered opens, as editor-presence.spec.ts does: Alice is already in the
+      // Staggered opens, as presence-editor.spec.ts does: Alice is already in the
       // document when Bob arrives, so the capture shows a peer *joining*.
       await l.goto(`/#/d/${docId}`);
       await expect(l.getByTestId('task-row').first()).toBeVisible({ timeout: 60_000 });
@@ -975,7 +975,7 @@ test('presence-updates.gif', async ({ browser }) => {
   await Promise.all([alice.close(), bob.close()]);
 });
 
-test('peritext-presence.gif', async ({ browser }) => {
+test('presence-peritext.gif', async ({ browser }) => {
   const alice = await capturePeer(browser, 'alice', { video: true });
   const bob = await capturePeer(browser, 'bob', { video: true });
   await setDisplayName(alice.page, 'Alice');
@@ -1120,11 +1120,11 @@ test('peritext-presence.gif', async ({ browser }) => {
   // tip above them — is pixel-for-pixel unchanged at 32. Trimming the holds is not
   // an alternative: a held frame is nearly free, so the bytes are all in the two
   // typed runs and the selection gestures.
-  await hstackGif('peritext-presence.gif', clips.left, clips.right, { fps: 8, maxColors: 32 });
+  await hstackGif('presence-peritext.gif', clips.left, clips.right, { fps: 8, maxColors: 32 });
   await Promise.all([alice.close(), bob.close()]);
 });
 
-test('datagrid-presence.gif', async ({ browser }) => {
+test('presence-datagrid.gif', async ({ browser }) => {
   const alice = await capturePeer(browser, 'alice', { video: true });
   const bob = await capturePeer(browser, 'bob', { video: true });
   await setDisplayName(alice.page, 'Alice');
@@ -1261,14 +1261,14 @@ test('datagrid-presence.gif', async ({ browser }) => {
   // line with the other two-peer GIFs; the flow is taps and settling figures, so
   // neither is visible at slide size.
   //
-  // Still the house 64 colours, unlike peritext-presence's 32: the row band, the
+  // Still the house 64 colours, unlike presence-peritext's 32: the row band, the
   // formula-reference beat and the two sheets made this clip half again as long
   // (2842 KB), and 48 was tried — but this frame carries conditional-format fills, a
   // Monte Carlo histogram and italic ± values, which is far more distinct colour
   // than a page of prose, and the run that would have measured it could not be
   // completed. Left at 64 so the encode here matches the asset in docs/; measure
   // and lower it on a quiet tree if the size matters.
-  await hstackGif('datagrid-presence.gif', clips.left, clips.right, { fps: 8, width: 720 });
+  await hstackGif('presence-datagrid.gif', clips.left, clips.right, { fps: 8, width: 720 });
   await Promise.all([alice.close(), bob.close()]);
 });
 
@@ -1344,7 +1344,7 @@ test('validation.gif', async ({ browser }) => {
   await Promise.all([alice.close(), bob.close()]);
 });
 
-test('source-presence.gif', async ({ browser }) => {
+test('presence-source.gif', async ({ browser }) => {
   const alice = await capturePeer(browser, 'alice', { video: true });
   const bob = await capturePeer(browser, 'bob', { video: true });
   await setDisplayName(alice.page, 'Alice');
@@ -1412,7 +1412,7 @@ test('source-presence.gif', async ({ browser }) => {
     }
   );
 
-  await hstackGif('source-presence.gif', clips.left, clips.right, { fps: 8, width: 720 });
+  await hstackGif('presence-source.gif', clips.left, clips.right, { fps: 8, width: 720 });
   await Promise.all([alice.close(), bob.close()]);
 });
 

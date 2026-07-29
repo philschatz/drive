@@ -9,14 +9,12 @@ import { peerColor, peerDisplayName, peerIdentityKey, usePresence } from '../../
 import { DocumentTitleBar } from '../../common/DocumentTitleBar';
 import { useDocumentHistory } from '../../common/useDocumentHistory';
 import { useEditorUndoRedo } from '../../common/useUndoRedo';
-import { useHideOnScroll } from '../../common/useHideOnScroll';
 import { useCanEdit } from '../../common/useCanEdit';
 import { useFocusPathSync } from '../../common/useFocusPathSync';
 import { useKeyboardInset } from '../../common/useKeyboardInset';
 import { useDocumentValidation } from '../../common/useDocumentValidation';
 import { HistorySlider } from '../../common/HistorySlider';
 import { DocLoader } from '../../common/useDocument';
-import { Fab } from '@/components/ui/fab';
 import { RichTextEditor, type RemoteCursor, type RichTextEditorApi, type SelectionState } from './RichTextEditor';
 import { BottomFormatBar } from './BottomFormatBar';
 import { applyOpsToSpans } from './spans-model';
@@ -25,19 +23,18 @@ import { markdownToSpans, spansToMarkdown } from './markdown';
 const DOC_QUERY = '{ name: (.name // "Sentences") }';
 
 /**
- * Sentences (word-processing) editor. Opens as a read-only view; the bottom-right
- * FAB (edit role only) switches to edit mode, where the shared title bar gains
- * undo/redo and a DataGrid-style formatting bar docks to the bottom.
+ * Sentences (word-processing) editor. There is no edit mode: holding the edit
+ * role opens the document editable, with undo/redo on the shared title bar and a
+ * DataGrid-style formatting bar docked to the bottom — that bar is the
+ * affordance. Read-only access renders the same document with neither.
  */
 export function SentencesView({ docId, readOnly }: { docId?: string; rest?: string; readOnly?: boolean }) {
   const [name, setName] = useState('Sentences');
   const [spans, setSpans] = useState<RichTextSpan[] | null>(null);
-  const [editing, setEditing] = useState(false);
   const [selState, setSelState] = useState<SelectionState | null>(null);
 
   const history = useDocumentHistory(docId!);
   const { undo, redo, canUndo, canRedo, onHeads } = useEditorUndoRedo(docId!, history);
-  const hidden = useHideOnScroll();
   const validationErrors = useDocumentValidation(docId);
   const { canEdit, canEditRef, noAccess } = useCanEdit(docId, readOnly, history);
   const { peers, peerList, broadcast } = usePresence(docId);
@@ -56,18 +53,6 @@ export function SentencesView({ docId, readOnly }: { docId?: string; rest?: stri
   // drawn (and the local caret rebased) against exactly the text being rendered.
   const [cursorPositions, setCursorPositions] = useState<Record<string, number | null> | undefined>(undefined);
 
-  // Losing edit rights (revocation, time travel) drops back to the viewer.
-  const editMode = editing && canEdit;
-  useEffect(() => { if (editing && !canEdit) setEditing(false); }, [editing, canEdit]);
-
-  const startEditing = useCallback(() => {
-    setEditing(true);
-    // Focus once the contenteditable render lands. The browser selection the
-    // gesture made (e.g. the double-clicked word) survives the flip, so the
-    // caret is already where the user aimed.
-    requestAnimationFrame(() => editorApiRef.current?.focus());
-  }, []);
-
   /**
    * Apply a push from the worker. The caret rebase lands BEFORE setSpans on
    * purpose: the editor's restore effect runs on the spans render, so text
@@ -77,8 +62,8 @@ export function SentencesView({ docId, readOnly }: { docId?: string; rest?: stri
   const applyRemoteSpans = useCallback((next: RichTextSpan[], cursors?: Record<string, number | null>) => {
     const held = localCursorRef.current;
     const api = editorApiRef.current;
-    // localCursorRef is only populated in edit mode, and isFocused() keeps an
-    // unfocused editor from claiming a caret it doesn't own.
+    // localCursorRef is only populated once a caret exists, and isFocused() keeps
+    // an unfocused editor from claiming a caret it doesn't own.
     if (held && cursors && api?.isFocused()) {
       const from = cursors[held.tokens[0]];
       const to = cursors[held.tokens[1]];
@@ -151,7 +136,7 @@ export function SentencesView({ docId, readOnly }: { docId?: string; rest?: stri
   // caret — the editor's rebaseCaret guard refuses it.
   const localCursorRef = useRef<{ tokens: [string, string]; sel: { from: number; to: number } } | null>(null);
   useEffect(() => {
-    if (!docId || !editMode || !selState) {
+    if (!docId || !canEdit || !selState) {
       localCursorRef.current = null;
       setCursorPath(null);
       return;
@@ -166,9 +151,12 @@ export function SentencesView({ docId, readOnly }: { docId?: string; rest?: stri
       })
       .catch(() => { /* doc not ready — next selection change retries */ });
     return () => { cancelled = true; };
-  }, [docId, editMode, selState?.from, selState?.to]);
+  }, [docId, canEdit, selState?.from, selState?.to]);
 
-  useFocusPathSync(editMode ? (cursorPath ?? ['content']) : null, broadcast);
+  // Only a real caret is broadcast: `selState` (and so `cursorPath`) exists only
+  // once the user has put a selection inside the editor, so merely having an
+  // editable document open does not show up to peers as "(editing)".
+  useFocusPathSync(cursorPath, broadcast);
 
   // Peers whose presence carries a cursor pair, one entry per user (a user's
   // several devices collapse to one identity; own devices are skipped). Derived
@@ -273,14 +261,10 @@ export function SentencesView({ docId, readOnly }: { docId?: string; rest?: stri
         peerTitle={(peer) => `${peerDisplayName(peer.peerId, peer.value?.userGroupId)}${peer.value?.focusedField ? ' (editing)' : ''}`}
         onToggleHistory={history.toggleHistory}
         historyActive={history.active}
-        onUndo={editMode ? undo : undefined}
-        onRedo={editMode ? redo : undefined}
+        onUndo={canEdit ? undo : undefined}
+        onRedo={canEdit ? redo : undefined}
         canUndo={canUndo}
         canRedo={canRedo}
-        // In edit mode the leading button becomes a checkmark that leaves edit
-        // mode, the same affordance DataGrid's focus bar uses.
-        onDone={editMode ? () => setEditing(false) : undefined}
-        hidden={hidden && !editMode}
         hasValidationErrors={validationErrors.length > 0}
         sourcePath={['content']}
         overflow={overflow}
@@ -303,20 +287,16 @@ export function SentencesView({ docId, readOnly }: { docId?: string; rest?: stri
       <div
         className="max-w-screen-md mx-auto w-full px-4 sm:px-6"
         style={{
-          paddingBottom: editMode ? `calc(6rem + ${keyboardInset}px)` : '6rem',
+          // The formatting bar (and, on iOS, the keyboard above it) sits over the
+          // end of the document.
+          paddingBottom: canEdit ? `calc(6rem + ${keyboardInset}px)` : '6rem',
           ...(noAccess ? { opacity: 0.4, pointerEvents: 'none' } : {}),
         }}
-        // Double-clicking the viewed text starts editing (links keep their
-        // own double-click meaning — opening the target).
-        onDblClick={canEdit && !editMode ? (e: MouseEvent) => {
-          if ((e.target as Element | null)?.closest?.('a')) return;
-          startEditing();
-        } : undefined}
       >
         {spans !== null && (
           <RichTextEditor
             spans={spans}
-            editable={editMode}
+            editable={canEdit}
             onOps={applyOps}
             onSelectionState={setSelState}
             onUndo={undo}
@@ -327,12 +307,9 @@ export function SentencesView({ docId, readOnly }: { docId?: string; rest?: stri
         )}
       </div>
 
-      {canEdit && !editMode && (
-        <Fab icon="edit" aria-label="Edit sentences" onClick={startEditing} />
-      )}
-      {/* Leaving edit mode is the title bar's checkmark (see onDone above), so
-          the only thing edit mode adds down here is the formatting bar. */}
-      {editMode && (
+      {/* The docked bar is what says "you can type here" — there is no Edit FAB
+          and no mode to leave, so the title bar keeps its Back arrow. */}
+      {canEdit && (
         <BottomFormatBar state={selState} apiRef={editorApiRef} keyboardInset={keyboardInset} />
       )}
     </DocLoader>

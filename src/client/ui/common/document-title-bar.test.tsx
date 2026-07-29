@@ -1,4 +1,4 @@
-import { render, screen, fireEvent } from '@testing-library/preact';
+import { render, screen, fireEvent, act } from '@testing-library/preact';
 
 // Mock automerge module before importing DocumentTitleBar
 jest.mock('./automerge', () => ({
@@ -281,5 +281,43 @@ describe('DocumentTitleBar', () => {
     expect(screen.queryByText('Read-only')).toBeNull();
     expect(screen.queryByText('Admin')).toBeNull();
     expect(screen.queryByText('Editing')).toBeNull();
+  });
+
+  /**
+   * Hide-on-scroll belongs to the bar, not to each editor: a new document type
+   * gets it by mounting one. `sticky={false}` opts out — that bar sits in a
+   * layout (DataGrid's) that hides it, so translating itself too would double up.
+   */
+  describe('hide-on-scroll', () => {
+    const bar = () => screen.getByText('arrow_back').closest('div')!;
+    const scrollTo = async (y: number) => {
+      (window as any).scrollY = y;
+      await act(() => { document.dispatchEvent(new Event('scroll')); return Promise.resolve(); });
+    };
+
+    afterEach(() => { (window as any).scrollY = 0; });
+
+    it('hides itself when the page scrolls down, with nothing passed', async () => {
+      render(<DocumentTitleBar icon="grid" title="Test" />);
+      expect(bar().className).not.toContain('-translate-y-full');
+
+      await scrollTo(400); // well past the hook's 12px threshold
+      expect(bar().className).toContain('-translate-y-full');
+
+      await scrollTo(0); // back to the top always reveals
+      expect(bar().className).not.toContain('-translate-y-full');
+    });
+
+    it('leaves a non-sticky bar alone (its layout owns the hiding)', async () => {
+      render(<DocumentTitleBar icon="grid" title="Test" sticky={false} />);
+      await scrollTo(400);
+      expect(bar().className).not.toContain('-translate-y-full');
+    });
+
+    it('lets an explicit `hidden` override win', async () => {
+      render(<DocumentTitleBar icon="grid" title="Test" hidden={false} />);
+      await scrollTo(400);
+      expect(bar().className).not.toContain('-translate-y-full');
+    });
   });
 });

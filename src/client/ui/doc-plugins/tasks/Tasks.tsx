@@ -6,7 +6,6 @@ import { PresenceDot } from '../../common/PeerDot';
 import { DocumentTitleBar } from '../../common/DocumentTitleBar';
 import { useDocumentHistory } from '../../common/useDocumentHistory';
 import { useEditorUndoRedo } from '../../common/useUndoRedo';
-import { useHideOnScroll } from '../../common/useHideOnScroll';
 import { useCanEdit } from '../../common/useCanEdit';
 import { useFocusPathSync } from '../../common/useFocusPathSync';
 import { HistorySlider } from '../../common/HistorySlider';
@@ -139,7 +138,6 @@ export function Tasks({ docId, rest, readOnly }: { docId?: string; rest?: string
   // Feeds both the version slider and the undo cursor; ref-routed inside the
   // hook so the (docId-only-deps) subscription effect never calls a stale one.
   const { undo, redo, canUndo, canRedo, onHeads } = useEditorUndoRedo(docId!, history);
-  const hidden = useHideOnScroll();
   const validationErrors = useDocumentValidation(docId);
   const { canEdit, canEditRef, noAccess } = useCanEdit(docId, readOnly, history);
   const { peers, peerList, broadcast } = usePresence(docId);
@@ -312,7 +310,6 @@ export function Tasks({ docId, rest, readOnly }: { docId?: string; rest?: string
         onRedo={canEdit ? redo : undefined}
         canUndo={canUndo}
         canRedo={canRedo}
-        hidden={hidden}
         hasValidationErrors={validationErrors.length > 0}
         sourcePath={focusPath}
         // Only offered when there's something finished to clear out.

@@ -62,9 +62,9 @@ documents in `src/client/home/examples/`, seeded via the empty home page's
 | `linking-a-device.gif` | A device with a library of documents links a second one, which then receives them all |
 | `presence-updates.gif` | Two peers in the same task editor; the dot walks down the other's property list — Title, Priority, Description — greying each row they occupy |
 | `add-and-share-with-friend.gif` | Sharing an open document with a new contact by QR, who then opens it |
-| `datagrid-presence.gif` | Two peers in one sheet: each other's tagged cells, a Monte Carlo histogram, three rows highlighted from the headers, a formula opened so its referenced cells light up and then edited on both screens, and the formatting / conditional-formatting sheets opened without being used |
-| `peritext-presence.gif` | Two peers holding **overlapping** selections in one document: Alice types over hers, destroying the two words the selections shared, and Bob is left holding the words that survived — then Bob types and replaces exactly those |
-| `source-presence.gif` | A grid on the left, the same document as JSON on the right: the dot tracks the selected cell, and editing an empty one makes the key appear |
+| `presence-datagrid.gif` | Two peers in one sheet: each other's tagged cells, a Monte Carlo histogram, three rows highlighted from the headers, a formula opened so its referenced cells light up and then edited on both screens, and the formatting / conditional-formatting sheets opened without being used |
+| `presence-peritext.gif` | Two peers holding **overlapping** selections in one document: Alice types over hers, destroying the two words the selections shared, and Bob is left holding the words that survived — then Bob types and replaces exactly those |
+| `presence-source.gif` | A grid on the left, the same document as JSON on the right: the dot tracks the selected cell, and editing an empty one makes the key appear |
 | `validation.gif` | A task list beside its JSON: deleting an optional field regroups the task, and an invalid enum raises a schema error in both panes |
 | `device-permissions.gif` | One user's two devices on the same counters document; the second device is walked admin → edit → read → edit → admin from Settings → Devices, and its write affordances vanish and return live |
 
@@ -85,10 +85,10 @@ cd docs && for f in *.png *.gif; do grep -q "$f" slides.md || echo "UNREFERENCED
 ```
 
 Two of the GIFs adjust their fixture before recording, and both tweaks are about the
-430px frame rather than cosmetics: `datagrid-presence.gif` narrows the label column so
+430px frame rather than cosmetics: `presence-datagrid.gif` narrows the label column so
 more than one estimate column fits on screen, and `device-permissions.gif` hand-writes
 its counters document because the bundled example's completion keys are
-`{{today-6d@…}}` templates that only the importer expands. `datagrid-presence.gif` used
+`{{today-6d@…}}` templates that only the importer expands. `presence-datagrid.gif` used
 to unfreeze a column here too — the examples themselves no longer freeze one, precisely
 because at 430px a frozen column is a sticky pane sitting on top of every tap target to
 its right.
@@ -193,7 +193,7 @@ Three things every screencast gets for free, and one to reach for:
 - **A row/column header selection is broadcast to nobody.** `handleRowHeaderClick`
   clears the selected *cell*, and the grid's presence payload is a cell path — so
   while a header band is up that peer announces nothing and their tag disappears
-  from the other pane. `datagrid-presence.gif` films the band anyway (it is a real
+  from the other pane. `presence-datagrid.gif` films the band anyway (it is a real
   selection with real commands behind it) and takes a cell again straight after to
   get the tag back. Do not write a beat that expects the far side to show the band.
   And a body row header is a **`td`**, not a `th` — only the corner one is a `th`,
@@ -223,7 +223,7 @@ Three things every screencast gets for free, and one to reach for:
   `trim()`ed, which still fails a selection a whole word out, and hands back the
   real string so `padLike` can type that boundary space back.
 - **A rebased selection's exact extent is measured, not assumed.**
-  `peritext-presence.gif` films two *overlapping* selections and then destroys the
+  `presence-peritext.gif` films two *overlapping* selections and then destroys the
   shared words, and where the surviving anchor lands relative to the space in front
   of the next word is the editor's business. `sentences-local-caret.spec.ts` owns
   that assertion ("a selection overlapping a peer edit keeps the words that
@@ -234,7 +234,7 @@ Three things every screencast gets for free, and one to reach for:
   sentence in the following bullet, and Enter-then-type left an empty block behind and did
   the same ("AAA"/"BBB" → Enter after AAA → typing X gives "AAA"/""/"XBBB"). Filming an
   edit mid-block — select a phrase and type over it — is the path that works, and it is
-  what `tour.gif` and `peritext-presence.gif` both do.
+  what `tour.gif` and `presence-peritext.gif` both do.
 - **Taps on list rows need the scroll to settle first.** `tap()` measures the target's box
   and presses ~450ms later, which is fine for a button and not for a row that had to be
   scrolled into view: it is often still gliding, so the press lands on whatever slid into
@@ -244,7 +244,7 @@ Three things every screencast gets for free, and one to reach for:
   one and it does not survive a collaborator: there is no consistent selection while
   the button is down, so a remote cursor push arriving mid-sweep makes the editor's
   caret-restore effect re-apply the half-finished selection it last recorded, which
-  re-anchors the drag. Measured in `peritext-presence.gif`: an anchor at offset 41
+  re-anchors the drag. Measured in `presence-peritext.gif`: an anchor at offset 41
   became 22 mid-move and the clip selected 19 characters that were never swept. Use
   `selectPhrase()` — double-click then shift-click, each atomic, with a real
   selection in between — and assert what the gesture caught, because a selection one
@@ -254,7 +254,7 @@ Three things every screencast gets for free, and one to reach for:
   eight `MATERIAL_CATEGORICAL` hues at random: both peers land on the same one about
   one run in eight, and indigo is a poor draw whatever the other peer got — at the
   25% opacity the selection overlay uses it is nearly the editor's own selection
-  tint. `peritext-presence.gif` warns on both and keeps going (the name tips still
+  tint. `presence-peritext.gif` warns on both and keeps going (the name tips still
   disambiguate); re-run for a cleaner pair before putting the asset on a slide.
 - **`create-examples` only renders on an empty home page**, so anything using it must
   start from a fresh context.
@@ -265,7 +265,7 @@ Three things every screencast gets for free, and one to reach for:
   5.6 MB at 8fps/256 colours, 3.9 MB at 128 and 3.0 MB at 64, with no visible loss on
   text, spreadsheet fills, or the 25%-opacity peer tints. It roughly halved the whole
   deck. Raise `maxColors` per asset if something ever bands — and it goes the other way
-  too: `peritext-presence.gif` passes 32, measured on one pair of recordings at 3068 KB
+  too: `presence-peritext.gif` passes 32, measured on one pair of recordings at 3068 KB
   (64), 2815 (48) and 2432 (32), with the frame it exists for — two stacked tints and a
   10px name tip — unchanged. Trimming holds is not an alternative lever: a held frame is
   nearly free, so the bytes live in the typed runs and the gestures.
@@ -285,7 +285,7 @@ Three things every screencast gets for free, and one to reach for:
   reasoning from this list. Dropping `fps` is no safer on a busy clip, where
   fewer frames each carry a bigger delta: `device-permissions.gif` at 6fps came out
   *bigger* than at 8. Three assets still pass `width: 720`
-  (`datagrid-presence`, `validation`, `source-presence`) from before that measurement and
+  (`presence-datagrid`, `validation`, `presence-source`) from before that measurement and
   have never been re-checked — if you regenerate one, try it without and compare.
 - **`video.path()` is a trap.** Playwright only guarantees a recording is on disk
   once the whole *context* closes, and a capture still has work to do in that

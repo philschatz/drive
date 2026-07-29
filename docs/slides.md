@@ -226,7 +226,7 @@ The rest of slides are screencaps
 - Whole rows highlight from the headers; a formula, opened, outlines every cell it depends on in the colour of its own token
 - Edit that formula and every figure derived from it moves on both screens — formatting and conditional formatting are one sheet away
 
-![bg right:44% fit](datagrid-presence.gif)
+![bg right:44% fit](presence-datagrid.gif)
 
 ---
 
@@ -239,7 +239,7 @@ The rest of slides are screencaps
 - Alice types over hers, destroying the words they shared: Bob is left holding the ones that survived, not a collapsed caret
 - Positions resolve in the **same worker push** as the text they describe, so a caret is never a frame stale
 
-![bg right:44% fit](peritext-presence.gif)
+![bg right:44% fit](presence-peritext.gif)
 
 ---
 
@@ -251,4 +251,4 @@ The rest of slides are screencaps
 - The dot tracks the peer's selected cell, because presence is a path rather than a coordinate
 - Cells are sparse, so typing into an empty one *creates* the key — it appears in the other pane mid-list
 
-![bg right:44% fit](source-presence.gif)
+![bg right:44% fit](presence-source.gif)

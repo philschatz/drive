@@ -123,7 +123,7 @@ test('a caret at end-of-document keeps working after a peer appends', async ({ b
  * are gone. What bob must be left holding is the remaining *words* — not a
  * collapsed caret, and not a range that slid forward onto text nobody selected.
  *
- * docs/capture/assets.capture.ts films exactly this (peritext-presence.gif) and
+ * docs/capture/assets.capture.ts films exactly this (presence-peritext.gif) and
  * takes its `BOB_SURVIVES` from here: the assertion is `trim()`ed because whether
  * the rebased anchor lands before or after the space in front of `the` is the
  * editor's business, and both answers are correct. The capture reads the real

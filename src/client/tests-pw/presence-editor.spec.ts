@@ -11,10 +11,10 @@ import { waitFor } from './support/peer';
  *
  * Both workers are warmed (doc loaded) before any UI navigation, like
  * presence-liveness.spec.ts — the open-a-fresh-doc unavailable/WASM path is a
- * separate known engine issue (see source-presence.spec.ts).
+ * separate known engine issue (see presence-source.spec.ts).
  */
 // Previously fixme'd for the beekem pcs_key_ops panic (`unreachable executed`,
-// see source-presence.spec.ts) on the late joiner's first presence encrypt, now
+// see presence-source.spec.ts) on the late joiner's first presence encrypt, now
 // fixed in beekem. The usePresence newcomer re-flush this spec covers is app-side.
 test('editors opened at different times see each other without re-broadcast loops', async ({ browser }) => {
   test.setTimeout(180_000);

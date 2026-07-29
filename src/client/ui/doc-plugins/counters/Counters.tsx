@@ -5,7 +5,6 @@ import { PresenceDot } from '../../common/PeerDot';
 import { DocumentTitleBar } from '../../common/DocumentTitleBar';
 import { useDocumentHistory } from '../../common/useDocumentHistory';
 import { useEditorUndoRedo } from '../../common/useUndoRedo';
-import { useHideOnScroll } from '../../common/useHideOnScroll';
 import { useCanEdit } from '../../common/useCanEdit';
 import { useFocusPathSync } from '../../common/useFocusPathSync';
 import { HistorySlider } from '../../common/HistorySlider';
@@ -189,7 +188,6 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
 
   const history = useDocumentHistory(docId!);
   const { undo, redo, canUndo, canRedo, onHeads } = useEditorUndoRedo(docId!, history);
-  const hidden = useHideOnScroll();
   const validationErrors = useDocumentValidation(docId);
   const { canEdit, canEditRef, noAccess } = useCanEdit(docId, readOnly, history);
   const { peers, peerList, broadcast } = usePresence(docId);
@@ -385,7 +383,6 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
         onRedo={canEdit ? redo : undefined}
         canUndo={canUndo}
         canRedo={canRedo}
-        hidden={hidden}
         hasValidationErrors={validationErrors.length > 0}
         sourcePath={focusPath}
         action={{ icon: 'bar_chart', label: 'Chart', onSelect: () => setChartOpen(true) }}

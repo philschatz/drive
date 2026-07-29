@@ -16,7 +16,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/ho
 import type { RefObject } from 'preact';
 import type { RichTextOp, RichTextSpan } from '../../../../shared/rich-text-ops';
 import {
-  blocksFromSpans, blockDepth, blockIndexAt, blockType, contentLength, isListItem, marksInRange, orderedListNumbers,
+  blocksFromSpans, blockDepth, blockIndexAt, blockType, contentLength, isListItem, markExtentAt, marksInRange, orderedListNumbers,
   type BlockNode, type BlockType, type InlineRun,
 } from './blocks';
 import {
@@ -472,7 +472,16 @@ export function RichTextEditor({
       if (!sel) return;
       const bl = blocksRef.current;
       if (sel.from === sel.to) {
-        // Collapsed: toggle a pending mark for the next insertion.
+        // Collapsed inside formatted text: act on the whole formatted stretch.
+        // Arming a pending mark instead would leave the visibly-active button
+        // doing nothing to the text the caret is actually sitting in.
+        const extent = markExtentAt(bl, sel.from, name);
+        if (extent) {
+          pendingMarksRef.current = {};
+          emitFormat(toggleMarkOps(bl, extent.from, extent.to, name), sel);
+          return;
+        }
+        // Collapsed in plain text: toggle a pending mark for the next insertion.
         const effective = { ...marksInRange(bl, sel.from, sel.to) };
         for (const [n, v] of Object.entries(pendingMarksRef.current)) {
           if (v === false) delete effective[n];
@@ -486,8 +495,17 @@ export function RichTextEditor({
     },
     setLink(href) {
       const sel = readSelection() ?? lastSelectionRef.current;
-      if (!sel || sel.from === sel.to) return;
-      emitFormat(setLinkOps(blocksRef.current, sel.from, sel.to, href), sel);
+      if (!sel) return;
+      const bl = blocksRef.current;
+      if (sel.from === sel.to) {
+        // A caret inside a link edits (or removes) that whole link — the sheet
+        // opened showing its href, so it has to act on it. A caret in plain text
+        // has no target, so there is nothing to link.
+        const extent = markExtentAt(bl, sel.from, 'link');
+        if (extent) emitFormat(setLinkOps(bl, extent.from, extent.to, href), sel);
+        return;
+      }
+      emitFormat(setLinkOps(bl, sel.from, sel.to, href), sel);
     },
     setBlockType(type, attrs) {
       const sel = readSelection() ?? lastSelectionRef.current;

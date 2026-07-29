@@ -199,13 +199,30 @@ export function BottomFormatBar({
             />
             <div className="flex gap-2 justify-end">
               {state?.linkHref && (
-                <button
-                  type="button"
-                  className="px-4 h-10 rounded-full state-layer text-error"
-                  onClick={() => { api()?.setLink(null); setLinkOpen(false); }}
-                >
-                  Remove
-                </button>
+                <>
+                  {/* The document is always editable, so a click in the text
+                      places the caret rather than following the link — this is
+                      how an editor opens one (and it works on a phone, which a
+                      modifier-click does not). */}
+                  <button
+                    type="button"
+                    data-testid="link-open"
+                    className="px-4 h-10 rounded-full state-layer"
+                    onClick={() => {
+                      window.open(state.linkHref!, '_blank', 'noopener');
+                      setLinkOpen(false);
+                    }}
+                  >
+                    Open
+                  </button>
+                  <button
+                    type="button"
+                    className="px-4 h-10 rounded-full state-layer text-error"
+                    onClick={() => { api()?.setLink(null); setLinkOpen(false); }}
+                  >
+                    Remove
+                  </button>
+                </>
               )}
               <button
                 type="submit"

@@ -4,6 +4,7 @@ import { ConnectionStatus } from './ConnectionStatus';
 import { RenameSheet } from './RenameSheet';
 import { type PresenceState } from './presence';
 import { useAccess } from './useAccess';
+import { useHideOnScroll } from './useHideOnScroll';
 import { sourceUrl, sharePath, shareUrl } from './doc-urls';
 import { OverflowMenu, type OverflowMenuItem } from './OverflowMenu';
 import { MATERIAL_ORANGE } from './categorical-colors';
@@ -106,9 +107,11 @@ export function BarIconButton({
  * overflow menu holding the low-frequency actions (Rename / Share / History /
  * Validation / Edit source + editor-specific `overflow` items).
  *
- * The bar is sticky and hides itself when `hidden` is set — editors get that
- * from the shared `useHideOnScroll()` hook, so dragging up hides the chrome and
- * dragging back down reveals it in every document type.
+ * The bar is sticky and hides itself on scroll: it owns the shared
+ * `useHideOnScroll()` hook, so dragging up hides the chrome and dragging back
+ * down reveals it in every document type — including ones not written yet —
+ * without each editor wiring that up. A bar that does not position itself
+ * (`sticky={false}`) doesn't translate either; that layout owns its hiding.
  */
 export function DocumentTitleBar<P extends PeerLike>({
   icon,
@@ -127,11 +130,10 @@ export function DocumentTitleBar<P extends PeerLike>({
   canUndo,
   canRedo,
   hasValidationErrors = false,
-  onDone,
   action,
   overflow = [],
   historyPlacement = 'menu',
-  hidden = false,
+  hidden,
   sticky = true,
   children,
 }: {
@@ -157,16 +159,13 @@ export function DocumentTitleBar<P extends PeerLike>({
   canRedo?: boolean;
   /** Show the warning button linking to the source editor. */
   hasValidationErrors?: boolean;
-  /** Set while the editor is in edit mode: the leading button becomes a
-   *  checkmark that commits and leaves edit mode, instead of the back link. */
-  onDone?: () => void;
   /** The document's own bar button, shown right after undo/redo. */
   action?: BarAction;
   /** Document-specific items shown behind the kebab. */
   overflow?: OverflowItem[];
   /** Put History on the bar (as a document action) instead of in the kebab. */
   historyPlacement?: 'menu' | 'bar';
-  /** Slide the bar out of view (see useHideOnScroll). */
+  /** Override the bar's own hide-on-scroll state (it hides itself by default). */
   hidden?: boolean;
   /** Set false when the bar sits in a fixed-height flex layout that positions
    * it itself (DataGrid), rather than over scrolling page content. */
@@ -175,6 +174,10 @@ export function DocumentTitleBar<P extends PeerLike>({
 }) {
   const { access } = useAccess(docId);
   const [renaming, setRenaming] = useState(false);
+  // A bar positioned by someone else's layout (DataGrid's fixed-height flex
+  // column) is hidden by that layout too, so it must not also translate itself.
+  const autoHidden = useHideOnScroll();
+  const barHidden = hidden ?? (sticky && autoHidden);
 
   // Bar layout is declared, not measured: undo/redo first, then the document's
   // own actions, then the connection/share cluster, validation, and the kebab.
@@ -229,22 +232,18 @@ export function DocumentTitleBar<P extends PeerLike>({
       className={
         'flex items-center gap-1 pl-1 pr-1 min-h-14 w-full bg-page transition-transform duration-200' +
         (sticky ? ' sticky top-0 z-20' : '') +
-        (hidden ? ' -translate-y-full' : '')
+        (barHidden ? ' -translate-y-full' : '')
       }
     >
-      {/* Left side — a checkmark that leaves edit mode when the editor is in it
-          (matching DataGrid's focus bar), otherwise the back link to Home. */}
-      {onDone ? (
-        <BarIconButton icon="check" label="Done" onClick={onDone} size={24} />
-      ) : (
-        <a
-          href="#/"
-          aria-label="Back"
-          className="inline-flex items-center justify-center h-10 w-10 rounded-full state-layer shrink-0"
-        >
-          <span className="material-symbols-outlined" style={{ fontSize: 24 }}>arrow_back</span>
-        </a>
-      )}
+      {/* Left side — always the back link to Home. No editor has a mode to leave
+          (DataGrid's focus-mode checkmark is its own FocusTopBar). */}
+      <a
+        href="#/"
+        aria-label="Back"
+        className="inline-flex items-center justify-center h-10 w-10 rounded-full state-layer shrink-0"
+      >
+        <span className="material-symbols-outlined" style={{ fontSize: 24 }}>arrow_back</span>
+      </a>
 
       <span className="material-symbols-outlined text-muted-foreground shrink-0" style={{ fontSize: 20 }}>
         {icon}

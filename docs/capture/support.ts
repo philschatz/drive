@@ -392,7 +392,7 @@ export async function befriend(a: CapturePeer, b: CapturePeer): Promise<{ aGroup
  *
  * Presence only works between peers whose workers have the doc loaded before
  * the editor mounts — opening the UI on a cold worker races the first
- * broadcast and the dots never appear. tests-pw/editor-presence.spec.ts warms
+ * broadcast and the dots never appear. tests-pw/presence-editor.spec.ts warms
  * both peers the same way for the same reason.
  */
 export async function warmDoc(peer: CapturePeer, docId: string, name: string): Promise<void> {

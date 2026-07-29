@@ -152,3 +152,40 @@ export function marksInRange(blocks: BlockNode[], from: number, to: number): Rec
   }
   return acc ?? {};
 }
+
+/**
+ * The whole stretch of formatted text a caret sits in: the contiguous
+ * characters around `index` carrying mark `name`, or null if it carries none.
+ *
+ * This is what makes a caret-only format gesture act on something. With nothing
+ * selected, tapping Bold inside a bold word un-bolds the *word* (rather than
+ * only arming the next keystroke), and the Link sheet edits the link the caret
+ * is in. `index` is read the same way `marksInRange` reads a caret — the
+ * character BEFORE it — so the toolbar's active state and the action it performs
+ * can never disagree.
+ *
+ * Adjacent runs merge only when the mark's value matches too, so two different
+ * links (or two different-coloured spans) side by side stay separate, and the
+ * walk stops at the block edge: a heading's bold is not the next paragraph's.
+ */
+export function markExtentAt(
+  blocks: BlockNode[],
+  index: number,
+  name: string,
+): { from: number; to: number; value: unknown } | null {
+  for (const b of blocks) {
+    for (let i = 0; i < b.runs.length; i++) {
+      const r = b.runs[i];
+      if (!(index > r.from && index <= r.from + r.text.length)) continue;
+      if (!r.marks || !(name in r.marks)) return null;
+      const value = r.marks[name];
+      const same = (run: InlineRun) => !!run.marks && name in run.marks && run.marks[name] === value;
+      let from = r.from;
+      let to = r.from + r.text.length;
+      for (let j = i - 1; j >= 0 && same(b.runs[j]); j--) from = b.runs[j].from;
+      for (let j = i + 1; j < b.runs.length && same(b.runs[j]); j++) to = b.runs[j].from + b.runs[j].text.length;
+      return { from, to, value };
+    }
+  }
+  return null;
+}

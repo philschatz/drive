@@ -6,12 +6,13 @@
  * block wins there decides where the caret lands, which type Enter inherits and
  * which block the toolbar reports — so every boundary index is pinned here.
  */
-import { blocksFromSpans, blockIndexAt, blockType, contentLength } from './blocks';
+import { blocksFromSpans, blockIndexAt, blockType, contentLength, markExtentAt } from './blocks';
 import type { BlockValue, RichTextSpan } from '../../../../shared/rich-text-ops';
 
 const block = (type: string, attrs?: Record<string, unknown>): RichTextSpan =>
   ({ type: 'block', value: { type, parents: [], attrs } as BlockValue & Record<string, unknown> });
-const text = (value: string): RichTextSpan => ({ type: 'text', value });
+const text = (value: string, marks?: Record<string, unknown>): RichTextSpan =>
+  ({ type: 'text', value, marks } as RichTextSpan);
 
 describe('blocksFromSpans', () => {
   it('indexes markers and text into one flat sequence', () => {
@@ -102,5 +103,63 @@ describe('blockIndexAt', () => {
     ]);
     expect(blockType(blocks[blockIndexAt(blocks, 4)])).toBe('paragraph');
     expect(blockType(blocks[blockIndexAt(blocks, 5)])).toBe('unordered-list-item');
+  });
+});
+
+/**
+ * What a caret-only format gesture acts on. The toolbar shows a mark as active
+ * from the character BEFORE the caret, so the extent has to be read the same way
+ * — otherwise the button lights up for one stretch of text and edits another.
+ */
+describe('markExtentAt', () => {
+  //          1234567890123456
+  // flat: ￼plain bold plain   (marker at 0)
+  const doc = blocksFromSpans([
+    block('paragraph'), text('plain '), text('bold', { strong: true }), text(' plain'),
+  ]);
+
+  it('spans the whole formatted run from a caret inside it', () => {
+    // "bold" occupies [7, 11).
+    expect(markExtentAt(doc, 8, 'strong')).toEqual({ from: 7, to: 11, value: true });
+    // Caret at the run's end still reads as inside it (the char before it).
+    expect(markExtentAt(doc, 11, 'strong')).toEqual({ from: 7, to: 11, value: true });
+  });
+
+  it('reports nothing from plain text, or for an absent mark', () => {
+    expect(markExtentAt(doc, 3, 'strong')).toBeNull();
+    // At the run's start the character before the caret is unformatted, which is
+    // also what makes the toolbar show Bold inactive there.
+    expect(markExtentAt(doc, 7, 'strong')).toBeNull();
+    expect(markExtentAt(doc, 8, 'em')).toBeNull();
+  });
+
+  it('merges adjacent runs carrying the same value', () => {
+    // Two runs, both bold, split by an unrelated mark on the second.
+    const blocks = blocksFromSpans([
+      block('paragraph'), text('one', { strong: true }), text('two', { strong: true, em: true }),
+    ]);
+    expect(markExtentAt(blocks, 2, 'strong')).toEqual({ from: 1, to: 7, value: true });
+    // …but em covers only its own run.
+    expect(markExtentAt(blocks, 5, 'em')).toEqual({ from: 4, to: 7, value: true });
+  });
+
+  it('keeps two different links apart', () => {
+    const a = JSON.stringify({ href: 'https://a.dev' });
+    const b = JSON.stringify({ href: 'https://b.dev' });
+    const blocks = blocksFromSpans([
+      block('paragraph'), text('aaa', { link: a }), text('bbb', { link: b }),
+    ]);
+    expect(markExtentAt(blocks, 2, 'link')).toEqual({ from: 1, to: 4, value: a });
+    expect(markExtentAt(blocks, 5, 'link')).toEqual({ from: 4, to: 7, value: b });
+  });
+
+  it('stops at the block edge', () => {
+    // A heading's bold is not the following paragraph's bold.
+    const blocks = blocksFromSpans([
+      block('heading', { level: 1 }), text('head', { strong: true }),
+      block('paragraph'), text('body', { strong: true }),
+    ]);
+    expect(markExtentAt(blocks, 3, 'strong')).toEqual({ from: 1, to: 5, value: true });
+    expect(markExtentAt(blocks, 8, 'strong')).toEqual({ from: 6, to: 10, value: true });
   });
 });
