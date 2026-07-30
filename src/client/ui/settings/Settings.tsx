@@ -1,6 +1,6 @@
 /**
  * Settings index — a Material list navigating to sub-screens (profile, devices,
- * storage, backup, developer tools, debugging, danger zone) plus Friends.
+ * storage, backup, debugging, danger zone) plus Friends.
  * The sections themselves live under ./sections/ and render at
  * `#/settings/:section` via SettingsSection.
  */
@@ -19,7 +19,6 @@ const GROUPS: Array<Array<{ icon: string; label: string; href: string }>> = [
     { icon: 'save', label: 'Data Backup', href: '#/settings/backup' },
   ],
   [
-    { icon: 'link', label: 'Open Link', href: '#/settings/developer' },
     { icon: 'bug_report', label: 'Debugging', href: '#/settings/debugging' },
     { icon: 'warning', label: 'Danger Zone', href: '#/settings/danger' },
   ],

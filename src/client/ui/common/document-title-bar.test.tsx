@@ -121,18 +121,20 @@ describe('DocumentTitleBar', () => {
     expect(onRename).not.toHaveBeenCalled();
   });
 
-  // The status is icon-only; the state is exposed through the button's
-  // accessible name (see ConnectionStatus).
-  it('shows a connected wifi icon when connected', () => {
+  // The status is icon-only; the state is exposed through the button's accessible
+  // name (see ConnectionStatus). The glyph is the cloud pair the Debugging page's
+  // relay row uses — the two surfaces report the same fact, so they say it the
+  // same way.
+  it('shows a connected cloud icon when connected', () => {
     mockUseConnectionStatus.mockReturnValue(true);
     render(<DocumentTitleBar icon="grid" title="Test" />);
-    expect(screen.getByLabelText('Connected').textContent).toBe('wifi_password');
+    expect(screen.getByLabelText('Connected').textContent).toBe('cloud_done');
   });
 
-  it('shows an offline wifi icon when not connected', () => {
+  it('shows an offline cloud icon when not connected', () => {
     mockUseConnectionStatus.mockReturnValue(false);
     render(<DocumentTitleBar icon="grid" title="Test" />);
-    expect(screen.getByLabelText('Disconnected').textContent).toBe('wifi_off');
+    expect(screen.getByLabelText('Disconnected').textContent).toBe('cloud_off');
   });
 
   // Offline there are no peers or transports to show, so the status button is

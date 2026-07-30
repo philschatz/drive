@@ -768,8 +768,16 @@ export function setPresence(docId: string, state: Partial<PresenceState>): void 
 
 export interface DeviceInfo {
   agentId: string;
-  role: MemberRole;
+  /** `null` = no membership to report (revoked, or the group isn't readable yet). */
+  role: DeviceRole;
   isMe?: boolean;
+  /**
+   * Optional so a stale worker bundle (a PWA that hasn't picked up the new one)
+   * degrades to the old behaviour rather than hiding management actions on every
+   * row: `undefined` reads as "not known to be the founder / issuer unknown".
+   */
+  isFounder?: boolean;
+  issuerAgentId?: string;
   /**
    * Friendly device name. Main-thread-enriched (see use-devices.ts) from the
    * device-names cache — the worker's listGroupDevices does not populate it.
@@ -785,8 +793,8 @@ export interface IdentityInfo {
   devices?: DeviceInfo[];
 }
 
-import type { MemberInfo, MemberRole } from '../../shared/keyhive-types';
-export type { MemberRole, IndividualMemberInfo, GroupMemberInfo, MemberInfo } from '../../shared/keyhive-types';
+import type { MemberInfo, DeviceRole } from '../../shared/keyhive-types';
+export type { MemberRole, DeviceRole, IndividualMemberInfo, GroupMemberInfo, MemberInfo } from '../../shared/keyhive-types';
 
 /** A contact card plus the sender's user-group id, for QR/URL linking & sharing. */
 export interface LinkPayload {

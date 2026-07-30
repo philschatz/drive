@@ -577,14 +577,16 @@ test('connections.png', async ({ browser }) => {
   if (!direct) console.warn('  ! no direct WebRTC channel — connections.png will show "via relay"');
 
   await alice.page.goto('/#/settings/debugging');
-  await expect(alice.page.getByText(/Peer devices connected: [1-9]/)).toBeVisible({ timeout: 60_000 });
-  // Bob is a friend, not a linked device, so their device name never travelled
-  // to Alice — the peer row would read as a truncated agent id. The row's field
-  // is editable for exactly this reason (a local label), so set it here.
-  const bobRow = alice.page.getByTitle(bobAgentId);
+  await expect(alice.page.getByText(/Peer devices \([1-9]/)).toBeVisible({ timeout: 60_000 });
+  // Bob is a friend, not a linked device, so their device name never travelled to
+  // Alice — the peer row would read as a truncated agent id. The row is renamable
+  // for exactly this reason (a local label): tap it to open the rename sheet.
+  const bobRow = alice.page.getByTestId('peer-row').filter({ hasText: bobAgentId.slice(0, 16) });
   await expect(bobRow).toBeVisible({ timeout: 30_000 });
-  await bobRow.fill(IOS);
-  await bobRow.press('Enter');
+  await bobRow.click();
+  // The real md-outlined-text-field wraps a native input in its shadow root.
+  await alice.page.locator('#rename-input input').fill(IOS);
+  await alice.page.getByTestId('rename-save').click();
   await beat(alice.page, 800);
   await still(alice.page, 'connections.png');
   await Promise.all([alice.close(), bob.close()]);
@@ -1480,30 +1482,25 @@ test('device-permissions.gif', async ({ browser }) => {
       .not.toBe(before);
   }
 
-  /**
-   * The 📱 iOS row of the device list, found by its name field.
-   *
-   * DeviceList carries no testids and its role Select has no id, so the shared
-   * `radixSelect` helper does not apply. The name input's `title` is the device's
-   * agentId, and the row is its grandparent (input → EditableName span → row).
-   */
-  const iosRow = (page: Page) => page.getByTitle(iosAgentId).locator('../..');
+  /** The 📱 iOS row of the device list. Its `title` is the device's agentId. */
+  const iosRow = (page: Page) => page.getByTestId('device-row').filter({ has: page.locator(`[title="${iosAgentId}"]`) });
 
-  /** Change 📱 iOS's role from the first device. No confirm(): that guard is self-only. */
+  /**
+   * Change 📱 iOS's role from the first device: tap the row, tap Change access, pick
+   * from the shared role picker. (The inline Radix Select this used to drive is gone
+   * — device rows open an options sheet now.)
+   */
   async function setDeviceRole(page: Page, role: 'Read' | 'Edit' | 'Admin'): Promise<void> {
-    const trigger = iosRow(page).getByRole('combobox');
-    await tap(page, trigger);
-    // The listbox is portalled to document.body, so it is not inside the row.
-    await expect(page.getByRole('listbox')).toBeVisible({ timeout: 30_000 });
+    await tap(page, iosRow(page));
+    await expect(page.getByTestId('device-options-sheet')).toBeVisible({ timeout: 30_000 });
+    await tap(page, page.getByTestId('device-change-role'));
+    await expect(page.getByTestId('role-picker-sheet')).toBeVisible({ timeout: 30_000 });
     await beat(page, 500);
-    // Matched on text, not accessible name: under Preact these Radix options
-    // report the *selected* value as their name, so all three answer to
-    // `getByRole('option', { name: 'Admin' })` and none to `'Edit'`.
-    await tap(page, page.getByRole('option').filter({ hasText: role }));
-    // The Select is controlled by the fetched role, so it snaps back to the old
-    // value until the change round-trips. That is the real signal — and it takes
-    // a while: changeDeviceRole is a revoke plus a re-add with a key rotation.
-    await expect(trigger).toHaveText(role, { timeout: 60_000 });
+    await tap(page, page.getByTestId(`role-${role.toLowerCase()}`));
+    // The row shows the fetched role, so it holds the old value until the change
+    // round-trips. That is the real signal — and it takes a while: changeDeviceRole
+    // is a revoke plus a re-add with a key rotation.
+    await expect(iosRow(page).getByTestId('device-role')).toHaveText(role, { timeout: 60_000 });
   }
 
   const clips = await takePair(

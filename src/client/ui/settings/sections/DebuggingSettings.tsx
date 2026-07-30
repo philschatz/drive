@@ -15,6 +15,8 @@
  */
 import { useState, useEffect } from 'preact/hooks';
 import { Alert } from '@/components/ui/alert';
+import { Button } from '@/components/ui/button';
+import { MdTextField } from '@/components/ui/md-text-field';
 import { showError } from '@/components/ui/toast';
 import {
   useWsStatus,
@@ -29,6 +31,7 @@ import {
   clearAllCaches,
   onDeviceNamesUpdated,
 } from '../../worker-api';
+import { navigateToUrlOrHash } from '../../common/navigate-url';
 import { peerIdentityKey } from '../../common/presence';
 import { PeerDot } from '../../common/PeerDot';
 import { RenameSheet } from '../../common/RenameSheet';
@@ -77,6 +80,9 @@ export function DebuggingSettings() {
    */
   const [renameFor, setRenameFor] = useState<{ agentId: string; value: string } | null>(null);
 
+  /** The Open-link form's draft. */
+  const [linkUrl, setLinkUrl] = useState('');
+
   // This device's peerId is "<base64 agentId>-drive"; the prefix is the agentId
   // its device name is keyed by (base64 never contains '-', so the split is exact).
   const myPeerId = getWorkerPeerId();
@@ -103,6 +109,12 @@ export function DebuggingSettings() {
     } catch (err: any) {
       showError('Failed to clear caches: ' + err.message);
     }
+  };
+
+  const handleNavigateUrl = () => {
+    if (!linkUrl.trim()) return;
+    const err = navigateToUrlOrHash(linkUrl);
+    if (err) showError(`Invalid URL — ${err.toLowerCase()}`);
   };
 
   const saveName = (agentId: string, name: string) => {
@@ -236,6 +248,30 @@ export function DebuggingSettings() {
           <div slot="supporting-text">Reloads the app</div>
         </md-list-item>
       </SettingsGroup>
+
+      {/* Open link — a developer utility, folded in from its own former Settings
+          row. Last, and a real form rather than a list row, because unlike
+          everything above it there is something to submit. */}
+      <div className="md-label-large text-on-surface-variant mt-4 mb-1 px-4">Open link</div>
+      <SettingsProse>
+        Paste a link to navigate to it (e.g. document or add-friend links).
+      </SettingsProse>
+      <div className="px-4 pt-2">
+        <MdTextField
+          label="Link"
+          type="url"
+          value={linkUrl}
+          placeholder="https://… or #/…"
+          data-testid="developer-url"
+          onInput={setLinkUrl}
+          onEnter={handleNavigateUrl}
+        />
+        <div className="flex items-center justify-end gap-2 mt-4">
+          <Button data-testid="developer-go" disabled={!linkUrl.trim()} onClick={handleNavigateUrl}>
+            Open
+          </Button>
+        </div>
+      </div>
 
       <RenameSheet
         open={!!renameFor}

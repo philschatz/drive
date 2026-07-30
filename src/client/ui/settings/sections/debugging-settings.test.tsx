@@ -19,6 +19,7 @@ let mockClearAllCaches: jest.Mock;
 let mockDebugEnabled: boolean;
 let mockNames: Record<string, string>;
 let mockShowError: jest.Mock;
+let mockNavigate: jest.Mock;
 
 jest.mock('../../worker-api', () => ({
   useWsStatus: () => mockWsConnected,
@@ -49,6 +50,10 @@ jest.mock('../../device-names', () => ({
 
 jest.mock('../../../shared/idb-storage', () => ({ isDebugEnabled: () => mockDebugEnabled }));
 
+jest.mock('../../common/navigate-url', () => ({
+  navigateToUrlOrHash: (...args: any[]) => mockNavigate(...args),
+}));
+
 jest.mock('@/components/ui/toast', () => ({
   showToast: jest.fn(),
   showError: (...args: any[]) => mockShowError(...args),
@@ -77,6 +82,7 @@ beforeEach(() => {
   mockSetDebugEnabled = jest.fn(() => Promise.resolve());
   mockClearAllCaches = jest.fn(() => Promise.resolve());
   mockShowError = jest.fn();
+  mockNavigate = jest.fn(() => undefined);
 });
 
 describe('connection status', () => {
@@ -185,4 +191,35 @@ it('clears caches with no confirmation — nothing is lost', async () => {
   fireEvent.click(screen.getByTestId('clear-caches'));
   await waitFor(() => expect(mockClearAllCaches).toHaveBeenCalled());
   expect(screen.queryByTestId('confirm-accept')).toBeNull();
+});
+
+// Open link used to be its own Settings section; it lives here now.
+describe('open link', () => {
+  const field = () => screen.getByTestId('developer-url') as HTMLInputElement;
+
+  it('submits on the button and on Enter', () => {
+    render(<DebuggingSettings />);
+
+    fireEvent.input(field(), { target: { value: '#/d/abc' } });
+    fireEvent.click(screen.getByTestId('developer-go'));
+    expect(mockNavigate).toHaveBeenCalledWith('#/d/abc');
+
+    fireEvent.keyDown(field(), { key: 'Enter' });
+    expect(mockNavigate).toHaveBeenCalledTimes(2);
+  });
+
+  it('reports a bad URL as an error snackbar', () => {
+    mockNavigate = jest.fn(() => 'Unsupported scheme');
+    render(<DebuggingSettings />);
+    fireEvent.input(field(), { target: { value: 'javascript:alert(1)' } });
+    fireEvent.click(screen.getByTestId('developer-go'));
+
+    expect(mockShowError).toHaveBeenCalledWith('Invalid URL — unsupported scheme');
+  });
+
+  it('does not submit an empty field', () => {
+    render(<DebuggingSettings />);
+    fireEvent.click(screen.getByTestId('developer-go'));
+    expect(mockNavigate).not.toHaveBeenCalled();
+  });
 });

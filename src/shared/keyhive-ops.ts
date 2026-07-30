@@ -1,5 +1,5 @@
 import { Keyhive } from "@keyhive/keyhive/slim";
-import type { MemberRole, MemberInfo, ArchiveDocResult } from './keyhive-types';
+import type { MemberRole, MemberInfo, ArchiveDocResult, DeviceEntry } from './keyhive-types';
 
 // Re-export these so the worker can use them without duplicating
 export function bytesToBase64(bytes: Uint8Array): string {
@@ -292,6 +292,24 @@ export class KeyhiveOps {
   }
 
   /**
+   * Refuse to revoke the current device's own membership.
+   *
+   * Not defensive tidiness — self-revocation *succeeds* and bricks the group.
+   * `revoke_member`'s self branch is the one case where an admin can revoke its own
+   * delegation, so for the founder the root delegation goes, `rebuild()` leaves
+   * `members` **empty**, and the follow-up `addMember` then fails with `NoProof`
+   * because the signer no longer holds any capability. Nobody can administer the
+   * group afterwards. The UI never offers this (DeviceOptionsSheet excludes `isMe`),
+   * but the kh-change-device-role / kh-remove-device RPCs are reachable directly.
+   */
+  private async assertNotSelf(deviceAgentIdB64: string, verb: string): Promise<void> {
+    const me = await this.kh.individual;
+    if (bytesEqual(me.id.toBytes(), base64ToBytes(deviceAgentIdB64))) {
+      throw new Error(`Cannot ${verb} this device from its own user group.`);
+    }
+  }
+
+  /**
    * Whether both this device and the peer are members of the user-group.
    * The device-link handshake is complete once both sides are members: the new
    * device adopts the group id first (not yet a member), then the original/admin
@@ -310,6 +328,7 @@ export class KeyhiveOps {
   }
 
   async removeDeviceFromGroup(deviceAgentIdB64: string): Promise<void> {
+    await this.assertNotSelf(deviceAgentIdB64, 'remove');
     const group = await this.getUserGroup();
     if (!group) return;
     const targetBytes = base64ToBytes(deviceAgentIdB64);
@@ -325,11 +344,20 @@ export class KeyhiveOps {
    * Change a device's access level within the personal user-group: revoke + re-add
    * with a new Access, the same idiom as the doc-level changeRole but targeting
    * group.toMembered(). Admin-only. forceResyncAllPeers so the affected device
-   * learns its new access. NOTE: the founding device's root delegation is permanent
-   * in keyhive, so demoting the device that created the group (including the current
-   * device when it is the founder) does not actually reduce its access.
+   * learns its new access.
+   *
+   * Two limits keyhive imposes, both surfaced by DeviceOptionsSheet rather than
+   * discovered as a failed call:
+   * - The **founding** device's delegation is a root delegation with no proof, so
+   *   `revoke_member` returns `NoProof` and demoting it throws. Its access is
+   *   permanent (`DeviceEntry.isFounder`).
+   * - You can only revoke a delegation you issued, or one descended from it. So a
+   *   linked admin device can manage only the devices *it* linked, not its siblings
+   *   (`DeviceEntry.issuerAgentId`).
+   * Targeting the current device is refused outright — see {@link assertNotSelf}.
    */
   async changeDeviceRole(deviceAgentIdB64: string, newRole: string): Promise<void> {
+    await this.assertNotSelf(deviceAgentIdB64, 'change access for');
     const group = await this.getUserGroup();
     if (!group) throw new Error('User group not available');
     const targetBytes = base64ToBytes(deviceAgentIdB64);
@@ -391,31 +419,62 @@ export class KeyhiveOps {
   }
 
   /**
-   * List the devices in the personal user-group; [self] if there is no group yet.
-   * Roles are normalized to a MemberRole (read/edit/admin) so the UI can drive a
-   * controlled role Select and derive admin-ness (see DeviceList). The current
-   * device reports its real role when it appears as a member; when it doesn't (it
-   * can read as the Active self-agent rather than an Individual member) it founded/
-   * administers the group, so we surface it as admin.
+   * List the devices in the personal user-group, each with its real access.
+   *
+   * The filter is `!isGroup()`, NOT `isIndividual()`. In its own keyhive the
+   * current device always resolves to `Agent::Active`, never `Agent::Individual`
+   * — `generate_group` seeds the self root delegation with Active, `get_agent`
+   * returns Active for self before any other lookup (so even a *peer-issued*
+   * delegation to us rehydrates as Active), and archive rehydration does the same
+   * — and `JsAgent` exposes no `isActive`. An `isIndividual()` filter therefore
+   * dropped the one row that reports our own access, every time, which is why
+   * this used to re-add self with a hard-coded 'admin' and a read-only device saw
+   * itself as an admin. Same filter and same reason as {@link getDocMembers}.
+   *
+   * `role: null` means no membership to report — revoked, or the group isn't
+   * readable (no group yet, or its ops haven't synced). It is never a guess.
    */
-  async listGroupDevices(): Promise<{ agentId: string; role: MemberRole; isMe: boolean }[]> {
+  async listGroupDevices(): Promise<DeviceEntry[]> {
     const me = await this.kh.individual;
     const myAgentId = bytesToBase64(me.id.toBytes());
+    const noAccess = (agentId: string): DeviceEntry =>
+      ({ agentId, role: null, isMe: agentId === myAgentId, isFounder: false });
+
     const group = await this.getUserGroup();
-    if (!group) {
-      return [{ agentId: myAgentId, role: 'admin', isMe: true }];
-    }
+    if (!group) return [noAccess(myAgentId)];
+
+    const groupIdBytes: Uint8Array = group.groupId.toBytes();
     const members = await group.members();
-    const devices = members
-      .filter((m: any) => m.who.isIndividual())
-      .map((m: any) => {
+    const devices: DeviceEntry[] = members
+      .filter((m: any) => !m.who.isGroup())
+      .map((m: any): DeviceEntry => {
         const agentId = bytesToBase64(m.who.id.toBytes());
-        return { agentId, role: toMemberRole(m.can.toString()), isMe: agentId === myAgentId };
+        // A root delegation is signed by the group's own ephemeral key, whose
+        // verifying key IS the group id. Only Group::generate mints one, only for
+        // the founding device — and revoke_member can find no proof to revoke it
+        // with, so the founder is permanently an admin. Read the issuer as
+        // positive evidence rather than testing `proof.delegation.proof` for
+        // absence: a false positive would silently make a manageable device
+        // unmanageable, where a miss merely restores the old behaviour.
+        const issuerAgentId = bytesToBase64(m.proof.verifyingKey);
+        return {
+          agentId,
+          role: toMemberRole(m.can.toString()),
+          isMe: agentId === myAgentId,
+          isFounder: bytesEqual(m.proof.verifyingKey, groupIdBytes),
+          issuerAgentId,
+        };
       });
-    if (!devices.some((d: { agentId: string }) => d.agentId === myAgentId)) {
-      devices.unshift({ agentId: myAgentId, role: 'admin', isMe: true });
-    }
-    return devices;
+
+    // Absent from members(): revoked by a peer admin, or mid-link before the
+    // admin's reciprocal add has arrived. Keep a row so the screen still shows
+    // "This device" (dropping it would trip DeviceList's "No linked devices."
+    // empty state), but report no access rather than inventing admin.
+    if (!devices.some((d) => d.agentId === myAgentId)) devices.push(noAccess(myAgentId));
+
+    // members() is a HashMap walk, so its order is arbitrary. The old unshift
+    // guaranteed self came first and the UI still reads as though it does.
+    return devices.sort((x, y) => Number(y.isMe) - Number(x.isMe));
   }
 
   /**

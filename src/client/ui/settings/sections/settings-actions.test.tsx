@@ -14,7 +14,6 @@ let mockReachable: string | null;
 let mockEnableSettingsSync: jest.Mock;
 let mockDeleteAllData: jest.Mock;
 let mockIdentity: { deviceId: string; userGroupId: string | null };
-let mockNavigate: jest.Mock;
 let mockShowToast: jest.Mock;
 let mockShowError: jest.Mock;
 
@@ -43,10 +42,6 @@ jest.mock('../../device-names', () => ({
   setDeviceName: () => Promise.resolve(),
 }));
 
-jest.mock('../../common/navigate-url', () => ({
-  navigateToUrlOrHash: (...args: any[]) => mockNavigate(...args),
-}));
-
 jest.mock('@/components/ui/toast', () => ({
   showToast: (...args: any[]) => mockShowToast(...args),
   showError: (...args: any[]) => mockShowError(...args),
@@ -62,14 +57,12 @@ jest.mock('@/components/ui/sheet', () => ({
 import { StorageSettings } from './StorageSettings';
 import { BackupSettings } from './BackupSettings';
 import { DangerZone } from './DangerZone';
-import { DeveloperSettings } from './DeveloperSettings';
 
 beforeEach(() => {
   mockReachable = null;
   mockEnableSettingsSync = jest.fn(() => Promise.resolve());
   mockDeleteAllData = jest.fn(() => Promise.resolve());
   mockIdentity = { deviceId: 'device-1', userGroupId: 'group-1' };
-  mockNavigate = jest.fn(() => undefined);
   mockShowToast = jest.fn();
   mockShowError = jest.fn();
   // Not stubbing window.location: neither it nor `reload` is redefinable in this
@@ -171,33 +164,5 @@ describe('BackupSettings', () => {
   });
 });
 
-describe('DeveloperSettings', () => {
-  const field = () => screen.getByTestId('developer-url') as HTMLInputElement;
-
-  it('submits on the button and on Enter', () => {
-    render(<DeveloperSettings />);
-
-    fireEvent.input(field(), { target: { value: '#/d/abc' } });
-    fireEvent.click(screen.getByTestId('developer-go'));
-    expect(mockNavigate).toHaveBeenCalledWith('#/d/abc');
-
-    // Enter-to-submit is new — the old raw input had no keyboard path.
-    fireEvent.keyDown(field(), { key: 'Enter' });
-    expect(mockNavigate).toHaveBeenCalledTimes(2);
-  });
-
-  it('reports a bad URL as an error snackbar', () => {
-    mockNavigate = jest.fn(() => 'Unsupported scheme');
-    render(<DeveloperSettings />);
-    fireEvent.input(field(), { target: { value: 'javascript:alert(1)' } });
-    fireEvent.click(screen.getByTestId('developer-go'));
-
-    expect(mockShowError).toHaveBeenCalledWith('Invalid URL — unsupported scheme');
-  });
-
-  it('does not submit an empty field', () => {
-    render(<DeveloperSettings />);
-    fireEvent.click(screen.getByTestId('developer-go'));
-    expect(mockNavigate).not.toHaveBeenCalled();
-  });
-});
+// The Open-link form moved into DebuggingSettings, and so did its tests — see
+// debugging-settings.test.tsx.

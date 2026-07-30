@@ -8,11 +8,12 @@
  * and trash button this row used to carry.
  *
  * Role editing parallels the document Sharing page: an admin device can change
- * access on *other* devices. Your own role is never editable and your own device
- * is never removable — self-demotion is hard to undo (without admin you can no
- * longer manage devices or restore your own access from here), so the actions
- * simply aren't offered rather than being guarded by a confirm. See
- * DeviceOptionsSheet, which encodes that as which rows exist.
+ * access on the devices it delegated. Which actions a row offers is decided by
+ * DeviceOptionsSheet, which encodes keyhive's three limits (never yourself, never
+ * the founder, only devices you delegated) as which rows exist.
+ *
+ * The role shown is the device's *real* access, `null` included — a device the
+ * group revoked reads "No access" rather than being quietly presented as an admin.
  *
  * The sheets live here rather than in the calling page so the component's props
  * stay purely declarative. A rename needs no refresh callback: `useDevices`
@@ -22,6 +23,7 @@
 
 import { useState } from 'preact/hooks';
 import { showError } from '@/components/ui/toast';
+import { accessTitle } from '@/components/AccessIcon';
 import { RenameSheet } from '@/common/RenameSheet';
 import { useConfirm } from '@/common/ConfirmSheet';
 import { RolePickerSheet } from '../sharing/RolePickerSheet';
@@ -40,8 +42,11 @@ export function DeviceList({ devices, onRemove, onChangeRole, statuses }: {
   statuses?: Record<string, DeviceStatus>;
 }) {
   // The current device is the "me" row; only an admin device can manage access —
-  // mirrors the Sharing page's `myAccess === 'admin'` gate.
-  const isAdmin = devices.find(d => d.isMe)?.role === 'admin';
+  // mirrors the Sharing page's `myAccess === 'admin'` gate. Now that the role is
+  // real rather than a hard-coded 'admin', a revoked or demoted device correctly
+  // gets no management actions at all.
+  const me = devices.find(d => d.isMe);
+  const isAdmin = me?.role === 'admin';
 
   const [optionsFor, setOptionsFor] = useState<DeviceInfo | null>(null);
   const [renameFor, setRenameFor] = useState<DeviceInfo | null>(null);
@@ -140,8 +145,10 @@ export function DeviceList({ devices, onRemove, onChangeRole, statuses }: {
                       {!status?.online ? 'Offline' : status?.transport === 'direct' ? 'P2P' : 'Via relay'}
                     </span>
                   )}
-                  <span className="text-xs text-muted-foreground capitalize" data-testid="device-role">
-                    {dev.role}
+                  {/* accessTitle already returns "Admin"/"Edit"/"Read", and "No
+                      access" for null — so no `capitalize` and no null branch. */}
+                  <span className="text-xs text-muted-foreground whitespace-nowrap" data-testid="device-role">
+                    {accessTitle(dev.role)}
                   </span>
                 </span>
               </md-list-item>
@@ -155,6 +162,8 @@ export function DeviceList({ devices, onRemove, onChangeRole, statuses }: {
         displayName={optionsFor ? nameOf(optionsFor) : ''}
         hasStoredName={!!optionsFor && getDeviceName(optionsFor.agentId) !== undefined}
         isAdmin={isAdmin}
+        iAmFounder={me?.isFounder === true}
+        myAgentId={me?.agentId}
         busy={busy}
         onOpenChange={(open: boolean) => { if (!open) setOptionsFor(null); }}
         onRename={handleRename}
@@ -179,7 +188,8 @@ export function DeviceList({ devices, onRemove, onChangeRole, statuses }: {
         open={!!roleTarget}
         onOpenChange={(open: boolean) => { if (!open) setRoleTarget(null); }}
         title="Device access"
-        value={roleTarget?.role}
+        // `null` (no membership) is not a pickable role — leave the list unchecked.
+        value={roleTarget?.role ?? undefined}
         onPick={role => {
           const target = roleTarget;
           setRoleTarget(null);

@@ -111,7 +111,61 @@ describe('DeviceList row actions', () => {
 
   it("states every device's role on its row, including your own", () => {
     setup([ME, OTHER]);
-    expect(screen.getAllByTestId('device-role').map(n => n.textContent)).toEqual(['admin', 'admin']);
+    expect(screen.getAllByTestId('device-role').map(n => n.textContent)).toEqual(['Admin', 'Admin']);
+  });
+
+  it('reports no access rather than a role it does not have', () => {
+    // The regression this guards: listGroupDevices used to hard-code the current
+    // device as admin, so a revoked or demoted device saw itself as an admin and
+    // was offered actions keyhive then refused.
+    setup([device('me-agent', { isMe: true, role: null }), OTHER]);
+    expect(screen.getAllByTestId('device-role').map(n => n.textContent)).toEqual(['No access', 'Admin']);
+
+    openRow('other-agent');
+    expect(within(sheet()).queryByTestId('device-change-role')).toBeNull();
+    expect(within(sheet()).queryByTestId('device-remove')).toBeNull();
+  });
+
+  it('will not offer to demote or remove the founding device, and says why', () => {
+    // The founder's delegation is the group's root delegation — no proof exists to
+    // revoke it with, so keyhive throws NoProof.
+    setup([ME, device('founder-agent', { isFounder: true })]);
+    openRow('founder-agent');
+    expect(within(sheet()).queryByTestId('device-change-role')).toBeNull();
+    expect(within(sheet()).queryByTestId('device-remove')).toBeNull();
+    expect(within(sheet()).getByTestId('device-founder-note').textContent).toContain('created the group');
+  });
+
+  it('will not offer to manage a sibling this device did not link, and says why', () => {
+    // You can only revoke a delegation you issued (or one descended from it), so a
+    // linked admin device cannot manage the devices some *other* device linked.
+    setup([
+      device('me-agent', { isMe: true, issuerAgentId: 'founder-agent' }),
+      device('sibling-agent', { issuerAgentId: 'founder-agent' }),
+    ]);
+    openRow('sibling-agent');
+    expect(within(sheet()).queryByTestId('device-change-role')).toBeNull();
+    expect(within(sheet()).getByTestId('device-not-mine-note').textContent).toContain('linked this one');
+  });
+
+  it('lets the founder manage a device it did not directly link', () => {
+    setup([
+      device('me-agent', { isMe: true, isFounder: true }),
+      device('other-agent', { issuerAgentId: 'some-other-device' }),
+    ]);
+    openRow('other-agent');
+    // The founder issued every ancestor delegation, so it can revoke any of them.
+    expect(within(sheet()).getByTestId('device-change-role')).toBeDefined();
+    expect(within(sheet()).getByTestId('device-remove')).toBeDefined();
+  });
+
+  it('still offers management when the worker reports no issuer (stale bundle)', () => {
+    // isFounder/issuerAgentId are optional: an old worker bundle omits them, and
+    // that must degrade to "offer the action and let it fail" rather than hiding
+    // management on every row.
+    setup([ME, OTHER]);
+    openRow('other-agent');
+    expect(within(sheet()).getByTestId('device-change-role')).toBeDefined();
   });
 
   it('offers Reset name only once a name has been stored', () => {

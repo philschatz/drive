@@ -2121,6 +2121,131 @@ describe('KeyhiveOps', () => {
       expect(devices).toHaveLength(1);
       expect(devices[0].isMe).toBe(true);
       expect(devices[0].agentId).toBe((await ops.getIdentity()).agentId);
+      // No group means no membership to read — report that, don't guess 'admin'.
+      expect(devices[0].role).toBeNull();
+      expect(devices[0].isFounder).toBe(false);
+    });
+
+    it('listGroupDevices marks the founding device, and only it', async () => {
+      const { ops: a } = await createOps();
+      const { ops: b } = await createOps();
+      await a.ensureUserGroup({ create: true });
+      const aAgentId = (await a.getIdentity()).agentId;
+      const bAgentId = await learnAgent(a, b);
+      await a.addDeviceToGroup(bAgentId);
+
+      const devices = await a.listGroupDevices();
+      // The founder's delegation is the group's root delegation — signed by the
+      // ephemeral key that became the group id — so keyhive has no proof to revoke
+      // it with and its admin access is permanent.
+      expect(devices.find((d) => d.agentId === aAgentId)?.isFounder).toBe(true);
+      expect(devices.find((d) => d.agentId === bAgentId)?.isFounder).toBe(false);
+      // B was delegated by A, which is what decides who may manage B.
+      expect(devices.find((d) => d.agentId === bAgentId)?.issuerAgentId).toBe(aAgentId);
+      // Self is always first, so the "This device" row doesn't move between renders
+      // (members() is a HashMap walk, so the order is otherwise arbitrary).
+      expect(devices[0].isMe).toBe(true);
+    });
+
+    it('refuses to change or remove the current device (self-revocation empties the group)', async () => {
+      const { ops } = await createOps();
+      await ops.ensureUserGroup({ create: true });
+      const me = (await ops.getIdentity()).agentId;
+      // Self-revocation is the one case keyhive lets an admin revoke its own
+      // delegation: the root delegation goes, members becomes empty, and the
+      // follow-up addMember then fails with NoProof — nobody can administer the
+      // group afterwards. Refuse at the ops layer, not just in the sheet.
+      await expect(ops.changeDeviceRole(me, 'read')).rejects.toThrow(/Cannot change access for this device/);
+      await expect(ops.removeDeviceFromGroup(me)).rejects.toThrow(/Cannot remove this device/);
+      expect(await ops.listGroupDevices()).toHaveLength(1);
+    });
+
+    /**
+     * The regression this whole change exists for. The filter was `isIndividual()`,
+     * which is false for the current device on EVERY path — keyhive resolves self to
+     * Agent::Active, including when rehydrating a delegation a peer issued *to us* —
+     * so our own row was always dropped and re-added with a hard-coded 'admin'. A
+     * demoted device saw itself as an admin and was offered manage actions keyhive
+     * then refused.
+     */
+    it('a device demoted by a peer admin reports its OWN row as read, not admin', async () => {
+      const { ops: a, kh: khA } = await createOps();
+      const { ops: b, kh: khB } = await createOps();
+
+      // Order is load-bearing: ingestArchive carries A's individuals but NOT A's own
+      // Individual (that lives in archive.active.individual), so the root delegation
+      // naming A fails with UnknownAgent and parks in pending_events. Learning A's
+      // contact card and then ingesting its events retries those pending ops, at
+      // which point the group materializes on B.
+      const syncAtoB = async () => {
+        await khB.ingestArchive(new Archive((await khA.toArchive()).toBytes()));
+        const indAonB = await khB.receiveContactCard(await khA.contactCard());
+        const evts: Map<Uint8Array, Uint8Array> = await khA.eventsForAgent(indAonB.toAgent());
+        const arr: Uint8Array[] = [];
+        evts.forEach((v: Uint8Array) => arr.push(v));
+        await khB.ingestEventsBytes(arr);
+      };
+
+      const aGroupId = await a.ensureUserGroup({ create: true });
+      const aAgentId = (await a.getIdentity()).agentId;
+      const bAgentId = await learnAgent(a, b);
+      await a.addDeviceToGroup(bAgentId); // as admin
+
+      // B joins the same group. No waitForSync: fx.syncKeyhive() is a no-op here, so
+      // polling for ops we already hold would just burn the timeout.
+      await syncAtoB();
+      await b.ensureUserGroup({ adoptGroupId: aGroupId! });
+      expect(await b.getUserGroupId()).toBe(aGroupId);
+
+      const before = await b.listGroupDevices();
+      expect(before.find((d) => d.isMe)?.agentId).toBe(bAgentId);
+      expect(before.find((d) => d.isMe)?.role).toBe('admin');
+
+      // A demotes B, and the revocation + new read delegation reach B. They cannot
+      // half-arrive: the new delegation references the revocation, so receive_delegation
+      // rejects it with MissingDependency until the revocation is in.
+      await a.changeDeviceRole(bAgentId, 'read');
+      await syncAtoB();
+
+      const after = await b.listGroupDevices();
+      expect(after.filter((d) => d.isMe)).toHaveLength(1); // no synthetic duplicate row
+      expect(after.find((d) => d.isMe)?.agentId).toBe(bAgentId);
+      expect(after.find((d) => d.isMe)?.role).toBe('read'); // ← read 'admin' before the fix
+      expect(after.find((d) => d.isMe)?.isFounder).toBe(false);
+      // A is untouched, and reads as the founder from B's side too.
+      expect(after.find((d) => d.agentId === aAgentId)?.role).toBe('admin');
+      expect(after.find((d) => d.agentId === aAgentId)?.isFounder).toBe(true);
+    });
+
+    it('a device removed from the group reports no access for itself', async () => {
+      const { ops: a, kh: khA } = await createOps();
+      const { ops: b, kh: khB } = await createOps();
+
+      const syncAtoB = async () => {
+        await khB.ingestArchive(new Archive((await khA.toArchive()).toBytes()));
+        const indAonB = await khB.receiveContactCard(await khA.contactCard());
+        const evts: Map<Uint8Array, Uint8Array> = await khA.eventsForAgent(indAonB.toAgent());
+        const arr: Uint8Array[] = [];
+        evts.forEach((v: Uint8Array) => arr.push(v));
+        await khB.ingestEventsBytes(arr);
+      };
+
+      const aGroupId = await a.ensureUserGroup({ create: true });
+      const bAgentId = await learnAgent(a, b);
+      await a.addDeviceToGroup(bAgentId);
+      await syncAtoB();
+      await b.ensureUserGroup({ adoptGroupId: aGroupId! });
+
+      await a.removeDeviceFromGroup(bAgentId);
+      await syncAtoB();
+
+      const after = await b.listGroupDevices();
+      const self = after.find((d) => d.isMe);
+      // Keep the row — dropping it would trip DeviceList's "No linked devices."
+      // empty state — but report no access rather than a synthetic admin.
+      expect(self).toBeDefined();
+      expect(self?.role).toBeNull();
+      expect(self?.isFounder).toBe(false);
     });
 
     it('addMember resolves a group id to the Group (doc member is a group)', async () => {
