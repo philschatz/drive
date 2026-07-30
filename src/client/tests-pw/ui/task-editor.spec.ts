@@ -2,12 +2,19 @@ import { test, expect } from '@playwright/test';
 import { openApp, createDocViaUI, openProperty, saveProperty, cancelProperty, mdFieldTid, type App } from './support';
 
 /**
- * The task editor's transactional panes, in a real browser.
+ * The task editor's transactional panes, against the REAL Material elements.
  *
  * Playwright rather than jsdom for one reason: `MdTextField` renders a
  * `md-outlined-text-field` whose real `<input>` lives in a shadow root that Lit
  * populates *asynchronously*. Under jsdom the md elements never upgrade at all, so
- * the focus behaviour these tests pin down simply doesn't exist there.
+ * the focus behaviour pinned here simply doesn't exist there.
+ *
+ * Deliberately NOT re-tested here, because it holds against the jsdom fallback
+ * input and is covered there: Cancel discards / Save commits / Enter saves
+ * (FieldEditor.test.tsx) and a transactional pane having no Back arrow
+ * (PropertySheet.test.tsx). What is left is what only the real element can show —
+ * that focus reaches the shadow input at all, and that a blur of THAT input is
+ * still not a commit.
  */
 test.describe.configure({ mode: 'serial' });
 
@@ -47,7 +54,7 @@ test.describe('Task editor', () => {
     await expect(app.page.getByTestId('ted-title-row')).toBeVisible({ timeout: 15_000 });
   };
 
-  test('a detail pane focuses its field, so typing lands in it', async () => {
+  test('a detail pane focuses its shadow input, and blurring it is not a commit', async () => {
     const page = app.page;
     await openEditor();
 
@@ -72,36 +79,18 @@ test.describe('Task editor', () => {
     await expect(mdFieldTid(app.page, 'ted-priority')).toHaveValue('3');
     // Nothing outside the field got selected.
     expect(await page.evaluate(() => String(window.getSelection() ?? ''))).toBe('');
-    await cancelProperty(page, 'ted-priority');
-  });
-
-  test('Save commits, Cancel discards, and neither is a blur', async () => {
-    const page = app.page;
-
-    // Cancel: the summary row keeps the old value and the pane pops back.
-    await openProperty(page, 'ted-priority');
-    await mdFieldTid(app.page, 'ted-priority').fill('7');
-    await cancelProperty(page, 'ted-priority');
-    await expect(page.getByTestId('ted-priority-row')).toContainText('Add priority');
-
-    // Save: the summary row updates.
-    await openProperty(page, 'ted-priority');
-    await mdFieldTid(app.page, 'ted-priority').fill('2');
     await saveProperty(page, 'ted-priority');
-    await expect(page.getByTestId('ted-priority-row')).toContainText('2');
+    await expect(page.getByTestId('ted-priority-row')).toContainText('3');
 
-    // Blurring a transactional field must NOT commit — that is the whole point.
+    // Blurring the real shadow input must NOT commit — that is the whole point of a
+    // transactional pane, and the md element's focus/blur events are composed and
+    // retargeted in a way the fallback input's are not.
     await openProperty(page, 'ted-desc');
     await mdFieldTid(app.page, 'ted-desc').fill('Two dinners, one packed lunch.');
-    await page.getByTestId('ted-desc-row').isVisible().catch(() => {});
     await page.evaluate(() => (document.activeElement as HTMLElement)?.blur());
     await cancelProperty(page, 'ted-desc');
     await expect(page.getByTestId('ted-desc-row')).toContainText('Add description');
 
-    // …and a transactional pane has no Back arrow; Cancel is the way out.
-    await openProperty(page, 'ted-title');
-    await expect(page.getByRole('button', { name: 'Back' })).toHaveCount(0);
-    await cancelProperty(page, 'ted-title');
     await page.getByRole('button', { name: 'Close' }).click();
   });
 });

@@ -123,7 +123,11 @@ test('linking a new device exchanges device names both ways', async ({ browser }
     await expect(bRow).toHaveCount(1, { timeout: 15_000 });
 
     // A remote device is relabellable: tap the row → Rename → Save. That persists
-    // locally (the reported gap — other devices used to be read-only).
+    // locally (the reported gap — other devices used to be read-only). The sheet
+    // wiring itself is covered in jsdom by device-list.test.tsx; it is driven here
+    // because the name has to actually be in this device's store for the reload
+    // assertion below, and setDeviceName lives outside the worker API the test
+    // bridge exposes.
     const RENAMED_B = "Bob's phone";
     await bRow.click();
     await expect(deviceA.page.getByTestId('device-options-sheet')).toBeVisible();
@@ -293,81 +297,6 @@ test('a newly linked device loads a friend-shared document', async ({ browser })
 });
 
 /**
- * Regression: a newly linked device should load the ORIGINAL device's whole
- * library. The original's user-group administers its docs; once the new device
- * adopts that group, reconcileHomeDocs must surface those docs in its home list.
- */
-test('a newly linked device loads the original device\'s documents', async ({ browser }) => {
-  let deviceA: Peer | undefined;
-  let deviceB: Peer | undefined;
-  try {
-    [deviceA, deviceB] = await Promise.all([newPeer(browser, 'deviceA'), newPeer(browser, 'deviceB')]);
-
-    // Device A (original) has an established group and a document in its library.
-    await deviceA.call('ensureUserGroup', { create: true });
-    const { docId } = await deviceA.call('createDoc', {
-      '@type': 'TaskList',
-      name: 'My list',
-      tasks: {},
-    });
-    const a = await deviceA.call('getLinkPayload');
-    expect(a.userGroupId).toBeTruthy();
-
-    // Link device B via the encrypted rendezvous (what the UI does).
-    const { rendezvousId, key } = await deviceA.call('rendezvousCreateDeviceLink');
-    const linkedPromise = deviceA.page.evaluate(
-      (rid) => new Promise<string>((resolve) => {
-        const off = (window as any).__drive.onRendezvousEvent((e: any) => {
-          if (e.rendezvousId === rid && (e.status === 'linked' || e.status === 'error')) {
-            off(); resolve(e.status);
-          }
-        });
-      }),
-      rendezvousId,
-    );
-    await deviceB.call('rendezvousJoinDeviceLink', rendezvousId, key);
-    expect(await linkedPromise).toBe('linked');
-
-    await waitFor(
-      () => deviceB!.call('getIdentity'),
-      (id) => id.userGroupId === a.userGroupId,
-      { label: 'deviceB adopts shared group' },
-    );
-
-    // The original device's document must appear in the new device's home list.
-    await waitFor(
-      () => deviceB!.call('getDocList'),
-      (list) => list.some((e) => e.id === docId),
-      { label: 'deviceB loads the original device\'s doc', timeout: 45_000 },
-    );
-
-    // …and its content must actually sync (not just be listed-but-unavailable).
-    await waitFor(
-      () => deviceB!.call('queryDoc', docId, '.name').then((r) => r.result).catch(() => null),
-      (result) => result === 'My list',
-      { label: 'deviceB reads the synced doc content', timeout: 45_000 },
-    );
-
-    // Reopen device B (close & reopen the app): docs must still load on a fresh
-    // worker init — the startup path, gated by findDanglingUserGroup, must not
-    // skip reconcile for a legitimately-adopted group.
-    await deviceB.page.goto('/');
-    await deviceB.page.waitForFunction(() => !!(window as any).__drive, undefined, { timeout: 60_000 });
-    await deviceB.page.evaluate(() =>
-      Promise.all([(window as any).__drive.workerReady, (window as any).__drive.keyhiveReady])
-    );
-    await waitFor(
-      () => deviceB!.call('getDocList'),
-      (list) => list.some((e) => e.id === docId),
-      { label: 'deviceB still has the doc after reopen', timeout: 45_000 },
-    );
-  } finally {
-    await deviceA?.close();
-    await deviceB?.close();
-  }
-});
-
-/**
  * Regression: same as above, but the ORIGINAL device has opted into SHARED
  * settings (it owns a keyhive-private DriveSettings doc). Linking a new device
  * must still load AND decrypt the original's existing documents — the new device
@@ -441,6 +370,23 @@ test('a newly linked device loads documents when the host uses Shared settings',
       () => deviceB!.call('getAllDeviceNames'),
       (names) => !!names[idA.agentId],
       { label: 'deviceB syncs the shared settings doc', timeout: 45_000 },
+    );
+
+    // Reopen device B (close & reopen the app): docs must still load on a fresh
+    // worker init — the startup path, gated by findDanglingUserGroup, must not skip
+    // reconcile for a legitimately-adopted group. Asserted here rather than in its
+    // own test because this Shared-settings host is the harder configuration: the
+    // adopted settings-doc pointer is the thing most likely to stall the startup
+    // reconcile it guards.
+    await deviceB.page.goto('/');
+    await deviceB.page.waitForFunction(() => !!(window as any).__drive, undefined, { timeout: 60_000 });
+    await deviceB.page.evaluate(() =>
+      Promise.all([(window as any).__drive.workerReady, (window as any).__drive.keyhiveReady])
+    );
+    await waitFor(
+      () => deviceB!.call('getDocList'),
+      (list) => list.some((e) => e.id === docId),
+      { label: 'deviceB still has the doc after reopen', timeout: 45_000 },
     );
   } finally {
     await deviceA?.close();

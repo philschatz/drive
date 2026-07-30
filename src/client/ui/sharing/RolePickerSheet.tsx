@@ -1,19 +1,22 @@
 /**
- * Role picker — bottom sheet. Shared by the two flows that need a role:
- * inviting someone new and changing an existing member's.
+ * Role picker — bottom sheet. Shared by the three flows that need a role: inviting
+ * someone new, changing an existing member's, and changing a device's access.
  *
- * Dismissing without choosing cancels, so callers can treat `onPick` as the
- * only success path. `relay` is a real keyhive access level but is deliberately
- * not offered — the rest of the UI can't represent it either (see AccessIcon).
+ * A thin wrapper over the generic {@link PickerSheet}, which is the app's one
+ * implementation of "pick one of these with a checkmark on the current one". The
+ * roles and their explanations live here; the surface doesn't.
+ *
+ * `relay` is a real keyhive access level but is deliberately not offered — the rest
+ * of the UI can't represent it either (see AccessIcon).
  */
 
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
+import { PickerSheet, type PickerOption } from '../common/PickerSheet';
 import type { MemberRole } from '../../../shared/keyhive-types';
 
-const ROLES: { role: MemberRole; icon: string; label: string; detail: string }[] = [
-  { role: 'read', icon: 'visibility', label: 'Read', detail: 'Can view but not change' },
-  { role: 'edit', icon: 'edit', label: 'Edit', detail: 'Can view and change' },
-  { role: 'admin', icon: 'admin_panel_settings', label: 'Admin', detail: 'Can also manage sharing' },
+const ROLES: PickerOption<MemberRole>[] = [
+  { value: 'read', icon: 'visibility', label: 'Read', detail: 'Can view but not change', testId: 'role-read' },
+  { value: 'edit', icon: 'edit', label: 'Edit', detail: 'Can view and change', testId: 'role-edit' },
+  { value: 'admin', icon: 'admin_panel_settings', label: 'Admin', detail: 'Can also manage sharing', testId: 'role-admin' },
 ];
 
 export function RolePickerSheet({
@@ -31,31 +34,14 @@ export function RolePickerSheet({
   onPick: (role: MemberRole) => void;
 }) {
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="bottom" className="max-h-[85vh] p-4 overflow-y-auto">
-        {/* SheetContent doesn't forward extra props — testid goes on a wrapper */}
-        <div data-testid="role-picker-sheet">
-          <SheetHeader>
-            <SheetTitle>{title}</SheetTitle>
-          </SheetHeader>
-
-          <md-list style={{ background: 'transparent' }} className="mt-2">
-            {ROLES.map(({ role, icon, label, detail }) => (
-              <md-list-item
-                key={role}
-                type="button"
-                data-testid={`role-${role}`}
-                onClick={() => { onOpenChange(false); onPick(role); }}
-              >
-                <md-icon slot="start">{icon}</md-icon>
-                <div slot="headline">{label}</div>
-                <div slot="supporting-text">{detail}</div>
-                {value === role && <md-icon slot="end">check</md-icon>}
-              </md-list-item>
-            ))}
-          </md-list>
-        </div>
-      </SheetContent>
-    </Sheet>
+    <PickerSheet
+      open={open}
+      onOpenChange={onOpenChange}
+      title={title}
+      options={ROLES}
+      value={value}
+      onPick={onPick}
+      data-testid="role-picker-sheet"
+    />
   );
 }

@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { openApp, createDocViaUI, mdSelect, mdField, openProperty, backToProperties, saveProperty, cancelProperty, type App } from './support';
+import { openApp, createDocViaUI, mdSelect, mdField, openProperty, backToProperties, saveProperty, type App } from './support';
 
 /**
  * Calendar editor UI test (ported from cypress/e2e/calendar.cy.ts). Consolidated
@@ -137,31 +137,14 @@ test.describe('Calendar', () => {
     await expect(mdField(page, 'ed-title')).toHaveValue('Brand New Event');
     await closeEditor();
 
-    // Overlay click closes the panel
+    // Overlay click closes the panel. Kept (unlike the Escape-pops-back and
+    // Cancel-discards mechanics, which PropertySheet.test.tsx and
+    // FieldEditor.test.tsx cover in jsdom) because it depends on real hit-testing:
+    // the editor is a bottom sheet, so the overlay's centre is covered by sheet
+    // content and only a click near its top edge actually dismisses.
     await openEvent('Brand New Event');
-    // Click near the top of the overlay — the editor is a bottom sheet, so the
-    // overlay's center is covered by sheet content (a force-click there would
-    // land on the sheet and not dismiss).
     await page.locator('.overlay').click({ force: true, position: { x: 10, y: 10 } });
     await expect(page.locator('.panel')).toHaveCount(0);
-
-    // Escape inside a detail pane pops back to the list rather than closing
-    await openEvent('Brand New Event');
-    await openProperty(page, 'ed-title');
-    await page.keyboard.press('Escape');
-    await expect(page.getByTestId('ed-title-row')).toBeVisible();
-    await expect(page.locator('.panel')).toBeVisible();
-    // …and Escape on the list closes the sheet.
-    await page.keyboard.press('Escape');
-    await expect(page.locator('.panel')).toHaveCount(0);
-
-    // Cancel in the (transactional) title pane throws the edit away.
-    await openEvent('Brand New Event');
-    await openProperty(page, 'ed-title');
-    await mdField(page, 'ed-title').fill('Abandoned Title');
-    await cancelProperty(page, 'ed-title');
-    await expect(page.getByTestId('ed-title-row')).toContainText('Brand New Event');
-    await closeEditor();
 
     // Edit the title -> "Updated Title". Save is what writes it.
     await openEvent('Brand New Event');

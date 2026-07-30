@@ -1,3 +1,4 @@
+import { expect } from '@playwright/test';
 import type { Browser, BrowserContext, Page } from '@playwright/test';
 import type { DriveBridge } from '../../ui/test-bridge';
 
@@ -78,6 +79,26 @@ export async function newPeer(browser: Browser, name: string): Promise<Peer> {
     call,
     close: () => context.close(),
   };
+}
+
+/**
+ * Block until each page can see the other's presence, i.e. both workers hold the
+ * document and have exchanged readable presence.
+ *
+ * Any test that asserts on a peer's presence needs this barrier first. Presence is
+ * ephemeral with no replay, so a broadcast sent before the other side's worker has
+ * joined is gone for good — and the sender has no reason to send another unless
+ * something changes on its side. The capture suite hit exactly this and measured
+ * it: see the `bothSeeEachOther` doc comment in docs/capture/assets.capture.ts.
+ *
+ * A peer-dot is the right signal because it only renders off the `viewing`
+ * channel, which means that channel decrypted — so the doc's keyhive epoch has
+ * converged far enough for any other channel to be readable too.
+ */
+export async function bothSeeEachOther(a: Page, b: Page, timeout = 90_000): Promise<void> {
+  for (const page of [a, b]) {
+    await expect(page.getByTestId('peer-dot').first()).toBeVisible({ timeout });
+  }
 }
 
 /**

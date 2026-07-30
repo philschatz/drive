@@ -231,6 +231,60 @@ describe('redundant pushes leave the DOM selection alone', () => {
   // moves the caret — is covered by the two "real restore" cases above.
 });
 
+/**
+ * What each block/run type actually renders. These were Playwright-only, which
+ * meant a real render regression could only surface behind a two-peer boot, a
+ * production build, and a reload — and the reload's persistence race is what
+ * eventually reported it. None of it needs a browser: the divider is markup, and
+ * list indentation is an inline style, not a stylesheet rule.
+ */
+describe('block and run rendering', () => {
+  it('renders a divider as an hr between its neighbours', () => {
+    const { root } = setup(markdownToSpans('para\n\n---\n\nafter'));
+    const divider = root.querySelector('.rt-divider') as HTMLElement;
+    expect(divider.querySelector('hr')).toBeTruthy();
+    // Its `contentEditable={false}` is deliberately NOT asserted: jsdom has no
+    // contentEditable property, so Preact takes the attribute path and drops a
+    // `false`. The atomicity it buys is pinned model-side instead — see
+    // edit-ops.test.ts's backspace-into-divider case.
+    expect(Array.from(root.children).map(c => c.tagName.toLowerCase()))
+      .toEqual(['p', 'div', 'p']);
+  });
+
+  it('renders a link as a real anchor carrying its href', () => {
+    const { root } = setup(markdownToSpans('see [the docs](https://example.com/docs) now'));
+    const anchor = root.querySelector('a.rt-link') as HTMLAnchorElement;
+    expect(anchor.textContent).toBe('the docs');
+    expect(anchor.getAttribute('href')).toBe('https://example.com/docs');
+    expect(anchor.getAttribute('rel')).toBe('noopener noreferrer');
+  });
+
+  it('keeps strong/em classes on a link run', () => {
+    const { root } = setup(markdownToSpans('[**bold link**](https://example.com/)'));
+    expect(root.querySelector('a.rt-link')!.className).toContain('rt-strong');
+  });
+
+  it('indents a nested list item further than its parent', () => {
+    const { root } = setup(markdownToSpans('- first\n  - second'));
+    const items = Array.from(root.querySelectorAll('.rt-li')) as HTMLElement[];
+    expect(items).toHaveLength(2);
+    const pad = (el: HTMLElement) => parseFloat(el.style.paddingLeft);
+    expect(pad(items[1])).toBeGreaterThan(pad(items[0]));
+  });
+
+  it('numbers an ordered list', () => {
+    const { root } = setup(markdownToSpans('1. one\n2. two'));
+    expect(Array.from(root.querySelectorAll('.rt-marker')).map(m => m.textContent))
+      .toEqual(['1.', '2.']);
+  });
+
+  it('bullets an unordered list', () => {
+    const { root } = setup(markdownToSpans('- one\n- two'));
+    expect(Array.from(root.querySelectorAll('.rt-marker')).map(m => m.textContent))
+      .toEqual(['•', '•']);
+  });
+});
+
 describe('root-level selection points', () => {
   // What Chrome's Ctrl+A yields in a contenteditable: the root itself, child
   // index 0 → child count. The root carries no data-from/data-bfrom of its own,

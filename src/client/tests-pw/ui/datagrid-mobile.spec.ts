@@ -220,24 +220,6 @@ test.describe('DataGrid mobile', () => {
     await expect(tabsBar.locator('[data-sheet-tab]', { hasText: 'Budget' })).toHaveClass(/bg-secondary-container/);
   });
 
-  test('scrolling down hides the chrome, scrolling up reveals it', async () => {
-    const page = app.page;
-
-    // Overview mode (no chrome hiding in focus mode), back on the tall sheet
-    await page.getByTestId('sheet-tabs-bar').locator('[data-sheet-tab]', { hasText: 'Sheet 1' }).click();
-    await expect(page.getByTestId('doc-title')).toBeVisible();
-    const pageEl = page.locator('.datagrid-page');
-
-    const container = page.locator('.datagrid-container');
-    // Scroll down within the grid
-    await container.evaluate(el => { el.scrollTop = 200; });
-    await expect(pageEl).toHaveClass(/chrome-hidden/);
-
-    // Scroll back up
-    await container.evaluate(el => { el.scrollTop = 150; });
-    await expect(pageEl).not.toHaveClass(/chrome-hidden/);
-  });
-
   test('frozen rows pin flush under the header and cover scrolling rows', async () => {
     const page = app.page;
     const container = page.locator('.datagrid-container');
@@ -280,6 +262,13 @@ test.describe('DataGrid mobile', () => {
     expect(Math.abs(scrolled.r1Top - scrolled.headerBottom)).toBeLessThanOrEqual(1);
     expect(scrolled.r2Top).toBeLessThan(atRest.r2Top);
 
+    // Scrolling down also hides the page chrome, and scrolling back up reveals it.
+    // The threshold arithmetic is `nextChromeState`, covered in grid-geometry.test.ts;
+    // what needs a browser is that a real scroll event drives it at all.
+    await expect(page.locator('.datagrid-page')).toHaveClass(/chrome-hidden/);
+    await container.evaluate(el => { el.scrollTop = 150; });
+    await expect(page.locator('.datagrid-page')).not.toHaveClass(/chrome-hidden/);
+
     // Unfreeze for the following tests
     await tabsBar.locator('[data-sheet-tab]', { hasText: 'Sheet 1' }).click();
     await page.getByRole('button', { name: 'Decrease frozen rows' }).click();
@@ -316,31 +305,44 @@ test.describe('DataGrid mobile', () => {
     await expect(more).toBeVisible();
     await expect(headlines(more)).toHaveText(['Back', 'Freeze rows', 'Hide row', 'Resize']);
 
-    // Resize → stepper sheet; stepping applies immediately
+    // Resize → stepper sheet.
     await more.locator('md-menu-item', { hasText: 'Resize' }).click();
     const resize = page.getByTestId('resize-sheet');
     await expect(resize).toBeVisible();
+    // A count-accurate label, so this really is a guard against an empty
+    // selection rather than a string that reads "1 row" no matter what.
     await expect(resize).toContainText('Applies to 1 row.');
-    // MdTextField: .fill() throws on the custom-element host, so reach the
-    // inner input (Playwright's CSS engine pierces open shadow roots).
-    const resizeInput = page.locator('[data-testid="resize-input"] input');
-    await resizeInput.fill('60');
-    await resizeInput.press('Enter');
+
+    // Step the height up rather than typing it. `fill()` on an <input
+    // type="number"> does not replace the value in Chromium — Playwright falls
+    // back to select-then-insert, and select() is a no-op on number inputs — so
+    // the committed value was caret-dependent garbage. The stepper is also the
+    // gesture a phone user actually has.
+    const stepUp = page.getByLabel('Increase row height');
+    const docId = /#\/d\/([^/?]+)/.exec(page.url())![1];
+    const storedHeight = async () => {
+      const r = await page.evaluate((docId) => (window as any).__drive.queryDoc(
+        docId, '.sheets | to_entries | map(.value) | .[0] | .rows | to_entries | sort_by(.value.index) | .[2].value.height'
+      ), docId);
+      return r.result as number | null;
+    };
+    // 28 (the default) + 8 steps of 4 = 60, which must clear the 28px content
+    // floor a <tr> height cannot go below — below that a "successful" resize is
+    // indistinguishable from no resize at all.
+    for (let i = 0; i < 8; i++) await stepUp.click();
+    await expect.poll(storedHeight, { timeout: 10_000 }).toBe(60);
     await expect.poll(async () => (await header.boundingBox())!.height).toBeGreaterThan(50);
 
-    // Reset restores the default height
+    // Reset clears the stored height, restoring the default.
     await resize.getByRole('button', { name: 'Reset' }).click();
+    await expect.poll(storedHeight, { timeout: 10_000 }).toBeNull();
     await expect.poll(async () => (await header.boundingBox())!.height).toBeLessThan(40);
     await page.keyboard.press('Escape');
     await expect(resize).not.toBeVisible();
-  });
 
-  test('autofill extends a row from its neighbour', async () => {
-    const page = app.page;
-    const cellText = (col: number, row: number) => cell(col, row).innerText();
-    await page.locator('.datagrid-container').evaluate(el => { el.scrollTop = 0; });
-
-    // Seed a series in rows 1-2 of column C, then autofill row 3 from row 2
+    // Autofill from the same menu, reached by right-click (the desktop path to
+    // it). The series arithmetic is covered in datagrid.test.ts / commands.test.ts;
+    // what is checked here is that the menu item runs it against the right row.
     const editor = page.locator('.bottom-editor-cm .cm-content');
     const setCell = async (col: number, row: number, text: string) => {
       await cell(col, row).click();
@@ -352,14 +354,12 @@ test.describe('DataGrid mobile', () => {
     await setCell(2, 1, '10');
     await page.getByRole('button', { name: 'Done' }).click();
 
-    // Right-click row 3's header (desktop path to the same menu)
-    await page.locator('.datagrid-row-header').filter({ hasText: /^3$/ }).click({ button: 'right' });
-    const menu = page.getByTestId('header-menu-row');
+    await header.click({ button: 'right' });
     await expect(menu).toBeVisible();
     await menu.locator('md-menu-item', { hasText: 'Autofill' }).click();
 
     // Row 3 continues the +5 progression from the row above
-    await expect.poll(() => cellText(2, 2), { timeout: 10_000 }).toBe('15');
+    await expect.poll(() => cell(2, 2).innerText(), { timeout: 10_000 }).toBe('15');
   });
 
   test('format sheet applies formatting and opens conditional rules', async () => {
@@ -391,9 +391,22 @@ test.describe('DataGrid mobile', () => {
     await expect(cell(1, 1)).toHaveCSS('font-weight', '700');
     await expect(sheet).toBeVisible();
 
-    // Number format: Percent
-    await sheet.locator('md-list-item', { hasText: 'Percent' }).click();
+    // Number format is one row now, opening a picker sheet — ten formats inline
+    // pushed the rest of the sheet off-screen. The picker is a sibling sheet, so the
+    // format sheet is still there behind it afterwards.
+    await sheet.getByTestId('number-format-row').click();
+    const numFmt = page.getByTestId('number-format-sheet');
+    await expect(numFmt).toBeVisible();
+    await numFmt.getByTestId('numfmt-percent').click();
     await expect(cell(1, 1)).toContainText('1000.00%');
+    await expect(sheet).toBeVisible();
+
+    // The font picker previews each name in its own typeface.
+    await sheet.getByTestId('font-family-row').click();
+    const fontSheet = page.getByTestId('font-family-sheet');
+    await expect(fontSheet).toBeVisible();
+    await fontSheet.getByTestId('font-georgia').click();
+    await expect(cell(1, 1)).toHaveCSS('font-family', /Georgia/);
 
     // Clear formatting resets both
     await sheet.locator('md-list-item', { hasText: 'Clear formatting' }).click();

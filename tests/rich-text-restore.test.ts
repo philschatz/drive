@@ -46,6 +46,33 @@ describe('rich-text-aware version restore', () => {
     expect(A.spans(restored, ['content'])).toEqual(A.spans(v1, ['content']));
   });
 
+  /**
+   * Undo SCOPE over a divider. This was unpinned everywhere: the Playwright test
+   * that nominally covered it asserted `not.toContainText('tail')`, which "tai"
+   * satisfies — so an undo that ate the divider along with the character looked
+   * identical to a correct one.
+   */
+  it('takes back one edit after a divider without taking the divider', () => {
+    const v1 = build([
+      { op: 'splice', index: 0, del: 0, text: 'body' },
+      { op: 'splitBlock', index: 4, block: { type: 'divider', parents: [], attrs: {} } },
+      { op: 'splitBlock', index: 5, block: { type: 'paragraph', parents: [], attrs: {} } },
+    ]);
+    const v2 = A.change(v1, (d: any) => applyRichTextOps(A, d, ['content'], [
+      { op: 'splice', index: 6, del: 0, text: 'tail' },
+    ]));
+    expect((A.toJS(v2) as any).content).toBe('body￼￼tail');
+
+    const restored = restore(v2, v1);
+    // The divider and its trailing paragraph are both still there; only the
+    // typed run is gone.
+    expect(A.spans(restored, ['content'])).toEqual(A.spans(v1, ['content']));
+    const blocks = A.spans(restored, ['content'])
+      .filter((s: any) => s.type === 'block')
+      .map((s: any) => s.value.type);
+    expect(blocks).toEqual(['divider', 'paragraph']);
+  });
+
   it('leaves plain string fields on the default assignment path', () => {
     const v1 = A.from({ name: 'first', content: '' });
     const v2 = A.change(v1, (d: any) => { d.name = 'second'; });

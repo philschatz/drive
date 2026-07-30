@@ -47,6 +47,13 @@ module.exports = {
       testEnvironment: 'jsdom',
       setupFilesAfterEnv: ['<rootDir>/tests/support/setup-console.ts'],
       roots: ['<rootDir>/src/client'],
+      // Build-time constants Vite substitutes via `define` (see vite.config.ts).
+      // Components that render them (Home's footer) would otherwise throw a bare
+      // ReferenceError under jsdom.
+      globals: {
+        __APP_VERSION__: 'test',
+        __BUILD_TIME__: '2026-01-01T00:00:00.000Z',
+      },
       testMatch: ['**/?(*.)+(test).tsx', '**/clipboard.test.ts'],
       transform: {
         '^.+\\.tsx?$': ['ts-jest', {

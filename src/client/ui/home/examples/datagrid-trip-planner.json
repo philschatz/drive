@@ -430,7 +430,6 @@
           "format": {
             "bold": true,
             "fontSize": 13,
-            "bgColor": "#f1f3f4",
             "borderTop": {
               "style": "double",
               "color": "#3c4043"
@@ -456,8 +455,7 @@
           "rangeColStart": "c1",
           "rangeColEnd": "c2",
           "format": {
-            "bold": true,
-            "bgColor": "#e8f0fe"
+            "bold": true
           }
         }
       },
@@ -476,7 +474,6 @@
           "conditionValue": "0",
           "format": {
             "textColor": "#c5221f",
-            "bgColor": "#fce8e6",
             "bold": true
           }
         },
@@ -494,7 +491,6 @@
           "conditionValue": "yes",
           "format": {
             "textColor": "#0b8043",
-            "bgColor": "#e6f4ea",
             "bold": true
           }
         },
@@ -722,7 +718,6 @@
           "rangeColEnd": "c5",
           "format": {
             "bold": true,
-            "bgColor": "#f3e5f5",
             "borderTop": {
               "style": "thin",
               "color": "#8e24aa"

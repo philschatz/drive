@@ -9,11 +9,12 @@ import { mdField } from './ui/support';
  *     link appears in a readonly input we read out of the DOM;
  *   - a SECOND, genuinely-cold browser opens that link directly — AddFriendPage's
  *     doReceive() runs on mount, so the receiver's worker/keyhive may still be
- *     booting (the real-world race the worker-level rendezvous.spec never hits,
- *     because its peers are pre-booted at '/').
+ *     booting. That cold-start race is the reason this test exists at the UI level
+ *     rather than against the worker API, where both peers are already booted.
  *
  * Both browsers must end up mutual friends, and — since two fresh browsers have
- * no name set — each side must be offered a name field for the (nameless) other.
+ * no name set — each side must be offered a name field for the (nameless) other,
+ * with the name it types ending up in that side's roster.
  *
  * There are deliberately NO `page.on('dialog')` handlers anywhere in this file:
  * the flow raises no native dialogs any more (the alert/prompt became a snackbar
@@ -78,14 +79,23 @@ test('two fresh browsers become mutual friends via the add-friend link', async (
   let alice: Peer | undefined;
   let bob: Peer | undefined;
   try {
+    // Neither peer sets a name, so neither transmits one during the exchange —
+    // which is what makes both ends fall through to the naming field.
     alice = await newPeer(browser, 'alice');
     const url = await startShareAndGetLink(alice);
+
+    // The whole link has to fit in a scannable QR code, which is why the payload
+    // travels over the relay rendezvous and only a topic id + key ride the URL.
+    // (The size of the payload behind it is bounded in tests/rendezvous-bounds.)
+    expect(new URL(url).hash.length).toBeLessThan(200);
 
     // A different, cold browser opens the link — the receiver flow runs itself.
     bob = await coldOpenLink(browser, 'bob', url);
 
-    // Neither peer has a name set, so both ends land on the name field. Naming is
-    // what closes each side's flow, so it has to happen before the assertions.
+    // Both ends land on the name field. Naming is what closes each side's flow, so
+    // it has to happen before the assertions. Receiver side (Bob) is
+    // AddFriendPage's RenameSheet; sharer side (Alice) is the invite sheet's own
+    // body, swapped in place of the QR.
     await nameTheFriend(bob, 'Alice');
     await nameTheFriend(alice, 'Bob');
 
@@ -95,11 +105,16 @@ test('two fresh browsers become mutual friends via the add-friend link', async (
     expect(aliceGroup).toBeTruthy();
     expect(bobGroup).toBeTruthy();
 
-    // Direction 1: Bob (the one who opened the link) knows Alice.
+    // Direction 1: Bob (the one who opened the link) knows Alice, by the name he gave.
     await waitFor(
       () => bob!.call('getKnownFriends', ''),
       (list) => list.some((c) => c.agentId === aliceGroup),
       { label: 'bob knows alice' },
+    );
+    await waitFor(
+      () => bob!.call('getAllFriendNames'),
+      (names) => names[aliceGroup!] === 'Alice',
+      { label: 'bob named alice' },
     );
     // Direction 2: Alice knows Bob — the mutual half, all from one link.
     await waitFor(
@@ -107,37 +122,9 @@ test('two fresh browsers become mutual friends via the add-friend link', async (
       (list) => list.some((c) => c.agentId === bobGroup),
       { label: 'alice knows bob' },
     );
-  } finally {
-    await Promise.all([alice?.close(), bob?.close()].filter(Boolean) as Promise<void>[]);
-  }
-});
-
-test('each side names a friend who sent no name', async ({ browser }) => {
-  let alice: Peer | undefined;
-  let bob: Peer | undefined;
-  try {
-    // Neither peer sets a name, so neither transmits one during the exchange —
-    // which is what makes both ends fall through to the naming field.
-    alice = await newPeer(browser, 'alice');
-    const url = await startShareAndGetLink(alice);
-    bob = await coldOpenLink(browser, 'bob', url);
-
-    // Receiver side (Bob): AddFriendPage's RenameSheet.
-    await nameTheFriend(bob, 'Alice (from Bob)');
-    // Sharer side (Alice): the invite sheet's own body, swapped in place of the QR.
-    await nameTheFriend(alice, 'Bob (from Alice)');
-
-    const { userGroupId: aliceGroup } = await alice.call('ensureUserGroup', { create: true });
-    const { userGroupId: bobGroup } = await bob.call('ensureUserGroup', { create: true });
-
-    await waitFor(
-      () => bob!.call('getAllFriendNames'),
-      (names) => names[aliceGroup!] === 'Alice (from Bob)',
-      { label: 'bob named alice' },
-    );
     await waitFor(
       () => alice!.call('getAllFriendNames'),
-      (names) => names[bobGroup!] === 'Bob (from Alice)',
+      (names) => names[bobGroup!] === 'Bob',
       { label: 'alice named bob' },
     );
 

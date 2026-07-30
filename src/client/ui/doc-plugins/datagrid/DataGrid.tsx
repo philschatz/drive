@@ -9,6 +9,8 @@ import { FocusTopBar } from './FocusTopBar';
 import { ConditionalFormatSheet } from './ConditionalFormatSheet';
 import { FormatSheet } from './FormatSheet';
 import { ColorSheet, type ColorTarget } from './ColorSheet';
+import { PickerSheet } from '@/common/PickerSheet';
+import { NUMBER_FORMAT_OPTIONS, FONT_FAMILY_OPTIONS } from './format-presets';
 import { ContextMenu, ContextMenuTrigger } from '@/components/ui/context-menu';
 import {
   sortedEntries, colIndexToLetter, shortId,
@@ -154,6 +156,8 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
   const [sheetListOpen, setSheetListOpen] = useState(false);
   const [sheetOptionsOpen, setSheetOptionsOpen] = useState(false);
   const [formatSheetOpen, setFormatSheetOpen] = useState(false);
+  const [numFmtOpen, setNumFmtOpen] = useState(false);
+  const [fontFamilyOpen, setFontFamilyOpen] = useState(false);
   /** Which colour the colour-only sheet is editing (null = closed). */
   const [colorTarget, setColorTarget] = useState<ColorTarget | null>(null);
   /** Anchored row/column header menu (long-press or right-click). */
@@ -2071,6 +2075,37 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
         onClear={() => commands.resolveById('clear-formatting').execute()}
         onOpenConditional={() => setCondFormatOpen(true)}
         onOpenColor={setColorTarget}
+        onOpenNumberFormat={() => setNumFmtOpen(true)}
+        onOpenFontFamily={() => setFontFamilyOpen(true)}
+      />
+      {/* The two long single-selects, as sibling sheets over the format sheet — same
+          arrangement as the colour picker, so the format sheet stays put behind them
+          and formatting remains iterative. */}
+      <PickerSheet
+        open={numFmtOpen}
+        onOpenChange={setNumFmtOpen}
+        title="Number format"
+        options={NUMBER_FORMAT_OPTIONS}
+        value={currentCellFormat?.numFmt ?? 'auto'}
+        onPick={(v) => {
+          if (commandCtxRef.current) {
+            applyFormatToSelection(commandCtxRef.current, { numFmt: v === 'auto' ? undefined : v });
+          }
+        }}
+        data-testid="number-format-sheet"
+      />
+      <PickerSheet
+        open={fontFamilyOpen}
+        onOpenChange={setFontFamilyOpen}
+        title="Font"
+        options={FONT_FAMILY_OPTIONS}
+        value={currentCellFormat?.fontFamily ?? 'Default'}
+        onPick={(v) => {
+          if (commandCtxRef.current) {
+            applyFormatToSelection(commandCtxRef.current, { fontFamily: v === 'Default' ? undefined : v });
+          }
+        }}
+        data-testid="font-family-sheet"
       />
       {/* Colour-only picker, shared by the bottom bar and the format sheet. */}
       <ColorSheet

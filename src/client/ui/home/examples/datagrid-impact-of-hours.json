@@ -696,8 +696,7 @@
           "rangeColEnd": "c1",
           "format": {
             "bold": true,
-            "hAlign": "right",
-            "bgColor": "#f1f3f4"
+            "hAlign": "right"
           }
         },
         "footerValues": {
@@ -708,8 +707,7 @@
           "rangeColEnd": "c2",
           "format": {
             "numFmt": "#,##0.0",
-            "bold": true,
-            "bgColor": "#f1f3f4"
+            "bold": true
           }
         }
       },
@@ -728,7 +726,6 @@
           "conditionValue": "0",
           "format": {
             "textColor": "#c5221f",
-            "bgColor": "#fce8e6",
             "bold": true
           }
         },
@@ -761,8 +758,7 @@
           "conditionType": "lt",
           "conditionValue": "0.4",
           "format": {
-            "textColor": "#e37400",
-            "bgColor": "#fef7e0"
+            "textColor": "#e37400"
           }
         },
         "nationalScope": {
@@ -1047,7 +1043,6 @@
           "rangeColEnd": "c6",
           "format": {
             "bold": true,
-            "bgColor": "#e6f4ea",
             "borderTop": {
               "style": "double",
               "color": "#0b8043"

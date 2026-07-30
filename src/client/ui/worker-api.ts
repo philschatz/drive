@@ -724,6 +724,17 @@ export function queryDoc(
   return client.queryDoc(docId, filter, opts);
 }
 
+/**
+ * Force throttled writes out to storage and wait for them; resolves with the
+ * number of docs saved. automerge-repo persists on a debounce and the repo lives
+ * in a dedicated worker that a reload or tab close kills outright, so an edit
+ * made moments ago is applied but not yet durable. Omit `docId` to flush all
+ * open docs.
+ */
+export function flushStorage(docId?: string): Promise<number> {
+  return request('flush-storage', docId ? { docId } : {});
+}
+
 // ── History & undo ──────────────────────────────────────────────────────────
 
 export function getDocHistory(docId: string): Promise<Array<{ version: number; time: number }>> {

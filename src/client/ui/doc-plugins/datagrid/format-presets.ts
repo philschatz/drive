@@ -25,6 +25,32 @@ export const NUMBER_FORMATS: { label: string; value: string; example?: string }[
   { label: 'Datetime', value: 'mm/dd/yyyy hh:mm', example: '04/02/2026 14:30' },
 ];
 
+/**
+ * The two long single-selects as PickerSheet options. Built here rather than in the
+ * sheet so `'auto'`/`'Default'` (the "no explicit format" sentinels, both stored as
+ * `undefined`) stay next to the presets they belong to.
+ *
+ * Testids are slugged from the label because the values can't be: a number format is
+ * `#,##0.00`, and an `md-list-item` has no implicit ARIA role under jsdom.
+ */
+export const NUMBER_FORMAT_OPTIONS = NUMBER_FORMATS.map(nf => ({
+  value: nf.value,
+  label: nf.label,
+  detail: nf.example,
+  testId: `numfmt-${nf.label.toLowerCase().replace(/\s+/g, '-')}`,
+}));
+
+export const FONT_FAMILY_OPTIONS = [
+  { value: 'Default', label: 'Default', testId: 'font-default' },
+  ...FONT_FAMILIES.map(f => ({
+    value: f,
+    label: f,
+    // Each name set in its own typeface — the preview is what you're choosing.
+    labelStyle: { fontFamily: f },
+    testId: `font-${f.toLowerCase().replace(/\s+/g, '-')}`,
+  })),
+];
+
 export const PRESET_COLORS = [
   '#000000', '#434343', '#666666', '#999999', '#b7b7b7', '#cccccc', '#d9d9d9', '#efefef', '#f3f3f3', '#ffffff',
   '#980000', '#ff0000', '#ff9900', '#ffff00', '#00ff00', '#00ffff', '#4a86e8', '#0000ff', '#9900ff', '#ff00ff',

@@ -18,9 +18,17 @@ export function effectiveFrozenCount(storedCount: number | undefined, visibleIds
 export const DEFAULT_ROW_HEIGHT = 28;
 export const DEFAULT_COL_WIDTH = 100;
 
-/** Allowed size range per axis, matching the schema's `min: 0` with a usable floor. */
+/**
+ * Allowed size range per axis, matching the schema's `min: 0` with a usable floor.
+ *
+ * The row floor is DEFAULT_ROW_HEIGHT, not something smaller, because a `<tr>`
+ * height is a *minimum* and `.datagrid-cell` in datagrid.css sets a hard 28px of
+ * content — so every stored height below the default rendered identically to it.
+ * Allowing them meant the sheet could report a change that was invisible on the
+ * grid, which is worse than not offering it.
+ */
 export const SIZE_LIMITS = {
-  row: { min: 16, max: 500, step: 4 },
+  row: { min: DEFAULT_ROW_HEIGHT, max: 500, step: 4 },
   col: { min: 20, max: 2000, step: 10 },
 } as const;
 

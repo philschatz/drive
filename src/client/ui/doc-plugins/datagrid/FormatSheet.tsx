@@ -1,8 +1,5 @@
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
-import {
-  Select, SelectTrigger, SelectValue, SelectContent, SelectItem,
-} from '@/components/ui/select';
-import { FONT_FAMILIES, FONT_SIZES, NUMBER_FORMATS } from './format-presets';
+import { FONT_SIZES, NUMBER_FORMATS } from './format-presets';
 import type { DataGridCellFormat } from '../../../../shared/schemas/datagrid';
 import type { ColorTarget } from './ColorSheet';
 
@@ -86,6 +83,8 @@ export function FormatSheet({
   onClear,
   onOpenConditional,
   onOpenColor,
+  onOpenNumberFormat,
+  onOpenFontFamily,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -97,10 +96,17 @@ export function FormatSheet({
   onOpenConditional: () => void;
   /** Open the colour-only sheet for text or fill. */
   onOpenColor: (target: ColorTarget) => void;
+  /** Open the number-format picker (a sibling sheet, so this one stays open). */
+  onOpenNumberFormat: () => void;
+  /** Open the font-family picker (likewise a sibling). */
+  onOpenFontFamily: () => void;
 }) {
   const fontSize = currentFormat?.fontSize ?? 11;
   const smaller = FONT_SIZES.filter(s => s < fontSize);
   const larger = FONT_SIZES.filter(s => s > fontSize);
+  const numFmtLabel = NUMBER_FORMATS.find(
+    nf => nf.value === (currentFormat?.numFmt ?? 'auto'),
+  )?.label ?? 'Custom';
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -146,22 +152,10 @@ export function FormatSheet({
           />
         </div>
 
-        {/* Font family + size stepper */}
-        <div className="flex items-center gap-3 mt-3">
-          <Select
-            value={currentFormat?.fontFamily ?? 'Default'}
-            onValueChange={(v: string) => onApply({ fontFamily: v === 'Default' ? undefined : v })}
-          >
-            <SelectTrigger className="flex-1 min-w-0" data-testid="font-family-select">
-              <SelectValue placeholder="Font" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="Default">Default</SelectItem>
-              {FONT_FAMILIES.map(f => (
-                <SelectItem key={f} value={f} style={{ fontFamily: f }}>{f}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+        {/* Font size stays a stepper: it is a value on a scale, stepped far more
+            often than it is jumped, so two 40px targets beat a list of fourteen. */}
+        <div className="flex items-center justify-between mt-3 px-4">
+          <span className="md-body-large">Font size</span>
           <div className="flex items-center">
             <button
               aria-label="Decrease font size"
@@ -183,29 +177,28 @@ export function FormatSheet({
           </div>
         </div>
 
-        <SectionLabel>Number format</SectionLabel>
-        <md-list style={{ background: 'transparent' }}>
-          {NUMBER_FORMATS.map(nf => {
-            const checked = nf.value === 'auto'
-              ? !currentFormat?.numFmt
-              : currentFormat?.numFmt === nf.value;
-            return (
-              <md-list-item
-                key={nf.value}
-                type="button"
-                onClick={() => onApply({ numFmt: nf.value === 'auto' ? undefined : nf.value })}
-              >
-                <md-icon slot="start">{checked ? 'check' : ''}</md-icon>
-                <div slot="headline">{nf.label}</div>
-                {nf.example && <div slot="supporting-text" className="font-mono">{nf.example}</div>}
-              </md-list-item>
-            );
-          })}
-        </md-list>
+        <md-divider role="separator" className="my-3" />
 
-        <md-divider role="separator" className="my-2" />
-
+        {/* Font and number format are one row each, not two inline lists of ten and
+            fourteen — those pushed everything below them off-screen. Each opens a
+            sibling picker sheet (like the colour picker), so this sheet stays put
+            behind it and the current value reads in the row's supporting text. */}
         <md-list style={{ background: 'transparent' }}>
+          <md-list-item type="button" data-testid="font-family-row" onClick={onOpenFontFamily}>
+            <md-icon slot="start">font_download</md-icon>
+            <div slot="headline">Font</div>
+            {/* Set in the font it names — the preview is the point. */}
+            <div slot="supporting-text" style={{ fontFamily: currentFormat?.fontFamily ?? undefined }}>
+              {currentFormat?.fontFamily ?? 'Default'}
+            </div>
+            <md-icon slot="end" aria-hidden="true">chevron_right</md-icon>
+          </md-list-item>
+          <md-list-item type="button" data-testid="number-format-row" onClick={onOpenNumberFormat}>
+            <md-icon slot="start">123</md-icon>
+            <div slot="headline">Number format</div>
+            <div slot="supporting-text">{numFmtLabel}</div>
+            <md-icon slot="end" aria-hidden="true">chevron_right</md-icon>
+          </md-list-item>
           <md-list-item type="button" onClick={() => { onOpenChange(false); onOpenConditional(); }}>
             <md-icon slot="start">auto_awesome</md-icon>
             <div slot="headline">Conditional formatting</div>

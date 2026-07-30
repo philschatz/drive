@@ -41,9 +41,13 @@ export function ResizeSheet({
   };
 
   const label = kind === 'row' ? 'Row height' : 'Column width';
-  const target = count > 1
-    ? `${count} ${kind === 'row' ? 'rows' : 'columns'}`
-    : kind === 'row' ? '1 row' : '1 column';
+  // Pluralize off `count` itself rather than `count > 1`, which read "1 row" for
+  // an empty selection — applying to nothing while claiming to apply to one, and
+  // leaving no way for a test to tell an empty selection from a real one.
+  const unit = count === 1
+    ? (kind === 'row' ? 'row' : 'column')
+    : (kind === 'row' ? 'rows' : 'columns');
+  const target = `${count} ${unit}`;
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -76,8 +80,13 @@ export function ResizeSheet({
                 value={String(value)}
                 min={limits.min}
                 max={limits.max}
-                onInput={v => setValue(parseInt(v, 10) || 0)}
-                onCommit={v => commit(parseInt(v, 10) || 0)}
+                // `parseInt(v) || 0` used to turn any unparseable read into 0,
+                // which `commit` then clamped up to the minimum — so a field that
+                // momentarily read as empty silently applied the smallest size
+                // instead of what the user typed. Ignore a bad read and keep the
+                // current value; the stepper buttons and a later commit still work.
+                onInput={v => { const n = parseInt(v, 10); if (!Number.isNaN(n)) setValue(n); }}
+                onCommit={v => { const n = parseInt(v, 10); if (!Number.isNaN(n)) commit(n); }}
               />
               <button
                 aria-label={`Increase ${label.toLowerCase()}`}

@@ -57,6 +57,12 @@ interface SubInfo {
   lastCursorsJson?: string;
 }
 
+/** One encrypted presence channel, plus whether encrypting it rotated the CGKA. */
+interface PresenceCiphertext {
+  enc: Uint8Array;
+  rotated: boolean;
+}
+
 interface DocEntry {
   handle: any;
   pinnedVersion: number | null; // null = live view
@@ -522,6 +528,41 @@ export class DriveEngine {
     handle.on?.('doc', onArrive);
   }
 
+  /**
+   * Push throttled writes out to storage and await them, returning how many docs
+   * were saved.
+   *
+   * automerge-repo persists on a debounce (`saveDebounceRate`, 100ms by default),
+   * and the repo runs in a DEDICATED worker that a reload or tab close terminates
+   * outright — pending timers and in-flight IDB transactions die with it. So the
+   * `result` a caller awaits from `update-doc` proves the change was applied, NOT
+   * that it is durable. Anything that knows the process is about to go away
+   * (visibilitychange → hidden) should call this first.
+   *
+   * Not a complete fix for a hard close: a page being torn down cannot await a
+   * postMessage round trip. Shrinking the window further means tuning
+   * `saveDebounceRate` where the Repo is built (see keyhive-repo.ts).
+   */
+  private async flushStorage(docId?: string): Promise<number> {
+    const storage = this.repo?.storageSubsystem;
+    if (!storage) return 0;
+    const handles = docId
+      ? [this.docRegistry.get(docId)?.handle].filter(Boolean)
+      : [...this.docRegistry.values()].map(e => e.handle);
+    let saved = 0;
+    for (const handle of handles) {
+      const doc = handle?.doc?.();
+      if (!doc) continue;
+      try {
+        await storage.saveDoc(handle.documentId, doc);
+        saved++;
+      } catch (err) {
+        console.warn(`[engine] flush-storage failed for ${handle.documentId}:`, errMsg(err));
+      }
+    }
+    return saved;
+  }
+
   private async createDriveSettingsDoc(): Promise<any | null> {
     if (!this.repo || !this.khOps || !this.setNextDocId) return null;
     const { docIdBytes } = await this.khOps.createKeyhiveDoc();
@@ -768,17 +809,20 @@ export class DriveEngine {
   }
 
   // ── Presence crypto ────────────────────────────────────────────────────────
-  private async encryptPresenceValue(doc: any, value: unknown): Promise<Uint8Array> {
+  private async encryptPresenceValue(doc: any, value: unknown): Promise<PresenceCiphertext> {
     const bytes = new TextEncoder().encode(JSON.stringify(value ?? null));
     const ref = new this.bridge.ChangeId(crypto.getRandomValues(new Uint8Array(32)));
     const result = await this.khOps!.kh.tryEncrypt(doc, ref, [], bytes);
-    return result.encrypted_content().toBytes();
+    // `update_op()` is defined only when this encrypt rotated the CGKA epoch —
+    // i.e. only then did it mint key material the peer does not have yet. See
+    // flushPresenceOut for why the caller has to know.
+    return { enc: result.encrypted_content().toBytes(), rotated: !!result.update_op() };
   }
   private async decryptPresenceValue(doc: any, enc: Uint8Array): Promise<unknown> {
     const decrypted = await this.khOps!.kh.tryDecrypt(doc, this.bridge.Encrypted.fromBytes(enc));
     return JSON.parse(new TextDecoder().decode(decrypted));
   }
-  private async encryptPresenceValueOrNull(doc: any, value: unknown): Promise<Uint8Array | null> {
+  private async encryptPresenceValueOrNull(doc: any, value: unknown): Promise<PresenceCiphertext | null> {
     try { return await this.encryptPresenceValue(doc, value); }
     catch (err) {
       // Swallowing this silently hid a wedged CGKA ("SecretKey not found" after
@@ -790,11 +834,24 @@ export class DriveEngine {
   private async flushPresenceOut(entry: DocEntry): Promise<boolean> {
     if (!entry.presence || !entry.presenceDoc || !entry.presenceDesired) return true;
     let allOk = true;
+    let rotated = false;
     for (const [k, v] of Object.entries(entry.presenceDesired)) {
-      const enc = await this.encryptPresenceValueOrNull(entry.presenceDoc, v);
-      if (enc) entry.presence.broadcast(k, enc);
-      else allOk = false;
+      const out = await this.encryptPresenceValueOrNull(entry.presenceDoc, v);
+      if (out) {
+        entry.presence.broadcast(k, out.enc);
+        if (out.rotated) rotated = true;
+      } else allOk = false;
     }
+    // A rotation minted key material the peer needs in order to read what we just
+    // sent — and the cyphertext is ALREADY on the wire, because presence.broadcast
+    // goes out immediately while keyhive holds the new op behind a 1s debounce
+    // before syncing it (the `syncTimeout` in the library's keyhive.ts). So the
+    // peer reliably receives bytes it cannot decrypt for about a second and logs
+    // "Key not found". That alone would heal, but every retry round re-encrypts,
+    // so the replacement cyphertext arrives just as early as the last one and the
+    // peer can flap indefinitely — one epoch behind, forever. Pushing the material
+    // here makes it race the cyphertext instead of trailing it.
+    if (rotated) this.khIntegration?.networkAdapter?.syncKeyhive?.();
     return allOk;
   }
   private schedulePresenceRetry(entry: DocEntry): void {
@@ -2189,6 +2246,15 @@ export class DriveEngine {
         emit({ type: 'result', id: msg.id, result: null });
       } catch (err: any) {
         console.error('[engine] update-doc failed:', errMsg(err));
+        emit({ type: 'result', id: msg.id, error: errMsg(err) });
+      }
+      return;
+    }
+
+    if (msg.type === 'flush-storage') {
+      try {
+        emit({ type: 'result', id: msg.id, result: await this.flushStorage(msg.docId) });
+      } catch (err: any) {
         emit({ type: 'result', id: msg.id, error: errMsg(err) });
       }
       return;

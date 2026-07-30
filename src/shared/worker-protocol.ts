@@ -59,6 +59,12 @@ export type MainToWorker =
   | { type: 'subscribe-query'; subId: number; docId: string; filter: string; peek?: boolean; meta?: boolean; spansPath?: (string | number)[] }
   | { type: 'unsubscribe-query'; subId: number }
   | { type: 'set-doc-version'; docId: string; version: number | null }
+  // Force any throttled writes for this doc (or every open doc) out to storage
+  // and await them. automerge-repo saves on a debounce, so a doc edited moments
+  // ago is not yet durable; the repo lives in a DEDICATED worker, which a reload
+  // or tab close terminates mid-debounce. Called on visibilitychange → hidden,
+  // and by tests that reload and then assert the content came back.
+  | { type: 'flush-storage'; id: number; docId?: string }
   | { type: 'get-doc-history'; id: number; docId: string }
   | { type: 'debug-get-version-patches'; id: number; docId: string; version: number }
   | { type: 'restore-doc-to-heads'; id: number; docId: string; heads: string[] }

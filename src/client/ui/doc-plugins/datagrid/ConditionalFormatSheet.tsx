@@ -240,8 +240,10 @@ export function ConditionalFormatSheet({
     }, [currentSheetId, id]);
   };
 
-  // Swap the rule's index with its neighbor in sorted-by-index order.
-  // Lower index = higher priority (evaluated first), so "up" = lower index.
+  // Swap the rule's index with its neighbour in the list as displayed, which is
+  // ascending index — so "up" really is one row up. Higher index wins
+  // (resolveConditionalFormat sorts descending and takes the first match), so moving
+  // up lowers priority and moving down raises it, matching the buttons' tooltips.
   const moveRule = (id: string, direction: 'up' | 'down') => {
     const ids = sortedRules.map(([rid]) => rid);
     const idx = ids.indexOf(id);
@@ -358,21 +360,15 @@ export function ConditionalFormatSheet({
             {/* Material list, matching the app's other option sheets. Tapping a
                 row edits the rule; reorder/delete stay as trailing icon buttons
                 since they act without leaving the list. */}
+            {/* Rendered in priority order and nothing else. Rules that don't apply
+                to the selection are dimmed in place rather than grouped below a
+                divider: that regrouping meant a row's on-screen position no longer
+                matched its priority index, so Move up/down — which swap by index —
+                appeared to move a rule somewhere other than up or down, and could
+                swap it with a rule on the far side of the divider. */}
             <md-list style={{ background: 'transparent' }}>
-              {(() => {
-                const applicable = sortedRules.filter(([, rule]) => ruleAppliesToSelection(rule));
-                const other = sortedRules.filter(([, rule]) => !ruleAppliesToSelection(rule));
-                const combined: ([string, ConditionalFormatRule] | 'divider')[] = [...applicable];
-                if (applicable.length > 0 && other.length > 0) combined.push('divider');
-                combined.push(...other);
-                return combined;
-              })().map((item) => {
-                if (item === 'divider') {
-                  return <md-divider key="divider" role="separator" />;
-                }
-                const [id, rule] = item;
+              {sortedRules.map(([id, rule], priorityIdx) => {
                 const applies = ruleAppliesToSelection(rule);
-                const priorityIdx = sortedRules.findIndex(([rid]) => rid === id);
                 const isFirst = priorityIdx === 0;
                 const isLast = priorityIdx === sortedRules.length - 1;
                 return (

@@ -479,7 +479,6 @@
           "rangeColEnd": "c4",
           "format": {
             "bold": true,
-            "bgColor": "#f1f3f4",
             "borderTop": {
               "style": "double",
               "color": "#3c4043"
@@ -1208,7 +1207,6 @@
           "conditionValue": "200",
           "format": {
             "bold": true,
-            "bgColor": "#fce8e6",
             "textColor": "#c5221f"
           }
         },
@@ -1239,7 +1237,6 @@
           "rangeColEnd": "c5",
           "format": {
             "bold": true,
-            "bgColor": "#e6f4ea",
             "borderBottom": {
               "style": "thin",
               "color": "#0b8043"

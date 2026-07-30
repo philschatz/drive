@@ -127,6 +127,10 @@ export function __reset(): void {
   presenceSubs.clear();
   cursors.clear();
   cursorSubs.clear();
+  docList = [];
+  docListSubs.clear();
+  unseenFlags = {};
+  unseenSubs.clear();
 }
 /** Push a presence peer map ({ peerId: { peerId, value } }) to subscribers. */
 export function __setPresence(docId: string, peers: Record<string, any>): void {
@@ -238,7 +242,12 @@ const unsub = (): (() => void) => noop;
 
 export const workerReady = Promise.resolve();
 export const keyhiveReady = Promise.resolve();
-export const HOME_SUMMARY_QUERY = '.';
+// The real projection verbatim, not '.', because Home reads named fields off the
+// result (`type`, `name`, the per-type counts) — and this mock runs the real jq
+// engine, so a stand-in would test a shape the worker never sends. Keep in sync
+// with worker-api.ts.
+export const HOME_SUMMARY_QUERY =
+  '{ type: .["@type"], name: (.name // ""), eventCount: (if .events then (.events | length) else 0 end), taskCount: (if .tasks then [.tasks[] | select(.progress != "completed" and .progress != "cancelled")] | length else 0 end), cellCount: (if .sheets then [.sheets[].cells // {} | length] | add else 0 end) }';
 
 export function openDoc(): Promise<void> { return Promise.resolve(); }
 export function queryDoc(docId: string, filter: string): Promise<any> {
@@ -307,11 +316,39 @@ export function useConnectionStatus(): boolean { return true; }
 export function useWsStatus(): boolean { return true; }
 export function whenWsConnected(): Promise<void> { return Promise.resolve(); }
 
-export function getDocList(): Promise<any[]> { return Promise.resolve([]); }
-export function fetchDocList(): Promise<any[]> { return Promise.resolve([]); }
-export function onDocListUpdated(): () => void { return noop; }
-export function onUnseenChangesUpdated(): () => void { return noop; }
-export function getUnseenChanges(): Record<string, boolean> { return {}; }
+// Doc list + unseen flags: subscribable, so a Home test can drive the two pushes
+// the real worker owns (the list itself, and the per-doc new-changes flags — which
+// travel on their own channel precisely because they must be able to change when
+// the summary projection does not).
+let docList: any[] = [];
+const docListSubs = new Set<(list: any[]) => void>();
+let unseenFlags: Record<string, boolean> = {};
+const unseenSubs = new Set<(u: Record<string, boolean>) => void>();
+
+export function getDocList(): Promise<any[]> { return Promise.resolve(docList); }
+export function fetchDocList(): Promise<any[]> { return Promise.resolve(docList); }
+export function onDocListUpdated(fn: (list: any[]) => void): () => void {
+  docListSubs.add(fn);
+  fn(docList);
+  return () => { docListSubs.delete(fn); };
+}
+export function onUnseenChangesUpdated(fn: (u: Record<string, boolean>) => void): () => void {
+  unseenSubs.add(fn);
+  fn(unseenFlags);
+  return () => { unseenSubs.delete(fn); };
+}
+export function getUnseenChanges(): Record<string, boolean> { return { ...unseenFlags }; }
+
+/** Push a doc list ({ id, type, name }[]) as the worker's doc-list update. */
+export function __setDocList(list: Array<{ id: string; type?: string; name?: string }>): void {
+  docList = list;
+  for (const fn of docListSubs) fn(docList);
+}
+/** Push the worker's per-doc unseen-changes flags. */
+export function __setUnseen(unseen: Record<string, boolean>): void {
+  unseenFlags = unseen;
+  for (const fn of unseenSubs) fn(getUnseenChanges());
+}
 export function onDeviceNamesUpdated(): () => void { return noop; }
 export function onFriendNamesUpdated(): () => void { return noop; }
 

@@ -2,38 +2,54 @@ import { test, expect } from '@playwright/test';
 import { openApp, createDocViaUI, type App } from './support';
 
 /**
- * Sentences (word-processing) editor — real-browser coverage for what jsdom can't
- * do: genuine contenteditable typing (beforeinput), Selection-driven toolbar
- * formatting, keyboard shortcuts, and worker/IndexedDB persistence across a
- * reload. The pure editing logic (ops, markdown, spans) is Jest-covered.
+ * Sentences (word-processing) editor — the parts of it that only a real browser
+ * expresses. Everything else moved to Jest: block/run rendering and list
+ * indentation to RichTextEditor.test.tsx, toolbar formatting and Markdown import
+ * to SentencesView.test.tsx, and the editing logic itself to edit-ops.test.ts /
+ * markdown.test.ts / blocks.test.ts. What is left needs a browser for a specific
+ * reason, named per test.
  *
- * Tests are serial and build up one document.
+ * The document is seeded once through the app's own Markdown import rather than
+ * built up across tests, so a failure can't cascade and each test starts from a
+ * known document.
  */
 test.describe.configure({ mode: 'serial' });
 
 let app: App;
 
 const editor = () => app.page.getByTestId('rt-editor');
+const selectedText = () => app.page.evaluate(() => window.getSelection()?.toString() ?? '');
 
-/** Select [start, end) inside the first inline run whose text contains `text`. */
-async function selectIn(text: string, start: number, end: number): Promise<void> {
-  await app.page.evaluate(({ text, start, end }) => {
-    const runs = Array.from(document.querySelectorAll('.rt-editor [data-from]'));
-    const el = runs.find(r => (r.textContent ?? '').includes(text));
-    if (!el || !el.firstChild) throw new Error(`run containing "${text}" not found`);
-    const base = (el.textContent ?? '').indexOf(text);
-    const range = document.createRange();
-    range.setStart(el.firstChild, base + start);
-    range.setEnd(el.firstChild, base + end);
-    const sel = window.getSelection()!;
-    sel.removeAllRanges();
-    sel.addRange(range);
-  }, { text, start, end });
+/** Everything the tests below need: heading, list, link, divider, trailing text. */
+const SEED = [
+  '# Hello world',
+  '',
+  '- first',
+  '  - second',
+  '',
+  '[after](https://example.com/docs) the list',
+  '',
+  '---',
+  '',
+  'tail',
+].join('\n');
+
+/** Replace the document with `md`, through the app's own Markdown import. */
+async function seed(md: string, expected: string): Promise<void> {
+  // The confirm() dialog is auto-accepted by the openApp handler.
+  await app.page.setInputFiles('[data-testid="import-md-input"]', {
+    name: 'seed.md',
+    mimeType: 'text/markdown',
+    buffer: Buffer.from(md),
+  });
+  await expect(editor()).toContainText(expected);
+  await expect(app.page.getByTestId('format-bar')).toBeVisible();
 }
 
 test.beforeAll(async ({ browser }) => {
   app = await openApp(browser, 'document');
   await createDocViaUI(app, 'Sentences', 'Living Doc');
+  await seed(SEED, 'tail');
 });
 
 test.afterAll(async () => {
@@ -41,126 +57,89 @@ test.afterAll(async () => {
   await app.close();
 });
 
-test('opens editable, with the formatting bar and no mode to enter', async () => {
-  await expect(editor()).toBeVisible();
-  await expect(editor()).toHaveAttribute('contenteditable', 'true');
-  await expect(app.page.getByTestId('format-bar')).toBeVisible();
-
-  // Nothing to enter and nothing to leave.
-  await expect(app.page.getByLabel('Edit sentences')).toHaveCount(0);
-  await expect(app.page.getByLabel('Done')).toHaveCount(0);
-  await expect(app.page.getByLabel('Back')).toBeVisible();
-});
-
-test('typing inserts text through beforeinput', async () => {
-  await editor().click();
-  await app.page.keyboard.type('Hello world');
-  await expect(editor()).toContainText('Hello world');
-});
-
-test('bold via toolbar button and italic via Ctrl+I', async () => {
-  await selectIn('Hello world', 0, 5); // "Hello"
-  await app.page.getByTestId('fmt-format_bold').click();
-  await expect(editor().locator('.rt-strong')).toHaveText('Hello');
-
-  await selectIn('world', 0, 5);
-  await app.page.keyboard.press('ControlOrMeta+i');
-  await expect(editor().locator('.rt-em')).toHaveText('world');
-});
-
-test('heading via the text-style sheet', async () => {
-  await selectIn('Hello', 1, 1);
-  await app.page.getByTestId('fmt-notes').click();
-  await app.page.locator('md-list-item', { hasText: 'Heading 1' }).click();
-  await expect(editor().locator('h1')).toContainText('Hello world');
-});
-
-test('Enter starts a paragraph after a heading; lists nest with Tab', async () => {
-  // Caret to the end of the heading, then a new block.
-  await selectIn('world', 5, 5);
-  await app.page.keyboard.press('End');
-  await app.page.keyboard.press('Enter');
-  await app.page.keyboard.type('first');
-  await expect(editor().locator('p')).toContainText('first');
-
-  await app.page.getByTestId('fmt-format_list_bulleted').click();
-  await expect(editor().locator('.rt-li')).toContainText('first');
-
-  // Enter continues the list; Tab nests the new item.
-  await app.page.keyboard.press('Enter');
-  await app.page.keyboard.type('second');
-  await app.page.keyboard.press('Tab');
-  const items = editor().locator('.rt-li');
-  await expect(items).toHaveCount(2);
-  await expect(items.nth(1)).toContainText('second');
-  // Nested item is indented further than its parent.
-  const [p0, p1] = await Promise.all([
-    items.nth(0).evaluate(el => parseFloat(getComputedStyle(el).paddingLeft)),
-    items.nth(1).evaluate(el => parseFloat(getComputedStyle(el).paddingLeft)),
-  ]);
-  expect(p1).toBeGreaterThan(p0);
-
-  // Enter twice on the empty next item exits the list back to a paragraph.
-  await app.page.keyboard.press('End');
-  await app.page.keyboard.press('Enter');
-  await app.page.keyboard.press('Enter');
-  await app.page.keyboard.press('Enter');
-  await app.page.keyboard.type('after the list');
-  await expect(editor().locator('p', { hasText: 'after the list' })).toBeVisible();
-});
-
-test('links apply to the selection and render as anchors', async () => {
-  await selectIn('after the list', 0, 5); // "after"
-  await app.page.getByTestId('fmt-link').click();
-  await app.page.getByTestId('link-input').fill('https://example.com/docs');
-  await app.page.getByRole('button', { name: 'Apply' }).click();
-  const anchor = editor().locator('a.rt-link');
-  await expect(anchor).toHaveText('after');
-  await expect(anchor).toHaveAttribute('href', 'https://example.com/docs');
-});
-
-test('divider inserts and undo (Ctrl+Z) restores', async () => {
-  await editor().locator('p', { hasText: 'the list' }).click();
-  await app.page.keyboard.press('End');
-  await app.page.getByTestId('fmt-horizontal_rule').click();
-  await expect(editor().locator('.rt-divider hr')).toBeVisible();
-
-  await app.page.keyboard.type('tail');
-  await expect(editor()).toContainText('tail');
-  await app.page.keyboard.press('ControlOrMeta+z');
-  await expect(editor()).not.toContainText('tail');
-});
-
-test('content survives a reload, and the link is a real anchor', async () => {
-  // Editable renders a real <a> too — it only swallows the click (which places
-  // the caret); the Link sheet's Open is how an editor follows it.
-  await expect(editor().locator('a.rt-link')).toHaveAttribute('href', 'https://example.com/docs');
+/**
+ * The one assertion in this file that cannot be made anywhere else: that the
+ * worker's writes are durable across a process restart. `page.reload()` kills the
+ * dedicated worker, so this covers the whole chain — automerge-repo's throttled
+ * saveDoc, the flush the app performs when the page is hidden, IndexedDB, and the
+ * rehydrate on boot. It is also what caught the missing flush: without it the tail
+ * of the history died with the worker.
+ */
+test('content survives a reload', async () => {
+  // What the app itself does on visibilitychange → hidden; a reload gives no such
+  // warning, so ask for it explicitly rather than racing the save debounce.
+  await app.page.evaluate(() => (window as any).__drive.flushStorage());
 
   await app.page.reload();
   await app.page.waitForFunction(() => !!(window as any).__drive, undefined, { timeout: 60_000 });
+
   await expect(editor().locator('h1')).toContainText('Hello world', { timeout: 30_000 });
   await expect(editor().locator('.rt-li')).toHaveCount(2);
   await expect(editor().locator('.rt-divider hr')).toBeVisible();
+  await expect(editor()).toContainText('tail');
+  // Editable renders a real <a>; it only swallows the click (which places the
+  // caret), and the Link sheet's Open is how an editor follows it.
+  await expect(editor().locator('a.rt-link')).toHaveAttribute('href', 'https://example.com/docs');
   // And it comes back editable, with no gesture in between.
   await expect(editor()).toHaveAttribute('contenteditable', 'true');
   await expect(app.page.getByTestId('format-bar')).toBeVisible();
 });
 
-test('double-clicking selects a word, and typing replaces it', async () => {
+/**
+ * Gestures the browser implements and jsdom does not: word-granularity selection
+ * from a double click, and the undo keybinding through a real contenteditable.
+ * The undo *scope* (one edit, divider intact) is pinned model-side in
+ * tests/rich-text-restore.test.ts — this only proves the key reaches it.
+ */
+test('double-click selects a word, and Ctrl+Z takes back the edit that replaced it', async () => {
   await editor().locator('h1').dblclick();
+  expect(await selectedText()).toBe('Hello');
+
   await app.page.keyboard.type('Howdy');
   await expect(editor().locator('h1')).toContainText('Howdy');
+
+  await app.page.keyboard.press('ControlOrMeta+z');
+  await expect(editor().locator('h1')).toContainText('Hello world');
+  // The undo took back one edit, not the document: the divider is still here.
+  await expect(editor().locator('.rt-divider hr')).toBeVisible();
 });
 
-test('imports a Markdown file, replacing the content', async () => {
-  // The confirm() dialog is auto-accepted by the openApp handler.
-  await app.page.setInputFiles('[data-testid="import-md-input"]', {
-    name: 'notes.md',
-    mimeType: 'text/markdown',
-    buffer: Buffer.from('# Fresh start\n\nImported **body**\n\n1. alpha\n2. beta'),
-  });
-  await expect(editor().locator('h1')).toHaveText('Fresh start');
-  await expect(editor().locator('.rt-strong')).toHaveText('body');
-  await expect(editor().locator('.rt-li')).toHaveCount(2);
-  await expect(editor()).not.toContainText('Hello world');
+/**
+ * A native mouse drag, upward. Moving the caret mints Automerge cursor tokens;
+ * registering them makes the worker re-push the subscription, and that push
+ * re-runs the editor's caret-restore effect — so a background round trip lands
+ * mid-drag. Every step here moves earlier in document order, so the selection can
+ * only grow, unless that restore resets the browser's drag anchor. It did, which
+ * collapsed the highlight on the way up while downward drags looked fine. The
+ * waits are deliberate: without them the assertions run before the push.
+ */
+test('dragging a selection upward keeps growing the highlight', async () => {
+  await seed('alpha\n\nbeta\n\ngamma', 'gamma');
+  // Collapse anything already selected: a mousedown inside an existing selection
+  // starts a drag-and-drop, not a new selection.
+  await editor().locator('p').nth(1).click();
+  const first = (await editor().locator('p').nth(0).boundingBox())!;
+  const last = (await editor().locator('p').nth(2).boundingBox())!;
+
+  const from = { x: last.x + last.width - 2, y: last.y + last.height / 2 };
+  const to = { x: first.x + 2, y: first.y + first.height / 2 };
+  await app.page.mouse.move(from.x, from.y);
+  await app.page.mouse.down();
+
+  const lengths: number[] = [];
+  const steps = 6;
+  for (let i = 1; i <= steps; i++) {
+    const t = i / steps;
+    await app.page.mouse.move(from.x + (to.x - from.x) * t, from.y + (to.y - from.y) * t);
+    await app.page.waitForTimeout(200); // let a push land mid-drag
+    lengths.push((await selectedText()).length);
+  }
+  await app.page.mouse.up();
+
+  for (let i = 1; i < lengths.length; i++) {
+    expect(lengths[i]).toBeGreaterThanOrEqual(lengths[i - 1]);
+  }
+  const text = await selectedText();
+  expect(text).toContain('gamma');
+  expect(text).toContain('alpha');
 });
