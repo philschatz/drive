@@ -140,45 +140,6 @@ export function formatDisplayValue(display: string, numFmt: string | undefined):
 }
 
 // ============================================================
-// computeCellFormat — resolve effective format for a cell from format ranges
-// ============================================================
-
-export function computeCellFormat(
-  formats: Record<string, FormatRange> | undefined,
-  rowId: string,
-  colId: string,
-  rowIds: string[],
-  colIds: string[],
-): DataGridCellFormat | undefined {
-  if (!formats) return undefined;
-
-  const rowIdx = rowIds.indexOf(rowId);
-  const colIdx = colIds.indexOf(colId);
-  if (rowIdx === -1 || colIdx === -1) return undefined;
-
-  // Sort ranges by index (ascending) so later overrides earlier
-  const sorted = Object.values(formats).sort((a, b) => a.index - b.index);
-
-  let merged: DataGridCellFormat | undefined;
-  for (const range of sorted) {
-    const rStart = rowIds.indexOf(range.rangeRowStart);
-    const rEnd = rowIds.indexOf(range.rangeRowEnd);
-    const cStart = colIds.indexOf(range.rangeColStart);
-    const cEnd = colIds.indexOf(range.rangeColEnd);
-    if (rStart === -1 || rEnd === -1 || cStart === -1 || cEnd === -1) continue;
-    if (rowIdx < rStart || rowIdx > rEnd || colIdx < cStart || colIdx > cEnd) continue;
-
-    if (!merged) {
-      merged = { ...range.format };
-    } else {
-      Object.assign(merged, range.format);
-    }
-  }
-
-  return merged;
-}
-
-// ============================================================
 // buildFormatCache — precompute format map for all visible cells
 // ============================================================
 
@@ -251,37 +212,6 @@ export function buildIndexMaps(rowIds: string[], colIds: string[]): { rowIdxMap:
   const colIdxMap = new Map<string, number>();
   colIds.forEach((id, i) => colIdxMap.set(id, i));
   return { rowIdxMap, colIdxMap };
-}
-
-// ============================================================
-// evaluateConditionalFormats — resolve conditional formatting for a cell
-// ============================================================
-
-export function evaluateConditionalFormats(
-  rules: Record<string, ConditionalFormatRule> | undefined,
-  rowId: string,
-  colId: string,
-  cellValue: string,
-  rowIds: string[],
-  colIds: string[],
-): DataGridCellFormat | undefined {
-  if (!rules) return undefined;
-
-  const { rowIdxMap, colIdxMap } = buildIndexMaps(rowIds, colIds);
-  const rowIdx = rowIdxMap.get(rowId);
-  const colIdx = colIdxMap.get(colId);
-  if (rowIdx === undefined || colIdx === undefined) return undefined;
-
-  const sorted = Object.values(rules).sort((a, b) => a.index - b.index);
-
-  for (const rule of sorted) {
-    if (!cellInAnyRange(rule.ranges, rowIdx, colIdx, rowIdxMap, colIdxMap)) continue;
-    if (matchesCondition(cellValue, rule.conditionType, rule.conditionValue)) {
-      return rule.format;
-    }
-  }
-
-  return undefined;
 }
 
 /**
