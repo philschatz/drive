@@ -86,7 +86,6 @@ function makeHarness(opts: {
     hasSelection: !!ctx.selectedCell,
     currentRowIndices: opts.currentRowIndices ?? [],
     currentColIndices: opts.currentColIndices ?? [],
-    sheetCount: 1,
     contextScope: null,
   };
 
@@ -94,13 +93,7 @@ function makeHarness(opts: {
 }
 
 function runCommand(id: string, state: GridCommandState, ctx: GridCommandContext) {
-  const api = useGridCommands(state, ctx);
-  const pools = [api.rowCtx, api.colCtx, api.cellCtx, api.toolbar, ...api.menus.map(m => m.entries)];
-  for (const pool of pools) {
-    const entry = pool.find(e => e.kind === 'command' && e.id === id) as any;
-    if (entry) { entry.execute(); return; }
-  }
-  throw new Error(`command not found in resolved slots: ${id}`);
+  useGridCommands(state, ctx).resolveById(id).execute();
 }
 
 // ── H4: delete-rows ───────────────────────────────────────────────────────────

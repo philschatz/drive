@@ -21,7 +21,6 @@ export function CommandContextMenuContent({ entries }: CommandContextMenuContent
         if (entry.kind === 'separator') {
           return <ContextMenuSeparator key={`sep-${i}`} />;
         }
-        if (entry.kind === 'submenu') return null; // submenus not supported in context menus
         return (
           <ContextMenuItem
             key={entry.id}

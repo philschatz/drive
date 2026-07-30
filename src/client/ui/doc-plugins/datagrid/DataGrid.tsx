@@ -1324,8 +1324,6 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
     return formatCache.get(`${origRow}:${origCol}`);
   }, [selectedCell, formatCache, visibleRowOriginalIndices, visibleColOriginalIndices]);
 
-  const rowMetas = doc2 ? Object.values(doc2.rows ?? {}) : [];
-  const colMetas = doc2 ? Object.values(doc2.columns ?? {}) : [];
   const commandState: GridCommandState = {
     canEdit,
     canUndo,
@@ -1333,9 +1331,6 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
     hasSelection: selectedCell !== null,
     currentRowIndices,
     currentColIndices,
-    sheetCount: sheetOrder.length,
-    hasHiddenRows: rowMetas.some((r: any) => r.hidden),
-    hasHiddenCols: colMetas.some((c: any) => c.hidden),
     hasFrozenRows: frozenRowCount > 0,
     hasFrozenCols: frozenColCount > 0,
     contextScope: contextMenu
@@ -1369,12 +1364,7 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
     setSelectedCols,
     undo,
     redo,
-    onDeleteSheet: handleDeleteSheet,
-    onHideSheet: handleHideSheet,
-    // Renaming happens in the sheet-options bottom sheet
-    onRenameSheet: () => setSheetOptionsOpen(true),
     formatCache,
-    openConditionalFormatPanel: () => setCondFormatOpen(true),
     openResizeSheet: (kind) => { setHeaderMenu(null); setResizeKind(kind); },
     onPasteShortcut: handlePasteShortcut,
   };
