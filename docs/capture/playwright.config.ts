@@ -44,6 +44,11 @@ export default defineConfig({
   use: {
     baseURL,
     viewport: VIEWPORT,
+    // The deck is a light-mode deck. This is Playwright's default *and* currently
+    // moot — the app's dark theme is driven by a `.dark` class that nothing sets,
+    // not by prefers-color-scheme (see globals.css) — but pinned explicitly so
+    // wiring that media query later can't silently re-render every slide dark.
+    colorScheme: 'light',
     // Crisp stills for slides. Ignored for video, which always records at the
     // CSS viewport size.
     deviceScaleFactor: 2,
