@@ -54,12 +54,13 @@ describe('Counters container', () => {
     expect(screen.getByRole('heading', { name: 'To do' })).toBeTruthy();
     expect(rowOf('Stretch').getAttribute('data-status')).toBe('pending');
 
-    // Clicking the leading icon records a completion → moves to "Done" with a
-    // 1-day flame streak badge (recurring items show streak, not a total).
+    // Clicking the leading icon records a completion → moves to "Done".
+    // A single-day streak is not a streak yet: the flame badge only renders
+    // once the streak reaches 2+ (recurring items show a streak, not a total).
     fireEvent.click(within(rowOf('Stretch')).getByRole('button', { name: 'Record completion for Stretch' }));
     expect(rowOf('Stretch').getAttribute('data-status')).toBe('done');
     expect(screen.getByRole('heading', { name: 'Done' })).toBeTruthy();
-    expect(within(rowOf('Stretch')).getByTitle('1-day streak')).toBeTruthy();
+    expect(within(rowOf('Stretch')).queryByTitle('1-day streak')).toBeNull();
 
     // The title text is a record button too — a second click adds another
     // completion (streak stays 1: same day) without opening the editor.
@@ -68,7 +69,7 @@ describe('Counters container', () => {
     const events = mock.__getDoc(DOC).events as Record<string, any>;
     const uid = Object.keys(events).find(k => events[k].title === 'Stretch')!;
     expect(Object.keys(events[uid].completions).length).toBe(2);
-    expect(within(rowOf('Stretch')).getByTitle('1-day streak')).toBeTruthy();
+    expect(within(rowOf('Stretch')).queryByTitle('1-day streak')).toBeNull();
 
     // Clicking the row itself (outside icon/title) opens the editor — and must
     // NOT record another completion.
@@ -125,6 +126,24 @@ describe('Counters container', () => {
     fireEvent.click(within(rowOf('Meditate')).getByTitle('Completions for Meditate'));
     expect(screen.getByTestId('completions-sheet')).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Completions (0)' })).toBeTruthy();
+  });
+
+  it('shows the flame streak badge once a recurring habit has a 2+ day streak', async () => {
+    const today = Temporal.Now.plainDateISO().toString();
+    const yesterday = Temporal.Now.plainDateISO().subtract({ days: 1 }).toString();
+    mock.__setDoc(DOC, {
+      '@type': 'Calendar+Counters', name: 'C',
+      events: {
+        e1: {
+          '@type': 'Event', title: 'Meditate',
+          recurrenceRule: { '@type': 'RecurrenceRule', frequency: 'daily' },
+          completions: { [`${yesterday}T09:00:00`]: '', [`${today}T09:00:00`]: '' },
+        },
+      },
+    });
+    render(<Counters docId={DOC} />);
+    await waitFor(() => expect(screen.getByText('Meditate')).toBeTruthy());
+    expect(within(rowOf('Meditate')).getByTitle('2-day streak')).toBeTruthy();
   });
 
   it('non-recurring tallies keep the lifetime N× badge', async () => {

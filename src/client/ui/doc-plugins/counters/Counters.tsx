@@ -139,7 +139,7 @@ function CounterListItem({ uid, ev, status, now, canEdit, peerEditingEvents, onR
       <span slot="end" className="flex items-center gap-1.5">
         {schedule && <Badge variant="secondary">{schedule}</Badge>}
         {ev.recurrenceRule
-          ? streak > 0 && (
+          ? streak > 1 && (
               <Badge
                 variant="default"
                 title={streakTitle(streak, ev.recurrenceRule.frequency)}
