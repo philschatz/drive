@@ -38,10 +38,7 @@ function noopSideEffects(): KeyhiveOpsSideEffects {
   return {
     persist: async () => {},
     syncKeyhive: () => {},
-    registerDoc: () => {},
     forceResyncAllPeers: () => {},
-    findDoc: () => {},
-    saveEventBytes: async () => {},
   };
 }
 

@@ -308,7 +308,6 @@ export function getMyAccessLevel(): Promise<string | null> { return Promise.reso
 
 export function usePeerTransports(): Record<string, any> { return {}; }
 export function onP2pStatus(): () => void { return noop; }
-export function getPeerTransport(): any { return { transport: 'relay' }; }
 export function getDirectPeers(): string[] { return []; }
 export function getConnectedPeers(): string[] { return []; }
 export function usePeerList(): string[] { return []; }

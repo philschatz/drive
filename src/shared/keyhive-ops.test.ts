@@ -39,20 +39,14 @@ function noopSideEffects(): KeyhiveOpsSideEffects & { calls: Record<string, any[
   const calls: Record<string, any[][]> = {
     persist: [],
     syncKeyhive: [],
-    registerDoc: [],
     forceResyncAllPeers: [],
-    findDoc: [],
-    saveEventBytes: [],
   };
   let userGroupId: string | null = null;
   return {
     calls,
     persist: async () => { calls.persist.push([]); },
     syncKeyhive: () => { calls.syncKeyhive.push([]); },
-    registerDoc: (a, b) => { calls.registerDoc.push([a, b]); },
     forceResyncAllPeers: () => { calls.forceResyncAllPeers.push([]); },
-    findDoc: (d) => { calls.findDoc.push([d]); },
-    saveEventBytes: async (e) => { calls.saveEventBytes.push([e]); },
     getUserGroupId: async () => userGroupId,
     setUserGroupId: async (id) => { userGroupId = id; },
   };
@@ -483,8 +477,6 @@ describe('KeyhiveOps', () => {
       expect(result.khDocId).toBeDefined();
       expect(typeof result.khDocId).toBe('string');
       expect(ops.khDocuments.has(result.khDocId)).toBe(true);
-      expect(fx.calls.registerDoc.length).toBe(1);
-      expect(fx.calls.registerDoc[0][0]).toBe('automerge-doc-123');
       // enableSharing also mints the user-group and makes it doc admin, so it
       // persists/syncs more than once now.
       expect(fx.calls.persist.length).toBeGreaterThanOrEqual(1);
@@ -1296,8 +1288,8 @@ describe('KeyhiveOps', () => {
       expect(aliceAccess!.toString()).toBe('Admin');
     });
 
-    it('Bob checks access with DocumentId from registerDoc vs reachableDocs', async () => {
-      // Test if the DocumentId stored via registerDoc matches what
+    it('Bob checks access with DocumentId from khDocuments vs reachableDocs', async () => {
+      // Test if the DocumentId cached in khDocuments matches what
       // accessForDoc expects (type/value match)
       const { ops: opsA, kh: khA } = await createOps();
       const { ops: opsB, kh: khB } = await createOps();
@@ -1306,7 +1298,7 @@ describe('KeyhiveOps', () => {
       const invite = await grantPeerAccessViaTempSigner(opsA, khDocId, 'admin');
       const claimResult = await claimViaArchive(opsA, opsB, invite.inviteKeyBytes, 'doc-1');
 
-      // Get the DocumentId from khDocuments (same as what registerDoc uses)
+      // Get the DocumentId from khDocuments (cached by enableSharing/claiming)
       const docFromKhDocuments = opsB.khDocuments.get(claimResult.khDocId);
       expect(docFromKhDocuments).toBeDefined();
       const docMapDocId = docFromKhDocuments.doc_id;

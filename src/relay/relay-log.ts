@@ -11,17 +11,6 @@ export function relayInfo(...args: unknown[]): void {
   if (!RELAY_QUIET) console.log(...args);
 }
 
-/**
- * Expected-condition relay log — a policy/hardening response the relay makes on
- * purpose (peer-id squat rejection, connection-cap refusal, slow-peer
- * disconnect, malformed-frame rejection). These are normal for an
- * internet-facing relay and are exercised by tests, so they're gated by
- * RELAY_QUIET. Genuinely-unexpected internal failures should stay on raw
- * console.error so real bugs surface even under RELAY_QUIET.
- */
-export function relayWarn(...args: unknown[]): void {
-  if (!RELAY_QUIET) console.warn(...args);
-}
 export function relayError(...args: unknown[]): void {
   if (!RELAY_QUIET) console.error(...args);
 }

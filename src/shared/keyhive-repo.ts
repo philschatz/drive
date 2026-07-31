@@ -74,8 +74,6 @@ export interface KeyhiveRepo {
   Presence: any;
   /** Convert keyhive doc-id bytes (== automerge BinaryDocumentId) → automerge doc id string. */
   amDocIdFromBytes: (bytes: Uint8Array) => string;
-  /** Run a keyhive op on the bridge's shared serialization queue. */
-  runOnKeyhiveQueue: <T>(fn: () => Promise<T>) => Promise<T>;
   /** Slot a pre-generated keyhive doc-id for the next repo.create2() (create-doc flow). */
   setNextDocId: (bytes: Uint8Array) => void;
 }
@@ -256,15 +254,10 @@ export async function createKeyhiveRepo(opts: CreateKeyhiveRepoOptions): Promise
   const khOps = new KeyhiveOps(khForOps, bridge, {
     persist: () => integration.keyhiveStorage.saveKeyhiveWithHash(khForOps),
     syncKeyhive: () => integration.networkAdapter?.syncKeyhive?.(),
-    // The official bridge derives the keyhive DocumentId from the automerge doc id
-    // directly, so there is no explicit doc registration step.
-    registerDoc: () => { },
     // After a local keyhive membership change, re-evaluate shareConfig so newly-
     // authorized peers get the doc announced (shareConfigChanged is the equivalent
     // of the old forceResync).
     forceResyncAllPeers: () => repo.shareConfigChanged(),
-    findDoc: (docId: string) => repo.find(docId as any),
-    saveEventBytes: (eventBytes: Uint8Array) => integration.keyhiveStorage.saveEventBytesWithHash(eventBytes),
     getUserGroupId: opts.getUserGroupId,
     setUserGroupId: opts.setUserGroupId,
   });
@@ -311,6 +304,6 @@ export async function createKeyhiveRepo(opts: CreateKeyhiveRepoOptions): Promise
 
   return {
     repo, khOps, integration, bridge,
-    Automerge, Presence, amDocIdFromBytes, runOnKeyhiveQueue, setNextDocId,
+    Automerge, Presence, amDocIdFromBytes, setNextDocId,
   };
 }

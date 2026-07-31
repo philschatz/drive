@@ -13,10 +13,6 @@ import { useLongPress } from '../common/useLongPress';
 import { CreateDocSheet, type ImportKind } from './CreateDocSheet';
 import { DocActionsSheet } from './DocActionsSheet';
 import { RenameSheet } from '../common/RenameSheet';
-import dayjs from 'dayjs';
-import relativeTimePlugin from 'dayjs/plugin/relativeTime';
-
-dayjs.extend(relativeTimePlugin);
 import { iconForType, docTypeLabel, type DocTypePlugin } from '@/doc-plugins';
 import { docUrl, shareUrl } from '@/common/doc-urls';
 import { relativeTime } from '../../../shared/relative-time';
@@ -431,7 +427,7 @@ export function Home({ path }: { path?: string }) {
       <input type="file" multiple ref={jsonInputRef} accept=".json,.md,application/json,text/markdown" style={{ display: 'none' }} onChange={handleImportJson as any} />
 
       <div className="text-xs text-muted-foreground mt-4 text-center">
-        <a href={`https://github.com/philschatz/drive/commit/${__APP_VERSION__}`} target="_blank" rel="noopener noreferrer" className="hover:underline">{__APP_VERSION__}</a> · built {dayjs(__BUILD_TIME__).fromNow()}
+        <a href={`https://github.com/philschatz/drive/commit/${__APP_VERSION__}`} target="_blank" rel="noopener noreferrer" className="hover:underline">{__APP_VERSION__}</a> · built {relativeTime(__BUILD_TIME__)}
       </div>
 
       {/* FAB → Create sheet (doc types + imports) */}

@@ -21,7 +21,7 @@ export const KEYS = {
   /**
    * The single home of this user's settings, whose *value type* selects the storage mode:
    *   - a **string** = the Automerge docId of the synced, keyhive-private DriveSettings
-to clean up   *     document ⇒ SHARED mode (contacts + names, device names, and archived-doc
+   *     document ⇒ SHARED mode (contacts + names, device names, and archived-doc
    *     tombstones sync across the user's devices);
    *   - an **object** = the same settings shape held as a device-local JSON blob
    *     (`{'@type':'DriveSettings', …}`) ⇒ LOCAL mode (no sync, no user-group minted);

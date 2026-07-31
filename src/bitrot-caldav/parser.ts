@@ -160,7 +160,7 @@ function computeOverridePatch(parent: CalendarEvent, exception: CalendarEvent): 
     }
   }
 
-  return Object.keys(patch).length > 0 ? patch : {}
+  return patch
 }
 
 /**
@@ -235,16 +235,6 @@ function parseBasicProperties(vevent: ICAL.Component, event: CalendarEvent): voi
   if (created) {
     event.created = icalTimeToUTC(created)
   }
-
-  // const lastModified = ensureTime(vevent.getFirstPropertyValue("last-modified"))
-  // if (lastModified) {
-  //   event.updated = icalTimeToUTC(lastModified)
-  // }
-
-  // const dtstamp = ensureTime(vevent.getFirstPropertyValue("dtstamp"))
-  // if (dtstamp && !event.updated) {
-  //   event.updated = icalTimeToUTC(dtstamp)
-  // }
 
   // Sequence — ignored (managed by CalDAV clients, not stored)
 

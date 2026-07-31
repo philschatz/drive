@@ -224,10 +224,6 @@ type P2pStatusListener = (peerId: string, transport: PeerTransport) => void;
 const p2pStatusListeners = new Set<P2pStatusListener>();
 const peerTransports = new Map<string, PeerTransport>();
 
-/** Current transport for a peer ('relay' if no direct channel is open). */
-export function getPeerTransport(peerId: string): PeerTransport {
-  return peerTransports.get(peerId) ?? 'relay';
-}
 /** All peers currently on a direct WebRTC channel. */
 export function getDirectPeers(): string[] {
   return [...peerTransports.entries()].filter(([, t]) => t === 'direct').map(([p]) => p);

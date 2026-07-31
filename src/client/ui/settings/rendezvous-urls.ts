@@ -77,13 +77,6 @@ export function buildAddFriendRendezvousUrl(rendezvousId: string, key: string): 
   return `${appBase()}#/add-friend/r.${rendezvousId}.${key}`;
 }
 
-export function buildAddFriendUrl(cardJson: string, displayName?: string, userGroupId?: string | null): string {
-  const payload = (displayName || userGroupId)
-    ? JSON.stringify({ card: cardJson, displayName, userGroupId: userGroupId ?? undefined })
-    : cardJson;
-  return `${appBase()}#/add-friend/${encodeCardForUrl(payload)}`;
-}
-
 export function decodeFriendData(b64url: string): { cardJson: string; displayName?: string; userGroupId?: string } {
   const raw = decodeStringFromUrl(b64url);
   try {

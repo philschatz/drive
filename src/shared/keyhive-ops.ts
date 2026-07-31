@@ -66,10 +66,7 @@ function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
 export interface KeyhiveOpsSideEffects {
   persist: () => Promise<void>;
   syncKeyhive: () => void;
-  registerDoc: (automergeDocId: string, khDocId: any) => void;
   forceResyncAllPeers: () => void;
-  findDoc: (docId: string) => void;
-  saveEventBytes: (eventBytes: Uint8Array) => Promise<void>;
   /** Read the persisted personal user-group id (base64), or null if none. */
   getUserGroupId: () => Promise<string | null>;
   /** Persist the personal user-group id (base64). */
@@ -807,7 +804,7 @@ export class KeyhiveOps {
    * that doc_id (used when the automerge doc was created with the keyhive
    * doc_id as its ID). Otherwise creates a new keyhive document.
    */
-  async enableSharing(automergeDocId: string, existingDocIdBytes?: Uint8Array): Promise<{ khDocId: string; groupId: string }> {
+  async enableSharing(automergeDocId: string, existingDocIdBytes?: Uint8Array): Promise<{ khDocId: string }> {
     let doc: any;
     if (existingDocIdBytes) {
       try {
@@ -823,17 +820,11 @@ export class KeyhiveOps {
     }
     const khDocId = bytesToBase64(doc.id.toBytes());
     this.khDocuments.set(khDocId, doc);
-    this.fx.registerDoc(automergeDocId, doc.doc_id);
     // The user-group administers every document this user shares.
     await this.assignGroupAsAdmin(doc);
     await this.fx.persist();
     this.fx.syncKeyhive();
-    return { khDocId, groupId: '' };
-  }
-
-  registerDocMapping(automergeDocId: string, khDocId: string): void {
-    const docId = new this.bridge.DocumentId(base64ToBytes(khDocId));
-    this.fx.registerDoc(automergeDocId, docId);
+    return { khDocId };
   }
 
   async registerSharingGroup(khDocId: string): Promise<true> {

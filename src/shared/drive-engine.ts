@@ -461,10 +461,9 @@ export class DriveEngine {
   private async loadDriveSettingsHandle(docId: string): Promise<any | null> {
     try {
       // The settings doc is intentionally absent from the home list, so register
-      // it with keyhive here (home docs get this in init) so it syncs.
+      // its sharing group here (home docs get this in init) so it syncs.
       const khDocId = this.resolveKhDocId(docId);
       try {
-        this.khOps!.registerDocMapping(docId, khDocId);
         await this.khOps!.registerSharingGroup(khDocId);
       } catch { /* best-effort */ }
       this.pinnedDocs.add(docId);
@@ -1698,7 +1697,6 @@ export class DriveEngine {
       for (const entry of earlyList) {
         const khDocId = this.resolveKhDocId(entry.id);
         try {
-          this.khOps.registerDocMapping(entry.id, khDocId);
           await this.khOps.registerSharingGroup(khDocId);
         } catch (err) {
           console.warn(`[engine] Failed to pre-register doc ${entry.id}:`, errMsg(err));
