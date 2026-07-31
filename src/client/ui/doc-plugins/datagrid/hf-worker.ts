@@ -13,6 +13,7 @@ import { buildSheetData, cellToHfValue, sortedEntries, internalToA1, a1ToInterna
 import { runMonteCarlo, type MCResults } from './monte-carlo';
 import { sampleDistribution, computeStats, type DistributionInfo, type DistributionStats } from './distributions';
 import { sheetStructureChanged, changedCellKeys, planMonteCarloBudget } from './hf-diff';
+import { parseInternal, extractCellRefs, type FormulaAST, type CellRef } from './formula-parser';
 
 registerCustomFunctions();
 
@@ -129,36 +130,38 @@ function formatCellValue(addr: { sheet: number; col: number; row: number }): { v
   return { value: String(computed) };
 }
 
-/** Extract all cell refs from an internal-format formula, grouped by sheet ID. */
+/** Extract all cell refs from an internal-format formula, grouped by sheet ID.
+ *  Parses the formula with the real parser, so ref-shaped text inside string
+ *  literals is ignored. An unparseable formula yields no refs. */
 function extractRefs(formula: string, currentSheetId: string): Map<string, Set<string>> {
   const refs = new Map<string, Set<string>>();
 
-  // Match cell references: {R{rowId}C{colId}}, {R[rowId]C[colId]}, {R{id}C{id}S{sheetId}}, etc.
-  // Both absolute {id} and relative [id] contain actual row/col IDs in the internal format.
-  const refPattern = /\{R[\{[]([^\}\]]+)[\}\]]C[\{[]([^\}\]]+)[\}\]](?:S\{([^}]+)\})?\}/g;
-  let m;
-  while ((m = refPattern.exec(formula)) !== null) {
-    const rowId = m[1];
-    const colId = m[2];
-    const sheetId = m[3] || currentSheetId;
-    if (!refs.has(sheetId)) refs.set(sheetId, new Set());
-    refs.get(sheetId)!.add(`${rowId}:${colId}`);
+  let ast: FormulaAST;
+  try {
+    ast = parseInternal(formula);
+  } catch {
+    return refs;
   }
 
-  // Also match column-only refs {C{colId}S{sheetId}} (whole-column cross-sheet refs).
-  // These don't have specific row IDs, but we still need to track the sheet dependency.
-  const colOnlyPattern = /\{C[\{[]([^\}\]]+)[\}\]]S\{([^}]+)\}\}/g;
-  while ((m = colOnlyPattern.exec(formula)) !== null) {
-    const sheetId = m[2];
+  const addRef = (ref: CellRef) => {
+    if (ref.row.id === '*' || ref.col.id === '*') {
+      // Whole-row/column ref: no specific cell IDs, but a cross-sheet one
+      // (S{sheetId} part) still pins the sheet dependency.
+      if (ref.sheet && !refs.has(ref.sheet.id)) refs.set(ref.sheet.id, new Set());
+      return;
+    }
+    const sheetId = ref.sheet?.id ?? currentSheetId;
     if (!refs.has(sheetId)) refs.set(sheetId, new Set());
-  }
+    refs.get(sheetId)!.add(`${ref.row.id}:${ref.col.id}`);
+  };
 
-  // Also match row-only refs {R{rowId}S{sheetId}} (whole-row cross-sheet refs, e.g.
-  // =SUM(Sheet2!1:1)). Like whole-column refs, they only pin the sheet dependency.
-  const rowOnlyPattern = /\{R[\{[]([^\}\]]+)[\}\]]S\{([^}]+)\}\}/g;
-  while ((m = rowOnlyPattern.exec(formula)) !== null) {
-    const sheetId = m[2];
-    if (!refs.has(sheetId)) refs.set(sheetId, new Set());
+  for (const node of extractCellRefs(ast)) {
+    if (node.type === 'range') {
+      addRef(node.from);
+      addRef(node.to);
+    } else {
+      addRef(node);
+    }
   }
 
   return refs;

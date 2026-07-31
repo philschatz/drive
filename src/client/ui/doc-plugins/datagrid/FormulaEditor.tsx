@@ -628,4 +628,4 @@ export function FormulaEditor({
 }
 
 
-export { extractHighlights, REF_COLORS, tokenizeA1, parseCellRefStr, isRange };
+export { isRange };

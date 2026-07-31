@@ -6,7 +6,6 @@ import {
   serializeR1C1,
   parseFormula,
   extractCellRefs,
-  nodeAtOffset,
   FormulaParseError,
 } from './formula-parser';
 import type { FormulaAST, FormulaNode, CellRef, RangeRef } from './formula-parser';
@@ -905,45 +904,6 @@ describe('extractCellRefs', () => {
   it('extracts refs from nested functions', () => {
     const refs = extractCellRefs(parseInternal('=IF({R[a]C[b]}>{R[c]C[d]},{R[e]C[f]},{R[g]C[h]})'));
     expect(refs).toHaveLength(4);
-  });
-});
-
-// ─── nodeAtOffset ────────────────────────────────────────────────────────────
-
-describe('nodeAtOffset', () => {
-  it('finds a cell ref at its offset', () => {
-    // ={R[a]C[b]}+{R[c]C[d]}
-    const ast = parseInternal('={R[a]C[b]}+{R[c]C[d]}');
-    const node = nodeAtOffset(ast, 1);
-    expect(node).toMatchObject({ type: 'cellRef' });
-  });
-
-  it('finds the second cell ref', () => {
-    const ast = parseInternal('={R[a]C[b]}+{R[c]C[d]}');
-    const node = nodeAtOffset(ast, 12);
-    expect(node).toMatchObject({ type: 'cellRef', col: { id: 'd' } });
-  });
-
-  it('finds the operator (falls through to binary)', () => {
-    const ast = parseInternal('={R[a]C[b]}+{R[c]C[d]}');
-    const node = nodeAtOffset(ast, 11);
-    expect(node).toMatchObject({ type: 'binary', operator: '+' });
-  });
-
-  it('finds a function call', () => {
-    const ast = parseInternal('=SUM({R[a]C[b]})');
-    const node = nodeAtOffset(ast, 1);
-    expect(node).toMatchObject({ type: 'function', name: 'SUM' });
-  });
-
-  it('returns null for offset beyond string', () => {
-    const ast = parseInternal('={R[a]C[b]}');
-    expect(nodeAtOffset(ast, 100)).toBeNull();
-  });
-
-  it('returns null for offset 0 (the = sign)', () => {
-    const ast = parseInternal('={R[a]C[b]}');
-    expect(nodeAtOffset(ast, 0)).toBeNull();
   });
 });
 

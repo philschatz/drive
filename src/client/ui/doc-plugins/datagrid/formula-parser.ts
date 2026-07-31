@@ -1230,22 +1230,3 @@ export function extractCellRefs(ast: FormulaAST): (CellRef | RangeRef)[] {
   walk(ast.body);
   return refs;
 }
-
-/** Find the deepest AST node whose span contains the given character offset. */
-export function nodeAtOffset(ast: FormulaAST, charOffset: number): FormulaNode | null {
-  let best: FormulaNode | null = null;
-  function walk(node: FormulaNode) {
-    if (charOffset >= node.start && charOffset < node.end) {
-      best = node;
-      switch (node.type) {
-        case 'binary': walk(node.left); walk(node.right); break;
-        case 'unary': walk(node.operand); break;
-        case 'function': node.args.forEach(walk); break;
-        case 'paren': walk(node.expr); break;
-        case 'range': walk(node.from); walk(node.to); break;
-      }
-    }
-  }
-  walk(ast.body);
-  return best;
-}
