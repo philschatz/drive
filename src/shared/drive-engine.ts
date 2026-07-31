@@ -286,6 +286,38 @@ export class DriveEngine {
     return this.repo;
   }
 
+  /**
+   * Run a request handler and emit the single `{result}`/`{error}` envelope the
+   * main thread awaits. `log` (if given) prefixes the error-level log for the
+   * handlers that want one; `error` is always emitted so callers see the failure.
+   */
+  private async respond(id: number, fn: () => Promise<unknown> | unknown, log?: string): Promise<void> {
+    try {
+      this.host.emit({ type: 'result', id, result: await fn() });
+    } catch (err: any) {
+      if (log) console.error(log, errMsg(err));
+      this.host.emit({ type: 'result', id, error: errMsg(err) });
+    }
+  }
+
+  /** Mint a keyhive-backed automerge doc (keyhive doc, next-doc-id, create, enable-sharing). */
+  private async createKeyhiveDocHandle(initialJson: any): Promise<any> {
+    const { docIdBytes } = await this.khOps!.createKeyhiveDoc();
+    this.setNextDocId!(docIdBytes);
+    const handle = await this.repo!.create2(initialJson);
+    await this.khOps!.enableSharing(handle.documentId, docIdBytes);
+    return handle;
+  }
+
+  /** Overwrite a doc with a target snapshot, unpin it, and push subscribers. */
+  private async restoreDoc(docId: string, targetDoc: any): Promise<void> {
+    const handle = await this.getOrLoadHandle(docId);
+    handle.change((d: any) => syncToTarget(d, targetDoc, richTextAwareStringSync(this.Automerge, targetDoc)));
+    const entry = this.docRegistry.get(docId);
+    if (entry) entry.pinnedVersion = null;
+    await this.pushToSubscriptions(docId);
+  }
+
   // ── DriveSettings document ─────────────────────────────────────────────────
   // See the field declarations above. Reads go through the loaded handle; writes
   // go through changeDriveSettings (validate-before-commit). Every store method
@@ -564,12 +596,9 @@ export class DriveEngine {
 
   private async createDriveSettingsDoc(): Promise<any | null> {
     if (!this.repo || !this.khOps || !this.setNextDocId) return null;
-    const { docIdBytes } = await this.khOps.createKeyhiveDoc();
-    this.setNextDocId(docIdBytes);
-    const handle = await this.repo.create2({
+    const handle = await this.createKeyhiveDocHandle({
       '@type': 'DriveSettings', friends: {}, deviceNames: {}, archivedDocIds: {},
     });
-    await this.khOps.enableSharing(handle.documentId, docIdBytes);
     const doc = handle.doc();
     if (this.repo.storageSubsystem && doc) {
       void this.repo.storageSubsystem.saveDoc(handle.documentId, doc);
@@ -1940,7 +1969,7 @@ export class DriveEngine {
     }
 
     if (msg.type === 'set-debug-mode') {
-      try {
+      await this.respond(msg.id, async () => {
         this.debugEnabled = msg.enabled;
         await this.host.kv.settingSet('debug-enable', msg.enabled);
         if (msg.enabled) {
@@ -1948,20 +1977,15 @@ export class DriveEngine {
           this.jqCache.clear();
           await this.host.kv.delPrefix(CACHE_PREFIX);
         }
-        emit({ type: 'result', id: msg.id, result: null });
-      } catch (err) {
-        emit({ type: 'result', id: msg.id, error: errMsg(err) });
-      }
+      });
       return;
     }
 
     if (msg.type === 'get-settings-mode') {
-      try {
+      await this.respond(msg.id, async () => {
         const userGroupId = this.khOps ? await this.khOps.getUserGroupId() : null;
-        emit({ type: 'result', id: msg.id, result: { mode: this.settingsMode, hasUserGroup: !!userGroupId } });
-      } catch (err) {
-        emit({ type: 'result', id: msg.id, error: errMsg(err) });
-      }
+        return { mode: this.settingsMode, hasUserGroup: !!userGroupId };
+      });
       return;
     }
 
@@ -1969,23 +1993,18 @@ export class DriveEngine {
     // reachable DriveSettings doc to adopt, or null. Used by the Settings page to
     // decide whether "sync settings" is a permanent create (confirm) or a reuse.
     if (msg.type === 'get-reachable-settings-doc') {
-      try {
+      await this.respond(msg.id, async () => {
         const docs = this.khOps ? await this.findReachableDriveSettingsDocs() : [];
-        emit({ type: 'result', id: msg.id, result: docs[0] ?? null });
-      } catch (err) {
-        emit({ type: 'result', id: msg.id, error: errMsg(err) });
-      }
+        return docs[0] ?? null;
+      });
       return;
     }
 
     // One-way opt-in: migrate the device-local settings blob into a synced DriveSettings
     // doc and switch to SHARED mode. There is no reverse (Shared is permanent).
     if (msg.type === 'enable-settings-sync') {
-      try {
-        if (this.settingsMode === 'shared') { // idempotent
-          emit({ type: 'result', id: msg.id, result: { mode: 'shared' } });
-          return;
-        }
+      await this.respond(msg.id, async () => {
+        if (this.settingsMode === 'shared') return { mode: 'shared' }; // idempotent
         if (!this.khOps) throw new Error('Keyhive not available — cannot sync settings');
         // Snapshot the current local blob so we can seed the synced doc with it.
         await this.ensureLocalSettings();
@@ -2024,15 +2043,13 @@ export class DriveEngine {
         // already synced from another device.
         this.fillMissingSettings(snapshot);
         this.refreshFromSettingsDoc();
-        emit({ type: 'result', id: msg.id, result: { mode: 'shared' } });
-      } catch (err) {
-        emit({ type: 'result', id: msg.id, error: errMsg(err) });
-      }
+        return { mode: 'shared' };
+      });
       return;
     }
 
     if (msg.type === 'ensure-device-name') {
-      try {
+      await this.respond(msg.id, async () => {
         const trimmed = msg.name?.trim();
         if (trimmed) {
           // Set THIS device's name to the generated default ONLY if none is stored
@@ -2044,10 +2061,7 @@ export class DriveEngine {
             await this.putDeviceName(msg.agentId, trimmed);
           }
         }
-        emit({ type: 'result', id: msg.id, result: null });
-      } catch (err) {
-        emit({ type: 'result', id: msg.id, error: errMsg(err) });
-      }
+      });
       return;
     }
 
@@ -2055,48 +2069,38 @@ export class DriveEngine {
       // Test hook: override presence timing so specs can drive a short stale
       // window instead of sleeping past the 12s default. Takes effect on the
       // next presence setup, so callers must set it before subscribing.
-      if (typeof msg.staleMs === 'number') PRESENCE_STALE_MS = msg.staleMs;
-      if (typeof msg.heartbeatMs === 'number') PRESENCE_HEARTBEAT_MS = msg.heartbeatMs;
-      if (typeof msg.livenessCheckMs === 'number') PRESENCE_LIVENESS_CHECK_MS = msg.livenessCheckMs;
-      emit({ type: 'result', id: msg.id, result: null });
+      await this.respond(msg.id, async () => {
+        if (typeof msg.staleMs === 'number') PRESENCE_STALE_MS = msg.staleMs;
+        if (typeof msg.heartbeatMs === 'number') PRESENCE_HEARTBEAT_MS = msg.heartbeatMs;
+        if (typeof msg.livenessCheckMs === 'number') PRESENCE_LIVENESS_CHECK_MS = msg.livenessCheckMs;
+      });
       return;
     }
 
     if (msg.type === 'clear-caches') {
-      try {
+      await this.respond(msg.id, async () => {
         this.queryResultCache.clear();
         this.jqCache.clear();
         await this.host.kv.delPrefix(CACHE_PREFIX);
-        emit({ type: 'result', id: msg.id, result: null });
-      } catch (err) {
-        emit({ type: 'result', id: msg.id, error: errMsg(err) });
-      }
+      });
       return;
     }
 
     if (msg.type === 'get-doc-list') {
-      try {
-        const list = (await this.host.kv.get<StoredDocEntry[]>(KEYS.docIds)) ?? [];
-        emit({ type: 'result', id: msg.id, result: list });
-      } catch (err) {
-        emit({ type: 'result', id: msg.id, error: errMsg(err) });
-      }
+      await this.respond(msg.id, async () => (await this.host.kv.get<StoredDocEntry[]>(KEYS.docIds)) ?? []);
       return;
     }
 
     if (msg.type === 'create-doc') {
-      try {
+      await this.respond(msg.id, async () => {
         if (!this.repo || !this.khOps || !this.setNextDocId) throw new Error('Secure repo not available');
-        const { docIdBytes } = await this.khOps.createKeyhiveDoc();
-        this.setNextDocId(docIdBytes);
-        const handle = await this.repo.create2(msg.initialJson);
+        const handle = await this.createKeyhiveDocHandle(msg.initialJson);
         {
           const earlyList = (await this.host.kv.get<StoredDocEntry[]>(KEYS.docIds)) ?? [];
           earlyList.unshift({ id: handle.documentId, ...(msg.metadata ?? {}) });
           await this.host.kv.set(KEYS.docIds, earlyList);
           emit({ type: 'doc-list-updated', list: earlyList });
         }
-        await this.khOps.enableSharing(handle.documentId, docIdBytes);
         const docId = handle.documentId;
         const doc = handle.doc();
         if (this.repo.storageSubsystem && doc) {
@@ -2106,17 +2110,15 @@ export class DriveEngine {
             console.error(`[engine] create-doc: saveDoc FAILED for ${docId}:`, err);
           });
         }
-        emit({ type: 'result', id: msg.id, result: { docId } });
-      } catch (err: any) {
-        emit({ type: 'result', id: msg.id, error: errMsg(err) });
-      }
+        return { docId };
+      });
       return;
     }
 
     if (msg.type === 'open-doc') {
       const progress = (pct: number, message: string) =>
         emit({ type: 'open-doc-progress', id: msg.id, pct, message });
-      try {
+      await this.respond(msg.id, async () => {
         this.pinnedDocs.add(msg.docId);
         if (this.khOps && this.bridge && this.khIntegration) {
           try {
@@ -2134,31 +2136,22 @@ export class DriveEngine {
         const handle = await this.getOrLoadHandle(msg.docId);
         this.getOrCreateEntry(msg.docId, handle);
         progress(50, 'Loading document data…');
-        const isReady = handle.isReady ? handle.isReady() : false;
-        if (isReady) {
+        if (handle.isReady ? handle.isReady() : false) {
           progress(100, 'Ready');
-          emit({ type: 'result', id: msg.id, result: { docId: msg.docId } });
-        } else {
-          // Await readiness OR unavailability so a doc no online peer has resolves
-          // the wait (as 'unavailable') instead of hanging forever. In this
-          // automerge-repo (subduction.37) `Repo.find()` already rejects on
-          // unavailable — caught below — but a handle that reaches this branch and
-          // then goes unavailable is reported as an error rather than left pending.
-          handle.whenReady(['ready', 'unavailable']).then(() => {
-            const nowReady = handle.isReady ? handle.isReady() : true;
-            if (nowReady) {
-              progress(100, 'Ready');
-              emit({ type: 'result', id: msg.id, result: { docId: msg.docId } });
-            } else {
-              emit({ type: 'result', id: msg.id, error: 'Document is unavailable — no connected peer has it yet.' });
-            }
-          }).catch((err: any) => {
-            emit({ type: 'result', id: msg.id, error: errMsg(err) });
-          });
+          return { docId: msg.docId };
         }
-      } catch (err: any) {
-        emit({ type: 'result', id: msg.id, error: errMsg(err) });
-      }
+        // Await readiness OR unavailability so a doc no online peer has resolves
+        // the wait (as 'unavailable') instead of hanging forever. In this
+        // automerge-repo (subduction.37) `Repo.find()` already rejects on
+        // unavailable — caught below — but a handle that reaches this branch and
+        // then goes unavailable is reported as an error rather than left pending.
+        await handle.whenReady(['ready', 'unavailable']);
+        if (handle.isReady ? handle.isReady() : true) {
+          progress(100, 'Ready');
+          return { docId: msg.docId };
+        }
+        throw new Error('Document is unavailable — no connected peer has it yet.');
+      });
       return;
     }
 
@@ -2215,7 +2208,7 @@ export class DriveEngine {
     }
 
     if (msg.type === 'update-doc') {
-      try {
+      await this.respond(msg.id, async () => {
         const handle = await this.getOrLoadHandle(msg.docId);
         const workerFns: Record<string, any> = {
           deepAssign,
@@ -2241,97 +2234,60 @@ export class DriveEngine {
         handle.change(applyFn);
         await this.pushToSubscriptions(msg.docId);
         if (this.driveSettingsHandle === handle) this.refreshFromSettingsDoc();
-        emit({ type: 'result', id: msg.id, result: null });
-      } catch (err: any) {
-        console.error('[engine] update-doc failed:', errMsg(err));
-        emit({ type: 'result', id: msg.id, error: errMsg(err) });
-      }
+      }, '[engine] update-doc failed:');
       return;
     }
 
     if (msg.type === 'flush-storage') {
-      try {
-        emit({ type: 'result', id: msg.id, result: await this.flushStorage(msg.docId) });
-      } catch (err: any) {
-        emit({ type: 'result', id: msg.id, error: errMsg(err) });
-      }
+      await this.respond(msg.id, async () => this.flushStorage(msg.docId));
       return;
     }
 
     if (msg.type === 'get-doc-history') {
-      try {
+      await this.respond(msg.id, async () => {
         const handle = await this.getOrLoadHandle(msg.docId);
         const doc = handle.doc();
         if (!doc) throw new Error('Document not ready');
-        const history = this.Automerge.getHistory(doc);
-        const result = history.map((e: any, i: number) => ({ version: i, time: e.change.time }));
-        emit({ type: 'result', id: msg.id, result });
-      } catch (err: any) {
-        emit({ type: 'result', id: msg.id, error: errMsg(err) });
-      }
+        return this.Automerge.getHistory(doc).map((e: any, i: number) => ({ version: i, time: e.change.time }));
+      });
       return;
     }
 
     if (msg.type === 'debug-get-version-patches') {
-      try {
-        const handle = await this.getOrLoadHandle(msg.docId);
-        const doc = handle.doc();
-        if (!doc) throw new Error('Document not ready');
-        const history = this.Automerge.getHistory(doc);
-        if (msg.version < 0 || msg.version >= history.length) throw new Error('Version out of range');
-        const afterHash = history[msg.version].change.hash;
-        const beforeHeads = msg.version === 0 ? [] : [history[msg.version - 1].change.hash];
-        const patches = this.Automerge.diff(doc, beforeHeads, [afterHash]);
-        emit({ type: 'result', id: msg.id, result: patches });
-      } catch (err: any) {
-        emit({ type: 'result', id: msg.id, error: errMsg(err) });
-      }
+      await this.respond(msg.id, async () => {
+        const { patches } = await this.diffVersions(msg.docId, msg.version - 1, msg.version);
+        return patches;
+      });
       return;
     }
 
     if (msg.type === 'restore-doc-to-heads') {
-      try {
+      await this.respond(msg.id, async () => {
         const handle = await this.getOrLoadHandle(msg.docId);
         const targetDoc = handle.view(msg.heads as any).doc();
         if (!targetDoc) throw new Error('Could not view document at heads');
-        handle.change((d: any) => syncToTarget(d, targetDoc, richTextAwareStringSync(this.Automerge, targetDoc)));
-        const entry = this.docRegistry.get(msg.docId);
-        if (entry) entry.pinnedVersion = null;
-        await this.pushToSubscriptions(msg.docId);
-        emit({ type: 'result', id: msg.id, result: null });
-      } catch (err: any) {
-        emit({ type: 'result', id: msg.id, error: errMsg(err) });
-      }
+        await this.restoreDoc(msg.docId, targetDoc);
+      });
       return;
     }
 
     if (msg.type === 'restore-doc-to-version') {
-      try {
-        const handle = await this.getOrLoadHandle(msg.docId);
-        const history = this.Automerge.getHistory(handle.doc());
+      await this.respond(msg.id, async () => {
+        const history = this.Automerge.getHistory((await this.getOrLoadHandle(msg.docId)).doc());
         const snap = history[msg.version]?.snapshot;
         if (!snap) throw new Error(`Version ${msg.version} not found`);
-        handle.change((d: any) => syncToTarget(d, snap, richTextAwareStringSync(this.Automerge, snap)));
-        const entry = this.docRegistry.get(msg.docId);
-        if (entry) entry.pinnedVersion = null;
-        await this.pushToSubscriptions(msg.docId);
-        emit({ type: 'result', id: msg.id, result: null });
-      } catch (err: any) {
-        emit({ type: 'result', id: msg.id, error: errMsg(err) });
-      }
+        await this.restoreDoc(msg.docId, snap);
+      });
       return;
     }
 
     if (msg.type === 'text-cursors') {
-      try {
+      await this.respond(msg.id, async () => {
         const handle = await this.getOrLoadHandle(msg.docId);
         const doc = handle.doc();
         if (!doc) throw new Error('Document not ready');
-        const result = msg.positions.map((p: number) => this.Automerge.getCursor(doc, msg.path, p));
-        emit({ type: 'result', id: msg.id, result });
-      } catch (err: any) {
-        emit({ type: 'result', id: msg.id, error: errMsg(err) });
-      }
+        return msg.positions.map((p: number) => this.Automerge.getCursor(doc, msg.path, p));
+      });
       return;
     }
 
@@ -2402,7 +2358,7 @@ export class DriveEngine {
     }
 
     if (msg.type === 'archive-doc') {
-      try {
+      await this.respond(msg.id, async () => {
         // Tombstone FIRST (empty baseline), so a reconcile racing this handler
         // (any keyhive ingest triggers one) can't re-add the doc between the
         // list write and the revoke below. The baseline is upgraded to the real
@@ -2446,76 +2402,69 @@ export class DriveEngine {
           console.warn('[engine] repo.delete failed on archive:', errMsg(err));
         }
         this.emit({ type: 'doc-list-updated', list: filtered });
-        emit({ type: 'result', id: msg.id, result: { status } });
-      } catch (err: any) {
-        console.warn('[engine] archive-doc failed:', errMsg(err));
-        emit({ type: 'result', id: msg.id, error: errMsg(err) });
-      }
+        return { status };
+      }, '[engine] archive-doc failed:');
       return;
     }
 
     if (msg.type === 'set-friend-name') {
-      try {
-        await this.putFriendName(msg.agentId, msg.name);
-        emit({ type: 'result', id: msg.id });
-      } catch (err: any) {
-        console.error('[engine] set-friend-name failed:', errMsg(err));
-        emit({ type: 'result', id: msg.id, error: errMsg(err) });
-      }
+      await this.respond(msg.id, () => this.putFriendName(msg.agentId, msg.name), '[engine] set-friend-name failed:');
       return;
     }
 
     if (msg.type === 'remove-friend-name') {
-      try {
-        await this.deleteFriendName(msg.agentId);
-        emit({ type: 'result', id: msg.id });
-      } catch (err: any) {
-        console.error('[engine] remove-friend-name failed:', errMsg(err));
-        emit({ type: 'result', id: msg.id, error: errMsg(err) });
-      }
+      await this.respond(msg.id, () => this.deleteFriendName(msg.agentId), '[engine] remove-friend-name failed:');
       return;
     }
 
     if (msg.type === 'set-device-name') {
-      try {
-        await this.putDeviceName(msg.agentId, msg.name);
-        emit({ type: 'result', id: msg.id });
-      } catch (err: any) {
-        console.error('[engine] set-device-name failed:', errMsg(err));
-        emit({ type: 'result', id: msg.id, error: errMsg(err) });
-      }
+      await this.respond(msg.id, () => this.putDeviceName(msg.agentId, msg.name), '[engine] set-device-name failed:');
       return;
     }
 
     if (msg.type === 'remove-device-name') {
-      try {
-        await this.deleteDeviceName(msg.agentId);
-        emit({ type: 'result', id: msg.id });
-      } catch (err: any) {
-        console.error('[engine] remove-device-name failed:', errMsg(err));
-        emit({ type: 'result', id: msg.id, error: errMsg(err) });
-      }
+      await this.respond(msg.id, () => this.deleteDeviceName(msg.agentId), '[engine] remove-device-name failed:');
       return;
     }
 
-    if (msg.type === 'kh-get-identity') {
-      try {
+    // Pure keyhive delegations: one entry per message type. Args match the khOps
+    // method except the resolveKhDocId wrappers; kh-link-device also re-runs the
+    // post-link home reconcile. kh-receive-contact-card / kh-get-known-friends
+    // keep dedicated handlers below (they touch the friend roster).
+    const khDelegates: Record<string, (kh: KeyhiveOps, m: any) => Promise<unknown> | unknown> = {
+      'kh-get-identity': (kh) => kh.getIdentity(),
+      'kh-get-contact-card': (kh) => kh.getContactCard(),
+      'kh-get-doc-members': (kh, m) => kh.getDocMembers(this.resolveKhDocId(m.docId)).then(members => ({ members })),
+      'kh-get-my-access': (kh, m) => kh.getMyAccess(this.resolveKhDocId(m.docId)),
+      'kh-add-member': (kh, m) => kh.addMember(m.agentId, this.resolveKhDocId(m.docId), m.role),
+      'kh-revoke-member': (kh, m) => kh.revokeMember(m.agentId, this.resolveKhDocId(m.docId)),
+      'kh-change-role': (kh, m) => kh.changeRole(m.agentId, this.resolveKhDocId(m.docId), m.newRole),
+      'kh-list-devices': (kh) => kh.listGroupDevices(),
+      'kh-remove-device': (kh, m) => kh.removeDeviceFromGroup(m.agentId),
+      'kh-change-device-role': (kh, m) => kh.changeDeviceRole(m.agentId, m.newRole),
+      'kh-ensure-user-group': (kh, m) => kh.ensureUserGroup({ create: m.create, adoptGroupId: m.adoptGroupId, waitForSync: m.waitForSync }),
+      'kh-get-link-payload': async (kh) => {
+        const userGroupId = await kh.ensureUserGroup({ create: true });
+        return { card: await kh.getContactCard(), userGroupId };
+      },
+      'kh-link-device': async (kh, m) => {
+        const result = await kh.linkDevice(m.deviceAgentId, m.peerGroupId);
+        void this.reconcileHomeDocsAfterLink();
+        return result;
+      },
+    };
+    const khDelegate = khDelegates[msg.type];
+    if (khDelegate) {
+      const m = msg as any; // kh-rdv-cancel (no id) never matches a table entry
+      await this.respond(m.id, () => {
         if (!this.khOps) throw new Error('Keyhive not available');
-        emit({ type: 'result', id: msg.id, result: await this.khOps.getIdentity() });
-      } catch (err: any) { emit({ type: 'result', id: msg.id, error: errMsg(err) }); }
-      return;
-    }
-
-    if (msg.type === 'kh-get-contact-card') {
-      try {
-        if (!this.khOps) throw new Error('Keyhive not available');
-        emit({ type: 'result', id: msg.id, result: await this.khOps.getContactCard() });
-      } catch (err: any) { emit({ type: 'result', id: msg.id, error: errMsg(err) }); }
+        return khDelegate(this.khOps, m);
+      });
       return;
     }
 
     if (msg.type === 'kh-receive-contact-card') {
-      try {
+      await this.respond(msg.id, async () => {
         if (!this.khOps) throw new Error('Keyhive not available');
         if (!msg.isDevice && !msg.userGroupId) {
           throw new Error('This contact is not a group — ask them to open Settings and show a fresh friend QR/link.');
@@ -2525,45 +2474,27 @@ export class DriveEngine {
         const alreadyKnown = !result.isOwnCard && !!friendGroupId
           ? await this.addKnownFriendGroup(friendGroupId)
           : false;
-        emit({ type: 'result', id: msg.id, result: { ...result, userGroupId: friendGroupId, alreadyKnown } });
-      } catch (err: any) { emit({ type: 'result', id: msg.id, error: errMsg(err) }); }
-      return;
-    }
-
-    if (msg.type === 'kh-get-doc-members') {
-      try {
-        if (!this.khOps) throw new Error('Keyhive not available');
-        const members = await this.khOps.getDocMembers(this.resolveKhDocId(msg.docId));
-        emit({ type: 'result', id: msg.id, result: { members } });
-      } catch (err: any) { emit({ type: 'result', id: msg.id, error: errMsg(err) }); }
-      return;
-    }
-
-    if (msg.type === 'kh-get-my-access') {
-      try {
-        if (!this.khOps) throw new Error('Keyhive not available');
-        emit({ type: 'result', id: msg.id, result: await this.khOps.getMyAccess(this.resolveKhDocId(msg.docId)) });
-      } catch (err: any) { emit({ type: 'result', id: msg.id, error: errMsg(err) }); }
+        return { ...result, userGroupId: friendGroupId, alreadyKnown };
+      });
       return;
     }
 
     if (msg.type === 'kh-get-known-friends') {
-      try {
+      await this.respond(msg.id, async () => {
         if (!this.khOps) throw new Error('Keyhive not available');
         // The unified `friends` map holds every known friend (named or null),
         // so its keys ARE the known-friend-group ids.
         await this.ensureDriveSettingsDoc();
         const friendGroupIds = Object.keys(this.driveSettingsDoc()?.friends ?? {});
         const excludeKhDocId = msg.excludeDocId ? this.resolveKhDocId(msg.excludeDocId) : undefined;
-        const result = await this.khOps.getKnownFriends(excludeKhDocId, friendGroupIds);
-        emit({ type: 'result', id: msg.id, result });
-      } catch (err: any) { emit({ type: 'result', id: msg.id, error: errMsg(err) }); }
+        return this.khOps.getKnownFriends(excludeKhDocId, friendGroupIds);
+      });
       return;
     }
 
     // Sharer: stage our (large) contact bundle for a rendezvous and return the id+key.
     if (msg.type === 'kh-rdv-create-share') {
-      try {
+      await this.respond(msg.id, async () => {
         if (!this.khOps) throw new Error('Keyhive not available');
         const myUserGroupId = await this.khOps.ensureUserGroup({ create: true });
         // Approximate size of what we'll send once the peer joins (plaintext bytes;
@@ -2636,10 +2567,8 @@ export class DriveEngine {
         });
         this.rdvSend({ type: RDV_SUB, rendezvousId });
         this.rdvEvent(rendezvousId, 'waiting');
-        emit({ type: 'result', id: msg.id, result: { rendezvousId, key, payloadBytes } });
-      } catch (err: any) {
-        emit({ type: 'result', id: msg.id, error: errMsg(err) });
-      }
+        return { rendezvousId, key, payloadBytes };
+      });
       return;
     }
 
@@ -2699,7 +2628,7 @@ export class DriveEngine {
     }
 
     if (msg.type === 'kh-rdv-link-create') {
-      try {
+      await this.respond(msg.id, async () => {
         if (!this.khOps) throw new Error('Keyhive not available');
         const myUserGroupId = await this.khOps.ensureUserGroup({ create: true });
         // Ensure our DriveSettings doc exists so we can hand its id to the joining
@@ -2750,112 +2679,19 @@ export class DriveEngine {
         });
         this.rdvSend({ type: RDV_SUB, rendezvousId });
         this.rdvEvent(rendezvousId, 'waiting');
-        emit({ type: 'result', id: msg.id, result: { rendezvousId, key, payloadBytes } });
-      } catch (err: any) {
-        emit({ type: 'result', id: msg.id, error: errMsg(err) });
-      }
+        return { rendezvousId, key, payloadBytes };
+      });
       return;
     }
 
     if (msg.type === 'kh-rdv-link-join') {
-      try {
-        const result = await this.rendezvousLinkJoin(msg.rendezvousId, msg.key, msg.deviceName);
-        emit({ type: 'result', id: msg.id, result });
-      } catch (err: any) {
-        emit({ type: 'result', id: msg.id, error: errMsg(err) });
-      }
+      await this.respond(msg.id, () => this.rendezvousLinkJoin(msg.rendezvousId, msg.key, msg.deviceName));
       return;
     }
 
     if (msg.type === 'kh-rdv-cancel') {
       this.rdvSessions.delete(msg.rendezvousId);
       this.rdvSend({ type: RDV_UNSUB, rendezvousId: msg.rendezvousId });
-      return;
-    }
-
-    if (msg.type === 'kh-list-devices') {
-      try {
-        if (!this.khOps) throw new Error('Keyhive not available');
-        emit({ type: 'result', id: msg.id, result: await this.khOps.listGroupDevices() });
-      } catch (err: any) { emit({ type: 'result', id: msg.id, error: errMsg(err) }); }
-      return;
-    }
-
-    if (msg.type === 'kh-remove-device') {
-      try {
-        if (!this.khOps) throw new Error('Keyhive not available');
-        await this.khOps.removeDeviceFromGroup(msg.agentId);
-        emit({ type: 'result', id: msg.id, result: undefined });
-      } catch (err: any) { emit({ type: 'result', id: msg.id, error: errMsg(err) }); }
-      return;
-    }
-
-    if (msg.type === 'kh-change-device-role') {
-      try {
-        if (!this.khOps) throw new Error('Keyhive not available');
-        await this.khOps.changeDeviceRole(msg.agentId, msg.newRole);
-        emit({ type: 'result', id: msg.id, result: undefined });
-      } catch (err: any) { emit({ type: 'result', id: msg.id, error: errMsg(err) }); }
-      return;
-    }
-
-    if (msg.type === 'kh-ensure-user-group') {
-      try {
-        if (!this.khOps) throw new Error('Keyhive not available');
-        const userGroupId = await this.khOps.ensureUserGroup({
-          create: msg.create,
-          adoptGroupId: msg.adoptGroupId,
-          waitForSync: msg.waitForSync,
-        });
-        emit({ type: 'result', id: msg.id, result: { userGroupId } });
-      } catch (err: any) { emit({ type: 'result', id: msg.id, error: errMsg(err) }); }
-      return;
-    }
-
-    if (msg.type === 'kh-link-device') {
-      try {
-        if (!this.khOps) throw new Error('Keyhive not available');
-        const result = await this.khOps.linkDevice(msg.deviceAgentId, msg.peerGroupId);
-        void this.reconcileHomeDocsAfterLink();
-        emit({ type: 'result', id: msg.id, result });
-      } catch (err: any) { emit({ type: 'result', id: msg.id, error: errMsg(err) }); }
-      return;
-    }
-
-    if (msg.type === 'kh-get-link-payload') {
-      try {
-        if (!this.khOps) throw new Error('Keyhive not available');
-        const userGroupId = await this.khOps.ensureUserGroup({ create: true });
-        const card = await this.khOps.getContactCard();
-        emit({ type: 'result', id: msg.id, result: { card, userGroupId } });
-      } catch (err: any) { emit({ type: 'result', id: msg.id, error: errMsg(err) }); }
-      return;
-    }
-
-    if (msg.type === 'kh-add-member') {
-      try {
-        if (!this.khOps) throw new Error('Keyhive not available');
-        const result = await this.khOps.addMember(msg.agentId, this.resolveKhDocId(msg.docId), msg.role);
-        emit({ type: 'result', id: msg.id, result });
-      } catch (err: any) { emit({ type: 'result', id: msg.id, error: errMsg(err) }); }
-      return;
-    }
-
-    if (msg.type === 'kh-revoke-member') {
-      try {
-        if (!this.khOps) throw new Error('Keyhive not available');
-        const result = await this.khOps.revokeMember(msg.agentId, this.resolveKhDocId(msg.docId));
-        emit({ type: 'result', id: msg.id, result });
-      } catch (err: any) { emit({ type: 'result', id: msg.id, error: errMsg(err) }); }
-      return;
-    }
-
-    if (msg.type === 'kh-change-role') {
-      try {
-        if (!this.khOps) throw new Error('Keyhive not available');
-        const result = await this.khOps.changeRole(msg.agentId, this.resolveKhDocId(msg.docId), msg.newRole);
-        emit({ type: 'result', id: msg.id, result });
-      } catch (err: any) { emit({ type: 'result', id: msg.id, error: errMsg(err) }); }
       return;
     }
 
