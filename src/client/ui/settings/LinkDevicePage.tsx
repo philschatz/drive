@@ -187,9 +187,8 @@ export function LinkDevicePage({ cardData }: LinkDevicePageProps) {
                       Open this link (or scan this QR code) on your original device to complete the
                       handshake:
                     </p>
-                    <div className="flex justify-center">
-                      <QRCodeDisplay url={myCardUrl} />
-                    </div>
+                    {/* QRCodeDisplay centers itself on a Material surface card. */}
+                    <QRCodeDisplay url={myCardUrl} />
                     {/* The link stays visible: it is the fallback when the payload
                         overflows QR capacity, and users paste it between devices. */}
                     <div className="flex items-center gap-1 mt-2">

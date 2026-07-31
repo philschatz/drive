@@ -28,10 +28,10 @@ export function QRCodeDisplay({ url, size = 200, className }: QRCodeProps) {
 
   if (error) {
     return (
-      <div
-        className={`text-xs text-muted-foreground border border-border rounded p-3 max-w-[200px] text-center ${className ?? ''}`}
-      >
-        Payload too large for a QR code — use the link below instead.
+      <div className={`flex justify-center w-full ${className ?? ''}`}>
+        <div className="text-xs text-muted-foreground border border-border rounded p-3 max-w-[200px] text-center">
+          Payload too large for a QR code — use the link below instead.
+        </div>
       </div>
     );
   }
@@ -46,12 +46,17 @@ export function QRCodeDisplay({ url, size = 200, className }: QRCodeProps) {
   };
 
   return (
-    <div
-      className={`cursor-pointer ${className ?? ''}`}
-      style={{ display: 'inline-block' }}
-      onClick={handleClick}
-      title="Click to copy link"
-      dangerouslySetInnerHTML={{ __html: svg }}
-    />
+    // A centered Material surface card: the QR's own white quiet zone sits on a
+    // rounded container tone, so it reads as an element rather than a floating
+    // square. `w-full` + `flex justify-center` centers it in whatever surface
+    // hosts it (sheet, page), so call sites don't each need a wrapper.
+    <div className={`flex justify-center w-full ${className ?? ''}`}>
+      <div
+        className="cursor-pointer rounded-2xl bg-surface-container-highest p-4"
+        onClick={handleClick}
+        title="Click to copy link"
+        dangerouslySetInnerHTML={{ __html: svg }}
+      />
+    </div>
   );
 }

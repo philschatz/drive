@@ -94,9 +94,8 @@ export function RendezvousShare({
 
   return (
     <div className="space-y-2">
-      <div className="flex justify-center">
-        <QRCodeDisplay url={url} />
-      </div>
+      {/* QRCodeDisplay centers itself on a Material surface card. */}
+      <QRCodeDisplay url={url} />
       {/* The link stays visible, not hidden behind a copy button: it is the fallback
           when the payload overflows QR capacity (QRCodeDisplay says as much), users
           paste it into a chat app, and a clipboard-only UI would be untestable. */}
