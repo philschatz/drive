@@ -13,7 +13,9 @@ interface PeerLike {
 /**
  * Relay connection status indicator. Tapping it opens a bottom sheet listing the
  * peers on this document and whether each is connected directly (P2P) or via the
- * relay. (The fuller connection-debug page is at `#/settings/debugging`.)
+ * relay; its "Relay socket" row deep-links to the connection-debug page
+ * (`#/settings/debugging`). Always tappable — offline the sheet still reports
+ * the relay state and links to debugging.
  *
  * Reused by Home and the DocumentTitleBar.
  *
@@ -47,23 +49,19 @@ export function ConnectionStatus<P extends PeerLike>({
           (The text label was pure noise on a narrow bar; the accessible name
           still reads "Connected"/"Disconnected".)
 
-          Disconnected from the relay there are no peers and no transports to
-          report, so the button is disabled (dimmed to the MD3 38% disabled
-          opacity) rather than recoloured — the greyed-out control is the
-          offline signal. */}
-      {/* Stays a real <button>: the title-bar tests read `.disabled`, which an
-          md-icon-button host would report as undefined under jsdom. */}
+          Always enabled: offline the sheet still reports the relay state
+          ("Relay socket / Closed") and links into the Debugging page, so there
+          is something to show even with no peers or transports. The greyed-out
+          glyph is the offline signal; the control itself stays tappable. */}
       <button
         aria-label={connected ? 'Connected' : 'Disconnected'}
-        disabled={!connected}
         className={
-          'inline-flex items-center gap-2 h-10 px-1.5 rounded-full shrink-0 ' +
-          (connected ? 'cursor-pointer state-layer ' : 'cursor-default opacity-[0.38] ') +
+          'inline-flex items-center gap-2 h-10 px-1.5 rounded-full shrink-0 cursor-pointer state-layer ' +
           className
         }
         title={connected
           ? 'Connected to relay. Tap for peer details.'
-          : 'Not connected to relay.'}
+          : 'Offline. Tap for relay status and debugging.'}
         onClick={() => setOpen(true)}
       >
         {/* Peer dots — clipped to ~4 dots on narrow screens. Devices of the same user
@@ -88,7 +86,10 @@ export function ConnectionStatus<P extends PeerLike>({
           </div>
         )}
         <span
-          className="material-symbols-outlined shrink-0 text-on-surface-variant"
+          className={
+            'material-symbols-outlined shrink-0 text-on-surface-variant ' +
+            (connected ? '' : 'opacity-[0.38]')
+          }
           style={{ fontSize: 20 }}
           aria-hidden="true"
         >
@@ -104,9 +105,18 @@ export function ConnectionStatus<P extends PeerLike>({
               <SheetTitle className="pr-8">Connection</SheetTitle>
             </SheetHeader>
 
-            {/* Same shape as the Debugging page's relay row, down to the glyph. */}
+            {/* Same shape as the Debugging page's relay row, down to the glyph —
+                but a button here, since it deep-links into that page. */}
             <md-list style={{ background: 'transparent' }} className="mt-2">
-              <md-list-item type="text" data-testid="relay-status" data-open={String(connected)}>
+              <md-list-item
+                type="button"
+                data-testid="relay-status"
+                data-open={String(connected)}
+                onClick={() => {
+                  setOpen(false);
+                  window.location.hash = '/settings/debugging';
+                }}
+              >
                 <md-icon slot="start" style={connected ? undefined : { color: 'var(--md-sys-color-error)' }}>
                   {connected ? 'cloud_done' : 'cloud_off'}
                 </md-icon>
@@ -114,6 +124,7 @@ export function ConnectionStatus<P extends PeerLike>({
                 <div slot="supporting-text" style={connected ? undefined : { color: 'var(--md-sys-color-error)' }}>
                   {connected ? 'Open' : 'Closed'}
                 </div>
+                <md-icon slot="end" aria-hidden="true">chevron_right</md-icon>
               </md-list-item>
             </md-list>
 
