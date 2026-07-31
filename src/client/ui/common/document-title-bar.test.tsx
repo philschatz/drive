@@ -151,6 +151,22 @@ describe('DocumentTitleBar', () => {
     expect((screen.getByLabelText('Disconnected') as HTMLButtonElement).disabled).toBe(false);
   });
 
+  it('still opens the Connection sheet when offline', () => {
+    mockUseConnectionStatus.mockReturnValue(false);
+    render(<DocumentTitleBar icon="grid" title="Test" />);
+    fireEvent.click(screen.getByLabelText('Disconnected'));
+    expect(screen.getByTestId('connection-sheet')).toBeTruthy();
+    // The relay row reports the closed socket so the sheet has something to say.
+    expect(screen.getByTestId('relay-status').getAttribute('data-open')).toBe('false');
+  });
+
+  it('deep-links the sheet\'s "Relay socket" row to the Debugging page', () => {
+    render(<DocumentTitleBar icon="grid" title="Test" />);
+    fireEvent.click(screen.getByLabelText('Connected'));
+    fireEvent.click(screen.getByTestId('relay-status'));
+    expect(window.location.hash).toBe('#/settings/debugging');
+  });
+
   it('renders peer dots for other peers', () => {
     const peers = [
       { peerId: 'self-peer-id' },
