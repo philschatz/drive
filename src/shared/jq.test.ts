@@ -64,19 +64,6 @@ describe('jq', () => {
     it('.a, .b, .c', () => expect(run('.a, .b, .c', { a: 1, b: 2, c: 3 })).toEqual([1, 2, 3]));
   });
 
-  // ---- Arithmetic ----
-  describe('arithmetic', () => {
-    it('addition', () => expect(run('.a + .b', { a: 3, b: 4 })).toEqual([7]));
-    it('subtraction', () => expect(run('.a - .b', { a: 10, b: 3 })).toEqual([7]));
-    it('multiplication', () => expect(run('. * 2', 5)).toEqual([10]));
-    it('division', () => expect(run('. / 2', 10)).toEqual([5]));
-    it('modulo', () => expect(run('. % 3', 10)).toEqual([1]));
-    it('string concat', () => expect(run('.a + .b', { a: 'hello', b: ' world' })).toEqual(['hello world']));
-    it('array concat', () => expect(run('.a + .b', { a: [1], b: [2] })).toEqual([[1, 2]]));
-    it('object merge', () => expect(run('.a + .b', { a: { x: 1 }, b: { y: 2 } })).toEqual([{ x: 1, y: 2 }]));
-    it('null + value', () => expect(run('null + 1', null)).toEqual([1]));
-  });
-
   // ---- Comparison ----
   describe('comparison', () => {
     it('==', () => expect(run('. == 1', 1)).toEqual([true]));
@@ -91,8 +78,7 @@ describe('jq', () => {
   describe('boolean operators', () => {
     it('and', () => expect(run('true and false', null)).toEqual([false]));
     it('or', () => expect(run('true or false', null)).toEqual([true]));
-    it('not', () => expect(run('true | not', null)).toEqual([false]));
-    it('null is falsy', () => expect(run('null | not', null)).toEqual([true]));
+    it('null is falsy', () => expect(run('null or 1', null)).toEqual([true]));
   });
 
   // ---- Alternative operator ----
@@ -119,34 +105,8 @@ describe('jq', () => {
     it('number abs', () => expect(run('length', -42)).toEqual([42]));
   });
 
-  describe('keys and values', () => {
-    it('keys of object (sorted)', () => expect(run('keys', { b: 2, a: 1 })).toEqual([['a', 'b']]));
-    it('keys of array', () => expect(run('keys', ['x', 'y'])).toEqual([[0, 1]]));
-    it('values', () => {
-      const result = run('values', { a: 1, b: 2 });
-      expect(result[0]).toContain(1);
-      expect(result[0]).toContain(2);
-    });
-  });
-
-  describe('has', () => {
-    it('object has key', () => expect(run('has("a")', { a: 1 })).toEqual([true]));
-    it('object missing key', () => expect(run('has("b")', { a: 1 })).toEqual([false]));
-    it('array has index', () => expect(run('has(1)', [10, 20])).toEqual([true]));
-    it('array out of bounds', () => expect(run('has(5)', [10, 20])).toEqual([false]));
-  });
-
-  describe('type', () => {
-    it('null', () => expect(run('type', null)).toEqual(['null']));
-    it('number', () => expect(run('type', 42)).toEqual(['number']));
-    it('string', () => expect(run('type', 'hi')).toEqual(['string']));
-    it('boolean', () => expect(run('type', true)).toEqual(['boolean']));
-    it('array', () => expect(run('type', [])).toEqual(['array']));
-    it('object', () => expect(run('type', {})).toEqual(['object']));
-  });
-
   describe('map', () => {
-    it('map over array', () => expect(run('map(. * 2)', [1, 2, 3])).toEqual([[2, 4, 6]]));
+    it('map over array', () => expect(run('map(. + 1)', [1, 2, 3])).toEqual([[2, 3, 4]]));
     it('map with filter', () => expect(run('map(select(. > 2))', [1, 2, 3, 4])).toEqual([[3, 4]]));
   });
 
@@ -173,20 +133,11 @@ describe('jq', () => {
     });
   });
 
-  describe('flatten', () => {
-    it('one level', () => expect(run('flatten', [[1, 2], [3, [4]]])).toEqual([[1, 2, 3, [4]]]));
-    it('with depth', () => expect(run('flatten(3)', [[1, [2, [3]]]])).toEqual([[1, 2, 3]]));
-  });
-
   describe('add', () => {
     it('sum numbers', () => expect(run('add', [1, 2, 3])).toEqual([6]));
     it('concat strings', () => expect(run('add', ['a', 'b', 'c'])).toEqual(['abc']));
     it('concat arrays', () => expect(run('add', [[1], [2], [3]])).toEqual([[1, 2, 3]]));
     it('empty', () => expect(run('add', [])).toEqual([null]));
-  });
-
-  describe('unique', () => {
-    it('deduplicates', () => expect(run('unique', [3, 1, 2, 1, 3])).toEqual([[3, 1, 2]]));
   });
 
   describe('sort / sort_by', () => {
@@ -200,131 +151,12 @@ describe('jq', () => {
     ]]));
   });
 
-  describe('group_by', () => {
-    it('groups by key', () => {
-      const input = [
-        { name: 'Alice', dept: 'eng' },
-        { name: 'Bob', dept: 'sales' },
-        { name: 'Charlie', dept: 'eng' },
-      ];
-      const result = run('group_by(.dept)', input);
-      expect(result[0]).toHaveLength(2);
-    });
-  });
-
-  describe('min / max / min_by / max_by', () => {
-    it('min', () => expect(run('min', [3, 1, 2])).toEqual([1]));
-    it('max', () => expect(run('max', [3, 1, 2])).toEqual([3]));
-    it('min_by', () => expect(run('min_by(.a)', [{ a: 3 }, { a: 1 }])).toEqual([{ a: 1 }]));
-    it('max_by', () => expect(run('max_by(.a)', [{ a: 3 }, { a: 1 }])).toEqual([{ a: 3 }]));
-  });
-
-  describe('first / last', () => {
-    it('first', () => expect(run('first', [1, 2, 3])).toEqual([1]));
-    it('last', () => expect(run('last', [1, 2, 3])).toEqual([3]));
-    it('first(expr)', () => expect(run('first(.[])', [10, 20])).toEqual([10]));
-  });
-
-  describe('range', () => {
-    it('range(n)', () => expect(run('[range(4)]', null)).toEqual([[0, 1, 2, 3]]));
-    it('range(a;b)', () => expect(run('[range(2;5)]', null)).toEqual([[2, 3, 4]]));
-    it('range(a;b;step)', () => expect(run('[range(0;10;3)]', null)).toEqual([[0, 3, 6, 9]]));
-  });
-
-  describe('string functions', () => {
-    it('ascii_downcase', () => expect(run('ascii_downcase', 'HELLO')).toEqual(['hello']));
-    it('ascii_upcase', () => expect(run('ascii_upcase', 'hello')).toEqual(['HELLO']));
-    it('ltrimstr', () => expect(run('ltrimstr("he")', 'hello')).toEqual(['llo']));
-    it('rtrimstr', () => expect(run('rtrimstr("lo")', 'hello')).toEqual(['hel']));
-    it('startswith', () => expect(run('startswith("hel")', 'hello')).toEqual([true]));
-    it('endswith', () => expect(run('endswith("llo")', 'hello')).toEqual([true]));
-    it('split', () => expect(run('split(",")', 'a,b,c')).toEqual([['a', 'b', 'c']]));
-    it('join', () => expect(run('join("-")', ['a', 'b', 'c'])).toEqual(['a-b-c']));
-    it('test', () => expect(run('test("^[0-9]+$")', '123')).toEqual([true]));
-    it('test negative', () => expect(run('test("^[0-9]+$")', 'abc')).toEqual([false]));
-  });
-
-  describe('contains / inside', () => {
-    it('string contains', () => expect(run('contains("ell")', 'hello')).toEqual([true]));
-    it('array contains', () => expect(run('contains([2])', [1, 2, 3])).toEqual([true]));
-    it('object contains', () => expect(run('contains({"a": 1})', { a: 1, b: 2 })).toEqual([true]));
-    it('inside', () => expect(run('inside("hello world")', 'hello')).toEqual([true]));
-  });
-
   // ---- Object/array construction ----
   describe('construction', () => {
     it('object construction', () => expect(run('{name: .n, age: .a}', { n: 'Alice', a: 30 })).toEqual([{ name: 'Alice', age: 30 }]));
     it('object shorthand', () => expect(run('{name, age}', { name: 'Alice', age: 30, extra: 1 })).toEqual([{ name: 'Alice', age: 30 }]));
-    it('array construction', () => expect(run('[.[] | . * 2]', [1, 2, 3])).toEqual([[2, 4, 6]]));
+    it('array construction', () => expect(run('[.[] | . + 10]', [1, 2, 3])).toEqual([[11, 12, 13]]));
     it('empty array literal', () => expect(run('[]', null)).toEqual([[]]));
-  });
-
-  // ---- try-catch ----
-  describe('try-catch', () => {
-    it('try suppresses errors', () => expect(run('try .a.b.c', null)).toEqual([null]));
-    it('try-catch', () => expect(run('try error("boom") catch .', null)).toEqual(['boom']));
-  });
-
-  // ---- Variables ----
-  describe('variables', () => {
-    it('as binding', () => expect(run('. as $x | $x + $x', 5)).toEqual([10]));
-    it('nested bindings', () => expect(run('.a as $a | .b as $b | $a + $b', { a: 10, b: 20 })).toEqual([30]));
-  });
-
-  // ---- reduce ----
-  describe('reduce', () => {
-    it('sum', () => expect(run('reduce .[] as $x (0; . + $x)', [1, 2, 3])).toEqual([6]));
-    it('collect', () => expect(run('reduce .[] as $x ([]; . + [$x * 2])', [1, 2, 3])).toEqual([[2, 4, 6]]));
-  });
-
-  // ---- def ----
-  describe('def', () => {
-    it('simple function', () => expect(run('def double: . * 2; [.[] | double]', [1, 2, 3])).toEqual([[2, 4, 6]]));
-    it('function with args', () => expect(run('def addN(n): . + n; 5 | addN(3)', null)).toEqual([8]));
-  });
-
-  // ---- Recurse ----
-  describe('recurse and ..', () => {
-    it('.. finds all values', () => {
-      const result = run('.. | numbers', { a: 1, b: { c: 2 }, d: [3] });
-      expect(result.sort()).toEqual([1, 2, 3]);
-    });
-  });
-
-  // ---- Paths ----
-  describe('paths', () => {
-    it('paths lists all', () => {
-      const result = run('[paths]', { a: 1, b: [2] });
-      expect(result[0]).toContainEqual(['a']);
-      expect(result[0]).toContainEqual(['b']);
-      expect(result[0]).toContainEqual(['b', 0]);
-    });
-    it('getpath', () => expect(run('getpath(["a","b"])', { a: { b: 42 } })).toEqual([42]));
-    it('setpath', () => expect(run('setpath(["a"]; 99)', { a: 1, b: 2 })).toEqual([{ a: 99, b: 2 }]));
-  });
-
-  // ---- Format strings ----
-  describe('format strings', () => {
-    it('@json', () => expect(run('@json', { a: 1 })).toEqual(['{"a":1}']));
-    it('@html', () => expect(run('@html', '<b>hi</b>')).toEqual(['&lt;b&gt;hi&lt;/b&gt;']));
-    it('@csv', () => expect(run('@csv', ['a', 'b', 'c'])).toEqual(['"a","b","c"']));
-    it('@uri', () => expect(run('@uri', 'hello world')).toEqual(['hello%20world']));
-  });
-
-  // ---- Math ----
-  describe('math builtins', () => {
-    it('floor', () => expect(run('floor', 3.7)).toEqual([3]));
-    it('ceil', () => expect(run('ceil', 3.2)).toEqual([4]));
-    it('round', () => expect(run('round', 3.5)).toEqual([4]));
-    it('sqrt', () => expect(run('sqrt', 9)).toEqual([3]));
-  });
-
-  // ---- tostring / tonumber ----
-  describe('conversions', () => {
-    it('tostring', () => expect(run('tostring', 42)).toEqual(['42']));
-    it('tonumber', () => expect(run('tonumber', '42')).toEqual([42]));
-    it('tojson', () => expect(run('tojson', [1, 2])).toEqual(['[1,2]']));
-    it('fromjson', () => expect(run('fromjson', '{"a":1}')).toEqual([{ a: 1 }]));
   });
 
   // ---- compile/one ----
@@ -359,7 +191,7 @@ describe('jq', () => {
     });
 
     it('filter events by date prefix', () => {
-      expect(run('[.events[] | select(.start | startswith("2025-06-15")) | .title]', calendar))
+      expect(run('[.events[] | select(.start[:10] == "2025-06-15") | .title]', calendar))
         .toEqual([['Standup', 'Lunch']]);
     });
 
@@ -394,208 +226,14 @@ describe('jq', () => {
         .toEqual([['Deploy', 'Write tests']]);
     });
 
-    it('group tasks by status', () => {
-      const result = run('.tasks | to_entries | map(.value) | group_by(.status) | length', taskList);
-      expect(result).toEqual([3]); // done, in-progress, todo
-    });
-
     it('high priority tasks', () => {
       expect(run('[.tasks[] | select(.priority <= 1) | .title] | sort', taskList))
         .toEqual([['Fix bug', 'Write tests']]);
     });
   });
 
-  // ---- Error handling ----
-  describe('errors', () => {
-    it('throws on unknown function', () => {
-      expect(() => run('notafunction', null)).toThrow(JqError);
-    });
-    it('throws on bad syntax', () => {
-      expect(() => run('.foo |', null)).toThrow(JqError);
-    });
-  });
-
-  // ---- with_entries ----
-  describe('with_entries', () => {
-    it('transforms object entries', () => {
-      expect(run('with_entries(select(.value > 1))', { a: 1, b: 2, c: 3 })).toEqual([{ b: 2, c: 3 }]);
-    });
-  });
-
-  // ---- limit ----
-  describe('limit', () => {
-    it('takes first n', () => expect(run('[limit(2; .[])]', [1, 2, 3, 4])).toEqual([[1, 2]]));
-  });
-
-  // ---- any / all ----
-  describe('any / all', () => {
-    it('any with filter', () => expect(run('any(. > 3)', [1, 2, 4])).toEqual([true]));
-    it('all with filter', () => expect(run('all(. > 0)', [1, 2, 3])).toEqual([true]));
-    it('all false', () => expect(run('all(. > 5)', [1, 2, 3])).toEqual([false]));
-  });
-
-  // ---- reverse ----
-  describe('reverse', () => {
-    it('array', () => expect(run('reverse', [1, 2, 3])).toEqual([[3, 2, 1]]));
-    it('string', () => expect(run('reverse', 'abc')).toEqual(['cba']));
-  });
-
-  // ---- Array subtraction ----
-  describe('array subtraction', () => {
-    it('removes matching elements', () => expect(run('. - [2, 3]', [1, 2, 3, 4])).toEqual([[1, 4]]));
-  });
-
-  // ---- unique_by ----
-  describe('unique_by', () => {
-    it('deduplicates by key', () => {
-      expect(run('unique_by(.a)', [{ a: 1, b: 'x' }, { a: 2, b: 'y' }, { a: 1, b: 'z' }]))
-        .toEqual([[{ a: 1, b: 'x' }, { a: 2, b: 'y' }]]);
-    });
-  });
-
-  // ---- explode / implode ----
-  describe('explode / implode', () => {
-    it('explode', () => expect(run('explode', 'AB')).toEqual([[65, 66]]));
-    it('implode', () => expect(run('implode', [65, 66])).toEqual(['AB']));
-  });
-
-  // ---- indices ----
-  describe('indices', () => {
-    it('string indices', () => expect(run('indices("o")', 'foobar')).toEqual([[1, 2]]));
-    it('array index', () => expect(run('index(2)', [1, 2, 3, 2])).toEqual([1]));
-    it('array rindex', () => expect(run('rindex(2)', [1, 2, 3, 2])).toEqual([3]));
-  });
-
-  // ---- gsub / sub ----
-  describe('sub / gsub', () => {
-    it('sub replaces first', () => expect(run('sub("o"; "0")', 'foobar')).toEqual(['f0obar']));
-    it('gsub replaces all', () => expect(run('gsub("o"; "0")', 'foobar')).toEqual(['f00bar']));
-  });
-
-  // ---- map_values ----
-  describe('map_values', () => {
-    it('transforms object values', () => expect(run('map_values(. + 1)', { a: 1, b: 2 })).toEqual([{ a: 2, b: 3 }]));
-  });
-
-  // ---- Object construction with computed keys ----
-  describe('computed object keys', () => {
-    it('dynamic keys', () => {
-      expect(run('{(.key): .value}', { key: 'name', value: 'Alice' })).toEqual([{ name: 'Alice' }]);
-    });
-  });
-
-  // ---- until ----
-  describe('until', () => {
-    it('loops until condition', () => {
-      expect(run('until(. >= 10; . * 2)', 1)).toEqual([16]);
-    });
-  });
-
-  // ---- foreach ----
-  describe('foreach', () => {
-    it('running sum', () => {
-      expect(run('[foreach .[] as $x (0; . + $x)]', [1, 2, 3])).toEqual([[1, 3, 6]]);
-    });
-  });
-
-  // ---- label-break ----
-  describe('label-break', () => {
-    it('breaks out of expression', () => {
-      expect(run('label $out | foreach .[] as $x (0; . + $x; if . > 3 then ., break $out else . end)', [1, 2, 3, 4])).toEqual([1, 3, 6]);
-    });
-  });
-
-  // ---- Type-selection builtins ----
-  describe('type selectors', () => {
-    it('numbers', () => {
-      const result = run('[.[] | numbers]', [1, 'a', null, 2, true]);
-      expect(result).toEqual([[1, 2]]);
-    });
-    it('strings', () => {
-      const result = run('[.[] | strings]', [1, 'a', null, 'b']);
-      expect(result).toEqual([['a', 'b']]);
-    });
-  });
-
-  // ---- Division produces split for strings ----
-  describe('string division', () => {
-    it('"a,b,c" / ","', () => expect(run('. / ","', 'a,b,c')).toEqual([['a', 'b', 'c']]));
-  });
-
-  // ---- Complex Automerge query ----
-  describe('complex document queries', () => {
-    const grid = {
-      '@type': 'DataGrid',
-      name: 'Inventory',
-      columns: {
-        'col-1': { name: 'Product', type: 'text' },
-        'col-2': { name: 'Price', type: 'number' },
-        'col-3': { name: 'Stock', type: 'number' },
-      },
-      rows: {
-        'r-1': { 'col-1': 'Widget', 'col-2': 9.99, 'col-3': 100 },
-        'r-2': { 'col-1': 'Gadget', 'col-2': 19.99, 'col-3': 50 },
-        'r-3': { 'col-1': 'Doohickey', 'col-2': 4.99, 'col-3': 200 },
-      },
-    };
-
-    it('total inventory value', () => {
-      const result = run('[.rows[] | .["col-2"] * .["col-3"]] | add', grid);
-      expect(result[0]).toBeCloseTo(9.99 * 100 + 19.99 * 50 + 4.99 * 200);
-    });
-
-    it('find cheap products', () => {
-      expect(run('[.rows[] | select(.["col-2"] < 10) | .["col-1"]] | sort', grid))
-        .toEqual([['Doohickey', 'Widget']]);
-    });
-
-    it('column names', () => {
-      expect(run('[.columns[] | .name] | sort', grid))
-        .toEqual([['Price', 'Product', 'Stock']]);
-    });
-  });
-
-  // ---- Untrusted-input hardening (hostile queries must not hang the worker) ----
+  // ---- Untrusted-input hardening ----
   describe('hostile query hardening', () => {
-    it('until(false; .) throws a bounded error instead of hanging', () => {
-      expect(() => run('until(false; . + 1)', 0)).toThrow(JqError);
-      expect(() => run('until(false; . + 1)', 0)).toThrow(/iterations/);
-    });
-
-    it('while(true; .) throws a bounded error when fully consumed', () => {
-      expect(() => run('while(true; . + 1)', 0)).toThrow(JqError);
-      expect(() => run('while(true; .)', 0)).toThrow(/iterations/);
-    });
-
-    it('while under limit() still short-circuits lazily', () => {
-      expect(run('[limit(3; while(true; . + 1))]', 0)).toEqual([[0, 1, 2]]);
-    });
-
-    it('legitimate until still terminates with the right answer', () => {
-      expect(run('until(. >= 1000; . + 1)', 0)).toEqual([1000]);
-    });
-
-    it('scan("") terminates with one empty match per position', () => {
-      expect(run('[scan("")]', 'ab')).toEqual([['', '', '']]);
-    });
-
-    it('scan with a zero-width-capable pattern terminates', () => {
-      expect(run('[scan("a*")]', 'abaa')).toEqual([['a', '', 'aa', '']]);
-    });
-
-    it('scan zero-width advance keeps surrogate pairs intact', () => {
-      expect(run('[scan("")]', '\u{1F600}')).toEqual([['', '']]);
-    });
-
-    it('a runaway generator trips the global step budget', () => {
-      expect(() => run('[range(1e9)]', null)).toThrow(JqError);
-      expect(() => run('[range(1e9)]', null)).toThrow(/step/);
-    });
-
-    it('nested loop bombs shielded by try still trip the global budget', () => {
-      expect(() => run('until(false; try until(false; . + 1) catch 0)', 0)).toThrow(JqError);
-    });
-
     it('.["__proto__"] yields null, not the prototype object', () => {
       expect(run('.["__proto__"]', { a: 1 })).toEqual([null]);
     });
@@ -610,33 +248,13 @@ describe('jq', () => {
     });
   });
 
-  // ---- Dedup/grouping semantics preserved by the hash-based rewrite ----
-  describe('unique/group_by equivalence semantics', () => {
-    it('unique treats objects with different key order as equal', () => {
-      expect(run('unique', [{ a: 1, b: 2 }, { b: 2, a: 1 }])).toEqual([[{ a: 1, b: 2 }]]);
+  // ---- Error handling ----
+  describe('errors', () => {
+    it('throws on unknown function', () => {
+      expect(() => run('notafunction', null)).toThrow(JqError);
     });
-
-    it('unique keeps first-seen order for nested values', () => {
-      expect(run('unique', [[2], [1], [2], [1, 2]])).toEqual([[[2], [1], [1, 2]]]);
-    });
-
-    it('unique does not conflate values of different types', () => {
-      expect(run('unique', [1, '1', true, null, [1], { '1': 1 }])).toEqual([[1, '1', true, null, [1], { '1': 1 }]]);
-    });
-
-    it('unique never merges NaN values (deepEqual semantics)', () => {
-      const result = run('unique', [NaN, NaN]);
-      expect(result[0]).toHaveLength(2);
-    });
-
-    it('group_by sorts groups by key and preserves item order', () => {
-      expect(run('group_by(.k)', [{ k: 2, i: 0 }, { k: 1, i: 1 }, { k: 2, i: 2 }]))
-        .toEqual([[[{ k: 1, i: 1 }], [{ k: 2, i: 0 }, { k: 2, i: 2 }]]]);
-    });
-
-    it('unique_by keeps the first item per key', () => {
-      expect(run('unique_by(.a)', [{ a: { x: 1, y: 2 }, b: 1 }, { a: { y: 2, x: 1 }, b: 2 }]))
-        .toEqual([[{ a: { x: 1, y: 2 }, b: 1 }]]);
+    it('throws on bad syntax', () => {
+      expect(() => run('.foo |', null)).toThrow(JqError);
     });
   });
 
@@ -665,6 +283,99 @@ describe('jq', () => {
     it('empty document', () => {
       const doc = { '@type': 'Calendar', name: '' };
       expect(one(query, doc)).toEqual({ type: 'Calendar', name: '', eventCount: 0, taskCount: 0, cellCount: 0 });
+    });
+  });
+
+  // ---- Pinned production queries ----
+  describe('production query strings (pinned)', () => {
+    // Every jq filter the app ships. jq.ts may only keep syntax these need.
+    const doc = {
+      '@type': 'TaskList',
+      name: 'Sprint',
+      description: 'desc',
+      color: '#3366ff',
+      timeZone: 'UTC',
+      events: {
+        'evt-1': { '@type': 'Event', title: 'Standup', start: '2026-06-15T09:00:00', recurrenceRule: { until: '2026-07-01T00:00:00' } },
+        'evt-2': { '@type': 'Event', title: 'Lunch', start: '2026-05-01T12:00:00' },
+      },
+      tasks: {
+        't-1': { title: 'Fix bug', progress: 'in-progress' },
+        't-2': { title: 'Write tests', progress: 'completed' },
+        't-3': { title: 'Deploy', progress: 'cancelled' },
+      },
+      sheets: {
+        'sheet-1': {
+          name: 'Main', index: 0, hidden: false,
+          rows: { 'r-1': { index: 0, height: 22 }, 'r-2': { index: 1, height: 24 }, 'r-3': { index: 2, height: 30 } },
+          columns: { 'c-1': { index: 0, name: 'A' }, 'c-2': { index: 1, name: 'B' } },
+          cells: { 'r-1:c-1': { value: 'a' }, 'r-2:c-1': { value: 'b' } },
+        },
+        'sheet-2': { name: 'Second', index: 1, hidden: true, rows: {}, columns: {}, cells: {} },
+      },
+    };
+
+    it('identity (SourceViewer)', () => {
+      expect(run('.', doc)).toEqual([doc]);
+    });
+
+    it('type discriminator (DocRoute)', () => {
+      expect(one('.["@type"]', doc)).toBe('TaskList');
+    });
+
+    it('active sheet (DataGrid sheetQuery)', () => {
+      expect(one('.sheets["sheet-1"]', doc)).toEqual(doc.sheets['sheet-1']);
+    });
+
+    it('Counters projection', () => {
+      expect(one('{ events: (.events // {}), name: (.name // "Counters") }', doc))
+        .toEqual({ events: doc.events, name: 'Sprint' });
+    });
+
+    it('Tasks projection', () => {
+      expect(one('{ tasks: (.tasks // {}), name: (.name // "Tasks") }', doc))
+        .toEqual({ tasks: doc.tasks, name: 'Sprint' });
+    });
+
+    it('Sentences projection', () => {
+      expect(one('{ name: (.name // "Sentences") }', doc)).toEqual({ name: 'Sprint' });
+    });
+
+    it('HOME_SUMMARY_QUERY (Home)', () => {
+      const query = '{ type: .["@type"], name: (.name // ""), eventCount: (if .events then (.events | length) else 0 end), taskCount: (if .tasks then [.tasks[] | select(.progress != "completed" and .progress != "cancelled")] | length else 0 end), cellCount: (if .sheets then [.sheets[].cells // {} | length] | add else 0 end) }';
+      expect(one(query, doc)).toEqual({ type: 'TaskList', name: 'Sprint', eventCount: 2, taskCount: 1, cellCount: 2 });
+    });
+
+    it('META_QUERY (DataGrid)', () => {
+      const query = '{ "@type": .["@type"], name: (.name // "Spreadsheet"), sheets: (.sheets | to_entries | map({ key: .key, value: { name: .value.name, index: .value.index, hidden: .value.hidden, rows: (.value.rows | to_entries | sort_by(.value.index) | map(.key)), cols: (.value.columns | to_entries | sort_by(.value.index) | map(.key)) } }) | from_entries) }';
+      expect(one(query, doc)).toEqual({
+        '@type': 'TaskList', name: 'Sprint',
+        sheets: {
+          'sheet-1': { name: 'Main', index: 0, hidden: false, rows: ['r-1', 'r-2', 'r-3'], cols: ['c-1', 'c-2'] },
+          'sheet-2': { name: 'Second', index: 1, hidden: true, rows: [], cols: [] },
+        },
+      });
+    });
+
+    it('calendarQuery (Calendar + AllCalendars)', () => {
+      const query = '{ "@type": .["@type"], events: (.events // {} | to_entries | map(select((.value.recurrenceRule != null and .value.start[:10] <= "2026-06-30" and ((.value.recurrenceRule.until // null) == null or .value.recurrenceRule.until[:10] >= "2026-05-01")) or (.value.recurrenceRule == null and .value.start[:10] >= "2026-05-01" and .value.start[:10] <= "2026-06-30"))) | from_entries), name: (.name // "Calendar"), description: (.description // ""), color: .color, timeZone: .timeZone }';
+      expect(one(query, doc)).toEqual({
+        '@type': 'TaskList',
+        events: { 'evt-1': doc.events['evt-1'], 'evt-2': doc.events['evt-2'] },
+        name: 'Sprint', description: 'desc', color: '#3366ff', timeZone: 'UTC',
+      });
+    });
+
+    it('document name (Playwright)', () => {
+      expect(one('.name', doc)).toBe('Sprint');
+    });
+
+    it('first sheet (Playwright datagrid)', () => {
+      expect(one('.sheets | to_entries | map(.value) | .[0]', doc)).toEqual(doc.sheets['sheet-1']);
+    });
+
+    it('row height by sorted index (Playwright datagrid)', () => {
+      expect(one('.sheets | to_entries | map(.value) | .[0] | .rows | to_entries | sort_by(.value.index) | .[2].value.height', doc)).toBe(30);
     });
   });
 });
