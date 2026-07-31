@@ -17,7 +17,7 @@ import { makeWebRTCRelayAdapter, type WebRTCRelayAdapter } from './webrtc-relay-
 import { RELAY_PEER_ID, PRODUCTION_RELAY_URL, isRelayLeaveFrame } from '../../shared/relay-identity';
 import { errMsg } from '../../shared/keyhive-ops';
 import { idbKvStore } from './idb-kvstore';
-import { DriveEngine } from '../../shared/drive-engine';
+import { DriveEngine, type DriveEngineInstance } from '../../shared/drive-engine';
 import type { EngineHost, EngineNetwork } from '../../shared/engine-host';
 import type { MainToWorker, WorkerToMain, ValidationError } from '../../shared/worker-protocol';
 
@@ -70,7 +70,7 @@ for (const level of ['log', 'debug', 'info'] as const) {
 // automerge-repo protocol. Same encoder settings as the repo's cbor helper.
 const rdvEncoder = new Encoder({ tagUint8Array: false, useRecords: false });
 
-let engine: DriveEngine | null = null;
+let engine: DriveEngineInstance | null = null;
 let p2pAdapter: WebRTCRelayAdapter | null = null;
 let pendingWebrtcPort: MessagePort | null = null;
 /** The engine's inbound-rendezvous-frame handler (registered during engine.init). */

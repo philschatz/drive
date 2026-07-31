@@ -36,7 +36,7 @@ import { NodeFSStorageAdapter } from '@automerge/automerge-repo-storage-nodefs';
 import { isRendezvousType } from '../shared/rendezvous-protocol';
 import { PRODUCTION_RELAY_URL, isRelayLeaveFrame } from '../shared/relay-identity';
 import { parseRendezvousToken } from '../shared/rendezvous-url';
-import { DriveEngine, type WatchUpdate } from '../shared/drive-engine';
+import { DriveEngine, type DriveEngineInstance, type WatchUpdate } from '../shared/drive-engine';
 import { relativeTime } from '../shared/relative-time';
 import { NodeKVStore } from './node-kvstore';
 import { ensureKeyhiveNodeShim, initSubductionNode } from './keyhive-node-shim';
@@ -161,7 +161,7 @@ function resolveDataDir(opts: CliOpts): string {
 async function startEngine(
   opts: CliOpts,
   mode: { network: boolean },
-): Promise<{ engine: DriveEngine; kv: NodeKVStore; wsAdapter: any }> {
+): Promise<{ engine: DriveEngineInstance; kv: NodeKVStore; wsAdapter: any }> {
   const dataDir = resolveDataDir(opts);
 
   // Patch the keyhive slim build + initialize the subduction WASM for Node, both
@@ -268,7 +268,7 @@ function withTimeout<T>(p: Promise<T>, ms: number, message: string): Promise<T> 
 }
 
 /** Poll (up to ~20s) for the keyhive group graph to sync so accessible docs surface. */
-async function waitForDocs(engine: DriveEngine): Promise<string[]> {
+async function waitForDocs(engine: DriveEngineInstance): Promise<string[]> {
   console.error('[cli] waiting for documents to sync…');
   let ids: string[] = [];
   for (let i = 0; i < 20; i++) {

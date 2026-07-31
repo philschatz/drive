@@ -7,27 +7,31 @@
  * The browser worker shell (automerge-worker.ts) and the Node CLI (cli.ts) each
  * build a host and drive the engine — the worker via `handleMessage`, the CLI via
  * `init()` / `rendezvousLinkJoin()` / `startWatching()` directly.
+ *
+ * The class is composed from a core base plus one mixin per subsystem:
+ *   EngineCore → EngineSettings → EnginePresence → EngineRendezvous → EngineWatch
+ * Each mixin exposes a late-bound `*Surface` hook (set in its constructor to
+ * `this`) so the core can reach INTO the subsystem for state that the subsystem
+ * owns — e.g. archive-doc's presence teardown, update-doc's settings validation.
  */
 import { deepAssign } from './deep-assign';
 import { syncToTarget } from './sync-to-target';
-import { validateDocument, DRIVE_SETTINGS_TYPE, createDriveSettingsDocJson } from './schemas';
+import { validateDocument, DRIVE_SETTINGS_TYPE } from './schemas';
 import { KeyhiveOps, bytesToBase64, base64ToBytes, errMsg } from './keyhive-ops';
 import { LRU } from './lru-cache';
-import { generateRendezvous, encryptString, decryptString } from './rendezvous-crypto';
-import { formatBytes } from './format-bytes';
 import {
-  RDV_SUB, RDV_UNSUB, RDV_MSG, RDV_PEER,
-  type RendezvousStatus,
-} from './rendezvous-protocol';
-import {
-  KEYS, LEGACY_IDB_KEYS, CACHE_PREFIX, queryCacheKey, validationCacheKey, docCachePrefix, hashStr,
+  KEYS, CACHE_PREFIX, queryCacheKey, validationCacheKey, docCachePrefix, hashStr,
   type QueryCacheEntry,
 } from './storage-keys';
 import { createKeyhiveRepo } from './keyhive-repo';
-import { RELAY_PEER_ID, buildRelayWatchFrame } from './relay-identity';
+import { RELAY_PEER_ID } from './relay-identity';
 import type { EngineHost } from './engine-host';
 import type { MainToWorker, WorkerToMain } from './worker-protocol';
 import { applyRichTextOps, richTextAwareStringSync, type RichTextOp } from './rich-text-ops';
+import { EngineSettings, type EngineSettingsSurface } from './engine-settings';
+import { EnginePresence, type EnginePresenceSurface } from './engine-presence';
+import { EngineRendezvous, type EngineRendezvousSurface } from './engine-rendezvous';
+import { EngineWatch, type EngineWatchSurface } from './engine-watch';
 
 /** JSON with recursively sorted object keys — for value comparisons where the
  * producer's key order is nondeterministic (e.g. Automerge span block values). */
@@ -38,8 +42,6 @@ function stableJson(v: any): string {
 }
 
 type StoredDocEntry = { id: string; type?: string; name?: string; sharingGroupId?: string;[k: string]: any };
-/** KEYS.archivedDocIds value: archived automerge docId → re-share-detection baseline. */
-type ArchivedDocTombstones = Record<string, { grantSigs: string[] }>;
 
 interface SubInfo {
   filter: string;
@@ -57,67 +59,15 @@ interface SubInfo {
   lastCursorsJson?: string;
 }
 
-/** One encrypted presence channel, plus whether encrypting it rotated the CGKA. */
-interface PresenceCiphertext {
-  enc: Uint8Array;
-  rotated: boolean;
-}
-
 interface DocEntry {
   handle: any;
   pinnedVersion: number | null; // null = live view
   subscriptions: Map<number, SubInfo>; // subId → filter + poster
-  presence: any | null;
-  presenceDoc?: any;
-  presenceDesired?: Record<string, unknown>;
-  presenceSend?: () => Promise<boolean>;
-  presenceRetry?: any;
-  presenceLiveness?: any;
   validationSubscribed: boolean;
 }
 
-/**
- * One live rendezvous. `onPeer` fires when another peer joins the topic; `onData`
- * fires with the decrypted payload of an inbound message. A one-way share sets only
- * `onPeer`; a receiver sets only `onData`; a device link sets both.
- */
-interface RdvSession {
-  key: string;
-  onPeer?: () => void;
-  onData?: (plaintext: string) => void;
-}
-
-const RDV_RECEIVE_TIMEOUT_MS = 120_000;
-
-/**
- * Upper bound on an inbound encrypted rendezvous payload. Anyone who learns a
- * topic id (or a hostile relay) can push bytes at it, so cap the size BEFORE
- * any decrypt/parse work. A legitimate payload is a contact bundle — a few KB,
- * and flat in the sender's document count (see `KeyhiveOps.contactBundleEvents`)
- * — so 256 KiB is generous headroom rather than a working limit.
- */
-export const RDV_MAX_DATA_BYTES = 256 * 1024;
-
-/** AES-GCM framing added by `encryptString`: a 12-byte IV plus the 16-byte tag. */
-const RDV_FRAME_OVERHEAD_BYTES = 28;
-
 /** See OPEN_DOCS_IN_BACKGROUND in the original worker. */
 const OPEN_DOCS_IN_BACKGROUND = true;
-
-// These are mutable so the set-presence-timing test hook can shrink the
-// windows (specs drive a short stale window instead of sleeping past the 12s
-// default); production never reassigns them. There is one engine per worker,
-// so a module-level override is effectively per-engine.
-/** How often each peer's Presence broadcasts a heartbeat when otherwise idle. */
-export let PRESENCE_HEARTBEAT_MS = 5000;
-/** A peer with no presence activity for this long is hidden from clients
- *  (two missed heartbeats plus network slack). */
-export let PRESENCE_STALE_MS = 12_000;
-/** How often to re-check freshness between events; worst-case detection
- *  latency is PRESENCE_STALE_MS + this. */
-let PRESENCE_LIVENESS_CHECK_MS = 3000;
-/** How often to re-attempt presence setup while the doc/keyhive isn't ready. */
-const PRESENCE_SETUP_RETRY_MS = 2000;
 
 /** Order-insensitive head-set equality. A missing record never equals. */
 export function headsEqual(a: string[] | undefined, b: string[]): boolean {
@@ -139,58 +89,22 @@ export function visiblePeerIds(repoPeers: readonly string[]): string[] {
   return repoPeers.filter((p) => p !== RELAY_PEER_ID);
 }
 
-/** Peers seen within `staleMs` of `now`. Fresh iff now - lastSeen < staleMs. */
-export function freshPresencePeerIds(
-  lastSeen: ReadonlyMap<string, number>,
-  now: number,
-  staleMs: number = PRESENCE_STALE_MS,
-): Set<string> {
-  const fresh = new Set<string>();
-  for (const [peerId, seenAt] of lastSeen) {
-    if (now - seenAt < staleMs) fresh.add(peerId);
-  }
-  return fresh;
-}
+export class EngineCore {
+  protected host: EngineHost;
 
-export interface WatchUpdate {
-  docId: string;
-  docType?: string;
-  name?: string;
-  heads: string[];
-  lastModified?: number;
-  versions?: number;
-}
-
-export interface StartWatchingOptions {
-  /** Minimum number of most-recently-updated docs to keep open continuously. */
-  keepOpen: number;
-  /** Also keep open every doc edited within this many days (the kept-open set is
-   *  whichever is larger: the top-N or the docs within this window). */
-  recentDays: number;
-  /** How long to hold each rotated doc open so it can sync before closing (ms). */
-  syncMs: number;
-  reenumerateEveryMs?: number;
-}
-
-export class DriveEngine {
-  private host: EngineHost;
-
-  // Populated by init() via createKeyhiveRepo.
-  private repo: any = null;
-  private khIntegration: any = null;
-  private khOps: KeyhiveOps | null = null;
-  private bridge: any = null;
-  private Automerge: any = null;
-  private PresenceClass: any = null;
-  private amDocIdFromBytes: ((bytes: Uint8Array) => string) | null = null;
-  private setNextDocId: ((bytes: Uint8Array) => void) | null = null;
-
-  /** Serialized last-sent RELAY_WATCH frame (diff guard) and its debounce timer. */
-  private lastRelayWatch: string | null = null;
-  private relayWatchTimer: ReturnType<typeof setTimeout> | null = null;
+  // Populated by init() via createKeyhiveRepo. Protected (not private) so the
+  // mixins can read them; null until init() runs.
+  protected repo: any = null;
+  protected khIntegration: any = null;
+  protected khOps: KeyhiveOps | null = null;
+  protected bridge: any = null;
+  protected Automerge: any = null;
+  protected PresenceClass: any = null;
+  protected amDocIdFromBytes: ((bytes: Uint8Array) => string) | null = null;
+  protected setNextDocId: ((bytes: Uint8Array) => void) | null = null;
 
   // Doc registry + subscriptions.
-  private docRegistry = new Map<string, DocEntry>();
+  protected docRegistry = new Map<string, DocEntry>();
   private subIdToDocId = new Map<number, string>();
   private pendingSubs = new Map<string, Map<number, SubInfo>>();
   // Cursor tokens to resolve into positions on every push: docId → stableJson(path)
@@ -198,14 +112,7 @@ export class DriveEngine {
   // 'subscribe-cursors'. Deliberately NOT on DocEntry: a registration routinely
   // arrives before the doc handle has loaded (same reason pendingSubs exists), and
   // hanging it off the entry would silently drop it on a cold page load.
-  private cursorSubs = new Map<string, Map<string, string[]>>();
-
-  // Presence subscriptions still waiting for the doc/keyhive to be ready:
-  // docId → retry timer (null while an attempt is in flight). Present iff a
-  // subscription wants presence that hasn't started yet.
-  private presencePending = new Map<string, any>();
-  // set-presence state that arrived before presence finished starting.
-  private presenceDesiredEarly = new Map<string, Record<string, unknown>>();
+  protected cursorSubs = new Map<string, Map<string, string[]>>();
 
   // Query caching.
   private jqCache = new LRU<string, (input: any) => any>(64);
@@ -229,41 +136,14 @@ export class DriveEngine {
   private lastViewedHeads: Record<string, string[]> | null = null; // null until init() loads it
   private unseenChanges: Record<string, boolean> = {};             // last computed state (what we emit)
 
-  // DriveSettings doc: the synced, keyhive-private source of truth for contacts,
-  // device names, and archived-doc tombstones. Located
-  // via the device-local KEYS.driveSettings pointer (set from local creation,
-  // guarded discovery of the user's own private docs, or the device-link
-  // rendezvous) — never by scanning synced docs for @type:'DriveSettings'.
-  private driveSettingsDocId: string | null = null;
-  private driveSettingsHandle: any = null;
-  private ensureSettingsInFlight: Promise<any> | null = null;
-  private legacyMerged = false;
-  // A settings-doc handle whose ops haven't synced yet. We subscribe to it ONCE and
-  // adopt when it arrives, rather than re-running loadDriveSettingsHandle on every
-  // keyhive ingest — that per-ingest churn (a serialized kh.getDocument + repo.find +
-  // whenReady) starves the post-device-link keyhive convergence of the user's real
-  // docs on a large established account, so nothing ever decrypts.
-  private driveSettingsDeferredHandle: any = null;
-
-  // Settings storage mode. LOCAL (default): the four settings live in a device-local
-  // JSON blob stored under KEYS.driveSettings (no sync, no user-group minted). SHARED
-  // (opt-in, one-way): the synced DriveSettings Automerge doc above. The mode is
-  // resolved in init() from the KEYS.driveSettings value TYPE — a string is a docId
-  // ⇒ shared; an object is the blob ⇒ local; absent ⇒ local. In LOCAL mode
-  // this.driveSettingsHandle is a lightweight facade ({__local, doc, change, on}) over
-  // this.localSettings, so every store method + changeDriveSettings works unchanged.
-  private settingsMode: 'shared' | 'local' = 'local';
-  private localSettings: any = null;
-  private ensureLocalInFlight: Promise<any> | null = null;
-
-  // Rendezvous.
-  private rdvSessions = new Map<string, RdvSession>();
-
-  // Watcher (keep-N-open + rotate).
-  private watching = false;
-  private watchedDocs = new Set<string>();
-  private pinnedDocs = new Set<string>();
-  private watchOnUpdate: ((u: WatchUpdate) => void) | null = null;
+  // Late-bound hooks into the mixin classes (each mixin's constructor assigns
+  // `this.<name>Surface = this as any`, so the core can reach subsystem state
+  // that the core class no longer declares). Assigned after super() in the
+  // composed constructor chain, i.e. before any message can arrive.
+  protected settingsSurface!: EngineSettingsSurface;
+  protected presenceSurface!: EnginePresenceSurface;
+  protected rendezvousSurface!: EngineRendezvousSurface;
+  protected watchSurface!: EngineWatchSurface;
 
   // How often (ms) keyhive requests a sync round; undefined ⇒ keyhive-repo's
   // 2000ms default. Only the browser worker sets this (from a build-time env, to
@@ -280,7 +160,7 @@ export class DriveEngine {
   get keyhiveOps(): KeyhiveOps | null { return this.khOps; }
   get automergeRepo(): any { return this.repo; }
 
-  private emit(event: WorkerToMain): void { this.host.emit(event); }
+  protected emit(event: WorkerToMain): void { this.host.emit(event); }
   private getRepo(): any {
     if (!this.repo) throw new Error('Secure repo not initialized');
     return this.repo;
@@ -291,7 +171,7 @@ export class DriveEngine {
    * main thread awaits. `log` (if given) prefixes the error-level log for the
    * handlers that want one; `error` is always emitted so callers see the failure.
    */
-  private async respond(id: number, fn: () => Promise<unknown> | unknown, log?: string): Promise<void> {
+  protected async respond(id: number, fn: () => Promise<unknown> | unknown, log?: string): Promise<void> {
     try {
       this.host.emit({ type: 'result', id, result: await fn() });
     } catch (err: any) {
@@ -301,7 +181,7 @@ export class DriveEngine {
   }
 
   /** Mint a keyhive-backed automerge doc (keyhive doc, next-doc-id, create, enable-sharing). */
-  private async createKeyhiveDocHandle(initialJson: any): Promise<any> {
+  protected async createKeyhiveDocHandle(initialJson: any): Promise<any> {
     const { docIdBytes } = await this.khOps!.createKeyhiveDoc();
     this.setNextDocId!(docIdBytes);
     const handle = await this.repo!.create2(initialJson);
@@ -318,490 +198,15 @@ export class DriveEngine {
     await this.pushToSubscriptions(docId);
   }
 
-  // ── DriveSettings document ─────────────────────────────────────────────────
-  // See the field declarations above. Reads go through the loaded handle; writes
-  // go through changeDriveSettings (validate-before-commit). Every store method
-  // below keeps its original this.emit(...) broadcast, so the main-thread caches
-  // and all the UI are unchanged.
-
-  private plainClone<T>(v: T): T { return JSON.parse(JSON.stringify(v)); }
-
-  /** Current DriveSettings contents, or null if the doc isn't loaded yet. */
-  private driveSettingsDoc(): any | null {
-    try { return this.driveSettingsHandle?.doc?.() ?? null; } catch { return null; }
-  }
-
-  /** Throw if applying `mutator` would make a DriveSettings doc invalid. */
-  private assertValidSettingsChange(handle: any, mutator: (d: any) => void): void {
-    // Branch on the handle, not this.settingsMode: a LOCAL-mode user can still open a
-    // real leftover DriveSettings automerge doc in the source viewer, which passes a
-    // real (non-__local) handle here and must use Automerge.clone.
-    let next: any;
-    if (handle.__local) {
-      next = this.plainClone(handle.doc());
-      mutator(next);
-    } else {
-      next = this.Automerge.change(this.Automerge.clone(handle.doc()), mutator);
-    }
-    // Only hard errors reject. An unknown property is reported as a `warning`
-    // (see obj() in schemas/core.ts) — a key this build doesn't know about must
-    // never make every subsequent settings write throw, which is what a stale
-    // key from another build would otherwise do.
-    const errors = validateDocument(next).filter(e => e.kind !== 'warning');
-    if (errors.length) {
-      const detail = errors.slice(0, 3).map(e => `${e.path.join('.') || '(root)'}: ${e.message}`).join('; ');
-      throw new Error(`DriveSettings change rejected (would be invalid): ${detail}`);
-    }
-  }
-
-  /**
-   * Validate a proposed change on a clone and throw if it would make the doc
-   * invalid, then commit it. This is what makes DriveSettings edits *enforced*
-   * (unlike other doc types, whose validation is advisory).
-   */
-  private changeDriveSettings(mutator: (d: any) => void): void {
-    const handle = this.driveSettingsHandle;
-    if (!handle) throw new Error('DriveSettings document is not loaded');
-    this.assertValidSettingsChange(handle, mutator);
-    handle.change(mutator);
-  }
-
-  /**
-   * Resolve (loading, discovering, or creating) this user's DriveSettings doc.
-   * Idempotent + single-flight. Returns the handle, or null when there is no
-   * user-group yet and `create` was not requested.
-   */
-  private async ensureDriveSettingsDoc(opts: { create?: boolean } = {}): Promise<any | null> {
-    // LOCAL mode: never touch keyhive. Return BEFORE any create path so `create:true`
-    // (which store methods pass) can never mint a user-group in local mode.
-    if (this.settingsMode === 'local') return this.ensureLocalSettings();
-    if (this.driveSettingsHandle) return this.driveSettingsHandle;
-    // Already waiting for a known settings doc to sync in — don't re-load it (that is
-    // the per-ingest churn that starves post-link convergence). Its 'change' handler
-    // adopts it once it arrives.
-    if (this.driveSettingsDeferredHandle) return null;
-    if (this.ensureSettingsInFlight) return this.ensureSettingsInFlight;
-    this.ensureSettingsInFlight = this.resolveDriveSettingsDoc(opts)
-      .catch(err => { console.warn('[engine] ensureDriveSettingsDoc failed:', errMsg(err)); return null; })
-      .finally(() => { this.ensureSettingsInFlight = null; });
-    return this.ensureSettingsInFlight;
-  }
-
-  // ── LOCAL settings backend (device-local JSON blob under KEYS.driveSettings) ──
-  // Installs a lightweight "handle" facade so every store method + changeDriveSettings
-  // operates on the in-memory blob and persists it, with no keyhive/sync involved.
-
-  /** Resolve the LOCAL settings blob (load-or-seed + one-time legacy migration). Single-flight. */
-  private async ensureLocalSettings(): Promise<any> {
-    if (this.driveSettingsHandle?.__local) return this.driveSettingsHandle;
-    if (this.ensureLocalInFlight) return this.ensureLocalInFlight;
-    this.ensureLocalInFlight = this.resolveLocalSettings()
-      .catch(err => { console.warn('[engine] ensureLocalSettings failed:', errMsg(err)); return this.driveSettingsHandle; })
-      .finally(() => { this.ensureLocalInFlight = null; });
-    return this.ensureLocalInFlight;
-  }
-
-  private async resolveLocalSettings(): Promise<any> {
-    const stored = await this.host.kv.get<any>(KEYS.driveSettings);
-    // A string here would mean SHARED mode — we should never be in LOCAL mode then, but
-    // guard anyway: only adopt an object as the blob, else seed a bare one.
-    this.localSettings = (stored && typeof stored === 'object')
-      ? stored
-      : createDriveSettingsDocJson();
-    this.installLocalHandle();
-    // Rename first: everything below writes into `friends`.
-    this.migrateContactsToFriends();
-    // The one-time legacy-key → blob consolidation (writes the blob via the local
-    // handle, then deletes the five LEGACY_IDB_KEYS). This IS the local migration.
-    await this.mergeLegacyIntoSettings();
-    this.refreshFromSettingsDoc();
-    return this.driveSettingsHandle;
-  }
-
-  /**
-   * One-way local rename of the roster map `contacts` → `friends`. Idempotent,
-   * and a no-op on docs created after the rename. Must run before anything else
-   * writes settings, since the schema no longer declares `contacts`.
-   *
-   * Safe despite the pre-state being "invalid": assertValidSettingsChange
-   * validates the post-mutation clone, which no longer carries the old key.
-   */
-  private migrateContactsToFriends(): void {
-    const doc = this.driveSettingsDoc();
-    if (!doc?.contacts) return;
-    this.changeDriveSettings(d => {
-      if (!d.friends) d.friends = {};
-      for (const [k, v] of Object.entries(d.contacts ?? {})) {
-        if (!(k in d.friends)) d.friends[k] = v; // never clobber a newer name
-      }
-      delete d.contacts;
-    });
-  }
-
-  /** Install the __local facade over this.localSettings into this.driveSettingsHandle. */
-  private installLocalHandle(): void {
-    // LOCAL mode has no synced settings doc, so keep the pointer null (reconcileHomeDocs
-    // excludes by this.driveSettingsDocId; there is nothing to exclude here).
-    this.driveSettingsDocId = null;
-    this.driveSettingsHandle = {
-      __local: true,
-      doc: () => this.localSettings,
-      change: (fn: (d: any) => void) => {
-        const c = this.plainClone(this.localSettings);
-        fn(c);
-        this.localSettings = c;
-        void this.host.kv.set(KEYS.driveSettings, c);
-      },
-      on: () => {},
-    };
-  }
-
-  private async resolveDriveSettingsDoc(opts: { create?: boolean }): Promise<any | null> {
-    if (!this.khOps || !this.repo || !this.amDocIdFromBytes) return null;
-
-    // 1) Device-local pointer → load it. If the pointer is set but the doc hasn't
-    //    synced yet, DEFER (do not create a duplicate) — a later ensure (fired on
-    //    keyhive ingest) will load it once its ops arrive. A non-string value means the
-    //    key currently holds a LOCAL blob (a local→shared opt-in in progress); treat it
-    //    as "no pointer" so we fall through to create (which overwrites it with the id).
-    const pointerVal = await this.host.kv.get<unknown>(KEYS.driveSettings);
-    const pointer = typeof pointerVal === 'string' ? pointerVal : null;
-    if (pointer) {
-      const handle = await this.loadDriveSettingsHandle(pointer);
-      if (handle) { await this.mergeLegacyIntoSettings(); return handle; }
-      // Not synced yet — loadDriveSettingsHandle has subscribed to adopt it on arrival
-      // (no per-ingest re-poll). mergeLegacy runs then too.
-      return null;
-    }
-
-    const userGroupId = await this.khOps.getUserGroupId();
-
-    // 2) Create it. createKeyhiveDoc mints the user-group if absent, so this
-    //    doubles as the first-write identity bootstrap. Reuse of an existing
-    //    settings doc is NOT attempted ambiently here — the enable-settings-sync
-    //    handler does that explicitly (findReachableDriveSettingsDocs) at the
-    //    user-initiated button press.
-    if (opts.create || userGroupId) {
-      const handle = await this.createDriveSettingsDoc();
-      await this.mergeLegacyIntoSettings();
-      return handle;
-    }
-    return null;
-  }
-
-  /** Find, register, pin, and subscribe the DriveSettings doc at `docId`. */
-  private async loadDriveSettingsHandle(docId: string): Promise<any | null> {
-    try {
-      // The settings doc is intentionally absent from the home list, so register
-      // its sharing group here (home docs get this in init) so it syncs.
-      const khDocId = this.resolveKhDocId(docId);
-      try {
-        await this.khOps!.registerSharingGroup(khDocId);
-      } catch { /* best-effort */ }
-      this.pinnedDocs.add(docId);
-      const handle = await this.getOrLoadHandle(docId);
-      if (handle.isReady && !handle.isReady()) {
-        await handle.whenReady?.(['ready', 'unavailable']).catch(() => {});
-      }
-      const doc = handle.doc?.();
-      if (doc && doc['@type'] === DRIVE_SETTINGS_TYPE) {
-        this.adoptLoadedSettingsHandle(docId, handle);
-        return handle;
-      }
-      if (doc && doc['@type'] !== DRIVE_SETTINGS_TYPE) {
-        console.warn(`[engine] doc ${docId} is not DriveSettings (@type=${doc['@type']}); not adopting`);
-        return null;
-      }
-      // Not synced yet. Subscribe ONCE and adopt when it arrives — do NOT let the
-      // caller re-run this load on every keyhive ingest (see driveSettingsDeferredHandle).
-      this.deferDriveSettingsHandle(docId, handle);
-      return null;
-    } catch (err) {
-      console.warn(`[engine] loadDriveSettingsHandle(${docId}) failed:`, errMsg(err));
-      return null;
-    }
-  }
-
-  /** Commit a loaded settings handle as the active one (clears any deferred wait). */
-  private adoptLoadedSettingsHandle(docId: string, handle: any): void {
-    this.driveSettingsDeferredHandle = null;
-    this.driveSettingsDocId = docId;
-    this.driveSettingsHandle = handle;
-    this.subscribeDriveSettings(handle);
-    // Rename before the first read/write of the roster (see migrateContactsToFriends).
-    this.migrateContactsToFriends();
-    this.refreshFromSettingsDoc();
-  }
-
-  /**
-   * Wait for a known-but-not-yet-synced settings doc to arrive by subscribing to its
-   * handle ONCE, instead of re-loading it on every keyhive ingest. The repeated load
-   * (registerSharingGroup → kh.getDocument, plus repo.find/whenReady, all serialized on
-   * the keyhive queue) otherwise contends with — and can indefinitely starve — the
-   * post-device-link sync of the user's real documents on a large account.
-   */
-  private deferDriveSettingsHandle(docId: string, handle: any): void {
-    if (this.driveSettingsDeferredHandle === handle) return;
-    this.driveSettingsDeferredHandle = handle;
-    console.warn('[engine] DriveSettings pointer set but doc not synced yet; waiting for it (no re-poll)');
-    const onArrive = () => {
-      if (this.driveSettingsDeferredHandle !== handle) { handle.off?.('change', onArrive); handle.off?.('doc', onArrive); return; }
-      let d: any = null;
-      try { d = handle.doc?.(); } catch { /* not ready */ }
-      if (d && d['@type'] === DRIVE_SETTINGS_TYPE) {
-        handle.off?.('change', onArrive);
-        handle.off?.('doc', onArrive);
-        this.adoptLoadedSettingsHandle(docId, handle);
-        void this.mergeLegacyIntoSettings();
-      }
-    };
-    handle.on?.('change', onArrive);
-    handle.on?.('doc', onArrive);
-  }
-
-  /**
-   * Push throttled writes out to storage and await them, returning how many docs
-   * were saved.
-   *
-   * automerge-repo persists on a debounce (`saveDebounceRate`, 100ms by default),
-   * and the repo runs in a DEDICATED worker that a reload or tab close terminates
-   * outright — pending timers and in-flight IDB transactions die with it. So the
-   * `result` a caller awaits from `update-doc` proves the change was applied, NOT
-   * that it is durable. Anything that knows the process is about to go away
-   * (visibilitychange → hidden) should call this first.
-   *
-   * Not a complete fix for a hard close: a page being torn down cannot await a
-   * postMessage round trip. Shrinking the window further means tuning
-   * `saveDebounceRate` where the Repo is built (see keyhive-repo.ts).
-   */
-  private async flushStorage(docId?: string): Promise<number> {
-    const storage = this.repo?.storageSubsystem;
-    if (!storage) return 0;
-    const handles = docId
-      ? [this.docRegistry.get(docId)?.handle].filter(Boolean)
-      : [...this.docRegistry.values()].map(e => e.handle);
-    let saved = 0;
-    for (const handle of handles) {
-      const doc = handle?.doc?.();
-      if (!doc) continue;
-      try {
-        await storage.saveDoc(handle.documentId, doc);
-        saved++;
-      } catch (err) {
-        console.warn(`[engine] flush-storage failed for ${handle.documentId}:`, errMsg(err));
-      }
-    }
-    return saved;
-  }
-
-  private async createDriveSettingsDoc(): Promise<any | null> {
-    if (!this.repo || !this.khOps || !this.setNextDocId) return null;
-    const handle = await this.createKeyhiveDocHandle(createDriveSettingsDocJson());
-    const doc = handle.doc();
-    if (this.repo.storageSubsystem && doc) {
-      void this.repo.storageSubsystem.saveDoc(handle.documentId, doc);
-    }
-    await this.host.kv.set(KEYS.driveSettings, handle.documentId);
-    this.pinnedDocs.add(handle.documentId);
-    this.driveSettingsDocId = handle.documentId;
-    this.driveSettingsHandle = handle;
-    this.subscribeDriveSettings(handle);
-    console.log(`[engine] created DriveSettings doc ${handle.documentId}`);
-    return handle;
-  }
-
-  /**
-   * Adopt a settings docId received over the trusted device-link rendezvous.
-   * Persists the pointer synchronously but loads the doc in the BACKGROUND — the
-   * doc may not have synced from the host yet, and blocking here would stall the
-   * device-link handshake. A later ensure (fired on keyhive ingest) loads it.
-   */
-  private async adoptDriveSettingsDoc(docId: string): Promise<void> {
-    // Writing the docId string is what makes this device SHARED — and it is one-way
-    // (nothing ever writes the local blob back over a string). Flip the in-memory mode
-    // synchronously so the subsequent ensure resolves down the shared path.
-    this.settingsMode = 'shared';
-    await this.host.kv.set(KEYS.driveSettings, docId);
-    if (this.driveSettingsDocId !== docId) {
-      this.driveSettingsHandle = null;
-      this.driveSettingsDocId = null;
-      this.driveSettingsDeferredHandle = null; // drop any stale wait; the new ensure re-subscribes
-    }
-    void this.ensureDriveSettingsDoc();
-  }
-
-  private subscribeDriveSettings(handle: any): void {
-    const onChange = () => this.refreshFromSettingsDoc();
-    handle.on('change', onChange);
-    if (typeof handle.on === 'function') handle.on('doc', onChange);
-  }
-
-  /** Rebroadcast names (called on load + on any local or remote edit). */
-  private refreshFromSettingsDoc(): void {
-    this.broadcastNames('friends');
-    this.broadcastNames('deviceNames');
-    // The friends roster feeds the relay watch list, and this fires for every
-    // settings-doc change — local writes AND edits synced from other devices.
-    this.scheduleRelayWatchRefresh();
-  }
-
-  /**
-   * Explicit reuse discovery for the "sync settings across devices" opt-in:
-   * automerge docIds of every REACHABLE DriveSettings doc, sorted ascending
-   * (canonical = [0]). Deliberately skips the member/permission check the old
-   * guarded discovery used — a doc synced from another of the user's devices
-   * whose keyhive group/CGKA ops haven't fully arrived yet fails that check, and
-   * that is exactly the doc we must adopt instead of minting a duplicate. Only
-   * invoked from the enable-settings-sync handler (one-time, user-initiated).
-   */
-  private async findReachableDriveSettingsDocs(): Promise<string[]> {
-    if (!this.khOps || !this.amDocIdFromBytes) return [];
-    const found: string[] = [];
-    try {
-      const { reachableKhIds } = await this.khOps.enumerateUserDocs();
-      for (const khId of reachableKhIds) {
-        const amId = this.amDocIdFromBytes(base64ToBytes(khId));
-        let handle: any;
-        try {
-          handle = await this.getOrLoadHandle(amId);
-          if (handle.isReady && !handle.isReady()) await handle.whenReady?.(['ready', 'unavailable']).catch(() => {});
-        } catch { continue; }
-        const doc = handle?.doc?.();
-        if (doc && doc['@type'] === DRIVE_SETTINGS_TYPE) found.push(amId);
-      }
-    } catch (err) {
-      console.warn('[engine] findReachableDriveSettingsDocs failed:', errMsg(err));
-    }
-    return found.sort();
-  }
-
-  /** Merge redundant (offline-race) settings docs into the canonical one, fill-missing. */
-  private async mergeRedundantSettingsDocs(loserDocIds: string[]): Promise<void> {
-    for (const id of loserDocIds) {
-      try {
-        const handle = await this.getOrLoadHandle(id);
-        const doc = handle?.doc?.();
-        if (doc) this.fillMissingSettings(doc);
-        console.warn(`[engine] DriveSettings: merged redundant doc ${id} into canonical (now orphaned)`);
-      } catch (err) {
-        console.warn(`[engine] DriveSettings: failed to merge redundant doc ${id}:`, errMsg(err));
-      }
-    }
-  }
-
-  /** Copy keys from `src`'s maps into the canonical doc without clobbering existing ones. */
-  private fillMissingSettings(src: any): void {
-    this.changeDriveSettings(d => {
-      for (const field of ['friends', 'deviceNames', 'archivedDocIds'] as const) {
-        const s = src?.[field];
-        if (!s || typeof s !== 'object') continue;
-        if (!d[field]) d[field] = {};
-        for (const [k, v] of Object.entries(s)) {
-          if (!(k in d[field])) d[field][k] = (v !== null && typeof v === 'object') ? this.plainClone(v) : v;
-        }
-      }
-    });
-  }
-
-  /** One-time merge of any legacy device-local IDB copies into the doc, then delete them. */
-  private async mergeLegacyIntoSettings(): Promise<void> {
-    if (this.legacyMerged || !this.driveSettingsHandle) return;
-    this.legacyMerged = true;
-    try {
-      const [friendNames, knownGroups, deviceNames, archivedDocIds] = await Promise.all([
-        this.host.kv.get<Record<string, string>>(LEGACY_IDB_KEYS.friendNames),
-        this.host.kv.get<string[]>(LEGACY_IDB_KEYS.knownFriendGroups),
-        this.host.kv.get<Record<string, string>>(LEGACY_IDB_KEYS.deviceNames),
-        this.host.kv.get<ArchivedDocTombstones>(LEGACY_IDB_KEYS.archivedDocIds),
-      ]);
-      if (friendNames || knownGroups || deviceNames || archivedDocIds) {
-        this.changeDriveSettings(d => {
-          if (!d.friends) d.friends = {};
-          if (!d.deviceNames) d.deviceNames = {};
-          if (!d.archivedDocIds) d.archivedDocIds = {};
-          for (const g of knownGroups ?? []) if (!(g in d.friends)) d.friends[g] = null;
-          for (const [k, v] of Object.entries(friendNames ?? {})) if (d.friends[k] == null) d.friends[k] = v;
-          for (const [k, v] of Object.entries(deviceNames ?? {})) if (!(k in d.deviceNames)) d.deviceNames[k] = v;
-          for (const [k, v] of Object.entries(archivedDocIds ?? {})) if (!(k in d.archivedDocIds)) d.archivedDocIds[k] = { grantSigs: [...((v as any)?.grantSigs ?? [])] };
-        });
-        console.log('[engine] migrated legacy IDB settings into the DriveSettings doc');
-      }
-      await Promise.all([
-        this.host.kv.del(LEGACY_IDB_KEYS.friendNames),
-        this.host.kv.del(LEGACY_IDB_KEYS.knownFriendGroups),
-        this.host.kv.del(LEGACY_IDB_KEYS.deviceNames),
-        this.host.kv.del(LEGACY_IDB_KEYS.archivedDocIds),
-      ]);
-      this.refreshFromSettingsDoc();
-    } catch (err) {
-      console.warn('[engine] mergeLegacyIntoSettings failed:', errMsg(err));
-    }
-  }
-
-  /** Archived-doc tombstones, read from / written to the DriveSettings doc. */
-  private getArchivedTombstones(): ArchivedDocTombstones {
-    const t = this.driveSettingsDoc()?.archivedDocIds;
-    return t ? this.plainClone(t) : {};
-  }
-  private setArchivedTombstone(docId: string, entry: { grantSigs: string[] }): void {
-    this.changeDriveSettings(d => { if (!d.archivedDocIds) d.archivedDocIds = {}; d.archivedDocIds[docId] = entry; });
-  }
-  private deleteArchivedTombstones(docIds: string[]): void {
-    if (!this.driveSettingsHandle || !docIds.length) return;
-    this.changeDriveSettings(d => { for (const id of docIds) if (d.archivedDocIds) delete d.archivedDocIds[id]; });
-  }
-
-  // ── Settings string-map stores (friend roster + device names, both in the DriveSettings doc) ──
-  // Friend value is the display name, or null when a friend is known but unnamed;
-  // deleting the key drops a friend from the roster entirely (no separate groups list).
-  private namesMap(field: 'friends' | 'deviceNames'): Record<string, string> {
-    const src = this.driveSettingsDoc()?.[field];
-    const out: Record<string, string> = {};
-    if (src) for (const [k, v] of Object.entries(src)) if (typeof v === 'string') out[k] = v;
-    return out;
-  }
-  /** Persist a friend's user-group (unnamed → null); returns true if already known. */
-  private async addKnownFriendGroup(groupId: string): Promise<boolean> {
-    const handle = await this.ensureDriveSettingsDoc({ create: true });
-    if (!handle) return false;
-    if (this.driveSettingsDoc()?.friends && groupId in this.driveSettingsDoc()!.friends) return true;
-    this.changeDriveSettings(d => { if (!d.friends) d.friends = {}; if (!(groupId in d.friends)) d.friends[groupId] = null; });
-    return false;
-  }
-  private broadcastNames(field: 'friends' | 'deviceNames'): void {
-    const names = this.namesMap(field);
-    this.emit(field === 'friends' ? { type: 'friend-names-updated', names } : { type: 'device-names-updated', names });
-  }
-  private async getNames(field: 'friends' | 'deviceNames'): Promise<Record<string, string>> { return this.namesMap(field); }
-  private async putSettingsName(field: 'friends' | 'deviceNames', agentId: string, name: string | undefined): Promise<void> {
-    const trimmed = name?.trim();
-    if (!trimmed) return;
-    const handle = await this.ensureDriveSettingsDoc({ create: true });
-    if (!handle) throw new Error('Cannot save name — settings document unavailable');
-    if (this.driveSettingsDoc()?.[field]?.[agentId] === trimmed) return;
-    this.changeDriveSettings(d => { if (!d[field]) d[field] = {}; d[field][agentId] = trimmed; });
-    this.broadcastNames(field);
-  }
-  private async deleteSettingsName(field: 'friends' | 'deviceNames', agentId: string): Promise<void> {
-    if (!this.driveSettingsHandle) return;
-    if (!(this.driveSettingsDoc()?.[field] && agentId in this.driveSettingsDoc()![field])) return;
-    this.changeDriveSettings(d => { if (d[field]) delete d[field][agentId]; });
-    this.broadcastNames(field);
-  }
-  private async getFriendNames(): Promise<Record<string, string>> { return this.getNames('friends'); }
-  private async putFriendName(agentId: string, name: string | undefined): Promise<void> { await this.putSettingsName('friends', agentId, name); }
-  private async deleteFriendName(agentId: string): Promise<void> { await this.deleteSettingsName('friends', agentId); }
-  private async putDeviceName(agentId: string, name: string | undefined): Promise<void> { await this.putSettingsName('deviceNames', agentId, name); }
-
   // ── keyhive doc-id helpers ─────────────────────────────────────────────────
   /** Derive the keyhive doc-ID (base64) from an automerge doc-ID. */
-  private resolveKhDocId(automergeDocId: string): string {
+  protected resolveKhDocId(automergeDocId: string): string {
     const khDocIdObj = this.bridge.docIdFromAutomergeUrl(`automerge:${automergeDocId}` as any);
     return bytesToBase64(khDocIdObj.toBytes());
   }
 
   /** Resolve the keyhive Document for an automerge doc-ID, or null if not available yet. */
-  private async getKhDoc(automergeDocId: string): Promise<any | null> {
+  protected async getKhDoc(automergeDocId: string): Promise<any | null> {
     if (!this.khOps || !this.bridge) return null;
     try {
       const khDocId = this.bridge.docIdFromAutomergeUrl(`automerge:${automergeDocId}` as any);
@@ -812,217 +217,25 @@ export class DriveEngine {
     }
   }
 
-  // ── Presence crypto ────────────────────────────────────────────────────────
-  private async encryptPresenceValue(doc: any, value: unknown): Promise<PresenceCiphertext> {
-    const bytes = new TextEncoder().encode(JSON.stringify(value ?? null));
-    const ref = new this.bridge.ChangeId(crypto.getRandomValues(new Uint8Array(32)));
-    const result = await this.khOps!.kh.tryEncrypt(doc, ref, [], bytes);
-    // `update_op()` is defined only when this encrypt rotated the CGKA epoch —
-    // i.e. only then did it mint key material the peer does not have yet. See
-    // flushPresenceOut for why the caller has to know.
-    return { enc: result.encrypted_content().toBytes(), rotated: !!result.update_op() };
-  }
-  private async decryptPresenceValue(doc: any, enc: Uint8Array): Promise<unknown> {
-    const decrypted = await this.khOps!.kh.tryDecrypt(doc, this.bridge.Encrypted.fromBytes(enc));
-    return JSON.parse(new TextDecoder().decode(decrypted));
-  }
-  private async encryptPresenceValueOrNull(doc: any, value: unknown): Promise<PresenceCiphertext | null> {
-    try { return await this.encryptPresenceValue(doc, value); }
-    catch (err) {
-      // Swallowing this silently hid a wedged CGKA ("SecretKey not found" after
-      // a reload lost an in-memory leaf secret) for a long time — keep it loud.
-      console.warn('[engine] presence encrypt failed:', errMsg(err));
-      return null;
-    }
-  }
-  private async flushPresenceOut(entry: DocEntry): Promise<boolean> {
-    if (!entry.presence || !entry.presenceDoc || !entry.presenceDesired) return true;
-    let allOk = true;
-    let rotated = false;
-    for (const [k, v] of Object.entries(entry.presenceDesired)) {
-      const out = await this.encryptPresenceValueOrNull(entry.presenceDoc, v);
-      if (out) {
-        entry.presence.broadcast(k, out.enc);
-        if (out.rotated) rotated = true;
-      } else allOk = false;
-    }
-    // A rotation minted key material the peer needs in order to read what we just
-    // sent — and the cyphertext is ALREADY on the wire, because presence.broadcast
-    // goes out immediately while keyhive holds the new op behind a 1s debounce
-    // before syncing it (the `syncTimeout` in the library's keyhive.ts). So the
-    // peer reliably receives bytes it cannot decrypt for about a second and logs
-    // "Key not found". That alone would heal, but every retry round re-encrypts,
-    // so the replacement cyphertext arrives just as early as the last one and the
-    // peer can flap indefinitely — one epoch behind, forever. Pushing the material
-    // here makes it race the cyphertext instead of trailing it.
-    if (rotated) this.khIntegration?.networkAdapter?.syncKeyhive?.();
-    return allOk;
-  }
-  private schedulePresenceRetry(entry: DocEntry): void {
-    if (entry.presenceRetry) return;
-    entry.presenceRetry = setInterval(async () => {
-      if (!entry.presence) { clearInterval(entry.presenceRetry); entry.presenceRetry = null; return; }
-      const outOk = await this.flushPresenceOut(entry);
-      const inOk = entry.presenceSend ? await entry.presenceSend() : true;
-      if (outOk && inOk) {
-        clearInterval(entry.presenceRetry);
-        entry.presenceRetry = null;
-        return;
-      }
-      // Still failing to decrypt a peer (typical after a reload: the rehydrated
-      // keyhive lacks the epoch secrets for the peer's cyphertext). Two levers,
-      // both needed: force a keyhive sync round so the missing key material can
-      // arrive, and re-announce ourselves — peers respond to a snapshot by
-      // re-flushing freshly-encrypted channels (see the 'snapshot' handler) —
-      // so each retry round has new material to try until decryption succeeds.
-      // broadcastLocalState is TS-private but a plain method at runtime.
-      this.khIntegration?.networkAdapter?.syncKeyhive?.();
-      (entry.presence as any)?.broadcastLocalState?.();
-    }, 5000);
-  }
-
-  /** Drop any pending presence-setup retry (and its buffered early state). */
-  private cancelPendingPresence(docId: string): void {
-    const t = this.presencePending.get(docId);
-    if (t) clearTimeout(t);
-    this.presencePending.delete(docId);
-    this.presenceDesiredEarly.delete(docId);
-  }
-
-  /** Stop and forget a doc's running presence (timers, listeners, goodbye). */
-  private teardownPresence(docId: string): void {
-    const entry = this.docRegistry.get(docId);
-    if (!entry?.presence) return;
-    if (entry.presenceRetry) { clearInterval(entry.presenceRetry); entry.presenceRetry = null; }
-    if (entry.presenceLiveness) { clearInterval(entry.presenceLiveness); entry.presenceLiveness = null; }
-    entry.presence.stop();
-    entry.presence = null;
-    entry.presenceDoc = undefined;
-    entry.presenceDesired = undefined;
-    entry.presenceSend = undefined;
-  }
-
-  /**
-   * Create + start the Presence for a doc. Returns false when keyhive isn't
-   * ready for it yet (caller retries); throws when the doc handle can't be
-   * loaded yet; returns true once presence is running.
-   */
-  private async trySetupPresence(docId: string): Promise<boolean> {
-    const handle = await this.getOrLoadHandle(docId);
-    const entry = this.getOrCreateEntry(docId, handle);
-    if (entry.presence) {
-      void entry.presenceSend?.(); // give the new subscriber a current snapshot
-      return true;
-    }
-    const doc = await this.getKhDoc(docId);
-    if (!doc) return false;
-
-    const presence = new this.PresenceClass({ handle });
-    // Library pruning is disabled (peerTtlMs = MAX_SAFE_INTEGER): its heartbeat
-    // handler (markSeen) bumps lastUpdateAt while prune() filters on
-    // lastActiveAt, so it drops idle-but-heartbeating peers. Liveness is
-    // tracked here instead, via lastSeen below.
-    presence.start({
-      initialState: {},
-      heartbeatMs: PRESENCE_HEARTBEAT_MS,
-      peerTtlMs: Number.MAX_SAFE_INTEGER,
-    });
-    entry.presence = presence;
-    entry.presenceDoc = doc;
-    const userGroupId = await this.khOps?.getUserGroupId();
-    entry.presenceDesired = {
-      viewing: true,
-      focusedField: null,
-      ...(userGroupId ? { userGroupId } : {}),
-      // State the main thread set while setup was still retrying.
-      ...(this.presenceDesiredEarly.get(docId) ?? {}),
-    };
-    this.presenceDesiredEarly.delete(docId);
-
-    const lastSeen = new Map<string, number>();
-    let lastEmittedFresh = new Set<string>();
-    const sendPresence = async (): Promise<boolean> => {
-      const raw = presence.getPeerStates().value;
-      const fresh = freshPresencePeerIds(lastSeen, Date.now());
-      const peers: Record<string, any> = {};
-      let allOk = true;
-      for (const [peerId, st] of Object.entries<any>(raw)) {
-        if (!fresh.has(peerId)) continue; // stale — hide and skip decrypt work
-        const value: Record<string, unknown> = {};
-        for (const [ch, enc] of Object.entries<any>(st?.value ?? {})) {
-          try { value[ch] = await this.decryptPresenceValue(doc, enc as Uint8Array); }
-          catch (err) {
-            allOk = false;
-            console.warn(`[engine] presence decrypt failed (peer ${peerId}, channel ${ch}):`, errMsg(err));
-          }
-        }
-        // A fresh peer with no readable state — nothing received yet, or
-        // nothing we could decrypt — needs the retry loop's re-announce.
-        if (Object.keys(value).length === 0) allOk = false;
-        // A heartbeat-first entry has no peerId of its own; the map key fills it in.
-        peers[peerId] = { peerId, ...st, value };
-      }
-      lastEmittedFresh = fresh;
-      this.emit({ type: 'update-presence', docId, peers });
-      if (!allOk) this.schedulePresenceRetry(entry);
-      return allOk;
-    };
-    entry.presenceSend = sendPresence;
-    presence.on('update', (e: any) => { lastSeen.set(e.peerId, Date.now()); void sendPresence(); });
-    presence.on('snapshot', (e: any) => {
-      lastSeen.set(e.peerId, Date.now());
-      // A snapshot is an announce: the sender either just started (its
-      // Presence.start broadcast, possibly after a tab reload) or is stuck
-      // unable to decrypt us and is asking for fresh material (see
-      // schedulePresenceRetry). Respond by re-encrypting and re-sending our
-      // channels: a freshly-started peer needs them because the library only
-      // re-announces to peerIds it has forgotten (and with pruning disabled it
-      // never forgets), and a stuck peer needs fresh cyphertext because each
-      // encrypt creates new keyhive ops whose sync delivers the key material
-      // it is missing. Flushes go out as updates, never snapshots, so two
-      // peers can't ping-pong announces.
-      void this.flushPresenceOut(entry);
-      void sendPresence();
-    });
-    presence.on('goodbye', (e: any) => { lastSeen.delete(e.peerId); void sendPresence(); });
-    presence.on('heartbeat', (e: any) => {
-      const wasFresh = lastEmittedFresh.has(e.peerId);
-      lastSeen.set(e.peerId, Date.now());
-      // Steady-state heartbeats only bump lastSeen; re-emit just for a peer
-      // that was hidden (new, or returning after going stale).
-      if (!wasFresh) void sendPresence();
-    });
-    const setsEqual = (a: Set<string>, b: Set<string>) =>
-      a.size === b.size && [...a].every(x => b.has(x));
-    entry.presenceLiveness = setInterval(() => {
-      if (!setsEqual(freshPresencePeerIds(lastSeen, Date.now()), lastEmittedFresh)) {
-        void sendPresence();
-      }
-    }, PRESENCE_LIVENESS_CHECK_MS);
-    if (typeof entry.presenceLiveness?.unref === 'function') entry.presenceLiveness.unref();
-    if (!(await this.flushPresenceOut(entry))) this.schedulePresenceRetry(entry);
-    return true;
-  }
-
   // ── Doc registry ───────────────────────────────────────────────────────────
-  private async getOrLoadHandle(docId: string): Promise<any> {
+  protected async getOrLoadHandle(docId: string): Promise<any> {
     const existing = this.docRegistry.get(docId);
     if (existing) return existing.handle;
     const r = this.getRepo();
     return await r.find(docId as any);
   }
 
-  private getOrCreateEntry(docId: string, handle: any): DocEntry {
+  protected getOrCreateEntry(docId: string, handle: any): DocEntry {
     let entry = this.docRegistry.get(docId);
     if (!entry) {
-      entry = { handle, pinnedVersion: null, subscriptions: new Map(), presence: null, validationSubscribed: false };
+      entry = { handle, pinnedVersion: null, subscriptions: new Map(), validationSubscribed: false };
       this.docRegistry.set(docId, entry);
       const onChange = () => {
         void this.pushToSubscriptions(docId);
         // Independent of pushToSubscriptions: that early-returns with no subs
         // and dedups on jq results, but seen-state must track every head change.
         this.refreshSeenState(docId);
-        if (this.watchedDocs.has(docId)) this.emitWatchUpdate(docId);
+        if (this.watchSurface.watchedDocs.has(docId)) this.watchSurface.emitWatchUpdate(docId);
       };
       handle.on('change', onChange);
       // Some automerge-repo versions also emit 'doc' for remote changes
@@ -1048,6 +261,35 @@ export class DriveEngine {
       }
     }
     return entry;
+  }
+
+  /**
+   * Best-effort save of loaded docs to the durable store, so an imminent page
+   * unload never loses the last in-memory edits (the Repo's debounce may not
+   * have flushed them yet). Returns the number of docs saved. `docId` limits
+   * the flush to one doc (the worker flushes the open doc on hidden); absent,
+   * every registered handle is flushed. Not a complete fix for a hard close:
+   * a page being torn down cannot await a postMessage round trip. Shrinking the
+   * window further means tuning `saveDebounceRate` where the Repo is built.
+   */
+  protected async flushStorage(docId?: string): Promise<number> {
+    const storage = this.repo?.storageSubsystem;
+    if (!storage) return 0;
+    const handles = docId
+      ? [this.docRegistry.get(docId)?.handle].filter(Boolean)
+      : [...this.docRegistry.values()].map(e => e.handle);
+    let saved = 0;
+    for (const handle of handles) {
+      const doc = handle?.doc?.();
+      if (!doc) continue;
+      try {
+        await storage.saveDoc(handle.documentId, doc);
+        saved++;
+      } catch (err) {
+        console.warn(`[engine] flush-storage failed for ${handle.documentId}:`, errMsg(err));
+      }
+    }
+    return saved;
   }
 
   // ── "New changes since last viewed" ────────────────────────────────────────
@@ -1328,7 +570,7 @@ export class DriveEngine {
     }
   }
 
-  private async reconcileHomeDocsAfterLink(): Promise<void> {
+  protected async reconcileHomeDocsAfterLink(): Promise<void> {
     for (let i = 0; i < 6; i++) {
       try { this.khIntegration?.networkAdapter?.syncKeyhive?.(); } catch { /* best effort */ }
       await this.reconcileHomeDocs();
@@ -1341,7 +583,7 @@ export class DriveEngine {
     try {
       const { accessibleKhIds, reachableKhIds } = await this.khOps.enumerateUserDocs();
       const list = (await this.host.kv.get<StoredDocEntry[]>(KEYS.docIds)) ?? [];
-      const tombstones = this.getArchivedTombstones(); // now synced in the DriveSettings doc
+      const tombstones = this.settingsSurface.getArchivedTombstones(); // now synced in the DriveSettings doc
       const removedTombstones: string[] = [];
       const knownIds = new Set(list.map(e => e.id));
       const accessibleAmIds = new Set(accessibleKhIds.map(k => this.amDocIdFromBytes!(base64ToBytes(k))));
@@ -1352,7 +594,7 @@ export class DriveEngine {
       for (const amDocId of accessibleAmIds) {
         if (knownIds.has(amDocId)) continue;
         // The DriveSettings doc is accessible but is NOT a home-list document.
-        if (amDocId === this.driveSettingsDocId) continue;
+        if (amDocId === this.settingsSurface.driveSettingsDocId) continue;
         const tomb = tombstones[amDocId];
         if (tomb) {
           // Archived here while the user-group kept access (self-revoke wasn't
@@ -1380,7 +622,7 @@ export class DriveEngine {
         // Safety net: if the DriveSettings doc ever slipped into the list (a
         // reconcile that raced ensureDriveSettingsDoc), drop it — it is not a
         // home-list document.
-        if (e.id === this.driveSettingsDocId) {
+        if (e.id === this.settingsSurface.driveSettingsDocId) {
           list.splice(i, 1);
           knownIds.delete(e.id);
           changed = true;
@@ -1415,7 +657,7 @@ export class DriveEngine {
           removedTombstones.push(amDocId);
         }
       }
-      this.deleteArchivedTombstones(removedTombstones);
+      this.settingsSurface.deleteArchivedTombstones(removedTombstones);
 
       if (changed) {
         await this.host.kv.set(KEYS.docIds, list);
@@ -1440,171 +682,6 @@ export class DriveEngine {
     this.emit({ type: peerCount > 0 ? 'peer-connected' : 'peer-disconnected', peerCount, peers });
   }
 
-  // ── Rendezvous ─────────────────────────────────────────────────────────────
-  // ── Relay discovery declaration (RELAY_WATCH) ───────────────────────────────
-
-  /**
-   * Recompute and (re)send the relay discovery declaration: this device's own
-   * user-group id plus every group it knows (friends roster + doc co-member
-   * groups). The relay introduces only mutually-declared peers — see
-   * WebSocketRelay's doc comment for the rules, the limits of self-asserted
-   * group ids, and the planned HMAC-token upgrade — so keeping this fresh is
-   * what makes friends discoverable at all. Debounced + diffed, so it is cheap
-   * to schedule from every roster-affecting site.
-   */
-  private scheduleRelayWatchRefresh(): void {
-    if (this.relayWatchTimer !== null) return;
-    this.relayWatchTimer = setTimeout(() => {
-      this.relayWatchTimer = null;
-      void this.refreshRelayWatch();
-    }, 500);
-    // Node only (browser timers are numbers): a pending debounce must not hold
-    // a short-lived CLI command open.
-    (this.relayWatchTimer as any).unref?.();
-  }
-
-  private async refreshRelayWatch(): Promise<void> {
-    if (!this.khOps) return;
-    try {
-      const group = await this.khOps.getUserGroupId();
-      if (!group) return; // no user group yet — nothing to declare, nobody to pair with
-      const friendGroupIds = Object.keys(this.driveSettingsDoc()?.friends ?? {});
-      const known = await this.khOps.getKnownFriends(undefined, friendGroupIds);
-      const frame = buildRelayWatchFrame(
-        group,
-        known.filter((m) => m.type === 'group' && !m.isMe).map((m) => m.agentId),
-      );
-      const serialized = JSON.stringify(frame);
-      if (serialized === this.lastRelayWatch) return;
-      this.lastRelayWatch = serialized;
-      this.host.network.sendOverlayFrame(frame);
-    } catch (err) {
-      console.warn('[engine] relay watch refresh failed:', errMsg(err));
-    }
-  }
-
-  private rdvSend(frame: { type: string; rendezvousId: string; data?: Uint8Array }): void {
-    this.host.network.sendOverlayFrame(frame);
-  }
-  private rdvEvent(rendezvousId: string, status: RendezvousStatus, message?: string, extra?: { friendGroupId?: string; friendHasName?: boolean }): void {
-    this.emit({ type: 'kh-rdv-event', rendezvousId, status, ...(message !== undefined ? { message } : {}), ...(extra ?? {}) });
-  }
-  /**
-   * Refuse a payload the peer would be forced to throw away.
-   * {@link handleRendezvousFrame} drops anything over {@link RDV_MAX_DATA_BYTES}
-   * before decrypting, so sending one anyway leaves the receiver waiting out
-   * RDV_RECEIVE_TIMEOUT_MS and then blaming the other device's QR — a diagnosis
-   * no amount of retrying can fix. Fail on this side, where we know the reason.
-   */
-  private assertRdvPayloadFits(byteLength: number): void {
-    if (byteLength <= RDV_MAX_DATA_BYTES) return;
-    throw new Error(
-      `This device's contact card is too large to exchange (${formatBytes(byteLength)}, limit ${formatBytes(RDV_MAX_DATA_BYTES)}).`,
-    );
-  }
-  private async rdvSendPayload(rendezvousId: string, key: string, plaintext: string): Promise<void> {
-    const framed = await encryptString(key, plaintext);
-    this.assertRdvPayloadFits(framed.length);
-    this.rdvEvent(rendezvousId, 'sending', formatBytes(framed.length));
-    this.rdvSend({ type: RDV_MSG, rendezvousId, data: framed });
-  }
-  /**
-   * Parse a rendezvous payload: an envelope `{card, displayName?, userGroupId?,
-   * deviceName?, driveSettingsDocId?}` — or a bare card string (the friend-share
-   * reply is always an envelope, but older/mirror flows tolerate the raw card).
-   */
-  private parseRdvPayload(pt: string): { card: string; displayName?: string; userGroupId?: string; deviceName?: string; driveSettingsDocId?: string } {
-    try {
-      const parsed = JSON.parse(pt);
-      if (parsed && typeof parsed === 'object' && typeof parsed.card === 'string') return parsed as any;
-    } catch { /* bare card string */ }
-    return { card: pt };
-  }
-  /** Handle an inbound rendezvous frame (host routes rdv frames here). */
-  handleRendezvousFrame(msg: any): void {
-    const rid: string | undefined = msg.rendezvousId;
-    if (!rid) return;
-    const session = this.rdvSessions.get(rid);
-    if (!session) return;
-    if (msg.type === RDV_PEER) {
-      session.onPeer?.();
-    } else if (msg.type === RDV_MSG && session.onData) {
-      const data: Uint8Array = msg.data instanceof Uint8Array ? msg.data : new Uint8Array(msg.data);
-      if (data.byteLength > RDV_MAX_DATA_BYTES) {
-        console.warn(`[engine] dropping oversized rendezvous payload (${data.byteLength} bytes, max ${RDV_MAX_DATA_BYTES})`);
-        // Say what happened rather than leaving the user to wait out
-        // RDV_RECEIVE_TIMEOUT_MS and be told to check the other device's QR. The
-        // session deliberately stays open: anyone who learns a topic id can push
-        // bytes at it, so tearing down here would hand them a way to cancel a
-        // legitimate exchange. The frame is still dropped before any decrypt work.
-        this.rdvEvent(rid, 'error', `The other device sent ${formatBytes(data.byteLength)}, over the ${formatBytes(RDV_MAX_DATA_BYTES)} limit.`);
-        return;
-      }
-      decryptString(session.key, data)
-        .then(pt => session.onData!(pt))
-        .catch(err => console.error('[engine] failed to decrypt inbound rendezvous payload:', errMsg(err)));
-    }
-  }
-
-  /** Device-link joiner (the new device). Adopts the original device's user-group. */
-  async rendezvousLinkJoin(rendezvousId: string, key: string, deviceName?: string): Promise<{ ok: true }> {
-    if (!this.khOps) throw new Error('Keyhive not available');
-    await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.rdvSessions.delete(rendezvousId);
-        reject(new Error('Timed out waiting for your other device. Make sure its QR/link is open, then try again.'));
-      }, RDV_RECEIVE_TIMEOUT_MS);
-      this.rdvSessions.set(rendezvousId, {
-        key,
-        onPeer: () => this.rdvEvent(rendezvousId, 'peer-joined'),
-        onData: (pt) => {
-          (async () => {
-            try {
-              this.rdvEvent(rendezvousId, 'receiving');
-              const { card: peerCard, userGroupId: peerGroupId, deviceName: peerDeviceName, driveSettingsDocId: peerSettingsDocId } =
-                this.parseRdvPayload(pt);
-              const result = await this.khOps!.receiveContactCard(peerCard);
-              if (result.isOwnCard) throw new Error("This is your own device's link. Open it on a different device.");
-              await this.khOps!.linkDevice(result.agentId, peerGroupId ?? null);
-              const myUserGroupId = await this.khOps!.ensureUserGroup({ create: true });
-              if (peerSettingsDocId) {
-                // The host opted to sync: adopt its DriveSettings doc pointer (trusted
-                // channel) — this makes us SHARED (one-way). The doc itself loads once
-                // its ops sync in; the host records both device names into it, so we do
-                // NOT write to it here (no writing to an unsynced doc, no duplicate).
-                await this.adoptDriveSettingsDoc(peerSettingsDocId);
-              } else if (peerDeviceName) {
-                // The host stayed Local (no shared doc). Record its device name in our
-                // own (local) settings so device names still exchange across the link.
-                await this.putDeviceName(result.agentId, peerDeviceName);
-              }
-              const myCard = await this.khOps!.getContactCard();
-              await this.rdvSendPayload(rendezvousId, key, JSON.stringify({
-                card: myCard, userGroupId: myUserGroupId, deviceName,
-                driveSettingsDocId: this.driveSettingsDocId ?? peerSettingsDocId ?? undefined,
-              }));
-              clearTimeout(timer);
-              this.rdvSessions.delete(rendezvousId);
-              this.rdvSend({ type: RDV_UNSUB, rendezvousId });
-              this.rdvEvent(rendezvousId, 'linked');
-              resolve();
-            } catch (err) {
-              clearTimeout(timer);
-              this.rdvSessions.delete(rendezvousId);
-              this.rdvSend({ type: RDV_UNSUB, rendezvousId });
-              this.rdvEvent(rendezvousId, 'error', errMsg(err));
-              reject(err);
-            }
-          })();
-        },
-      });
-      this.rdvSend({ type: RDV_SUB, rendezvousId });
-      this.rdvEvent(rendezvousId, 'waiting');
-    });
-    void this.reconcileHomeDocsAfterLink();
-    return { ok: true };
-  }
-
   // ── Init ─────────────────────────────────────────────────────────────────
   async init(): Promise<void> {
     // Hydrate the debug-enable flag from its persisted setting. When on it also
@@ -1620,10 +697,10 @@ export class DriveEngine {
     // Must happen before the ensureDriveSettingsDoc() below so it dispatches correctly.
     try {
       const v = await this.host.kv.get<unknown>(KEYS.driveSettings);
-      this.settingsMode = typeof v === 'string' ? 'shared' : 'local';
+      this.settingsSurface.settingsMode = typeof v === 'string' ? 'shared' : 'local';
     } catch (err) {
       console.warn('[engine] failed to read settings-storage mode:', errMsg(err));
-      this.settingsMode = 'local';
+      this.settingsSurface.settingsMode = 'local';
     }
 
     // Load device-local seen state (docId → sorted heads) up front, so seen-state
@@ -1663,10 +740,10 @@ export class DriveEngine {
           // home list. Run independently so settings-doc sync never delays the home
           // list — reconcile's own safety-net drops the settings doc if it races
           // ahead of driveSettingsDocId being set.
-          void this.ensureDriveSettingsDoc();
+          void this.settingsSurface.ensureDriveSettingsDoc();
           void this.reconcileHomeDocs();
           // Remote ops can add doc co-member groups the relay watch must name.
-          this.scheduleRelayWatchRefresh();
+          this.rendezvousSurface.scheduleRelayWatchRefresh();
           this.emit({ type: 'kh-state-changed' });
         },
       });
@@ -1686,20 +763,20 @@ export class DriveEngine {
         const orig = (this.khOps as any)[method].bind(this.khOps);
         (this.khOps as any)[method] = async (...args: unknown[]) => {
           const result = await orig(...args);
-          this.scheduleRelayWatchRefresh();
+          this.rendezvousSurface.scheduleRelayWatchRefresh();
           return result;
         };
       }
 
       // Route inbound rendezvous frames from the host's socket into the engine.
-      this.host.network.onRendezvousFrame((frame) => this.handleRendezvousFrame(frame));
+      this.host.network.onRendezvousFrame((frame) => this.rendezvousSurface.handleRendezvousFrame(frame));
 
       // Declare (and on every reconnect re-declare) whom the relay may pair us
       // with. Its discovery state is per-socket, so a fresh socket starts
       // undeclared — and an undeclared device is invisible to everyone.
       this.host.network.onSocketOpen?.(() => {
-        this.lastRelayWatch = null;
-        void this.refreshRelayWatch();
+        this.rendezvousSurface.lastRelayWatch = null;
+        void this.rendezvousSurface.refreshRelayWatch();
       });
 
       const ns = this.repo.networkSubsystem;
@@ -1722,17 +799,17 @@ export class DriveEngine {
       this.emit({ type: 'doc-list-updated', list: earlyList });
       // Load (or, for a user-group that has none yet, create + migrate) the synced
       // DriveSettings doc so contact/device names are ready for the broadcasts below.
-      await this.ensureDriveSettingsDoc();
+      await this.settingsSurface.ensureDriveSettingsDoc();
       // Missing last-viewed record = unseen: computable without loading any doc.
       // Docs WITH a record stay absent (unknown) until they load and compare —
       // avoids a dot-flash on every start.
       for (const e of earlyList) if (!this.lastViewedHeads![e.id]) this.unseenChanges[e.id] = true;
       this.emitUnseen();
-      this.broadcastNames('friends');
-      this.broadcastNames('deviceNames');
+      this.settingsSurface.broadcastNames('friends');
+      this.settingsSurface.broadcastNames('deviceNames');
       // Initial relay discovery declaration (settings doc + keyhive are ready;
       // if the socket isn't open yet, the onSocketOpen re-send covers it).
-      void this.refreshRelayWatch();
+      void this.rendezvousSurface.refreshRelayWatch();
       this.emit({ type: 'kh-ready' });
     } catch (khErr: any) {
       console.error('[engine] keyhive init failed:', khErr);
@@ -1760,182 +837,6 @@ export class DriveEngine {
 
     console.log('[engine] init complete');
     this.emit({ type: 'ready', peerId: this.repo!.peerId });
-  }
-
-  // ── Enumeration helpers (used by the CLI watch loop) ───────────────────────
-  /** Automerge doc ids the user-group can access. */
-  async enumerateAccessibleDocIds(): Promise<string[]> {
-    if (!this.khOps || !this.amDocIdFromBytes) return [];
-    const { accessibleKhIds } = await this.khOps.enumerateUserDocs();
-    return accessibleKhIds.map(k => this.amDocIdFromBytes!(base64ToBytes(k)));
-  }
-
-  /** Read a doc's `@type`/name and last-change time (opening it if needed). */
-  async getDocMeta(docId: string): Promise<WatchUpdate> {
-    const handle = await this.getOrLoadHandle(docId);
-    // Resolve on 'unavailable' too, so a doc no connected peer has (e.g. every
-    // read in the CLI's local-only mode) reports empty instead of hanging.
-    if (handle.whenReady) { try { await handle.whenReady(['ready', 'unavailable']); } catch { /* keep going */ } }
-    const doc = handle.doc();
-    const heads: string[] = handle.heads ? handle.heads() : [];
-    let lastModified: number | undefined;
-    let docType: string | undefined;
-    let name: string | undefined;
-    let versions: number | undefined;
-    if (doc) {
-      docType = doc['@type'];
-      name = doc.name;
-      const history = this.Automerge.getHistory(doc);
-      versions = history.length;
-      if (history.length > 0) {
-        const ts = history[history.length - 1].change.time;
-        if (ts) lastModified = ts;
-      }
-    }
-    return { docId, docType, name, heads, lastModified, versions };
-  }
-
-  /**
-   * A doc as a plain JS object (opens + waits for ready). With no `version`, the
-   * current view; otherwise the snapshot at that history index (0-based).
-   */
-  async getDocJson(docId: string, version?: number): Promise<any> {
-    const handle = await this.getOrLoadHandle(docId);
-    if (handle.whenReady) { try { await handle.whenReady(['ready', 'unavailable']); } catch { /* keep going */ } }
-    const doc = handle.doc();
-    if (!doc || version === undefined) return doc ?? null;
-    const history = this.Automerge.getHistory(doc);
-    if (version < 0 || version >= history.length) {
-      throw new Error(`version ${version} out of range (0..${history.length - 1})`);
-    }
-    return history[version].snapshot ?? null;
-  }
-
-  /**
-   * Automerge patch ops between two history versions (0-based indices). Defaults
-   * mirror the git-style range: `to` is the latest version, `from` is `to - 1`,
-   * so calling with no range shows what the most-recent change did. A `from` of
-   * -1 (or version 0 as the latest) diffs against the empty document.
-   */
-  async diffVersions(
-    docId: string, fromVersion?: number, toVersion?: number,
-  ): Promise<{ from: number; to: number; patches: any[] }> {
-    const handle = await this.getOrLoadHandle(docId);
-    if (handle.whenReady) { try { await handle.whenReady(['ready', 'unavailable']); } catch { /* keep going */ } }
-    const doc = handle.doc();
-    if (!doc) throw new Error('document not ready');
-    const history = this.Automerge.getHistory(doc);
-    const n = history.length;
-    if (n === 0) throw new Error('document has no history');
-
-    const to = toVersion ?? (n - 1);
-    const from = fromVersion ?? (to - 1); // -1 ⇒ diff against the empty document
-    if (to < 0 || to >= n) throw new Error(`version ${to} out of range (0..${n - 1})`);
-    if (from < -1 || from >= n) throw new Error(`version ${from} out of range (-1..${n - 1})`);
-
-    const beforeHeads = from < 0 ? [] : [history[from].change.hash];
-    const afterHeads = [history[to].change.hash];
-    const patches = this.Automerge.diff(doc, beforeHeads, afterHeads);
-    return { from, to, patches };
-  }
-
-  private emitWatchUpdate(docId: string): void {
-    if (!this.watchOnUpdate) return;
-    void this.getDocMeta(docId).then(u => this.watchOnUpdate?.(u)).catch(() => { });
-  }
-
-  // ── Watcher: keep N most-recent open + rotate the rest ─────────────────────
-  async startWatching(opts: StartWatchingOptions, onUpdate?: (u: WatchUpdate) => void): Promise<void> {
-    if (this.watching) return;
-    this.watching = true;
-    this.watchOnUpdate = onUpdate ?? null;
-    void this.runWatchLoop(opts);
-  }
-
-  stopWatching(): void {
-    this.watching = false;
-    this.watchedDocs.clear();
-  }
-
-  /** Mark a doc as watched (attaches to its change listener via getOrCreateEntry). */
-  private async watchKeepOpen(docId: string): Promise<void> {
-    this.watchedDocs.add(docId);
-    try {
-      const handle = await this.getOrLoadHandle(docId);
-      this.getOrCreateEntry(docId, handle);
-    } catch (err) {
-      console.warn(`[engine] watch keep-open failed ${docId}:`, errMsg(err));
-    }
-  }
-
-  /** Best-effort close: stop watching + drop the registry entry if nothing else needs it. */
-  private watchClose(docId: string): void {
-    this.watchedDocs.delete(docId);
-    if (this.pinnedDocs.has(docId)) return;
-    const entry = this.docRegistry.get(docId);
-    if (!entry) return;
-    if (entry.subscriptions.size > 0 || entry.validationSubscribed || entry.presence) return;
-    this.docRegistry.delete(docId);
-    this.cursorSubs.delete(docId);
-  }
-
-  private async runWatchLoop(opts: StartWatchingOptions): Promise<void> {
-    const syncMs = opts.syncMs;
-    const reenumerateEveryMs = opts.reenumerateEveryMs ?? 30_000;
-    while (this.watching) {
-      try {
-        const ids = await this.enumerateAccessibleDocIds();
-        // Rank by recency (last-change time, in seconds).
-        const ranked: Array<{ id: string; rec: number }> = [];
-        for (const id of ids) {
-          if (!this.watching) return;
-          try {
-            const meta = await this.getDocMeta(id);
-            ranked.push({ id, rec: meta.lastModified ?? 0 });
-          } catch {
-            ranked.push({ id, rec: 0 });
-          }
-        }
-        ranked.sort((a, b) => b.rec - a.rec);
-
-        // Kept-open set = whichever is LARGER: the top-N, or every doc edited within
-        // the last `recentDays`. Since the recent-window docs are the most recent,
-        // keeping the top max(N, #within-window) by recency yields exactly that union.
-        const nowSec = Date.now() / 1000;
-        const windowStart = nowSec - opts.recentDays * 86_400;
-        const withinWindow = ranked.filter(r => r.rec >= windowStart).length;
-        const keepCount = Math.max(opts.keepOpen, withinWindow);
-        const keep = ranked.slice(0, keepCount).map(r => r.id);
-        const keepSet = new Set(keep);
-
-        for (const id of keep) await this.watchKeepOpen(id);
-        console.log(`[engine] watch: keeping ${keep.length} doc(s) open (min ${opts.keepOpen}, ${withinWindow} within ${opts.recentDays}d)`);
-
-        // Release any previously-watched doc that dropped out of the kept set (and
-        // isn't pinned) so only the kept set stays resident between rotations.
-        for (const id of [...this.watchedDocs]) {
-          if (!keepSet.has(id)) this.watchClose(id);
-        }
-
-        // Rotate the remainder one-by-one: open, hold open long enough to sync, close.
-        const rest = ranked.slice(keepCount).map(r => r.id).filter(id => !this.pinnedDocs.has(id));
-        for (const id of rest) {
-          if (!this.watching) return;
-          console.log(`[engine] watch: syncing ${id} for ${Math.round(syncMs / 1000)}s`);
-          await this.watchKeepOpen(id);
-          this.emitWatchUpdate(id);
-          await this.sleep(syncMs);
-          if (!keepSet.has(id)) this.watchClose(id);
-        }
-      } catch (err) {
-        console.warn('[engine] watch loop error:', errMsg(err));
-      }
-      await this.sleep(reenumerateEveryMs);
-    }
-  }
-
-  private sleep(ms: number): Promise<void> {
-    return new Promise((r) => setTimeout(r, ms));
   }
 
   // ── Message dispatch (browser worker shell) ────────────────────────────────
@@ -1969,101 +870,15 @@ export class DriveEngine {
       return;
     }
 
-    if (msg.type === 'get-settings-mode') {
-      await this.respond(msg.id, async () => {
-        const userGroupId = this.khOps ? await this.khOps.getUserGroupId() : null;
-        return { mode: this.settingsMode, hasUserGroup: !!userGroupId };
-      });
-      return;
-    }
 
     // Read-only probe (no mutation, no mode flip): the docId of an existing
     // reachable DriveSettings doc to adopt, or null. Used by the Settings page to
     // decide whether "sync settings" is a permanent create (confirm) or a reuse.
-    if (msg.type === 'get-reachable-settings-doc') {
-      await this.respond(msg.id, async () => {
-        const docs = this.khOps ? await this.findReachableDriveSettingsDocs() : [];
-        return docs[0] ?? null;
-      });
-      return;
-    }
 
     // One-way opt-in: migrate the device-local settings blob into a synced DriveSettings
     // doc and switch to SHARED mode. There is no reverse (Shared is permanent).
-    if (msg.type === 'enable-settings-sync') {
-      await this.respond(msg.id, async () => {
-        if (this.settingsMode === 'shared') return { mode: 'shared' }; // idempotent
-        if (!this.khOps) throw new Error('Keyhive not available — cannot sync settings');
-        // Snapshot the current local blob so we can seed the synced doc with it.
-        await this.ensureLocalSettings();
-        const snapshot = this.plainClone(
-          this.localSettings ?? { ...createDriveSettingsDocJson(), contacts: {} },
-        );
-        // Flip to shared and drop the local handle so its change() can't write the blob
-        // back over the docId string createDriveSettingsDoc is about to persist.
-        this.settingsMode = 'shared';
-        this.driveSettingsHandle = null;
-        this.driveSettingsDocId = null;
-        this.ensureSettingsInFlight = null;
-        // Reuse an existing reachable DriveSettings doc (e.g. one already synced from
-        // another of this user's devices) rather than minting a duplicate. Skip the
-        // member/permission check — a synced-but-not-yet-CGKA-complete doc fails it, and
-        // that is the very case we need to catch. Create only when none is reachable.
-        let handle: any = null;
-        const reachable = await this.findReachableDriveSettingsDocs();
-        if (reachable.length) {
-          const canonical = reachable[0]; // lowest docId — deterministic across devices
-          handle = await this.loadDriveSettingsHandle(canonical);
-          if (handle) {
-            await this.host.kv.set(KEYS.driveSettings, canonical); // string pointer = SHARED
-            if (reachable.length > 1) await this.mergeRedundantSettingsDocs(reachable.slice(1));
-          }
-        }
-        if (!handle) handle = await this.ensureDriveSettingsDoc({ create: true });
-        if (!handle) {
-          // Rollback: keyhive/doc unavailable. The key still holds the blob object
-          // (createDriveSettingsDoc never reached its kv.set), so no data is lost.
-          this.settingsMode = 'local';
-          this.installLocalHandle();
-          throw new Error('Could not create the synced settings document');
-        }
-        // Copy the local blob into the (empty) synced doc, not clobbering anything
-        // already synced from another device.
-        this.fillMissingSettings(snapshot);
-        this.refreshFromSettingsDoc();
-        return { mode: 'shared' };
-      });
-      return;
-    }
 
-    if (msg.type === 'ensure-device-name') {
-      await this.respond(msg.id, async () => {
-        const trimmed = msg.name?.trim();
-        if (trimmed) {
-          // Set THIS device's name to the generated default ONLY if none is stored
-          // yet — so the device gets a real, editable name at creation, never
-          // clobbering a user edit or a name synced from another device. In LOCAL
-          // mode this seeds the blob and mints no user-group.
-          const handle = await this.ensureDriveSettingsDoc({ create: true });
-          if (handle && this.driveSettingsDoc()?.deviceNames?.[msg.agentId] == null) {
-            await this.putDeviceName(msg.agentId, trimmed);
-          }
-        }
-      });
-      return;
-    }
 
-    if (msg.type === 'set-presence-timing') {
-      // Test hook: override presence timing so specs can drive a short stale
-      // window instead of sleeping past the 12s default. Takes effect on the
-      // next presence setup, so callers must set it before subscribing.
-      await this.respond(msg.id, async () => {
-        if (typeof msg.staleMs === 'number') PRESENCE_STALE_MS = msg.staleMs;
-        if (typeof msg.heartbeatMs === 'number') PRESENCE_HEARTBEAT_MS = msg.heartbeatMs;
-        if (typeof msg.livenessCheckMs === 'number') PRESENCE_LIVENESS_CHECK_MS = msg.livenessCheckMs;
-      });
-      return;
-    }
 
     if (msg.type === 'clear-caches') {
       await this.respond(msg.id, async () => {
@@ -2107,7 +922,7 @@ export class DriveEngine {
       const progress = (pct: number, message: string) =>
         emit({ type: 'open-doc-progress', id: msg.id, pct, message });
       await this.respond(msg.id, async () => {
-        this.pinnedDocs.add(msg.docId);
+        this.settingsSurface.pinnedDocs.add(msg.docId);
         if (this.khOps && this.bridge && this.khIntegration) {
           try {
             const khDocId = this.bridge.docIdFromAutomergeUrl(`automerge:${msg.docId}` as any);
@@ -2217,11 +1032,11 @@ export class DriveEngine {
         // hand-edits made through the universal source inspector. Other doc types
         // keep the advisory validation (pushValidation) they had before.
         if (handle.doc?.()?.['@type'] === DRIVE_SETTINGS_TYPE) {
-          this.assertValidSettingsChange(handle, applyFn);
+          this.settingsSurface.assertValidSettingsChange(handle, applyFn);
         }
         handle.change(applyFn);
         await this.pushToSubscriptions(msg.docId);
-        if (this.driveSettingsHandle === handle) this.refreshFromSettingsDoc();
+        if (this.settingsSurface.driveSettingsHandle === handle) this.settingsSurface.refreshFromSettingsDoc();
       }, '[engine] update-doc failed:');
       return;
     }
@@ -2243,7 +1058,7 @@ export class DriveEngine {
 
     if (msg.type === 'debug-get-version-patches') {
       await this.respond(msg.id, async () => {
-        const { patches } = await this.diffVersions(msg.docId, msg.version - 1, msg.version);
+        const { patches } = await this.watchSurface.diffVersions(msg.docId, msg.version - 1, msg.version);
         return patches;
       });
       return;
@@ -2298,52 +1113,8 @@ export class DriveEngine {
       return;
     }
 
-    if (msg.type === 'subscribe-presence') {
-      // On a cold worker the doc handle / keyhive doc may not be ready yet
-      // (repo.find can throw before the first sync), so keep retrying until
-      // setup succeeds or the doc is unsubscribed — a one-shot attempt left
-      // presence permanently dead for pages loaded directly on an editor URL.
-      if (this.presencePending.has(msg.docId)) return; // already being established
-      this.presencePending.set(msg.docId, null); // null = attempt in flight
-      const attempt = async () => {
-        let ok = false;
-        try { ok = await this.trySetupPresence(msg.docId); }
-        catch (err: any) { console.warn('[engine] presence-subscribe not ready, retrying:', errMsg(err)); }
-        if (!this.presencePending.has(msg.docId)) {
-          // Unsubscribed while this attempt ran — undo a setup that won the race.
-          if (ok) this.teardownPresence(msg.docId);
-          return;
-        }
-        if (ok) { this.cancelPendingPresence(msg.docId); return; }
-        const t: any = setTimeout(() => { void attempt(); }, PRESENCE_SETUP_RETRY_MS);
-        if (typeof t?.unref === 'function') t.unref();
-        this.presencePending.set(msg.docId, t);
-      };
-      void attempt();
-      return;
-    }
 
-    if (msg.type === 'unsubscribe-presence') {
-      this.cancelPendingPresence(msg.docId);
-      this.teardownPresence(msg.docId);
-      return;
-    }
 
-    if (msg.type === 'set-presence') {
-      const entry = this.docRegistry.get(msg.docId);
-      if (entry?.presence) {
-        entry.presenceDesired = { ...(entry.presenceDesired ?? {}), ...msg.state };
-        if (!(await this.flushPresenceOut(entry))) this.schedulePresenceRetry(entry);
-      } else if (this.presencePending.has(msg.docId)) {
-        // Presence is still starting — buffer the state so it broadcasts once
-        // setup succeeds instead of being silently dropped.
-        this.presenceDesiredEarly.set(msg.docId, {
-          ...(this.presenceDesiredEarly.get(msg.docId) ?? {}),
-          ...msg.state,
-        });
-      }
-      return;
-    }
 
     if (msg.type === 'archive-doc') {
       await this.respond(msg.id, async () => {
@@ -2353,14 +1124,14 @@ export class DriveEngine {
         // grant signatures once revokeMyAccess reports them. The tombstone now
         // lives in the synced DriveSettings doc, so an archive propagates to the
         // user's other devices (archiving requires a user-group, so it exists).
-        await this.ensureDriveSettingsDoc({ create: true });
-        this.setArchivedTombstone(msg.docId, { grantSigs: [] });
+        await this.settingsSurface.ensureDriveSettingsDoc({ create: true });
+        this.settingsSurface.setArchivedTombstone(msg.docId, { grantSigs: [] });
         const list = (await this.host.kv.get<StoredDocEntry[]>(KEYS.docIds)) ?? [];
         const removedEntry = list.find(e => e.id === msg.docId);
         const filtered = list.filter(e => e.id !== msg.docId);
         await this.host.kv.set(KEYS.docIds, filtered);
-        this.cancelPendingPresence(msg.docId);
-        this.teardownPresence(msg.docId);
+        this.presenceSurface.cancelPending(msg.docId);
+        this.presenceSurface.teardown(msg.docId);
         const entry = this.docRegistry.get(msg.docId);
         if (entry) {
           for (const subId of entry.subscriptions.keys()) this.subIdToDocId.delete(subId);
@@ -2377,7 +1148,7 @@ export class DriveEngine {
             const res = await this.khOps.revokeMyAccess(removedKhDocId);
             status = res.status;
             if (res.grantSigs.length) {
-              this.setArchivedTombstone(msg.docId, { grantSigs: res.grantSigs });
+              this.settingsSurface.setArchivedTombstone(msg.docId, { grantSigs: res.grantSigs });
             }
           } catch (err: any) {
             console.warn('[engine] revokeMyAccess failed on archive:', errMsg(err));
@@ -2395,30 +1166,10 @@ export class DriveEngine {
       return;
     }
 
-    if (msg.type === 'set-friend-name') {
-      await this.respond(msg.id, () => this.putFriendName(msg.agentId, msg.name), '[engine] set-friend-name failed:');
-      return;
-    }
-
-    if (msg.type === 'remove-friend-name') {
-      await this.respond(msg.id, () => this.deleteFriendName(msg.agentId), '[engine] remove-friend-name failed:');
-      return;
-    }
-
-    if (msg.type === 'set-device-name') {
-      await this.respond(msg.id, () => this.putDeviceName(msg.agentId, msg.name), '[engine] set-device-name failed:');
-      return;
-    }
-
-    if (msg.type === 'remove-device-name') {
-      await this.respond(msg.id, () => this.deleteSettingsName('deviceNames', msg.agentId), '[engine] remove-device-name failed:');
-      return;
-    }
-
     // Pure keyhive delegations: one entry per message type. Args match the khOps
     // method except the resolveKhDocId wrappers; kh-link-device also re-runs the
     // post-link home reconcile. kh-receive-contact-card / kh-get-known-friends
-    // keep dedicated handlers below (they touch the friend roster).
+    // and the kh-rdv-* rendezvous handlers live in the settings / rendezvous mixins.
     const khDelegates: Record<string, (kh: KeyhiveOps, m: any) => Promise<unknown> | unknown> = {
       'kh-get-identity': (kh) => kh.getIdentity(),
       'kh-get-contact-card': (kh) => kh.getContactCard(),
@@ -2443,7 +1194,7 @@ export class DriveEngine {
     };
     const khDelegate = khDelegates[msg.type];
     if (khDelegate) {
-      const m = msg as any; // kh-rdv-cancel (no id) never matches a table entry
+      const m = msg as any;
       await this.respond(m.id, () => {
         if (!this.khOps) throw new Error('Keyhive not available');
         return khDelegate(this.khOps, m);
@@ -2451,221 +1202,7 @@ export class DriveEngine {
       return;
     }
 
-    if (msg.type === 'kh-receive-contact-card') {
-      await this.respond(msg.id, async () => {
-        if (!this.khOps) throw new Error('Keyhive not available');
-        if (!msg.isDevice && !msg.userGroupId) {
-          throw new Error('This contact is not a group — ask them to open Settings and show a fresh friend QR/link.');
-        }
-        const result = await this.khOps.receiveContactCard(msg.cardJson);
-        const friendGroupId = msg.isDevice ? null : msg.userGroupId;
-        const alreadyKnown = !result.isOwnCard && !!friendGroupId
-          ? await this.addKnownFriendGroup(friendGroupId)
-          : false;
-        return { ...result, userGroupId: friendGroupId, alreadyKnown };
-      });
-      return;
-    }
 
-    if (msg.type === 'kh-get-known-friends') {
-      await this.respond(msg.id, async () => {
-        if (!this.khOps) throw new Error('Keyhive not available');
-        // The unified `friends` map holds every known friend (named or null),
-        // so its keys ARE the known-friend-group ids.
-        await this.ensureDriveSettingsDoc();
-        const friendGroupIds = Object.keys(this.driveSettingsDoc()?.friends ?? {});
-        const excludeKhDocId = msg.excludeDocId ? this.resolveKhDocId(msg.excludeDocId) : undefined;
-        return this.khOps.getKnownFriends(excludeKhDocId, friendGroupIds);
-      });
-      return;
-    }
-
-    // Sharer: stage our (large) contact bundle for a rendezvous and return the id+key.
-    if (msg.type === 'kh-rdv-create-share') {
-      await this.respond(msg.id, async () => {
-        if (!this.khOps) throw new Error('Keyhive not available');
-        const myUserGroupId = await this.khOps.ensureUserGroup({ create: true });
-        // Approximate size of what we'll send once the peer joins (plaintext bytes;
-        // the on-wire framed size adds only ~28 bytes of IV+GCM tag). Surfaced to the
-        // sender's QR page so they can see how much is being transferred up front.
-        // Estimated rather than measured because building the real payload would
-        // MINT a prekey — see the deferred getContactCard() in onPeer below. The
-        // envelope is the real one, so only the card body is approximate.
-        const payloadBytes = new TextEncoder().encode(JSON.stringify({
-          card: await this.khOps.previewContactCard(),
-          displayName: msg.displayName, userGroupId: myUserGroupId ?? undefined,
-        })).length;
-        // Check before minting a rendezvous, so we never show a QR that cannot work.
-        this.assertRdvPayloadFits(payloadBytes + RDV_FRAME_OVERHEAD_BYTES);
-        const { rendezvousId, key } = generateRendezvous();
-        // Bidirectional: after sending our bundle we STAY subscribed to ingest the
-        // receiver's reply (their card + display name) so both peers end up knowing
-        // each other from a single scan. The receiver's own UI names us; we have no
-        // UI here, so the worker records their name from the reply payload.
-        this.rdvSessions.set(rendezvousId, {
-          key,
-          onPeer: () => {
-            this.rdvEvent(rendezvousId, 'peer-joined');
-            // Mint the card HERE, not at stage time: every getContactCard() rotates
-            // a prekey out of our advertised pool, and that key is meant for one
-            // contact. Staging a QR nobody scans must not consume one — otherwise
-            // just opening the invite screen grows our prekey history forever.
-            (async () => {
-              const myCard = await this.khOps!.getContactCard();
-              await this.rdvSendPayload(rendezvousId, key, JSON.stringify({
-                card: myCard, displayName: msg.displayName, userGroupId: myUserGroupId ?? undefined,
-              }));
-            })().catch((err) => this.rdvEvent(rendezvousId, 'error', errMsg(err)));
-          },
-          onData: (pt) => {
-            void (async () => {
-              try {
-                this.rdvEvent(rendezvousId, 'receiving');
-                const { card: cardJson, displayName, userGroupId: replyGroupId } = this.parseRdvPayload(pt);
-                const result = await this.khOps!.receiveContactCard(cardJson);
-                const resolvedGroupId = replyGroupId ?? result.groupId ?? null;
-                const added = !result.isOwnCard && !!resolvedGroupId;
-                if (added) {
-                  await this.addKnownFriendGroup(resolvedGroupId!);
-                  await this.putFriendName(resolvedGroupId!, displayName);
-                }
-                this.rdvSessions.delete(rendezvousId);
-                this.rdvSend({ type: RDV_UNSUB, rendezvousId });
-                // Surface who we added back (and whether they sent a name) so the
-                // sharer's UI can offer a name input when they didn't — the sharer
-                // otherwise has no chance to label a nameless friend.
-                this.rdvEvent(rendezvousId, 'received', undefined, added
-                  ? { friendGroupId: resolvedGroupId!, friendHasName: !!displayName?.trim() }
-                  : undefined);
-              } catch (err: any) {
-                this.rdvSessions.delete(rendezvousId);
-                this.rdvSend({ type: RDV_UNSUB, rendezvousId });
-                this.rdvEvent(rendezvousId, 'error', errMsg(err));
-              }
-            })();
-          },
-        });
-        this.rdvSend({ type: RDV_SUB, rendezvousId });
-        this.rdvEvent(rendezvousId, 'waiting');
-        return { rendezvousId, key, payloadBytes };
-      });
-      return;
-    }
-
-    if (msg.type === 'kh-rdv-receive') {
-      const { rendezvousId, key } = msg;
-      try {
-        if (!this.khOps) throw new Error('Keyhive not available');
-        const plaintext = await new Promise<string>((resolve, reject) => {
-          const timer = setTimeout(() => {
-            this.rdvSessions.delete(rendezvousId);
-            reject(new Error('Timed out waiting for your friend. Make sure they have the QR/link open, then try again.'));
-          }, RDV_RECEIVE_TIMEOUT_MS);
-          this.rdvSessions.set(rendezvousId, {
-            key,
-            onPeer: () => this.rdvEvent(rendezvousId, 'peer-joined'),
-            onData: (pt) => {
-              clearTimeout(timer);
-              this.rdvSessions.delete(rendezvousId);
-              this.rdvEvent(rendezvousId, 'receiving');
-              resolve(pt);
-            },
-          });
-          this.rdvSend({ type: RDV_SUB, rendezvousId });
-          this.rdvEvent(rendezvousId, 'waiting');
-        });
-
-        const { card: cardJson, displayName, userGroupId } = this.parseRdvPayload(plaintext);
-
-        const result = await this.khOps.receiveContactCard(cardJson);
-        const resolvedGroupId = userGroupId ?? result.groupId ?? null;
-        const alreadyKnown = !result.isOwnCard && !!resolvedGroupId
-          ? await this.addKnownFriendGroup(resolvedGroupId)
-          : false;
-        if (!result.isOwnCard) {
-          const myUserGroupId = await this.khOps.ensureUserGroup({ create: true });
-          const myCard = await this.khOps.getContactCard();
-          await this.rdvSendPayload(rendezvousId, key, JSON.stringify({ card: myCard, displayName: msg.displayName, userGroupId: myUserGroupId ?? undefined }));
-        }
-        this.rdvSend({ type: RDV_UNSUB, rendezvousId });
-        this.rdvEvent(rendezvousId, 'received');
-        emit({ type: 'result', id: msg.id, result: { ...result, userGroupId: resolvedGroupId, displayName, alreadyKnown } });
-      } catch (err: any) {
-        this.rdvSessions.delete(rendezvousId);
-        this.rdvSend({ type: RDV_UNSUB, rendezvousId });
-        this.rdvEvent(rendezvousId, 'error', errMsg(err));
-        emit({ type: 'result', id: msg.id, error: errMsg(err) });
-      }
-      return;
-    }
-
-    if (msg.type === 'kh-rdv-link-create') {
-      await this.respond(msg.id, async () => {
-        if (!this.khOps) throw new Error('Keyhive not available');
-        const myUserGroupId = await this.khOps.ensureUserGroup({ create: true });
-        // Ensure our DriveSettings doc exists so we can hand its id to the joining
-        // device (the trusted channel that propagates the pointer — never a scan).
-        await this.ensureDriveSettingsDoc({ create: true });
-        // The envelope our card will travel in. Built here for the size estimate
-        // with a non-minting card, and again in onPeer with the real one.
-        const envelope = (card: string) => JSON.stringify({
-          card, userGroupId: myUserGroupId, deviceName: msg.deviceName,
-          driveSettingsDocId: this.driveSettingsDocId ?? undefined,
-        });
-        // See kh-rdv-create-share: approximate payload size for the sender's QR page.
-        const payloadBytes = new TextEncoder().encode(envelope(await this.khOps.previewContactCard())).length;
-        this.assertRdvPayloadFits(payloadBytes + RDV_FRAME_OVERHEAD_BYTES);
-        const { rendezvousId, key } = generateRendezvous();
-        this.rdvSessions.set(rendezvousId, {
-          key,
-          onPeer: () => {
-            this.rdvEvent(rendezvousId, 'peer-joined');
-            // Mint only for a real exchange — see kh-rdv-create-share's onPeer.
-            (async () => {
-              await this.rdvSendPayload(rendezvousId, key, envelope(await this.khOps!.getContactCard()));
-            })().catch(err => this.rdvEvent(rendezvousId, 'error', errMsg(err)));
-          },
-          onData: (pt) => {
-            (async () => {
-              try {
-                this.rdvEvent(rendezvousId, 'receiving');
-                const { card: peerCard, userGroupId: peerGroupId, deviceName: peerDeviceName } = this.parseRdvPayload(pt);
-                const result = await this.khOps!.receiveContactCard(peerCard);
-                await this.khOps!.linkDevice(result.agentId, peerGroupId ?? null);
-                // We (the host) hold the shared settings doc locally, so record BOTH
-                // device names here: the joiner's, and our own (its default name),
-                // so both sync down to the joiner once it adopts the doc.
-                await this.putDeviceName(result.agentId, peerDeviceName);
-                if (msg.deviceName) {
-                  const myAgentId = (await this.khOps!.getIdentity()).agentId;
-                  await this.putDeviceName(myAgentId, msg.deviceName);
-                }
-                this.rdvSessions.delete(rendezvousId);
-                this.rdvSend({ type: RDV_UNSUB, rendezvousId });
-                this.rdvEvent(rendezvousId, 'linked');
-              } catch (err: any) {
-                this.rdvEvent(rendezvousId, 'error', errMsg(err));
-              }
-            })();
-          },
-        });
-        this.rdvSend({ type: RDV_SUB, rendezvousId });
-        this.rdvEvent(rendezvousId, 'waiting');
-        return { rendezvousId, key, payloadBytes };
-      });
-      return;
-    }
-
-    if (msg.type === 'kh-rdv-link-join') {
-      await this.respond(msg.id, () => this.rendezvousLinkJoin(msg.rendezvousId, msg.key, msg.deviceName));
-      return;
-    }
-
-    if (msg.type === 'kh-rdv-cancel') {
-      this.rdvSessions.delete(msg.rendezvousId);
-      this.rdvSend({ type: RDV_UNSUB, rendezvousId: msg.rendezvousId });
-      return;
-    }
 
     if (msg.type === 'query') {
       try {
@@ -2700,3 +1237,23 @@ export class DriveEngine {
     }
   }
 }
+
+/**
+ * The composed engine: settings → presence → rendezvous → watch, layered over
+ * the core. Each mixin assigns its `*Surface` hook in a field initializer (they
+ * avoid constructors so the composed class keeps the core's `(host, opts)`
+ * signature — see engine-settings.ts), and the core's `init()`/`handleMessage`
+ * reach subsystem state through those hooks.
+ */
+export const DriveEngine = EngineWatch(EngineRendezvous(EnginePresence(EngineSettings(EngineCore))));
+
+/** The composed engine's instance type (mixins' public members included). */
+export type DriveEngineInstance = InstanceType<typeof DriveEngine>;
+
+// Re-exports kept for the tests and the CLI (see Phase 3 split):
+export type { EngineSettingsSurface } from './engine-settings';
+export type { EnginePresenceSurface } from './engine-presence';
+export type { EngineRendezvousSurface } from './engine-rendezvous';
+export type { EngineWatchSurface, WatchUpdate } from './engine-watch';
+export { RDV_MAX_DATA_BYTES } from './engine-rendezvous';
+export { freshPresencePeerIds, PRESENCE_STALE_MS, PRESENCE_HEARTBEAT_MS } from './engine-presence';
