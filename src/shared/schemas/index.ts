@@ -25,7 +25,10 @@ import { taskListSchemaPlugin } from './tasks';
 import { dataGridSchemaPlugin } from './datagrid';
 import { countersSchemaPlugin } from './counters';
 import { sentencesSchemaPlugin } from './sentences';
-import { driveSettingsSchemaPlugin } from './drive-settings';
+import { driveSettingsSchemaPlugin, DRIVE_SETTINGS_TYPE, createDriveSettingsDocJson } from './drive-settings';
+
+/** DriveSettings special-case surface shared with the engine (type + fresh-doc seed). */
+export { DRIVE_SETTINGS_TYPE, createDriveSettingsDocJson } from './drive-settings';
 
 /** Every known document type's validation core. Adding a document type means
  * registering its schema core here and its full plugin in src/client/doc-plugins.

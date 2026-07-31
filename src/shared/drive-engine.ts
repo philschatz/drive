@@ -10,7 +10,7 @@
  */
 import { deepAssign } from './deep-assign';
 import { syncToTarget } from './sync-to-target';
-import { validateDocument } from './schemas';
+import { validateDocument, DRIVE_SETTINGS_TYPE, createDriveSettingsDocJson } from './schemas';
 import { KeyhiveOps, bytesToBase64, base64ToBytes, errMsg } from './keyhive-ops';
 import { LRU } from './lru-cache';
 import { generateRendezvous, encryptString, decryptString } from './rendezvous-crypto';
@@ -407,7 +407,7 @@ export class DriveEngine {
     // guard anyway: only adopt an object as the blob, else seed a bare one.
     this.localSettings = (stored && typeof stored === 'object')
       ? stored
-      : { '@type': 'DriveSettings', friends: {}, deviceNames: {}, archivedDocIds: {} };
+      : createDriveSettingsDocJson();
     this.installLocalHandle();
     // Rename first: everything below writes into `friends`.
     this.migrateContactsToFriends();
@@ -504,11 +504,11 @@ export class DriveEngine {
         await handle.whenReady?.(['ready', 'unavailable']).catch(() => {});
       }
       const doc = handle.doc?.();
-      if (doc && doc['@type'] === 'DriveSettings') {
+      if (doc && doc['@type'] === DRIVE_SETTINGS_TYPE) {
         this.adoptLoadedSettingsHandle(docId, handle);
         return handle;
       }
-      if (doc && doc['@type'] !== 'DriveSettings') {
+      if (doc && doc['@type'] !== DRIVE_SETTINGS_TYPE) {
         console.warn(`[engine] doc ${docId} is not DriveSettings (@type=${doc['@type']}); not adopting`);
         return null;
       }
@@ -548,7 +548,7 @@ export class DriveEngine {
       if (this.driveSettingsDeferredHandle !== handle) { handle.off?.('change', onArrive); handle.off?.('doc', onArrive); return; }
       let d: any = null;
       try { d = handle.doc?.(); } catch { /* not ready */ }
-      if (d && d['@type'] === 'DriveSettings') {
+      if (d && d['@type'] === DRIVE_SETTINGS_TYPE) {
         handle.off?.('change', onArrive);
         handle.off?.('doc', onArrive);
         this.adoptLoadedSettingsHandle(docId, handle);
@@ -596,9 +596,7 @@ export class DriveEngine {
 
   private async createDriveSettingsDoc(): Promise<any | null> {
     if (!this.repo || !this.khOps || !this.setNextDocId) return null;
-    const handle = await this.createKeyhiveDocHandle({
-      '@type': 'DriveSettings', friends: {}, deviceNames: {}, archivedDocIds: {},
-    });
+    const handle = await this.createKeyhiveDocHandle(createDriveSettingsDocJson());
     const doc = handle.doc();
     if (this.repo.storageSubsystem && doc) {
       void this.repo.storageSubsystem.saveDoc(handle.documentId, doc);
@@ -640,8 +638,8 @@ export class DriveEngine {
 
   /** Rebroadcast names (called on load + on any local or remote edit). */
   private refreshFromSettingsDoc(): void {
-    this.broadcastFriendNames(this.getFriendNamesMap());
-    this.broadcastDeviceNames(this.getDeviceNamesMap());
+    this.broadcastNames('friends');
+    this.broadcastNames('deviceNames');
     // The friends roster feeds the relay watch list, and this fires for every
     // settings-doc change — local writes AND edits synced from other devices.
     this.scheduleRelayWatchRefresh();
@@ -669,7 +667,7 @@ export class DriveEngine {
           if (handle.isReady && !handle.isReady()) await handle.whenReady?.(['ready', 'unavailable']).catch(() => {});
         } catch { continue; }
         const doc = handle?.doc?.();
-        if (doc && doc['@type'] === 'DriveSettings') found.push(amId);
+        if (doc && doc['@type'] === DRIVE_SETTINGS_TYPE) found.push(amId);
       }
     } catch (err) {
       console.warn('[engine] findReachableDriveSettingsDocs failed:', errMsg(err));
@@ -753,12 +751,13 @@ export class DriveEngine {
     this.changeDriveSettings(d => { for (const id of docIds) if (d.archivedDocIds) delete d.archivedDocIds[id]; });
   }
 
-  // ── Friend roster (unified `friends` map in the DriveSettings doc) ──────────
-  // Value is the display name, or null when a friend is known but unnamed.
-  private getFriendNamesMap(): Record<string, string> {
-    const friends = this.driveSettingsDoc()?.friends;
+  // ── Settings string-map stores (friend roster + device names, both in the DriveSettings doc) ──
+  // Friend value is the display name, or null when a friend is known but unnamed;
+  // deleting the key drops a friend from the roster entirely (no separate groups list).
+  private namesMap(field: 'friends' | 'deviceNames'): Record<string, string> {
+    const src = this.driveSettingsDoc()?.[field];
     const out: Record<string, string> = {};
-    if (friends) for (const [k, v] of Object.entries(friends)) if (typeof v === 'string') out[k] = v;
+    if (src) for (const [k, v] of Object.entries(src)) if (typeof v === 'string') out[k] = v;
     return out;
   }
   /** Persist a friend's user-group (unnamed → null); returns true if already known. */
@@ -769,53 +768,30 @@ export class DriveEngine {
     this.changeDriveSettings(d => { if (!d.friends) d.friends = {}; if (!(groupId in d.friends)) d.friends[groupId] = null; });
     return false;
   }
-  private async getFriendNames(): Promise<Record<string, string>> { return this.getFriendNamesMap(); }
-  private broadcastFriendNames(names: Record<string, string>): void {
-    this.emit({ type: 'friend-names-updated', names });
+  private broadcastNames(field: 'friends' | 'deviceNames'): void {
+    const names = this.namesMap(field);
+    this.emit(field === 'friends' ? { type: 'friend-names-updated', names } : { type: 'device-names-updated', names });
   }
-  private async putFriendName(agentId: string, name: string | undefined): Promise<void> {
+  private async getNames(field: 'friends' | 'deviceNames'): Promise<Record<string, string>> { return this.namesMap(field); }
+  private async putSettingsName(field: 'friends' | 'deviceNames', agentId: string, name: string | undefined): Promise<void> {
     const trimmed = name?.trim();
     if (!trimmed) return;
     const handle = await this.ensureDriveSettingsDoc({ create: true });
-    if (!handle) throw new Error('Cannot save friend name — settings document unavailable');
-    if (this.driveSettingsDoc()?.friends?.[agentId] === trimmed) return;
-    this.changeDriveSettings(d => { if (!d.friends) d.friends = {}; d.friends[agentId] = trimmed; });
-    this.broadcastFriendNames(this.getFriendNamesMap());
+    if (!handle) throw new Error('Cannot save name — settings document unavailable');
+    if (this.driveSettingsDoc()?.[field]?.[agentId] === trimmed) return;
+    this.changeDriveSettings(d => { if (!d[field]) d[field] = {}; d[field][agentId] = trimmed; });
+    this.broadcastNames(field);
   }
-  private async deleteFriendName(agentId: string): Promise<void> {
+  private async deleteSettingsName(field: 'friends' | 'deviceNames', agentId: string): Promise<void> {
     if (!this.driveSettingsHandle) return;
-    // The unified map means deleting the key drops them from the roster entirely
-    // (no separate known-groups list to prune).
-    this.changeDriveSettings(d => { if (d.friends) delete d.friends[agentId]; });
-    this.broadcastFriendNames(this.getFriendNamesMap());
+    if (!(this.driveSettingsDoc()?.[field] && agentId in this.driveSettingsDoc()![field])) return;
+    this.changeDriveSettings(d => { if (d[field]) delete d[field][agentId]; });
+    this.broadcastNames(field);
   }
-
-  // ── Device-name store (keyed by device agentId; part of the DriveSettings doc) ──
-  private getDeviceNamesMap(): Record<string, string> {
-    const dn = this.driveSettingsDoc()?.deviceNames;
-    const out: Record<string, string> = {};
-    if (dn) for (const [k, v] of Object.entries(dn)) if (typeof v === 'string') out[k] = v;
-    return out;
-  }
-  private async getDeviceNames(): Promise<Record<string, string>> { return this.getDeviceNamesMap(); }
-  private broadcastDeviceNames(names: Record<string, string>): void {
-    this.emit({ type: 'device-names-updated', names });
-  }
-  private async putDeviceName(agentId: string, name: string | undefined): Promise<void> {
-    const trimmed = name?.trim();
-    if (!trimmed) return;
-    const handle = await this.ensureDriveSettingsDoc({ create: true });
-    if (!handle) throw new Error('Cannot save device name — settings document unavailable');
-    if (this.driveSettingsDoc()?.deviceNames?.[agentId] === trimmed) return;
-    this.changeDriveSettings(d => { if (!d.deviceNames) d.deviceNames = {}; d.deviceNames[agentId] = trimmed; });
-    this.broadcastDeviceNames(this.getDeviceNamesMap());
-  }
-  private async deleteDeviceName(agentId: string): Promise<void> {
-    if (!this.driveSettingsHandle) return;
-    if (!(this.driveSettingsDoc()?.deviceNames && agentId in this.driveSettingsDoc()!.deviceNames)) return;
-    this.changeDriveSettings(d => { if (d.deviceNames) delete d.deviceNames[agentId]; });
-    this.broadcastDeviceNames(this.getDeviceNamesMap());
-  }
+  private async getFriendNames(): Promise<Record<string, string>> { return this.getNames('friends'); }
+  private async putFriendName(agentId: string, name: string | undefined): Promise<void> { await this.putSettingsName('friends', agentId, name); }
+  private async deleteFriendName(agentId: string): Promise<void> { await this.deleteSettingsName('friends', agentId); }
+  private async putDeviceName(agentId: string, name: string | undefined): Promise<void> { await this.putSettingsName('deviceNames', agentId, name); }
 
   // ── keyhive doc-id helpers ─────────────────────────────────────────────────
   /** Derive the keyhive doc-ID (base64) from an automerge doc-ID. */
@@ -1532,6 +1508,18 @@ export class DriveEngine {
     this.rdvEvent(rendezvousId, 'sending', formatBytes(framed.length));
     this.rdvSend({ type: RDV_MSG, rendezvousId, data: framed });
   }
+  /**
+   * Parse a rendezvous payload: an envelope `{card, displayName?, userGroupId?,
+   * deviceName?, driveSettingsDocId?}` — or a bare card string (the friend-share
+   * reply is always an envelope, but older/mirror flows tolerate the raw card).
+   */
+  private parseRdvPayload(pt: string): { card: string; displayName?: string; userGroupId?: string; deviceName?: string; driveSettingsDocId?: string } {
+    try {
+      const parsed = JSON.parse(pt);
+      if (parsed && typeof parsed === 'object' && typeof parsed.card === 'string') return parsed as any;
+    } catch { /* bare card string */ }
+    return { card: pt };
+  }
   /** Handle an inbound rendezvous frame (host routes rdv frames here). */
   handleRendezvousFrame(msg: any): void {
     const rid: string | undefined = msg.rendezvousId;
@@ -1574,7 +1562,7 @@ export class DriveEngine {
             try {
               this.rdvEvent(rendezvousId, 'receiving');
               const { card: peerCard, userGroupId: peerGroupId, deviceName: peerDeviceName, driveSettingsDocId: peerSettingsDocId } =
-                JSON.parse(pt) as { card: string; userGroupId?: string; deviceName?: string; driveSettingsDocId?: string };
+                this.parseRdvPayload(pt);
               const result = await this.khOps!.receiveContactCard(peerCard);
               if (result.isOwnCard) throw new Error("This is your own device's link. Open it on a different device.");
               await this.khOps!.linkDevice(result.agentId, peerGroupId ?? null);
@@ -1740,8 +1728,8 @@ export class DriveEngine {
       // avoids a dot-flash on every start.
       for (const e of earlyList) if (!this.lastViewedHeads![e.id]) this.unseenChanges[e.id] = true;
       this.emitUnseen();
-      this.broadcastFriendNames(await this.getFriendNames());
-      this.broadcastDeviceNames(await this.getDeviceNames());
+      this.broadcastNames('friends');
+      this.broadcastNames('deviceNames');
       // Initial relay discovery declaration (settings doc + keyhive are ready;
       // if the socket isn't open yet, the onSocketOpen re-send covers it).
       void this.refreshRelayWatch();
@@ -2009,7 +1997,7 @@ export class DriveEngine {
         // Snapshot the current local blob so we can seed the synced doc with it.
         await this.ensureLocalSettings();
         const snapshot = this.plainClone(
-          this.localSettings ?? { '@type': 'DriveSettings', contacts: {}, deviceNames: {}, archivedDocIds: {} },
+          this.localSettings ?? { ...createDriveSettingsDocJson(), contacts: {} },
         );
         // Flip to shared and drop the local handle so its change() can't write the blob
         // back over the docId string createDriveSettingsDoc is about to persist.
@@ -2228,7 +2216,7 @@ export class DriveEngine {
         // and reject (throw) rather than store an invalid document. This covers
         // hand-edits made through the universal source inspector. Other doc types
         // keep the advisory validation (pushValidation) they had before.
-        if (handle.doc?.()?.['@type'] === 'DriveSettings') {
+        if (handle.doc?.()?.['@type'] === DRIVE_SETTINGS_TYPE) {
           this.assertValidSettingsChange(handle, applyFn);
         }
         handle.change(applyFn);
@@ -2423,7 +2411,7 @@ export class DriveEngine {
     }
 
     if (msg.type === 'remove-device-name') {
-      await this.respond(msg.id, () => this.deleteDeviceName(msg.agentId), '[engine] remove-device-name failed:');
+      await this.respond(msg.id, () => this.deleteSettingsName('deviceNames', msg.agentId), '[engine] remove-device-name failed:');
       return;
     }
 
@@ -2533,15 +2521,7 @@ export class DriveEngine {
             void (async () => {
               try {
                 this.rdvEvent(rendezvousId, 'receiving');
-                let cardJson = pt;
-                let displayName: string | undefined;
-                let replyGroupId: string | undefined;
-                try {
-                  const parsed = JSON.parse(pt);
-                  if (parsed && typeof parsed === 'object' && typeof parsed.card === 'string') {
-                    cardJson = parsed.card; displayName = parsed.displayName; replyGroupId = parsed.userGroupId;
-                  }
-                } catch { /* raw card string */ }
+                const { card: cardJson, displayName, userGroupId: replyGroupId } = this.parseRdvPayload(pt);
                 const result = await this.khOps!.receiveContactCard(cardJson);
                 const resolvedGroupId = replyGroupId ?? result.groupId ?? null;
                 const added = !result.isOwnCard && !!resolvedGroupId;
@@ -2595,15 +2575,7 @@ export class DriveEngine {
           this.rdvEvent(rendezvousId, 'waiting');
         });
 
-        let cardJson = plaintext;
-        let displayName: string | undefined;
-        let userGroupId: string | undefined;
-        try {
-          const parsed = JSON.parse(plaintext);
-          if (parsed && typeof parsed === 'object' && typeof parsed.card === 'string') {
-            cardJson = parsed.card; displayName = parsed.displayName; userGroupId = parsed.userGroupId;
-          }
-        } catch { /* raw card string */ }
+        const { card: cardJson, displayName, userGroupId } = this.parseRdvPayload(plaintext);
 
         const result = await this.khOps.receiveContactCard(cardJson);
         const resolvedGroupId = userGroupId ?? result.groupId ?? null;
@@ -2657,7 +2629,7 @@ export class DriveEngine {
             (async () => {
               try {
                 this.rdvEvent(rendezvousId, 'receiving');
-                const { card: peerCard, userGroupId: peerGroupId, deviceName: peerDeviceName } = JSON.parse(pt);
+                const { card: peerCard, userGroupId: peerGroupId, deviceName: peerDeviceName } = this.parseRdvPayload(pt);
                 const result = await this.khOps!.receiveContactCard(peerCard);
                 await this.khOps!.linkDevice(result.agentId, peerGroupId ?? null);
                 // We (the host) hold the shared settings doc locally, so record BOTH

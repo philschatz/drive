@@ -25,13 +25,21 @@ export const KEYHIVE_ID_RE = /^[A-Za-z0-9+/]{43}=$/;
 // automerge-repo DocumentId — bs58check-encoded (base58 alphabet, no 0/O/I/l).
 export const AUTOMERGE_DOC_ID_RE = /^[1-9A-HJ-NP-Za-km-z]{32,64}$/;
 
+/** The DriveSettings `@type` discriminator — single source of truth for the engine's special-casing. */
+export const DRIVE_SETTINGS_TYPE = 'DriveSettings' as const;
+
+/** Seed document for a brand-new DriveSettings doc (empty roster, names, tombstones). */
+export function createDriveSettingsDocJson(): DriveSettingsDocument {
+  return { '@type': DRIVE_SETTINGS_TYPE, friends: {}, deviceNames: {}, archivedDocIds: {} };
+}
+
 /** Archive tombstone: the direct-grant signatures at archive time (re-share baseline). */
 export interface ArchivedDocTombstone {
   grantSigs: string[];
 }
 
 export interface DriveSettingsDocument {
-  '@type': 'DriveSettings';
+  '@type': typeof DRIVE_SETTINGS_TYPE;
   /**
    * The whole friend roster in one map, keyed by friend user-group id. The
    * value is the display name, or `null` when the friend is known but unnamed.
@@ -46,7 +54,7 @@ export interface DriveSettingsDocument {
 }
 
 export const driveSettingsSchema = obj({
-  '@type': str({ enum: ['DriveSettings'] }),
+  '@type': str({ enum: [DRIVE_SETTINGS_TYPE] }),
   // Keyed by friend user-group id. `str({ optional: true })` is how the DSL
   // expresses "string or null": the validator accepts null/absent only where a
   // node is optional. So a friend value may be a name string or null
@@ -60,7 +68,7 @@ export const driveSettingsSchema = obj({
 
 /** Worker-safe plugin core — registered in src/shared/schemas (validation only). */
 export const driveSettingsSchemaPlugin: DocSchemaPlugin = {
-  type: 'DriveSettings',
+  type: DRIVE_SETTINGS_TYPE,
   schema: driveSettingsSchema,
   checkDeps: () => {},
 };
