@@ -1181,7 +1181,15 @@ export class EngineCore {
       'kh-list-devices': (kh) => kh.listGroupDevices(),
       'kh-remove-device': (kh, m) => kh.removeDeviceFromGroup(m.agentId),
       'kh-change-device-role': (kh, m) => kh.changeDeviceRole(m.agentId, m.newRole),
-      'kh-ensure-user-group': (kh, m) => kh.ensureUserGroup({ create: m.create, adoptGroupId: m.adoptGroupId, waitForSync: m.waitForSync }),
+      // The client's ensureUserGroup unwraps `{ userGroupId }` (it caches the id
+      // for the group's contact card), so this delegate — unlike the others —
+      // wraps the raw keyhive result.
+      // The client's ensureUserGroup unwraps `{ userGroupId }` (it caches the id
+      // for the group's contact card), so this delegate — unlike the others —
+      // wraps the raw keyhive result.
+      'kh-ensure-user-group': async (kh, m) => ({
+        userGroupId: await kh.ensureUserGroup({ create: m.create, adoptGroupId: m.adoptGroupId, waitForSync: m.waitForSync }),
+      }),
       'kh-get-link-payload': async (kh) => {
         const userGroupId = await kh.ensureUserGroup({ create: true });
         return { card: await kh.getContactCard(), userGroupId };
