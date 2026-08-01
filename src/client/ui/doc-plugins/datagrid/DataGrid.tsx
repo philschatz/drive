@@ -1,25 +1,20 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'preact/hooks';
-import { subscribeQuery, updateDoc, getWorkerPeerId, getWorkerUserGroupId } from '../../worker-api';
+import { updateDoc, getWorkerPeerId, getWorkerUserGroupId } from '../../worker-api';
 import { peerColor, usePresence } from '../../common/presence';
 import { DocumentTitleBar } from '../../common/DocumentTitleBar';
 import { peerDisplayName, type PeerFieldInfo } from '../../common/presence';
-import { useGridCommands, commitReorder, commitAutofill, applyFormatToSelection, PASTE_FALLBACK_MS, type GridCommandState, type GridCommandContext } from './commands';
+import { useGridCommands, commitReorder, PASTE_FALLBACK_MS, type GridCommandState, type GridCommandContext } from './commands';
 import { CommandContextMenuContent } from './CommandBar';
 import { FocusTopBar } from './FocusTopBar';
-import { ConditionalFormatSheet } from './ConditionalFormatSheet';
-import { FormatSheet } from './FormatSheet';
-import { ColorSheet, type ColorTarget } from './ColorSheet';
-import { PickerSheet } from '@/common/PickerSheet';
-import { NUMBER_FORMAT_OPTIONS, FONT_FAMILY_OPTIONS } from './format-presets';
+import type { ColorTarget } from './ColorSheet';
 import { ContextMenu, ContextMenuTrigger } from '@/components/ui/context-menu';
 import {
-  sortedEntries, colIndexToLetter, shortId,
+  sortedEntries,
   a1ToInternal, internalToA1,
   getDisplayValue,
 } from './helpers';
 import { type FormulaEditorApi, type FormulaHighlight, isRange } from './FormulaEditor';
 import { BottomEditorBar, type AggregateChip } from './BottomEditorBar';
-import { FormulaInsertSheet } from './FormulaInsertSheet';
 import { computeSelectionAggregates } from './aggregates';
 import { pointToCell, buildRowOffsets, rowAtOffset } from './grid-geometry';
 import { useHideOnScroll } from '../../common/useHideOnScroll';
@@ -27,32 +22,24 @@ import { buildFormatCache, buildIndexMaps, formatDisplayValue, isAccountingForma
 import type { CellRefInfo } from './formatting';
 import type { DataGridCellFormat } from '../../../../shared/schemas/datagrid';
 import { SheetTabsBar } from './SheetTabsBar';
-import { SheetListSheet } from './SheetListSheet';
-import { SheetOptionsSheet } from './SheetOptionsSheet';
-import { applyFreezeCount, effectiveFrozenCount, applyItemSize } from './sheet-actions';
-import { HeaderContextMenu, type HeaderMenuPage } from './HeaderContextMenu';
-import { ResizeSheet } from './ResizeSheet';
+import { effectiveFrozenCount } from './sheet-actions';
+import type { HeaderMenuPage } from './HeaderContextMenu';
 import { useUndoRedo } from '../../common/useUndoRedo';
 import { useDocumentHistory } from '../../common/useDocumentHistory';
 import { useCanEdit } from '../../common/useCanEdit';
-import { pushDocHash } from '../../common/doc-urls';
 import { useFocusPathSync } from '../../common/useFocusPathSync';
 import { HistorySlider } from '../../common/HistorySlider';
 import { useDocumentValidation } from '../../common/useDocumentValidation';
 import { DocLoader } from '../../common/useDocument';
-import { createHfBridge, type HfBridge, type MCResults, type CondFormatResults } from './hf-bridge';
-import { sendHfPort } from '../../worker-api';
+import type { HfBridge, MCResults, CondFormatResults } from './hf-bridge';
 import { DistributionPanel } from './DistributionPanel';
 import { formatDistValue } from './helpers';
+import { useAutofillDrag } from './useAutofillDrag';
+import { useDataGridDoc } from './useDataGridDoc';
+import { useSheetActions } from './useSheetActions';
+import { GridHeaderRow } from './GridHeaderRow';
+import { GridSheets } from './GridSheets';
 import './datagrid.css';
-
-// Lightweight metadata query — returns doc name and each sheet's name/index/hidden plus row/col ordering (no cell data)
-const META_QUERY = '{ "@type": .["@type"], name: (.name // "Spreadsheet"), sheets: (.sheets | to_entries | map({ key: .key, value: { name: .value.name, index: .value.index, hidden: .value.hidden, rows: (.value.rows | to_entries | sort_by(.value.index) | map(.key)), cols: (.value.columns | to_entries | sort_by(.value.index) | map(.key)) } }) | from_entries) }';
-
-// Active sheet query template — returns the full sheet object for the current sheet
-function sheetQuery(sheetId: string): string {
-  return `.sheets["${sheetId}"]`;
-}
 
 // Custom function names from hf-functions.ts (for autocomplete).
 // HyperFormula built-in names are loaded lazily to avoid importing HF on the main thread.
@@ -647,140 +634,48 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
     }, [currentSheetId, kind, ids]);
   }, [mutate, currentSheetId]);
 
+  // Load document: HF bridge, metadata subscription, and the active-sheet
+  // subscription (`subscribeSheet` also serves the sheet-management handlers).
+  const { subscribeSheet } = useDataGridDoc({
+    docId,
+    initialSheetId,
+    history,
+    onHeadsUpdate,
+    setCurrentSheetId,
+    setRawDoc,
+    setGridName,
+    setMcResults,
+    setTick,
+    refs: {
+      hfBridgeRef, computedValuesRef, errorMessagesRef, spillTargetsRef,
+      condFormatResultsRef, activeSheetRef, activeSheetUnsubRef, docMetaRef,
+    },
+  });
+
   // -- Sheet management handlers --
-
-  const handleSelectSheet = useCallback((id: string, skipUrlUpdate = false) => {
-    if (id === currentSheetId) return;
-    if (editingCell) commitEdit();
-    hfBridgeRef.current?.switchSheet(id);
-    // Swap the active sheet subscription
-    if (docId) {
-      activeSheetUnsubRef.current?.();
-      activeSheetRef.current = null;
-      activeSheetUnsubRef.current = subscribeQuery(docId, sheetQuery(id), (sheetResult) => {
-        activeSheetRef.current = sheetResult;
-        setTick(t => t + 1);
-      });
-    }
-    setCurrentSheetId(id);
-    setSelectedCell(null);
-    setSelectionAnchor(null);
-    setEditingCell(null);
-    setSelectedRows(new Set());
-    setSelectedCols(new Set());
-    setContextMenu(null);
-    setClipboardSource(null);
-    setFormulaRefHighlights([]);
-    // Push history so back button navigates between sheets
-    if (!skipUrlUpdate && docId) {
-      pushDocHash(docId, `sheets/${id}`);
-    }
-  }, [currentSheetId, editingCell, commitEdit, docId]);
-
-  const handleAddSheet = useCallback(() => {
-    const m = docMetaRef.current;
-    if (!m || !docId) return;
-    const maxIndex = Object.values(m.sheets).reduce((max, s) => Math.max(max, s.index), 0);
-    const sheetCount = Object.keys(m.sheets).length;
-    const sid = shortId();
-    const cols: Record<string, { index: number; name: string }> = {};
-    for (let i = 0; i < 3; i++) cols[shortId()] = { index: i + 1, name: '' };
-    const rows: Record<string, { index: number }> = {};
-    for (let i = 0; i < 10; i++) rows[shortId()] = { index: i + 1 };
-    const newSheet = { '@type': 'Sheet', name: `Sheet ${sheetCount + 1}`, index: maxIndex + 1, columns: cols, rows, cells: {} };
-    updateDoc(docId, (d, sid, newSheet) => { d.sheets[sid] = newSheet as any; }, sid, newSheet);
-    // Optimistically update metadata so the tab appears immediately
-    docMetaRef.current = { ...m, sheets: { ...m.sheets, [sid]: { name: newSheet.name, index: newSheet.index, rows: [], cols: [] } } };
-    setTick(t => t + 1);
-    handleSelectSheet(sid);
-  }, [docId, handleSelectSheet]);
-
-  const handleRenameSheet = useCallback((id: string, name: string) => {
-    mutate((d, id, name) => { d.sheets[id].name = name; }, [id, name]);
-  }, [mutate]);
-
-  const handleDeleteSheet = useCallback((id: string) => {
-    const m = docMetaRef.current;
-    if (!m || !docId) return;
-    if (Object.keys(m.sheets).length <= 1) return;
-    const remaining = sortedEntries(m.sheets).filter(([sid]: [string, any]) => sid !== id);
-    // Rewrite cross-sheet formula refs + delete runs in the worker where full doc is available
-    updateDoc(docId, (d, deletedId) => {
-      const pattern = new RegExp(`S\\{${deletedId}\\}`, 'g');
-      for (const [sheetId, sheet] of Object.entries(d.sheets)) {
-        if (sheetId === deletedId) continue;
-        for (const [, cell] of Object.entries((sheet as any).cells || {})) {
-          if ((cell as any).value?.includes(`S{${deletedId}}`)) {
-            (cell as any).value = (cell as any).value.replace(pattern, 'S{#REF!}');
-          }
-        }
-      }
-      delete d.sheets[deletedId];
-    }, id);
-    if (id === currentSheetId) {
-      const nextId = remaining.length > 0 ? remaining[0][0] : null;
-      setCurrentSheetId(nextId);
-      if (nextId) hfBridgeRef.current?.switchSheet(nextId);
-      setSelectedCell(null); setSelectionAnchor(null); setEditingCell(null);
-      setSelectedRows(new Set()); setSelectedCols(new Set()); setClipboardSource(null);
-    }
-  }, [docId, currentSheetId]);
-
-  const handleHideSheet = useCallback((id: string) => {
-    const m = docMetaRef.current;
-    if (!m) return;
-    const visibleCount = Object.values(m.sheets).filter(s => !s.hidden).length;
-    if (visibleCount <= 1) return;
-    mutate((d, id) => { d.sheets[id].hidden = true; }, [id]);
-    docMetaRef.current = { ...m, sheets: { ...m.sheets, [id]: { ...m.sheets[id], hidden: true } } };
-    if (id === currentSheetId) {
-      const order = sortedEntries(m.sheets);
-      const firstVisible = order.find(([sid, s]: [string, any]) => sid !== id && !s.hidden);
-      if (firstVisible) handleSelectSheet(firstVisible[0]);
-    }
-  }, [mutate, currentSheetId, handleSelectSheet]);
-
-  const handleUnhideSheet = useCallback((id: string) => {
-    mutate((d, id) => { d.sheets[id].hidden = false; }, [id]);
-    const m = docMetaRef.current;
-    if (m?.sheets[id]) {
-      docMetaRef.current = { ...m, sheets: { ...m.sheets, [id]: { ...m.sheets[id], hidden: false } } };
-    }
-  }, [mutate]);
-
-  const handleReorderSheet = useCallback((draggedId: string, dropIndex: number) => {
-    const m = docMetaRef.current;
-    if (!m) return;
-    const order = sortedEntries(m.sheets);
-    // Remove dragged from order for calculating neighbors
-    const filtered = order.filter(([id]) => id !== draggedId);
-    let newIdx: number;
-    if (filtered.length === 0) return;
-    if (dropIndex <= 0) {
-      newIdx = filtered[0][1].index - 1;
-    } else if (dropIndex >= filtered.length) {
-      newIdx = filtered[filtered.length - 1][1].index + 1;
-    } else {
-      newIdx = (filtered[dropIndex - 1][1].index + filtered[dropIndex][1].index) / 2;
-    }
-    mutate((d, draggedId, newIdx) => { d.sheets[draggedId].index = newIdx; }, [draggedId, newIdx]);
-  }, [mutate]);
-
-  // Move a sheet one step among the *visible* tabs (hidden sheets are hopped
-  // over). Reuses the reorder index-midpoint math via handleReorderSheet.
-  const handleMoveSheet = useCallback((id: string, dir: -1 | 1) => {
-    const m = docMetaRef.current;
-    if (!m) return;
-    const order = sortedEntries(m.sheets);
-    const visible = order.filter(([, s]: [string, any]) => !s.hidden).map(([sid]) => sid);
-    const vi = visible.indexOf(id);
-    const ni = vi + dir;
-    if (vi < 0 || ni < 0 || ni >= visible.length) return;
-    const neighborId = visible[ni];
-    const filtered = order.filter(([sid]) => sid !== id);
-    const nIdx = filtered.findIndex(([sid]) => sid === neighborId);
-    handleReorderSheet(id, dir < 0 ? nIdx : nIdx + 1);
-  }, [handleReorderSheet]);
+  const {
+    handleSelectSheet, handleAddSheet, handleRenameSheet,
+    handleDeleteSheet, handleHideSheet, handleUnhideSheet,
+    handleReorderSheet, handleMoveSheet,
+  } = useSheetActions({
+    docId,
+    currentSheetId,
+    editingCell,
+    commitEdit,
+    mutate,
+    subscribeSheet,
+    refs: { docMetaRef, hfBridgeRef },
+    setCurrentSheetId,
+    setTick,
+    setSelectedCell,
+    setSelectionAnchor,
+    setEditingCell,
+    setSelectedRows,
+    setSelectedCols,
+    setContextMenu,
+    setClipboardSource,
+    setFormulaRefHighlights,
+  });
 
   // -- Context menu handlers --
 
@@ -1016,66 +911,7 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
   }, []);
 
   // Autofill drag: document-level mousemove/mouseup
-  useEffect(() => {
-    const onMouseMove = (e: MouseEvent) => {
-      if (!autofillDragRef.current) return;
-      const el = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null;
-      const td = el?.closest('[data-cell-col]') as HTMLElement | null;
-      if (!td) return;
-      const col = parseInt(td.dataset.cellCol!, 10);
-      const row = parseInt(td.dataset.cellRow!, 10);
-      if (isNaN(col) || isNaN(row)) return;
-
-      const src = autofillDragRef.current.sourceRange;
-
-      // Determine which axis the mouse has moved beyond
-      const beyondRow = row > src.maxRow ? row - src.maxRow : row < src.minRow ? src.minRow - row : 0;
-      const beyondCol = col > src.maxCol ? col - src.maxCol : col < src.minCol ? src.minCol - col : 0;
-
-      if (beyondRow === 0 && beyondCol === 0) {
-        setAutofillTarget(null);
-        return;
-      }
-
-      // Fill in whichever axis the mouse is furthest beyond
-      if (beyondRow >= beyondCol) {
-        // Vertical fill
-        if (row > src.maxRow) {
-          setAutofillTarget({ minCol: src.minCol, maxCol: src.maxCol, minRow: src.maxRow + 1, maxRow: row });
-        } else {
-          setAutofillTarget({ minCol: src.minCol, maxCol: src.maxCol, minRow: row, maxRow: src.minRow - 1 });
-        }
-      } else {
-        // Horizontal fill
-        if (col > src.maxCol) {
-          setAutofillTarget({ minRow: src.minRow, maxRow: src.maxRow, minCol: src.maxCol + 1, maxCol: col });
-        } else {
-          setAutofillTarget({ minRow: src.minRow, maxRow: src.maxRow, minCol: col, maxCol: src.minCol - 1 });
-        }
-      }
-    };
-
-    const onMouseUp = () => {
-      if (!autofillDragRef.current) return;
-      const src = autofillDragRef.current.sourceRange;
-      autofillDragRef.current = null;
-
-      // Use functional update to read current autofillTarget without stale closure
-      setAutofillTarget(prev => {
-        if (prev && commandCtxRef.current && canEditRef.current) {
-          commitAutofill(commandCtxRef.current, src, prev);
-        }
-        return null;
-      });
-    };
-
-    document.addEventListener('mousemove', onMouseMove);
-    document.addEventListener('mouseup', onMouseUp);
-    return () => {
-      document.removeEventListener('mousemove', onMouseMove);
-      document.removeEventListener('mouseup', onMouseUp);
-    };
-  }, []);
+  useAutofillDrag({ autofillDragRef, commandCtxRef, canEditRef, setAutofillTarget });
 
 
   // Peer presence cell map — keyed by "col:row", first peer wins. Skips the
@@ -1106,79 +942,6 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
     }
     return map;
   }, [peers, visibleColIds, visibleRowIds, currentSheetId]);
-
-  // Load document, init presence, and set up HF bridge
-  useEffect(() => {
-    if (!docId) return;
-
-    let mounted = true;
-
-    // Set up HF bridge for formula evaluation
-    const bridge = createHfBridge(sendHfPort);
-    hfBridgeRef.current = bridge;
-    const unsubValues = bridge.onComputedValues((values, spillTargets, errors) => {
-      computedValuesRef.current = values;
-      errorMessagesRef.current = errors;
-      spillTargetsRef.current = spillTargets;
-      if (mounted) setTick(t => t + 1);
-    });
-    const unsubMC = bridge.onMCResults((results) => {
-      if (mounted) setMcResults(results);
-    });
-    const unsubCF = bridge.onCondFormatResults((results) => {
-      condFormatResultsRef.current = results;
-      if (mounted) setTick(t => t + 1);
-    });
-
-    // Helper to subscribe to a sheet's full data
-    const subscribeToSheet = (sid: string) => {
-      activeSheetUnsubRef.current?.();
-      activeSheetRef.current = null;
-      activeSheetUnsubRef.current = subscribeQuery(docId, sheetQuery(sid), (sheetResult) => {
-        if (!mounted) return;
-        activeSheetRef.current = sheetResult;
-        setTick(t => t + 1);
-      });
-    };
-
-    // Subscription 1: lightweight metadata (doc name + sheet list)
-    const unsubMeta = subscribeQuery(docId, META_QUERY, (result, heads) => {
-      if (!mounted || !result) return;
-
-      if (!docMetaRef.current) {
-        // First load — determine which sheet to show and subscribe to it
-        const order = sortedEntries(result.sheets);
-        const firstSheetId = order.length > 0 ? order[0][0] : null;
-        const validInitial = initialSheetId && result.sheets[initialSheetId] ? initialSheetId : null;
-        const activeSheet = validInitial ?? firstSheetId;
-        setCurrentSheetId(activeSheet);
-        if (activeSheet) {
-          bridge.watch(docId, activeSheet);
-          subscribeToSheet(activeSheet);
-        }
-      }
-
-      setRawDoc(result);
-      docMetaRef.current = result;
-      if (result.name) setGridName(result.name);
-      document.title = (result.name || 'Spreadsheet') + ' - Spreadsheet';
-      history.onNewHeads(heads);
-      onHeadsUpdate(heads);
-      setTick(t => t + 1);
-    });
-
-    return () => {
-      mounted = false;
-      unsubMeta();
-      activeSheetUnsubRef.current?.();
-      activeSheetUnsubRef.current = null;
-      unsubValues();
-      unsubMC();
-      unsubCF();
-      bridge.destroy();
-      hfBridgeRef.current = null;
-    };
-  }, [docId]);
 
   // Automerge path to the focused cell (drives presence and the Edit Source link)
   const focusPath: (string | number)[] | undefined = useMemo(() => {
@@ -1528,11 +1291,18 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
             <table className="datagrid-table" style={{ width: columnDefs.reduce((sum, col, i) => sum + ((resizingCol?.index === i ? resizingCol.width : col.width) || 100), 48) }}>
               <thead>
                 <tr>
-                  <th
-                    className="datagrid-row-header datagrid-corner-header"
-                    style={frozenColCount > 0 || frozenRowCount > 0 ? { position: 'sticky', left: 0, top: 0, zIndex: 4 } : undefined}
-                    title="Select all cells"
-                    onClick={() => {
+                  <GridHeaderRow
+                    columnDefs={columnDefs}
+                    visibleColOriginalIndices={visibleColOriginalIndices}
+                    frozenColOffsets={frozenColOffsets}
+                    frozenColCount={frozenColCount}
+                    frozenRowCount={frozenRowCount}
+                    selectedCols={selectedCols}
+                    selectedCell={selectedCell}
+                    colHiddenGaps={colHiddenGaps}
+                    dropIndicator={dropIndicator}
+                    resizingCol={resizingCol}
+                    onSelectAll={() => {
                       if (visibleColIds.length === 0 || visibleRowIds.length === 0) return;
                       setContextMenu(null);
                       setSelectedRows(new Set());
@@ -1540,47 +1310,14 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
                       setSelectedCell([0, 0]);
                       setSelectionAnchor([visibleColIds.length - 1, visibleRowIds.length - 1]);
                     }}
+                    onHeaderClick={handleHeaderClick}
+                    onHeaderContextMenu={handleHeaderContextMenu}
+                    onHeaderMouseDown={handleHeaderMouseDown}
+                    headerLongPress={headerLongPress}
+                    onUnhideLines={unhideLines}
+                    onResizeMouseDown={handleResizeMouseDown}
+                    onAutoFitColumn={autoFitColumn}
                   />
-                  {columnDefs.map((col, ci) => {
-                    const isColSelected = selectedCols.has(ci);
-                    let dropClass = '';
-                    if (dropIndicator?.type === 'col') {
-                      if (dropIndicator.index === ci) dropClass = ' drop-left';
-                      else if (dropIndicator.index === ci + 1 && ci === columnDefs.length - 1) dropClass = ' drop-right';
-                    }
-                    const isFrozenCol = ci < frozenColCount;
-                    const isLastFrozenCol = ci === frozenColCount - 1;
-                    const gap = colHiddenGaps.find(g => g.beforeVisualIndex === ci);
-                    const frozenStyle = isFrozenCol ? { position: 'sticky' as const, left: frozenColOffsets[ci], zIndex: 3 } : undefined;
-                    return (
-                      <>
-                        {gap && (
-                          <th key={`unhide-col-${ci}`} className="datagrid-col-unhide" onClick={() => unhideLines('col', gap.hiddenIds)} title={`Show ${gap.hiddenIds.length} hidden column${gap.hiddenIds.length > 1 ? 's' : ''}`}>
-                            <span className="material-symbols-outlined" style={{ fontSize: '0.75rem' }}>unfold_more</span>
-                          </th>
-                        )}
-                        <th
-                          key={col.id}
-                          className={'datagrid-col-header' + (isColSelected ? ' selected' : selectedCell && selectedCell[0] === ci ? ' active' : '') + dropClass + (isLastFrozenCol ? ' frozen-col-last' : '')}
-                          style={{ width: (resizingCol?.index === ci ? resizingCol.width : col.width) || 100, ...frozenStyle }}
-                          data-col-index={ci}
-                          onClick={(e: any) => handleHeaderClick('col', ci, e)}
-                          onContextMenu={(e: any) => handleHeaderContextMenu('col', ci, e)}
-                          onMouseDown={(e: any) => handleHeaderMouseDown('col', ci, e)}
-                          {...headerLongPress('col', ci)}
-                        >
-                          {colIndexToLetter(visibleColOriginalIndices[ci])}
-                          <div className="col-resize-handle" onMouseDown={(e: any) => handleResizeMouseDown(ci, e)} onDblClick={(e: any) => { e.stopPropagation(); autoFitColumn(ci); }} />
-                        </th>
-                      </>
-                    );
-                  })}
-                  {/* Trailing unhide button if columns are hidden at the end */}
-                  {colHiddenGaps.find(g => g.beforeVisualIndex === columnDefs.length) && (
-                    <th className="datagrid-col-unhide" onClick={() => unhideLines('col', colHiddenGaps.find(g => g.beforeVisualIndex === columnDefs.length)!.hiddenIds)}>
-                      <span className="material-symbols-outlined" style={{ fontSize: '0.75rem' }}>unfold_more</span>
-                    </th>
-                  )}
                 </tr>
               </thead>
               <tbody>
@@ -1861,19 +1598,6 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
 
       </div>
 
-      <ConditionalFormatSheet
-        open={condFormatOpen}
-        onOpenChange={setCondFormatOpen}
-        rules={currentSheet?.conditionalFormats}
-        sortedRowIds={sortedRowIds}
-        sortedColIds={sortedColIds}
-        currentSheetId={currentSheetId ?? ''}
-        mutate={mutate}
-        selectedCell={selectedCell}
-        selectionRange={selectionRange}
-        visibleRowIds={visibleRowIds}
-        visibleColIds={visibleColIds}
-      />
       </div>
 
       {/* Monte Carlo stats for the selected cell — a strip at the bottom of the
@@ -1943,96 +1667,52 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
           multiSelect={isMultiSelect && !editingCell}
         />
       )}
-      <FormulaInsertSheet
-        open={formulaInsertOpen}
-        onOpenChange={setFormulaInsertOpen}
-        customFunctionNames={formulaNames}
-        onInsert={insertFunction}
-      />
-      {/* Row/column header menu — long-press (touch) or right-click. */}
-      <HeaderContextMenu
-        kind={headerMenu?.kind ?? 'row'}
-        anchor={headerMenu?.anchor ?? null}
-        page={headerMenu?.page ?? 'main'}
-        onPageChange={(page) => setHeaderMenu(m => m && { ...m, page })}
-        onClose={() => { setHeaderMenu(null); setContextMenu(null); }}
-        resolveCommand={commands.resolveById}
-        onResize={() => { const k = headerMenu?.kind ?? 'row'; setHeaderMenu(null); setResizeKind(k); }}
-      />
-      <ResizeSheet
-        open={resizeKind !== null}
-        onOpenChange={(o) => { if (!o) setResizeKind(null); }}
-        kind={resizeKind ?? 'row'}
-        count={resizeTargetIds.length}
-        currentSize={resizeCurrentSize}
-        onApply={(size) => {
-          if (effectiveSheetId && resizeKind) {
-            applyItemSize(mutate, effectiveSheetId, resizeKind, resizeTargetIds, size);
-          }
-        }}
-      />
-      <FormatSheet
-        open={formatSheetOpen}
-        onOpenChange={setFormatSheetOpen}
-        currentFormat={currentCellFormat}
-        onApply={(patch) => {
-          if (commandCtxRef.current) applyFormatToSelection(commandCtxRef.current, patch);
-        }}
-        onClear={() => commands.resolveById('clear-formatting').execute()}
-        onOpenConditional={() => setCondFormatOpen(true)}
-        onOpenColor={setColorTarget}
-        onOpenNumberFormat={() => setNumFmtOpen(true)}
-        onOpenFontFamily={() => setFontFamilyOpen(true)}
-      />
-      {/* The two long single-selects, as sibling sheets over the format sheet — same
-          arrangement as the colour picker, so the format sheet stays put behind them
-          and formatting remains iterative. */}
-      <PickerSheet
-        open={numFmtOpen}
-        onOpenChange={setNumFmtOpen}
-        title="Number format"
-        options={NUMBER_FORMAT_OPTIONS}
-        value={currentCellFormat?.numFmt ?? 'auto'}
-        onPick={(v) => {
-          if (commandCtxRef.current) {
-            applyFormatToSelection(commandCtxRef.current, { numFmt: v === 'auto' ? undefined : v });
-          }
-        }}
-        data-testid="number-format-sheet"
-      />
-      <PickerSheet
-        open={fontFamilyOpen}
-        onOpenChange={setFontFamilyOpen}
-        title="Font"
-        options={FONT_FAMILY_OPTIONS}
-        value={currentCellFormat?.fontFamily ?? 'Default'}
-        onPick={(v) => {
-          if (commandCtxRef.current) {
-            applyFormatToSelection(commandCtxRef.current, { fontFamily: v === 'Default' ? undefined : v });
-          }
-        }}
-        data-testid="font-family-sheet"
-      />
-      {/* Colour-only picker, shared by the bottom bar and the format sheet. */}
-      <ColorSheet
-        target={colorTarget}
-        onOpenChange={(o) => { if (!o) setColorTarget(null); }}
-        textColor={currentCellFormat?.textColor}
-        bgColor={currentCellFormat?.bgColor}
-        onApply={(target, color) => {
-          if (!commandCtxRef.current) return;
-          applyFormatToSelection(commandCtxRef.current,
-            target === 'fill' ? { bgColor: color } : { textColor: color });
-        }}
-        onOpenConditional={() => setCondFormatOpen(true)}
-      />
-      <SheetListSheet
-        open={sheetListOpen}
-        onOpenChange={setSheetListOpen}
-        sheets={sheetOrder}
-        currentSheetId={effectiveSheetId ?? ''}
-        readOnly={!canEdit}
-        onPick={(id) => {
+      <GridSheets
+        mutate={mutate}
+        commands={commands}
+        commandCtxRef={commandCtxRef}
+        canEdit={canEdit}
+        canEditRef={canEditRef}
+        currentSheet={currentSheet}
+        currentSheetId={currentSheetId}
+        effectiveSheetId={effectiveSheetId}
+        meta={meta}
+        sheetOrder={sheetOrder}
+        visibleSheetIds={visibleSheetIds}
+        sortedRowIds={sortedRowIds}
+        sortedColIds={sortedColIds}
+        visibleRowIds={visibleRowIds}
+        visibleColIds={visibleColIds}
+        selectedCell={selectedCell}
+        selectionRange={selectionRange}
+        currentCellFormat={currentCellFormat}
+        frozenRowCount={frozenRowCount}
+        frozenColCount={frozenColCount}
+        resizeKind={resizeKind}
+        resizeTargetIds={resizeTargetIds}
+        resizeCurrentSize={resizeCurrentSize}
+        formulaNames={formulaNames}
+        headerMenu={headerMenu}
+        condFormatOpen={condFormatOpen}
+        sheetListOpen={sheetListOpen}
+        sheetOptionsOpen={sheetOptionsOpen}
+        formatSheetOpen={formatSheetOpen}
+        numFmtOpen={numFmtOpen}
+        fontFamilyOpen={fontFamilyOpen}
+        colorTarget={colorTarget}
+        formulaInsertOpen={formulaInsertOpen}
+        onOpenChangeCondFormat={setCondFormatOpen}
+        onOpenChangeSheetList={setSheetListOpen}
+        onOpenChangeSheetOptions={setSheetOptionsOpen}
+        onOpenChangeFormat={setFormatSheetOpen}
+        onOpenChangeNumFmt={setNumFmtOpen}
+        onOpenChangeFontFamily={setFontFamilyOpen}
+        onOpenChangeColor={setColorTarget}
+        onOpenChangeFormulaInsert={setFormulaInsertOpen}
+        onHeaderMenuChange={setHeaderMenu}
+        onResizeKindChange={setResizeKind}
+        onContextMenuClose={() => setContextMenu(null)}
+        onPickSheet={(id) => {
           const s = sheetOrder.find(sh => sh.id === id);
           if (s?.hidden) {
             if (!canEditRef.current) return;
@@ -2040,30 +1720,13 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
           }
           handleSelectSheet(id);
         }}
+        onUnhideSheet={handleUnhideSheet}
+        onRenameSheet={handleRenameSheet}
+        onMoveSheet={handleMoveSheet}
+        onHideSheet={handleHideSheet}
+        onDeleteSheet={handleDeleteSheet}
+        onInsertFunction={insertFunction}
       />
-      {effectiveSheetId && (
-        <SheetOptionsSheet
-          open={sheetOptionsOpen}
-          onOpenChange={setSheetOptionsOpen}
-          sheetId={effectiveSheetId}
-          sheetName={meta?.sheets?.[effectiveSheetId]?.name ?? ''}
-          onRename={handleRenameSheet}
-          canMoveLeft={visibleSheetIds.indexOf(effectiveSheetId) > 0}
-          canMoveRight={visibleSheetIds.indexOf(effectiveSheetId) >= 0 && visibleSheetIds.indexOf(effectiveSheetId) < visibleSheetIds.length - 1}
-          onMove={handleMoveSheet}
-          canHide={visibleSheetIds.length > 1}
-          onHide={handleHideSheet}
-          canDelete={sheetOrder.length > 1}
-          onDelete={handleDeleteSheet}
-          frozenRows={frozenRowCount}
-          frozenCols={frozenColCount}
-          maxFrozenRows={Math.max(0, visibleRowIds.length - 1)}
-          maxFrozenCols={Math.max(0, visibleColIds.length - 1)}
-          onSetFrozen={(kind, count) => {
-            if (effectiveSheetId) applyFreezeCount(mutate, effectiveSheetId, kind, count);
-          }}
-        />
-      )}
     </div>
     </DocLoader>
   );
