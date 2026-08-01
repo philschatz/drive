@@ -897,7 +897,7 @@ test('presence-updates.gif', async ({ browser }) => {
     alice,
     bob,
     async (l, r) => {
-      // Staggered opens, as presence-editor.spec.ts does: Alice is already in the
+      // Staggered opens, as tests-pw/presence.spec.ts does: Alice is already in the
       // document when Bob arrives, so the capture shows a peer *joining*.
       await l.goto(`/#/d/${docId}`);
       await expect(l.getByTestId('task-row').first()).toBeVisible({ timeout: 60_000 });
