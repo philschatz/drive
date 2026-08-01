@@ -3,12 +3,14 @@ import { waitFor } from './support/peer';
 import { setupFriendPair, shareNewDoc, waitForDocName, type FriendPair } from './support/scenarios';
 
 /**
- * The two ways access ends, both of which are real keyhive revocation and neither
- * of which any mocked test reaches: the authority revoking a member, and a member
- * revoking itself (the "archive" flow).
+ * The full lifecycle of shared access, all real keyhive revocation that no
+ * mocked test reaches: the grant (a friend gains edit access and reads the doc),
+ * the authority revoking a member, and a member revoking itself (the "archive"
+ * flow). The grant half absorbed the assertions that used to live in
+ * friend-share.spec.ts.
  *
- * One friend pair for both, with a doc per test — a revoked doc is no use to the
- * next case, and sharing the pair is what the boot cost is in.
+ * One friend pair for all of it, with a doc per test — a revoked doc is no use
+ * to the next case, and sharing the pair is what the boot cost is in.
  */
 test.describe.configure({ mode: 'serial' });
 
@@ -29,15 +31,27 @@ test.afterAll(async () => {
  * last-cached view). So this asserts the achievable authority-side guarantees:
  * the revocation is applied, and a later edit by alice reaches alice but not bob.
  */
-test('revoking a member applies at the authority and cuts the member off from future edits', async () => {
+test('granting edit access lets a friend read the doc; revoking cuts them off', async () => {
   const { alice, bob, bobGroup } = pair;
   const docId = await shareNewDoc(pair, 'edit');
 
-  // Precondition: bob is a member and has the synced content.
+  // The two peers are genuinely distinct identities.
+  const idA = await alice.call('getIdentity');
+  const idB = await bob.call('getIdentity');
+  expect(idA.deviceId).not.toEqual(idB.deviceId);
+
+  // Precondition: bob is a member with 'edit' access and the synced content,
+  // and the doc shows up in his home list; alice sees 2+ members.
+  expect((await bob.call('getMyAccess', docId))?.toLowerCase()).toBe('edit');
   await waitFor(
     () => alice.call('getDocMembers', docId).then((r) => r.members),
-    (members) => members.some((m) => m.agentId === bobGroup),
+    (members) => members.some((m) => m.agentId === bobGroup) && members.length >= 2,
     { label: 'bob is a member before revoke' }
+  );
+  await waitFor(
+    () => bob.call('getDocList'),
+    (list) => list.some((e) => e.id === docId),
+    { label: 'doc appears in bob home list' }
   );
   await waitForDocName(bob, docId, 'Shared list');
 
