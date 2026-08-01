@@ -225,9 +225,14 @@ test.describe('DataGrid mobile', () => {
     const container = page.locator('.datagrid-container');
     await container.evaluate(el => { el.scrollTop = 0; });
 
-    // Freeze the first row via the sheet options stepper
+    // Freeze the first row via the sheet options stepper. Tap Sheet 1, then tap
+    // the now-active tab to open its options: tapping a non-active tab only
+    // switches to it (the sheet-management test left Budget active), and only
+    // the active tab opens the options sheet.
     const tabsBar = page.getByTestId('sheet-tabs-bar');
-    await tabsBar.locator('[data-sheet-tab]', { hasText: 'Sheet 1' }).click();
+    const sheet1Tab = tabsBar.locator('[data-sheet-tab]', { hasText: 'Sheet 1' });
+    await sheet1Tab.click();
+    await sheet1Tab.click();
     await page.getByRole('button', { name: 'Increase frozen rows' }).click();
     await expect(page.getByTestId('freeze-rows-stepper-value')).toHaveText('1');
     await page.keyboard.press('Escape');

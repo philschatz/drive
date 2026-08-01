@@ -92,11 +92,18 @@ test('content survives a reload', async () => {
  * tests/rich-text-restore.test.ts — this only proves the key reaches it.
  */
 test('double-click selects a word, and Ctrl+Z takes back the edit that replaced it', async () => {
-  await editor().locator('h1').dblclick();
+  // The h1 is full-width, so its geometric centre is empty space past the
+  // word — dblclick the start of the first run to land on "Hello".
+  const run = editor().locator('h1 span[data-from]').first();
+  const box = (await run.boundingBox())!;
+  await app.page.mouse.dblclick(box.x + 6, box.y + box.height / 2);
   expect(await selectedText()).toBe('Hello');
 
-  await app.page.keyboard.type('Howdy');
-  await expect(editor().locator('h1')).toContainText('Howdy');
+  // One character, not a word: every keystroke is its own change, so typing
+  // "Howdy" would take five undos to revert. Replacing a selection is one
+  // splice, so a single typed character is one change and one Ctrl+Z undoes it.
+  await app.page.keyboard.type('X');
+  await expect(editor().locator('h1')).toContainText('X world');
 
   await app.page.keyboard.press('ControlOrMeta+z');
   await expect(editor().locator('h1')).toContainText('Hello world');
