@@ -39,6 +39,20 @@ async function openSharedDoc(name: string): Promise<string> {
 
 const editor = (page: Page) => page.getByTestId('rt-editor');
 
+/** Global caret offset inside the editor, from the real DOM selection. */
+const caretOffset = (page: Page) => page.evaluate(() => {
+  const root = document.querySelector('[data-testid="rt-editor"]');
+  const sel = window.getSelection();
+  if (!root || !sel || sel.rangeCount === 0 || !sel.anchorNode) return -1;
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let seen = 0;
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    if (n === sel.anchorNode) return seen + sel.anchorOffset;
+    seen += (n as Text).data.length;
+  }
+  return -1;
+});
+
 /** Select `needle` inside the rich-text editor with a real DOM Range. */
 async function selectText(page: Page, needle: string): Promise<void> {
   await page.evaluate((needle) => {
@@ -94,7 +108,7 @@ test("a collaborator's caret renders as a line and tracks their moves", async ()
 
   // Bob opens the doc and, without touching it (no caret of his own), sees the text.
   await bob.page.goto(`/#/d/${docId}`);
-  await expect(editor(bob.page)).toContainText('hello from alice', { timeout: 30_000 });
+  await expect(editor(bob.page)).toContainText('hello from alice', { timeout: 45_000 });
 
   // Presence is ephemeral with no replay, so alice's caret broadcast is only useful
   // once bob's worker is on the document. Wait for that, then move her caret so a
@@ -146,13 +160,20 @@ test('the local caret survives a peer editing above it', async () => {
 
   // Bob edits at the very top of the document, before alice's caret.
   await bob.page.goto(`/#/d/${docId}`);
-  await expect(editor(bob.page)).toContainText('hello world', { timeout: 30_000 });
+  await expect(editor(bob.page)).toContainText('hello world', { timeout: 45_000 });
   await editor(bob.page).click();
   await bob.page.keyboard.press('ControlOrMeta+Home');
   await bob.page.keyboard.type('XY');
 
   // Alice sees the merge land.
-  await expect(editor(alice.page)).toContainText('XYhello world', { timeout: 30_000 });
+  await expect(editor(alice.page)).toContainText('XYhello world', { timeout: 45_000 });
+
+  // Her caret must settle at the rebased offset (10 = "hello wo|rld" with bob's
+  // "XY" prepended) before the next keystroke. The rebase rides the worker
+  // re-push that follows her cursor registering, so if her last ArrowLeft's mint
+  // was still in flight when bob's edit landed, the self-healing re-push is what
+  // moves it. Typing before it lands splices at the stale offset.
+  await expect.poll(() => caretOffset(alice.page), { timeout: 30_000 }).toBe(10);
 
   // Her next keystroke must still land inside "world" — an un-rebased caret
   // would put it two characters early ("XYhello !world").

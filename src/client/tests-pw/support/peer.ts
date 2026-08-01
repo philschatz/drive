@@ -1,4 +1,3 @@
-import { expect } from '@playwright/test';
 import type { Browser, BrowserContext, Page } from '@playwright/test';
 import type { DriveBridge } from '../../ui/test-bridge';
 
@@ -94,11 +93,27 @@ export async function newPeer(browser: Browser, name: string): Promise<Peer> {
  * A peer-dot is the right signal because it only renders off the `viewing`
  * channel, which means that channel decrypted — so the doc's keyhive epoch has
  * converged far enough for any other channel to be readable too.
+ *
+ * We don't just wait on those dots: the UI's newcomer re-announce is ONE-SHOT
+ * per unseen peer, and a single re-announce lost to the CGKA epoch race (a
+ * decrypt just after a rekey) would starve the barrier forever. So re-announce
+ * our own `viewing: true` on both pages each round — the same re-set pattern
+ * the presence spec relies on — until the dots render.
  */
 export async function bothSeeEachOther(a: Page, b: Page, timeout = 90_000): Promise<void> {
-  for (const page of [a, b]) {
-    await expect(page.getByTestId('peer-dot').first()).toBeVisible({ timeout });
+  const docId = /#\/(?:d|source)\/([^/?]+)/.exec(a.url())?.[1]
+    ?? /#\/(?:d|source)\/([^/?]+)/.exec(b.url())?.[1];
+  if (!docId) throw new Error(`bothSeeEachOther: no doc id in ${a.url()} / ${b.url()}`);
+  const dotVisible = (page: Page) =>
+    page.getByTestId('peer-dot').first().isVisible().catch(() => false);
+  const start = Date.now();
+  while (Date.now() - start < timeout) {
+    await a.evaluate((d) => (window as any).__drive.setPresence(d, { viewing: true }), docId);
+    await b.evaluate((d) => (window as any).__drive.setPresence(d, { viewing: true }), docId);
+    if ((await dotVisible(a)) && (await dotVisible(b))) return;
+    await new Promise((r) => setTimeout(r, 500));
   }
+  throw new Error(`bothSeeEachOther timed out after ${timeout}ms on doc ${docId}`);
 }
 
 /**
