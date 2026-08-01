@@ -142,6 +142,14 @@ test.describe('DataGrid mobile', () => {
     // Select B2:B3 by touch-dragging from B2 (tap first to select it)
     const from = (await cell(1, 1).boundingBox())!;
     await page.touchscreen.tap(from.x + 5, from.y + 5);
+    // A CDP-synthesized tap also fires Chromium's compat-mouse events, which
+    // the browser coalesces into a dblclick the grid reads as double-tap-to-edit.
+    // That phantom edit swallows the selection drag below; cancel it so the drag
+    // starts from a plain single-cell selection.
+    await page.waitForTimeout(50);
+    if (await page.locator('.datagrid-cell.editing').count()) {
+      await page.keyboard.press('Escape');
+    }
     const to = (await cell(1, 2).boundingBox())!;
     await touchDrag(
       page,
