@@ -99,21 +99,66 @@ export async function newPeer(browser: Browser, name: string): Promise<Peer> {
  * decrypt just after a rekey) would starve the barrier forever. So re-announce
  * our own `viewing: true` on both pages each round — the same re-set pattern
  * the presence spec relies on — until the dots render.
+ *
+ * The re-sets must NOT be faster than the keyhive sync debounce: every
+ * re-broadcast re-encrypts, and while the peers disagree on the CGKA epoch
+ * each encrypt mints NEW key material that the library holds ~1s before
+ * syncing (the `syncTimeout` in keyhive.ts — see flushPresenceOut's rotation
+ * comment). A loop that re-encrypts inside that debounce window keeps every
+ * round one epoch ahead of what the peer can decrypt, forever. 3s puts a full
+ * sync + the worker's own 5s retry re-announce between rotations, so a fresh
+ * epoch lands before the next broadcast.
  */
 export async function bothSeeEachOther(a: Page, b: Page, timeout = 90_000): Promise<void> {
   const docId = /#\/(?:d|source)\/([^/?]+)/.exec(a.url())?.[1]
     ?? /#\/(?:d|source)\/([^/?]+)/.exec(b.url())?.[1];
   if (!docId) throw new Error(`bothSeeEachOther: no doc id in ${a.url()} / ${b.url()}`);
+  // Stash the raw worker presence so a timeout can say whether the worker ever
+  // saw the peer even when the UI dot never rendered. Same subscription pattern
+  // the presence spec relies on; a second subscriber is a no-op on a page whose
+  // editor already subscribed.
+  const stash = (page: Page) => page.evaluate((d) => {
+    (window as any).__barrierPeers = {};
+    (window as any).__drive.subscribePresence(d, (peers: any) => {
+      (window as any).__barrierPeers = peers;
+    });
+  }, docId);
+  await stash(a);
+  await stash(b);
   const dotVisible = (page: Page) =>
     page.getByTestId('peer-dot').first().isVisible().catch(() => false);
   const start = Date.now();
+  let lastReset = 0;
   while (Date.now() - start < timeout) {
-    await a.evaluate((d) => (window as any).__drive.setPresence(d, { viewing: true }), docId);
-    await b.evaluate((d) => (window as any).__drive.setPresence(d, { viewing: true }), docId);
+    if (Date.now() - lastReset >= 3_000) {
+      await a.evaluate((d) => (window as any).__drive.setPresence(d, { viewing: true }), docId);
+      await b.evaluate((d) => (window as any).__drive.setPresence(d, { viewing: true }), docId);
+      lastReset = Date.now();
+    }
     if ((await dotVisible(a)) && (await dotVisible(b))) return;
     await new Promise((r) => setTimeout(r, 500));
   }
-  throw new Error(`bothSeeEachOther timed out after ${timeout}ms on doc ${docId}`);
+  const dump = async (name: string, page: Page) => {
+    const state = await page.evaluate(() => {
+      const peers = (window as any).__barrierPeers ?? {};
+      return {
+        peerCount: Object.keys(peers).length,
+        peers: Object.entries(peers).map(([pid, p]: any) => ({
+          pid,
+          peerId: p?.peerId ?? null,
+          value: p?.value ?? null,
+        })),
+        dotCount: document.querySelectorAll('[data-testid="peer-dot"]').length,
+        hasConnectionButton: !!document.querySelector('button[aria-label]'),
+        url: location.hash,
+      };
+    });
+    return `${name}: ${JSON.stringify(state)}`;
+  };
+  throw new Error(
+    `bothSeeEachOther timed out after ${timeout}ms on doc ${docId}\n` +
+    `${await dump('a', a)}\n${await dump('b', b)}`
+  );
 }
 
 /**

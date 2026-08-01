@@ -53,6 +53,36 @@ const caretOffset = (page: Page) => page.evaluate(() => {
   return -1;
 });
 
+/**
+ * Park the caret at a verified offset, re-correcting if it drifts.
+ *
+ * A caret-restore can fire LATE: the editor restores the last keystroke's
+ * pending caret on the next spans re-render, and if that re-render lands after
+ * we pressed an arrow, the selection is yanked back to end-of-text — and the
+ * rebase guard then refuses to move a caret it believes has "moved on" (see
+ * RichTextEditor's rebaseCaret). Each press is also a worker round-trip, so
+ * presses are the wrong unit of measurement. Drive by the DOM offset instead:
+ * press toward `target`, and require it to hold across a quiet window (long
+ * enough for the last keystroke's re-push + restore to fire and be corrected).
+ */
+async function parkCaretAt(page: Page, target: number, timeout = 30_000): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < timeout) {
+    const off = await caretOffset(page);
+    if (off === target) {
+      await page.waitForTimeout(800);
+      if ((await caretOffset(page)) === target) return;
+      continue;
+    }
+    if (off < 0) {
+      await editor(page).click();
+    } else {
+      await page.keyboard.press(off > target ? 'ArrowLeft' : 'ArrowRight');
+    }
+  }
+  throw new Error(`caret did not settle at ${target}; last=${await caretOffset(page)}`);
+}
+
 /** Select `needle` inside the rich-text editor with a real DOM Range. */
 async function selectText(page: Page, needle: string): Promise<void> {
   await page.evaluate((needle) => {
@@ -150,13 +180,14 @@ test('the local caret survives a peer editing above it', async () => {
   const { alice, bob } = pair;
   const docId = await openSharedDoc('Caret doc');
 
-  // Alice types a line and parks her caret in the middle of "world".
+  // Alice types a line and parks her caret in the middle of "world". The offset,
+  // not the press count, is the contract: a late caret-restore from the last
+  // keystroke can clobber a press and leave the caret (and the cursor it mints)
+  // at the wrong index — see parkCaretAt.
   await alice.page.goto(`/#/d/${docId}`);
   await editor(alice.page).click();
   await alice.page.keyboard.type('hello world');
-  await alice.page.keyboard.press('ArrowLeft');
-  await alice.page.keyboard.press('ArrowLeft');
-  await alice.page.keyboard.press('ArrowLeft'); // caret now "hello wo|rld"
+  await parkCaretAt(alice.page, 8); // "hello wo|rld"
 
   // Bob edits at the very top of the document, before alice's caret.
   await bob.page.goto(`/#/d/${docId}`);
@@ -257,6 +288,17 @@ test('a selection overlapping a peer edit keeps the words that survive', async (
   // Two overlapping selections: alice's ends inside bob's, sharing `and pitch`.
   await selectText(alice.page, OVERLAP_ALICE);
   await selectText(bob.page, OVERLAP_BOB);
+
+  // Bob's selection just triggered a cursor MINT — a worker round-trip that
+  // resolves against the worker's CURRENT doc state. If alice's replacement
+  // ops reach bob's worker before that mint lands, the cursors are minted
+  // against a doc with part of her edit applied, and their later resolution
+  // comes out shifted ("t up the t" instead of "the tents"). Drain bob's
+  // worker queue twice: the first drain guarantees the selState effect has
+  // dispatched the mint (FIFO behind it), the second that it has processed —
+  // both strictly before alice starts typing.
+  await bob.call('queryDoc', docId, '.name');
+  await bob.call('queryDoc', docId, '.name');
 
   // Alice types over hers, destroying the two shared words along the way.
   await alice.page.keyboard.type(OVERLAP_ALICE_TYPES);

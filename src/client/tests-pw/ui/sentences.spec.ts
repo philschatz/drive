@@ -105,6 +105,13 @@ test('double-click selects a word, and Ctrl+Z takes back the edit that replaced 
   await app.page.keyboard.type('X');
   await expect(editor().locator('h1')).toContainText('X world');
 
+  // The undo computes its target from a cursor advanced by the 'X' write's heads
+  // push. Under load a Ctrl+Z fired while the write is still in flight can target
+  // a stale version (restore throws "Version not found" and the doc keeps the X).
+  // Drain the worker — FIFO behind the pending write — so the write is applied
+  // and its push delivered before the undo.
+  await app.page.evaluate(() => (window as any).__drive.flushStorage());
+
   await app.page.keyboard.press('ControlOrMeta+z');
   await expect(editor().locator('h1')).toContainText('Hello world');
   // The undo took back one edit, not the document: the divider is still here.
