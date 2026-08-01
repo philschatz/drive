@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Locator } from '@playwright/test';
 import { openApp, createDocViaUI, mdSelect, mdField, openProperty, backToProperties, saveProperty, type App } from './support';
 
 /**
@@ -51,8 +51,28 @@ test.describe('Calendar', () => {
 
   /** Open an existing event from the day grid, landing on its property list. */
   async function openEvent(title: string) {
-    await app.page.getByText(title).first().click({ force: true });
-    await expect(app.page.locator('.panel')).toBeVisible();
+    await clickOpensPanel(app.page.getByText(title).first());
+  }
+
+  /**
+   * Click a grid element that should open the editor. schedule-x re-renders the
+   * grid when a range query lands; if that render replaces the target node
+   * between mousedown and mouseup, the browser swallows the synthesized click
+   * (no `click` event is fired) and the editor never opens — so tap until the
+   * panel appears.
+   */
+  async function clickOpensPanel(locator: Locator, opts: { position?: { x: number; y: number } } = {}) {
+    const panel = app.page.locator('.panel');
+    for (let attempt = 0; attempt < 3; attempt++) {
+      await locator.click({ force: true, ...opts });
+      try {
+        await expect(panel).toBeVisible({ timeout: 1_500 });
+        return;
+      } catch {
+        // swallowed click — retry
+      }
+    }
+    await expect(panel).toBeVisible();
   }
 
   async function createEvent(opts: {
@@ -67,8 +87,9 @@ test.describe('Calendar', () => {
   }) {
     const page = app.page;
     await switchToDayView();
-    await page.locator('.sx__time-grid-day').click({ position: { x: 50, y: 200 }, force: true });
-    await expect(page.locator('.panel')).toBeVisible();
+    // The grid tap can be swallowed by a mid-click schedule-x re-render (see
+    // clickOpensPanel); a new event opens straight in the Title pane.
+    await clickOpensPanel(page.locator('.sx__time-grid-day'), { position: { x: 50, y: 200 } });
 
     // A new event opens straight in the Title pane.
     await mdField(page, 'ed-title').fill(opts.title);
