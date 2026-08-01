@@ -193,12 +193,37 @@ export interface GridCommandsApi {
 // Helpers shared by plugins
 // ============================================================
 
-function rowIndices(s: GridCommandState): number[] {
-  return s.contextScope?.type === 'row' ? s.contextScope.indices : s.currentRowIndices;
+/** Selection indices for an axis, honoring the context-menu scope. */
+function lineIndices(axis: 'row' | 'col', s: GridCommandState): number[] {
+  return s.contextScope?.type === axis
+    ? s.contextScope.indices
+    : (axis === 'row' ? s.currentRowIndices : s.currentColIndices);
 }
 
-function colIndices(s: GridCommandState): number[] {
-  return s.contextScope?.type === 'col' ? s.contextScope.indices : s.currentColIndices;
+/** Visible ids for an axis. */
+function lineVisibleIds(axis: 'row' | 'col', ctx: GridCommandContext): string[] {
+  return axis === 'row' ? ctx.visibleRowIds : ctx.visibleColIds;
+}
+
+/** The sheet's row/column map for an axis. */
+function lineMap(axis: 'row' | 'col', sheet: any): Record<string, any> {
+  return axis === 'row' ? sheet.rows : sheet.columns;
+}
+
+/** The sheet's row/column map as sorted entries for an axis. */
+function lineEntries(axis: 'row' | 'col', sheet: any): Array<[string, any]> {
+  return sortedEntries(lineMap(axis, sheet));
+}
+
+/** The currently selected index set for an axis. */
+function lineSelected(axis: 'row' | 'col', ctx: GridCommandContext): Set<number> {
+  return axis === 'row' ? ctx.selectedRows : ctx.selectedCols;
+}
+
+/** Replace an axis's selected-index set. */
+function lineSetSelected(axis: 'row' | 'col', ctx: GridCommandContext, next: Set<number>): void {
+  if (axis === 'row') ctx.setSelectedRows(next);
+  else ctx.setSelectedCols(next);
 }
 
 /** Get the active sheet from the context. */
@@ -611,7 +636,7 @@ function autofillFromNeighbour(
   ctx: GridCommandContext,
   kind: 'row' | 'col',
 ): void {
-  const indices = kind === 'row' ? rowIndices(s) : colIndices(s);
+  const indices = lineIndices(kind, s);
   if (indices.length === 0) return;
   const start = Math.min(...indices);
   const end = Math.max(...indices);
@@ -643,399 +668,331 @@ function autofillFromNeighbour(
   ctx.setContextMenu(null);
 }
 
-const rowPlugin: GridPlugin = {
-  id: 'row',
-  commands: [
-    {
-      id: 'autofill-rows',
-      defaultLabel: 'Autofill',
-      icon: 'stat_minus_1',
-      // Needs a row above to extend from.
-      isEnabled: s => rowIndices(s).length > 0 && Math.min(...rowIndices(s)) > 0,
-      execute: (s, ctx) => autofillFromNeighbour(s, ctx, 'row'),
-    },
-    {
-      id: 'insert-row-above',
-      defaultLabel: s => {
-        const n = rowIndices(s).length;
-        return n > 1 ? `Insert ${n} rows above` : 'Insert 1 row above';
+// ============================================================
+// linePlugin — row/column plugin factory
+//
+// Rows and columns differ only by naming/ordering words, the sheet map they
+// operate on, the entry shape (columns carry a name), the cell-key match, and
+// their cell-ctx entries. One factory covers both, plus the hide/freeze halves
+// that used to live in a separate visibility plugin. Mutate callbacks are
+// serialized via fn.toString(), so they never close over factory params — the
+// axis string is passed as an arg and branched on inside, as commitReorder does.
+// ============================================================
+
+interface LineAxisConfig {
+  axis: 'row' | 'col';
+  /** Command-id fragments — shorter than the label nouns ('col', not 'column'). */
+  idNoun: string;
+  idPlural: string;
+  /** Label nouns ('column' reads better than 'col'). */
+  noun: string;
+  plural: string;
+  /** Words/icons for the two insert commands (before = above/left). */
+  insert: { beforeWord: string; afterWord: string; beforeIcon: string; afterIcon: string };
+  /** Words for the two move commands (before = up/left). */
+  moveBefore: string;
+  moveAfter: string;
+  /** Resize-sheet command (label/icon differ per axis). */
+  resize: { id: string; label: string; icon: string };
+  /** cell-ctx entries — NOT pure mirrors (columns' includes delete-rows). */
+  cellCtx: SlotEntry[];
+}
+
+function linePlugin(cfg: LineAxisConfig): GridPlugin {
+  const { axis } = cfg;
+  const isRow = axis === 'row';
+  const pluralVerb = (verb: string, n: number) => n > 1 ? `${verb} ${n} ${cfg.plural}` : `${verb} ${cfg.noun}`;
+  const insertLabel = (n: number, word: string) =>
+    n > 1 ? `Insert ${n} ${cfg.plural} ${word}` : `Insert 1 ${cfg.noun} ${word}`;
+  const id = {
+    autofill: `autofill-${cfg.idPlural}`,
+    insertBefore: `insert-${cfg.idNoun}-${cfg.insert.beforeWord}`,
+    insertAfter: `insert-${cfg.idNoun}-${cfg.insert.afterWord}`,
+    moveBefore: `move-${cfg.idPlural}-${cfg.moveBefore}`,
+    moveAfter: `move-${cfg.idPlural}-${cfg.moveAfter}`,
+    delete: `delete-${cfg.idPlural}`,
+    hide: `hide-${cfg.idPlural}`,
+    freeze: `freeze-${cfg.idPlural}`,
+    unfreeze: `unfreeze-${cfg.idPlural}`,
+  };
+
+  return {
+    id: isRow ? 'row' : 'column',
+    commands: [
+      {
+        id: id.autofill,
+        defaultLabel: 'Autofill',
+        icon: 'stat_minus_1',
+        // Needs a line before it to extend from.
+        isEnabled: s => lineIndices(axis, s).length > 0 && Math.min(...lineIndices(axis, s)) > 0,
+        execute: (s, ctx) => autofillFromNeighbour(s, ctx, axis),
       },
-      icon: 'keyboard_arrow_up',
-      isEnabled: s => rowIndices(s).length > 0,
-      execute: (s, ctx) => {
-        const { sheet: doc, setContextMenu, currentSheetId } = ctx;
-        if (!doc) return;
-        const sh = ctxSheet(ctx);
-        const indices = rowIndices(s);
-        const entries = sortedEntries(sh.rows);
-        if (entries.length === 0) return;
-        const count = Math.max(indices.length, 1);
-        // Resolve the VISIBLE target row to its position in the full sorted list (H4).
-        const minVisIdx = Math.min(...indices);
-        const targetId = ctx.visibleRowIds[minVisIdx];
-        if (!targetId) return;
-        const targetPos = entries.findIndex(([id]) => id === targetId);
-        if (targetPos === -1) return;
-        const hi = entries[targetPos][1].index;
-        const lo = targetPos === 0 ? hi - count : entries[targetPos - 1][1].index;
-        const newIds = Array.from({ length: count }, () => shortId());
-        ctx.mutate((d, currentSheetId, newIds, lo, hi, count) => {
-          const ms = d.sheets[currentSheetId];
-          for (let i = 0; i < count; i++) {
-            ms.rows[newIds[i]] = { index: lo + ((hi - lo) * (i + 1)) / (count + 1) };
-          }
-        }, [currentSheetId, newIds, lo, hi, count]);
-        setContextMenu(null);
-      },
-    },
-    {
-      id: 'insert-row-below',
-      defaultLabel: s => {
-        const n = rowIndices(s).length;
-        return n > 1 ? `Insert ${n} rows below` : 'Insert 1 row below';
-      },
-      icon: 'keyboard_arrow_down',
-      isEnabled: s => rowIndices(s).length > 0,
-      execute: (s, ctx) => {
-        const { sheet: doc, setContextMenu, currentSheetId } = ctx;
-        if (!doc) return;
-        const sh = ctxSheet(ctx);
-        const indices = rowIndices(s);
-        const entries = sortedEntries(sh.rows);
-        if (entries.length === 0) return;
-        const count = Math.max(indices.length, 1);
-        // Resolve the VISIBLE target row to its position in the full sorted list (H4).
-        const maxVisIdx = Math.max(...indices);
-        const targetId = ctx.visibleRowIds[maxVisIdx];
-        if (!targetId) return;
-        const targetPos = entries.findIndex(([id]) => id === targetId);
-        if (targetPos === -1) return;
-        const lo = entries[targetPos][1].index;
-        const hi = targetPos >= entries.length - 1 ? lo + count : entries[targetPos + 1][1].index;
-        const newIds = Array.from({ length: count }, () => shortId());
-        ctx.mutate((d, currentSheetId, newIds, lo, hi, count) => {
-          const ms = d.sheets[currentSheetId];
-          for (let i = 0; i < count; i++) {
-            ms.rows[newIds[i]] = { index: lo + ((hi - lo) * (i + 1)) / (count + 1) };
-          }
-        }, [currentSheetId, newIds, lo, hi, count]);
-        setContextMenu(null);
-      },
-    },
-    {
-      id: 'move-rows-up',
-      defaultLabel: 'Move up',
-      isEnabled: s => s.currentRowIndices.length > 0,
-      execute: (_, ctx) => {
-        const { sheet: doc, selectedRows, setSelectedRows, setContextMenu, currentSheetId } = ctx;
-        if (!doc) return;
-        const sh = ctxSheet(ctx);
-        const entries = sortedEntries(sh.rows);
-        // selectedRows are VISIBLE indices — resolve neighbors through visibleRowIds (H4).
-        const indices = [...selectedRows].sort((a, b) => a - b);
-        if (indices.length === 0 || indices[0] === 0) return;
-        const aboveId = ctx.visibleRowIds[indices[0] - 1];
-        if (!aboveId) return;
-        const lastVisId = ctx.visibleRowIds[indices[indices.length - 1]];
-        const lastPos = entries.findIndex(([id]) => id === lastVisId);
-        if (lastPos === -1) return;
-        const newIndex = lastPos >= entries.length - 1
-          ? entries[lastPos][1].index + 1
-          : (entries[lastPos][1].index + entries[lastPos + 1][1].index) / 2;
-        ctx.mutate((d, currentSheetId, aboveId, newIndex) => { d.sheets[currentSheetId].rows[aboveId].index = newIndex; }, [currentSheetId, aboveId, newIndex]);
-        setSelectedRows(new Set(indices.map(i => i - 1)));
-        setContextMenu(null);
-      },
-    },
-    {
-      id: 'move-rows-down',
-      defaultLabel: 'Move down',
-      isEnabled: s => s.currentRowIndices.length > 0,
-      execute: (_, ctx) => {
-        const { sheet: doc, selectedRows, setSelectedRows, setContextMenu, currentSheetId } = ctx;
-        if (!doc) return;
-        const sh = ctxSheet(ctx);
-        const entries = sortedEntries(sh.rows);
-        // selectedRows are VISIBLE indices — resolve neighbors through visibleRowIds (H4).
-        const indices = [...selectedRows].sort((a, b) => a - b);
-        if (indices.length === 0 || indices[indices.length - 1] >= ctx.visibleRowIds.length - 1) return;
-        const belowId = ctx.visibleRowIds[indices[indices.length - 1] + 1];
-        if (!belowId) return;
-        const firstVisId = ctx.visibleRowIds[indices[0]];
-        const firstPos = entries.findIndex(([id]) => id === firstVisId);
-        if (firstPos === -1) return;
-        const newIndex = firstPos === 0
-          ? entries[0][1].index - 1
-          : (entries[firstPos - 1][1].index + entries[firstPos][1].index) / 2;
-        ctx.mutate((d, currentSheetId, belowId, newIndex) => { d.sheets[currentSheetId].rows[belowId].index = newIndex; }, [currentSheetId, belowId, newIndex]);
-        setSelectedRows(new Set(indices.map(i => i + 1)));
-        setContextMenu(null);
-      },
-    },
-    {
-      id: 'delete-rows',
-      defaultLabel: s => {
-        const n = rowIndices(s).length;
-        return n > 1 ? `Delete ${n} rows` : 'Delete row';
-      },
-      danger: true,
-      icon: 'delete',
-      isEnabled: s => rowIndices(s).length > 0,
-      execute: (s, ctx) => {
-        const { sheet: doc, setSelectedRows, setContextMenu, currentSheetId } = ctx;
-        if (!doc) return;
-        const sh = ctxSheet(ctx);
-        const indices = rowIndices(s);
-        const rowEntries = sortedEntries(sh.rows);
-        // Selection indices are in VISIBLE space — resolve through visibleRowIds
-        // so a hidden row before the target is never deleted (H4).
-        const idsToDelete = indices.map(i => ctx.visibleRowIds[i]).filter(Boolean);
-        if (idsToDelete.length === 0) return;
-        const deletedSet = new Set(idsToDelete);
-        const sortedRowIds = rowEntries.map(([id]) => id);
-        const sortedColIds = sortedEntries(sh.columns).map(([id]) => id);
-        const rewrites = updateFormulasForDeletion(sh.cells, deletedSet, new Set(), sortedRowIds, sortedColIds);
-        ctx.mutate((d, currentSheetId, rewrites: Record<string, string>, idsToDelete) => {
-          const ms = d.sheets[currentSheetId];
-          for (const [key, newVal] of Object.entries(rewrites)) {
-            if (ms.cells[key] && ms.cells[key].value !== newVal) ms.cells[key].value = newVal;
-          }
-          for (const id of idsToDelete) {
-            delete ms.rows[id];
-            for (const key of Object.keys(ms.cells)) {
-              if (key.startsWith(`${id}:`)) delete ms.cells[key];
+      {
+        id: id.insertBefore,
+        defaultLabel: s => insertLabel(lineIndices(axis, s).length, cfg.insert.beforeWord),
+        icon: cfg.insert.beforeIcon,
+        isEnabled: s => lineIndices(axis, s).length > 0,
+        execute: (s, ctx) => {
+          const { sheet: doc, setContextMenu, currentSheetId } = ctx;
+          if (!doc) return;
+          const indices = lineIndices(axis, s);
+          const entries = lineEntries(axis, ctxSheet(ctx));
+          if (entries.length === 0) return;
+          const count = Math.max(indices.length, 1);
+          // Resolve the VISIBLE target to its position in the full sorted list (H4).
+          const minVisIdx = Math.min(...indices);
+          const targetId = lineVisibleIds(axis, ctx)[minVisIdx];
+          if (!targetId) return;
+          const targetPos = entries.findIndex(([id]) => id === targetId);
+          if (targetPos === -1) return;
+          const hi = entries[targetPos][1].index;
+          const lo = targetPos === 0 ? hi - count : entries[targetPos - 1][1].index;
+          const newIds = Array.from({ length: count }, () => shortId());
+          ctx.mutate((d, currentSheetId, axis, newIds, lo, hi, count) => {
+            const ms = d.sheets[currentSheetId];
+            const map = axis === 'row' ? ms.rows : ms.columns;
+            for (let i = 0; i < count; i++) {
+              const entry: any = { index: lo + ((hi - lo) * (i + 1)) / (count + 1) };
+              if (axis === 'col') entry.name = '';
+              map[newIds[i]] = entry;
             }
-          }
-        }, [currentSheetId, rewrites, idsToDelete]);
-        setSelectedRows(new Set());
-        setContextMenu(null);
+          }, [currentSheetId, axis, newIds, lo, hi, count]);
+          setContextMenu(null);
+        },
       },
+      {
+        id: id.insertAfter,
+        defaultLabel: s => insertLabel(lineIndices(axis, s).length, cfg.insert.afterWord),
+        icon: cfg.insert.afterIcon,
+        isEnabled: s => lineIndices(axis, s).length > 0,
+        execute: (s, ctx) => {
+          const { sheet: doc, setContextMenu, currentSheetId } = ctx;
+          if (!doc) return;
+          const indices = lineIndices(axis, s);
+          const entries = lineEntries(axis, ctxSheet(ctx));
+          if (entries.length === 0) return;
+          const count = Math.max(indices.length, 1);
+          // Resolve the VISIBLE target to its position in the full sorted list (H4).
+          const maxVisIdx = Math.max(...indices);
+          const targetId = lineVisibleIds(axis, ctx)[maxVisIdx];
+          if (!targetId) return;
+          const targetPos = entries.findIndex(([id]) => id === targetId);
+          if (targetPos === -1) return;
+          const lo = entries[targetPos][1].index;
+          const hi = targetPos >= entries.length - 1 ? lo + count : entries[targetPos + 1][1].index;
+          const newIds = Array.from({ length: count }, () => shortId());
+          ctx.mutate((d, currentSheetId, axis, newIds, lo, hi, count) => {
+            const ms = d.sheets[currentSheetId];
+            const map = axis === 'row' ? ms.rows : ms.columns;
+            for (let i = 0; i < count; i++) {
+              const entry: any = { index: lo + ((hi - lo) * (i + 1)) / (count + 1) };
+              if (axis === 'col') entry.name = '';
+              map[newIds[i]] = entry;
+            }
+          }, [currentSheetId, axis, newIds, lo, hi, count]);
+          setContextMenu(null);
+        },
+      },
+      {
+        id: id.moveBefore,
+        defaultLabel: isRow ? 'Move up' : 'Move left',
+        isEnabled: s => (isRow ? s.currentRowIndices : s.currentColIndices).length > 0,
+        execute: (_, ctx) => {
+          const { sheet: doc, setContextMenu, currentSheetId } = ctx;
+          if (!doc) return;
+          const entries = lineEntries(axis, ctxSheet(ctx));
+          // Selection is in VISIBLE space — resolve neighbors through visible ids (H4).
+          const indices = [...lineSelected(axis, ctx)].sort((a, b) => a - b);
+          if (indices.length === 0 || indices[0] === 0) return;
+          const beforeId = lineVisibleIds(axis, ctx)[indices[0] - 1];
+          if (!beforeId) return;
+          const lastVisId = lineVisibleIds(axis, ctx)[indices[indices.length - 1]];
+          const lastPos = entries.findIndex(([id]) => id === lastVisId);
+          if (lastPos === -1) return;
+          const newIndex = lastPos >= entries.length - 1
+            ? entries[lastPos][1].index + 1
+            : (entries[lastPos][1].index + entries[lastPos + 1][1].index) / 2;
+          ctx.mutate((d, currentSheetId, axis, beforeId, newIndex) => {
+            const map = axis === 'row' ? d.sheets[currentSheetId].rows : d.sheets[currentSheetId].columns;
+            map[beforeId].index = newIndex;
+          }, [currentSheetId, axis, beforeId, newIndex]);
+          lineSetSelected(axis, ctx, new Set(indices.map(i => i - 1)));
+          setContextMenu(null);
+        },
+      },
+      {
+        id: id.moveAfter,
+        defaultLabel: isRow ? 'Move down' : 'Move right',
+        isEnabled: s => (isRow ? s.currentRowIndices : s.currentColIndices).length > 0,
+        execute: (_, ctx) => {
+          const { sheet: doc, setContextMenu, currentSheetId } = ctx;
+          if (!doc) return;
+          const entries = lineEntries(axis, ctxSheet(ctx));
+          // Selection is in VISIBLE space — resolve neighbors through visible ids (H4).
+          const indices = [...lineSelected(axis, ctx)].sort((a, b) => a - b);
+          if (indices.length === 0 || indices[indices.length - 1] >= lineVisibleIds(axis, ctx).length - 1) return;
+          const afterId = lineVisibleIds(axis, ctx)[indices[indices.length - 1] + 1];
+          if (!afterId) return;
+          const firstVisId = lineVisibleIds(axis, ctx)[indices[0]];
+          const firstPos = entries.findIndex(([id]) => id === firstVisId);
+          if (firstPos === -1) return;
+          const newIndex = firstPos === 0
+            ? entries[0][1].index - 1
+            : (entries[firstPos - 1][1].index + entries[firstPos][1].index) / 2;
+          ctx.mutate((d, currentSheetId, axis, afterId, newIndex) => {
+            const map = axis === 'row' ? d.sheets[currentSheetId].rows : d.sheets[currentSheetId].columns;
+            map[afterId].index = newIndex;
+          }, [currentSheetId, axis, afterId, newIndex]);
+          lineSetSelected(axis, ctx, new Set(indices.map(i => i + 1)));
+          setContextMenu(null);
+        },
+      },
+      {
+        id: id.delete,
+        defaultLabel: s => pluralVerb('Delete', lineIndices(axis, s).length),
+        danger: true,
+        icon: 'delete',
+        isEnabled: s => lineIndices(axis, s).length > 0,
+        execute: (s, ctx) => {
+          const { sheet: doc, setContextMenu, currentSheetId } = ctx;
+          if (!doc) return;
+          const indices = lineIndices(axis, s);
+          // Selection indices are in VISIBLE space — resolve through visible ids
+          // so a hidden line before the target is never deleted (H4).
+          const idsToDelete = indices.map(i => lineVisibleIds(axis, ctx)[i]).filter(Boolean);
+          if (idsToDelete.length === 0) return;
+          const deletedSet = new Set(idsToDelete);
+          const sh = ctxSheet(ctx);
+          const sortedRowIds = sortedEntries(sh.rows).map(([id]) => id);
+          const sortedColIds = sortedEntries(sh.columns).map(([id]) => id);
+          const rewrites = updateFormulasForDeletion(
+            sh.cells,
+            isRow ? deletedSet : new Set(),
+            isRow ? new Set() : deletedSet,
+            sortedRowIds, sortedColIds,
+          );
+          ctx.mutate((d, currentSheetId, axis, rewrites: Record<string, string>, idsToDelete) => {
+            const ms = d.sheets[currentSheetId];
+            const map = axis === 'row' ? ms.rows : ms.columns;
+            for (const [key, newVal] of Object.entries(rewrites)) {
+              if (ms.cells[key] && ms.cells[key].value !== newVal) ms.cells[key].value = newVal;
+            }
+            for (const id of idsToDelete) {
+              delete map[id];
+              for (const key of Object.keys(ms.cells)) {
+                if (axis === 'row' ? key.startsWith(`${id}:`) : key.endsWith(`:${id}`)) delete ms.cells[key];
+              }
+            }
+          }, [currentSheetId, axis, rewrites, idsToDelete]);
+          lineSetSelected(axis, ctx, new Set());
+          setContextMenu(null);
+        },
+      },
+      {
+        id: id.hide,
+        defaultLabel: s => pluralVerb('Hide', lineIndices(axis, s).length),
+        icon: 'visibility_off',
+        isEnabled: s => lineIndices(axis, s).length > 0,
+        execute: (s, ctx) => {
+          const indices = lineIndices(axis, s);
+          const ids = indices.map(i => lineVisibleIds(axis, ctx)[i]).filter(Boolean);
+          if (ids.length === 0) return;
+          ctx.mutate((d, sid, axis, ids) => {
+            const map = axis === 'row' ? d.sheets[sid].rows : d.sheets[sid].columns;
+            for (const id of ids) map[id].hidden = true;
+          }, [ctx.currentSheetId, axis, ids]);
+          lineSetSelected(axis, ctx, new Set());
+          ctx.setContextMenu(null);
+        },
+      },
+      {
+        id: id.freeze,
+        defaultLabel: `Freeze ${cfg.plural}`,
+        icon: 'push_pin',
+        isEnabled: s => lineIndices(axis, s).length > 0,
+        execute: (s, ctx) => {
+          // Freeze the visible prefix up to the selection's last line.
+          applyFreezeCount(ctx.mutate, ctx.currentSheetId, axis, Math.max(...lineIndices(axis, s)) + 1);
+          ctx.setContextMenu(null);
+        },
+      },
+      {
+        id: id.unfreeze,
+        defaultLabel: `Unfreeze ${cfg.plural}`,
+        icon: 'push_pin',
+        isEnabled: s => (isRow ? s.hasFrozenRows : s.hasFrozenCols),
+        execute: (_, ctx) => {
+          applyFreezeCount(ctx.mutate, ctx.currentSheetId, axis, 0);
+          ctx.setContextMenu(null);
+        },
+      },
+      {
+        id: cfg.resize.id,
+        defaultLabel: cfg.resize.label,
+        icon: cfg.resize.icon,
+        // The value is picked in a bottom sheet (ResizeSheet), which applies it
+        // through applyItemSize.
+        isEnabled: s => lineIndices(axis, s).length > 0,
+        execute: (_, ctx) => ctx.openResizeSheet?.(axis),
+      },
+    ],
+    slots: {
+      [isRow ? 'row-ctx' : 'col-ctx']: [
+        { kind: 'command', id: id.insertBefore },
+        { kind: 'command', id: id.insertAfter },
+        { kind: 'separator' },
+        { kind: 'command', id: id.moveBefore },
+        { kind: 'command', id: id.moveAfter },
+        { kind: 'separator' },
+        { kind: 'command', id: cfg.resize.id },
+        { kind: 'separator' },
+        { kind: 'command', id: id.delete },
+        { kind: 'separator' },
+        { kind: 'command', id: id.hide },
+        { kind: 'command', id: id.freeze },
+        { kind: 'command', id: id.unfreeze },
+      ],
+      'cell-ctx': cfg.cellCtx,
     },
-    {
-      id: 'set-row-height',
-      defaultLabel: 'Resize rows\u2026',
-      icon: 'height',
-      isEnabled: s => rowIndices(s).length > 0,
-      // The value is picked in a bottom sheet (ResizeSheet), which applies it
-      // through applyRowHeight.
-      execute: (_, ctx) => ctx.openResizeSheet?.('row'),
-    },
+  };
+}
+
+const ROW_AXIS: LineAxisConfig = {
+  axis: 'row',
+  idNoun: 'row',
+  idPlural: 'rows',
+  noun: 'row',
+  plural: 'rows',
+  insert: { beforeWord: 'above', afterWord: 'below', beforeIcon: 'keyboard_arrow_up', afterIcon: 'keyboard_arrow_down' },
+  moveBefore: 'up',
+  moveAfter: 'down',
+  resize: { id: 'set-row-height', label: 'Resize rows\u2026', icon: 'height' },
+  cellCtx: [
+    { kind: 'separator' },
+    { kind: 'command', id: 'insert-row-above' },
   ],
-  slots: {
-    'row-ctx': [
-      { kind: 'command', id: 'insert-row-above' },
-      { kind: 'command', id: 'insert-row-below' },
-      { kind: 'separator' },
-      { kind: 'command', id: 'move-rows-up' },
-      { kind: 'command', id: 'move-rows-down' },
-      { kind: 'separator' },
-      { kind: 'command', id: 'set-row-height' },
-      { kind: 'separator' },
-      { kind: 'command', id: 'delete-rows' },
-    ],
-    'cell-ctx': [
-      { kind: 'separator' },
-      { kind: 'command', id: 'insert-row-above' },
-    ],
-  },
 };
 
-const columnPlugin: GridPlugin = {
-  id: 'column',
-  commands: [
-    {
-      id: 'autofill-cols',
-      defaultLabel: 'Autofill',
-      icon: 'stat_minus_1',
-      // Needs a column to the left to extend from.
-      isEnabled: s => colIndices(s).length > 0 && Math.min(...colIndices(s)) > 0,
-      execute: (s, ctx) => autofillFromNeighbour(s, ctx, 'col'),
-    },
-    {
-      id: 'insert-col-left',
-      defaultLabel: s => {
-        const n = colIndices(s).length;
-        return n > 1 ? `Insert ${n} columns left` : 'Insert 1 column left';
-      },
-      icon: 'keyboard_arrow_left',
-      isEnabled: s => colIndices(s).length > 0,
-      execute: (s, ctx) => {
-        const { sheet: doc, setContextMenu, currentSheetId } = ctx;
-        if (!doc) return;
-        const sh = ctxSheet(ctx);
-        const indices = colIndices(s);
-        const entries = sortedEntries(sh.columns);
-        if (entries.length === 0) return;
-        const count = Math.max(indices.length, 1);
-        // Resolve the VISIBLE target column to its position in the full sorted list (H4).
-        const minVisIdx = Math.min(...indices);
-        const targetId = ctx.visibleColIds[minVisIdx];
-        if (!targetId) return;
-        const targetPos = entries.findIndex(([id]) => id === targetId);
-        if (targetPos === -1) return;
-        const hi = entries[targetPos][1].index;
-        const lo = targetPos === 0 ? hi - count : entries[targetPos - 1][1].index;
-        const newIds = Array.from({ length: count }, () => shortId());
-        ctx.mutate((d, currentSheetId, newIds, lo, hi, count) => {
-          const ms = d.sheets[currentSheetId];
-          for (let i = 0; i < count; i++) {
-            ms.columns[newIds[i]] = { index: lo + ((hi - lo) * (i + 1)) / (count + 1), name: '' };
-          }
-        }, [currentSheetId, newIds, lo, hi, count]);
-        setContextMenu(null);
-      },
-    },
-    {
-      id: 'insert-col-right',
-      defaultLabel: s => {
-        const n = colIndices(s).length;
-        return n > 1 ? `Insert ${n} columns right` : 'Insert 1 column right';
-      },
-      icon: 'keyboard_arrow_right',
-      isEnabled: s => colIndices(s).length > 0,
-      execute: (s, ctx) => {
-        const { sheet: doc, setContextMenu, currentSheetId } = ctx;
-        if (!doc) return;
-        const sh = ctxSheet(ctx);
-        const indices = colIndices(s);
-        const entries = sortedEntries(sh.columns);
-        if (entries.length === 0) return;
-        const count = Math.max(indices.length, 1);
-        // Resolve the VISIBLE target column to its position in the full sorted list (H4).
-        const maxVisIdx = Math.max(...indices);
-        const targetId = ctx.visibleColIds[maxVisIdx];
-        if (!targetId) return;
-        const targetPos = entries.findIndex(([id]) => id === targetId);
-        if (targetPos === -1) return;
-        const lo = entries[targetPos][1].index;
-        const hi = targetPos >= entries.length - 1 ? lo + count : entries[targetPos + 1][1].index;
-        const newIds = Array.from({ length: count }, () => shortId());
-        ctx.mutate((d, currentSheetId, newIds, lo, hi, count) => {
-          const ms = d.sheets[currentSheetId];
-          for (let i = 0; i < count; i++) {
-            ms.columns[newIds[i]] = { index: lo + ((hi - lo) * (i + 1)) / (count + 1), name: '' };
-          }
-        }, [currentSheetId, newIds, lo, hi, count]);
-        setContextMenu(null);
-      },
-    },
-    {
-      id: 'move-cols-left',
-      defaultLabel: 'Move left',
-      isEnabled: s => s.currentColIndices.length > 0,
-      execute: (_, ctx) => {
-        const { sheet: doc, selectedCols, setSelectedCols, setContextMenu, currentSheetId } = ctx;
-        if (!doc) return;
-        const sh = ctxSheet(ctx);
-        const entries = sortedEntries(sh.columns);
-        // selectedCols are VISIBLE indices — resolve neighbors through visibleColIds (H4).
-        const indices = [...selectedCols].sort((a, b) => a - b);
-        if (indices.length === 0 || indices[0] === 0) return;
-        const leftId = ctx.visibleColIds[indices[0] - 1];
-        if (!leftId) return;
-        const lastVisId = ctx.visibleColIds[indices[indices.length - 1]];
-        const lastPos = entries.findIndex(([id]) => id === lastVisId);
-        if (lastPos === -1) return;
-        const newIndex = lastPos >= entries.length - 1
-          ? entries[lastPos][1].index + 1
-          : (entries[lastPos][1].index + entries[lastPos + 1][1].index) / 2;
-        ctx.mutate((d, currentSheetId, leftId, newIndex) => { d.sheets[currentSheetId].columns[leftId].index = newIndex; }, [currentSheetId, leftId, newIndex]);
-        setSelectedCols(new Set(indices.map(i => i - 1)));
-        setContextMenu(null);
-      },
-    },
-    {
-      id: 'move-cols-right',
-      defaultLabel: 'Move right',
-      isEnabled: s => s.currentColIndices.length > 0,
-      execute: (_, ctx) => {
-        const { sheet: doc, selectedCols, setSelectedCols, setContextMenu, currentSheetId } = ctx;
-        if (!doc) return;
-        const sh = ctxSheet(ctx);
-        const entries = sortedEntries(sh.columns);
-        // selectedCols are VISIBLE indices — resolve neighbors through visibleColIds (H4).
-        const indices = [...selectedCols].sort((a, b) => a - b);
-        if (indices.length === 0 || indices[indices.length - 1] >= ctx.visibleColIds.length - 1) return;
-        const rightId = ctx.visibleColIds[indices[indices.length - 1] + 1];
-        if (!rightId) return;
-        const firstVisId = ctx.visibleColIds[indices[0]];
-        const firstPos = entries.findIndex(([id]) => id === firstVisId);
-        if (firstPos === -1) return;
-        const newIndex = firstPos === 0
-          ? entries[0][1].index - 1
-          : (entries[firstPos - 1][1].index + entries[firstPos][1].index) / 2;
-        ctx.mutate((d, currentSheetId, rightId, newIndex) => { d.sheets[currentSheetId].columns[rightId].index = newIndex; }, [currentSheetId, rightId, newIndex]);
-        setSelectedCols(new Set(indices.map(i => i + 1)));
-        setContextMenu(null);
-      },
-    },
-    {
-      id: 'delete-cols',
-      defaultLabel: s => {
-        const n = colIndices(s).length;
-        return n > 1 ? `Delete ${n} columns` : 'Delete column';
-      },
-      danger: true,
-      icon: 'delete',
-      isEnabled: s => colIndices(s).length > 0,
-      execute: (s, ctx) => {
-        const { sheet: doc, setSelectedCols, setContextMenu, currentSheetId } = ctx;
-        if (!doc) return;
-        const sh = ctxSheet(ctx);
-        const indices = colIndices(s);
-        const colEntries = sortedEntries(sh.columns);
-        // Selection indices are in VISIBLE space — resolve through visibleColIds
-        // so a hidden column before the target is never deleted (H4).
-        const idsToDelete = indices.map(i => ctx.visibleColIds[i]).filter(Boolean);
-        if (idsToDelete.length === 0) return;
-        const deletedSet = new Set(idsToDelete);
-        const sortedRowIds = sortedEntries(sh.rows).map(([id]) => id);
-        const sortedColIds = colEntries.map(([id]) => id);
-        const rewrites = updateFormulasForDeletion(sh.cells, new Set(), deletedSet, sortedRowIds, sortedColIds);
-        ctx.mutate((d, currentSheetId, rewrites: Record<string, string>, idsToDelete) => {
-          const ms = d.sheets[currentSheetId];
-          for (const [key, newVal] of Object.entries(rewrites)) {
-            if (ms.cells[key] && ms.cells[key].value !== newVal) ms.cells[key].value = newVal;
-          }
-          for (const id of idsToDelete) {
-            delete ms.columns[id];
-            for (const key of Object.keys(ms.cells)) {
-              if (key.endsWith(`:${id}`)) delete ms.cells[key];
-            }
-          }
-        }, [currentSheetId, rewrites, idsToDelete]);
-        setSelectedCols(new Set());
-        setContextMenu(null);
-      },
-    },
-    {
-      id: 'set-col-width',
-      defaultLabel: 'Resize columns\u2026',
-      icon: 'width',
-      isEnabled: s => colIndices(s).length > 0,
-      execute: (_, ctx) => ctx.openResizeSheet?.('col'),
-    },
+const COL_AXIS: LineAxisConfig = {
+  axis: 'col',
+  idNoun: 'col',
+  idPlural: 'cols',
+  noun: 'column',
+  plural: 'columns',
+  insert: { beforeWord: 'left', afterWord: 'right', beforeIcon: 'keyboard_arrow_left', afterIcon: 'keyboard_arrow_right' },
+  moveBefore: 'left',
+  moveAfter: 'right',
+  resize: { id: 'set-col-width', label: 'Resize columns\u2026', icon: 'width' },
+  cellCtx: [
+    { kind: 'command', id: 'insert-col-left' },
+    { kind: 'separator' },
+    { kind: 'command', id: 'delete-rows' },
+    { kind: 'command', id: 'delete-cols' },
   ],
-  slots: {
-    'col-ctx': [
-      { kind: 'command', id: 'insert-col-left' },
-      { kind: 'command', id: 'insert-col-right' },
-      { kind: 'separator' },
-      { kind: 'command', id: 'move-cols-left' },
-      { kind: 'command', id: 'move-cols-right' },
-      { kind: 'separator' },
-      { kind: 'command', id: 'set-col-width' },
-      { kind: 'separator' },
-      { kind: 'command', id: 'delete-cols' },
-    ],
-    'cell-ctx': [
-      { kind: 'command', id: 'insert-col-left' },
-      { kind: 'separator' },
-      { kind: 'command', id: 'delete-rows' },
-      { kind: 'command', id: 'delete-cols' },
-    ],
-  },
 };
+
+const rowPlugin = linePlugin(ROW_AXIS);
+const columnPlugin = linePlugin(COL_AXIS);
 
 // ============================================================
 // Formatting helpers
@@ -1278,111 +1235,12 @@ const formattingPlugin: GridPlugin = {
 // Visibility & Freeze plugin
 // ============================================================
 
-const visibilityPlugin: GridPlugin = {
-  id: 'visibility',
-  commands: [
-    {
-      id: 'hide-rows',
-      defaultLabel: s => {
-        const n = rowIndices(s).length;
-        return n > 1 ? `Hide ${n} rows` : 'Hide row';
-      },
-      icon: 'visibility_off',
-      isEnabled: s => rowIndices(s).length > 0,
-      execute: (s, ctx) => {
-        const indices = rowIndices(s);
-        const ids = indices.map(i => ctx.visibleRowIds[i]).filter(Boolean);
-        if (ids.length === 0) return;
-        ctx.mutate((d, sid, ids) => {
-          for (const id of ids) d.sheets[sid].rows[id].hidden = true;
-        }, [ctx.currentSheetId, ids]);
-        ctx.setSelectedRows(new Set());
-        ctx.setContextMenu(null);
-      },
-    },
-    {
-      id: 'hide-cols',
-      defaultLabel: s => {
-        const n = colIndices(s).length;
-        return n > 1 ? `Hide ${n} columns` : 'Hide column';
-      },
-      icon: 'visibility_off',
-      isEnabled: s => colIndices(s).length > 0,
-      execute: (s, ctx) => {
-        const indices = colIndices(s);
-        const ids = indices.map(i => ctx.visibleColIds[i]).filter(Boolean);
-        if (ids.length === 0) return;
-        ctx.mutate((d, sid, ids) => {
-          for (const id of ids) d.sheets[sid].columns[id].hidden = true;
-        }, [ctx.currentSheetId, ids]);
-        ctx.setSelectedCols(new Set());
-        ctx.setContextMenu(null);
-      },
-    },
-    {
-      id: 'freeze-rows',
-      defaultLabel: 'Freeze rows',
-      icon: 'push_pin',
-      isEnabled: s => rowIndices(s).length > 0,
-      execute: (s, ctx) => {
-        // Freeze the visible prefix up to the selection's last row
-        applyFreezeCount(ctx.mutate, ctx.currentSheetId, 'row', Math.max(...rowIndices(s)) + 1);
-        ctx.setContextMenu(null);
-      },
-    },
-    {
-      id: 'unfreeze-rows',
-      defaultLabel: 'Unfreeze rows',
-      icon: 'push_pin',
-      isEnabled: s => s.hasFrozenRows,
-      execute: (_, ctx) => {
-        applyFreezeCount(ctx.mutate, ctx.currentSheetId, 'row', 0);
-        ctx.setContextMenu(null);
-      },
-    },
-    {
-      id: 'freeze-cols',
-      defaultLabel: 'Freeze columns',
-      icon: 'push_pin',
-      isEnabled: s => colIndices(s).length > 0,
-      execute: (s, ctx) => {
-        // Freeze the visible prefix up to the selection's last column
-        applyFreezeCount(ctx.mutate, ctx.currentSheetId, 'col', Math.max(...colIndices(s)) + 1);
-        ctx.setContextMenu(null);
-      },
-    },
-    {
-      id: 'unfreeze-cols',
-      defaultLabel: 'Unfreeze columns',
-      icon: 'push_pin',
-      isEnabled: s => s.hasFrozenCols,
-      execute: (_, ctx) => {
-        applyFreezeCount(ctx.mutate, ctx.currentSheetId, 'col', 0);
-        ctx.setContextMenu(null);
-      },
-    },
-  ],
-  slots: {
-    'row-ctx': [
-      { kind: 'separator' },
-      { kind: 'command', id: 'hide-rows' },
-      { kind: 'command', id: 'freeze-rows' },
-      { kind: 'command', id: 'unfreeze-rows' },
-    ],
-    'col-ctx': [
-      { kind: 'separator' },
-      { kind: 'command', id: 'hide-cols' },
-      { kind: 'command', id: 'freeze-cols' },
-      { kind: 'command', id: 'unfreeze-cols' },
-    ],
-  },
-};
 
 // ============================================================
 // Registry (built once at module load — plugins are static)
 // ============================================================
 
-const ALL_PLUGINS: GridPlugin[] = [historyPlugin, clipboardPlugin, rowPlugin, columnPlugin, formattingPlugin, visibilityPlugin];
+const ALL_PLUGINS: GridPlugin[] = [historyPlugin, clipboardPlugin, rowPlugin, columnPlugin, formattingPlugin];
 
 const COMMAND_REGISTRY = new Map<string, GridCommand>();
 for (const plugin of ALL_PLUGINS) {

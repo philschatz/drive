@@ -364,6 +364,75 @@ describe('commitAutofill with a hidden row in the fill span', () => {
   });
 });
 
+// ── linePlugin factory (4.1) ─────────────────────────────────────────────────
+
+// The row/column/visibility plugins were merged into one linePlugin(axis)
+// factory. These tests pin the observable surface it must reproduce exactly:
+// every command id, and the slot lists in their exact merged order.
+
+describe('linePlugin factory', () => {
+  const harness = () => makeHarness({
+    rows: [{ id: 'r0', index: 1 }, { id: 'r1', index: 2 }],
+    cols: [{ id: 'c0', index: 1 }, { id: 'c1', index: 2 }],
+    selectedCell: [0, 0],
+  });
+
+  it('registers every row/column/visibility command id', () => {
+    const { state, ctx } = harness();
+    const api = useGridCommands(state, ctx);
+    for (const id of [
+      'autofill-rows', 'insert-row-above', 'insert-row-below', 'move-rows-up', 'move-rows-down',
+      'delete-rows', 'set-row-height', 'hide-rows', 'freeze-rows', 'unfreeze-rows',
+      'autofill-cols', 'insert-col-left', 'insert-col-right', 'move-cols-left', 'move-cols-right',
+      'delete-cols', 'set-col-width', 'hide-cols', 'freeze-cols', 'unfreeze-cols',
+    ]) {
+      expect(() => api.resolveById(id)).not.toThrow();
+    }
+  });
+
+  it('keeps the cell-ctx slot list in the exact merged order', () => {
+    const { state, ctx } = harness();
+    const ids = useGridCommands(state, ctx).cellCtx.map(e => (e.kind === 'separator' ? null : e.id));
+    expect(ids).toEqual([
+      'cut', 'copy', 'paste',
+      null, 'insert-row-above',
+      'insert-col-left', null, 'delete-rows', 'delete-cols',
+      null, 'clear-formatting',
+    ]);
+  });
+
+  it('keeps the row-ctx and col-ctx slot lists in the exact merged order', () => {
+    const { state, ctx } = harness();
+    const api = useGridCommands(state, ctx);
+    expect(api.rowCtx.map(e => (e.kind === 'separator' ? null : e.id))).toEqual([
+      'insert-row-above', 'insert-row-below', null,
+      'move-rows-up', 'move-rows-down', null,
+      'set-row-height', null,
+      'delete-rows', null,
+      'hide-rows', 'freeze-rows', 'unfreeze-rows',
+    ]);
+    expect(api.colCtx.map(e => (e.kind === 'separator' ? null : e.id))).toEqual([
+      'insert-col-left', 'insert-col-right', null,
+      'move-cols-left', 'move-cols-right', null,
+      'set-col-width', null,
+      'delete-cols', null,
+      'hide-cols', 'freeze-cols', 'unfreeze-cols',
+    ]);
+  });
+
+  it('insert-col-left creates a column entry with name: "" (the col branch)', () => {
+    const { doc, state, ctx } = makeHarness({
+      rows: [{ id: 'r0', index: 1 }],
+      cols: [{ id: 'c0', index: 1 }],
+      currentColIndices: [0],
+    });
+    runCommand('insert-col-left', state, ctx);
+    const newId = Object.keys(doc.sheets.s1.columns).find(id => id !== 'c0')!;
+    expect(doc.sheets.s1.columns[newId].name).toBe('');
+    expect(doc.sheets.s1.columns[newId].index).toBeLessThan(1);
+  });
+});
+
 // ── Ctrl+V must reach the paste command ─────────────────────────────────
 
 describe('dispatchKey: paste', () => {
