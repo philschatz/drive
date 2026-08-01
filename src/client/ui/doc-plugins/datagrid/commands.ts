@@ -8,6 +8,7 @@ import {
 } from './clipboard';
 import type { DataGridDocument, DataGridCellFormat } from '../../../../shared/schemas/datagrid';
 import { applyFreezeCount } from './sheet-actions';
+import { toggleFormat, type ToggleableFormatKey } from './formatting';
 
 // ============================================================
 // Shortcut — canonical keyboard shortcut definition
@@ -232,6 +233,102 @@ function ctxSheet(ctx: GridCommandContext) {
 }
 
 // ============================================================
+// Paste helpers (shared by the internal and external paste paths)
+// ============================================================
+
+/**
+ * Convert raw pasted values into stored cell writes at the destination (VISIBLE
+ * indices), appending new rows/cols when the paste extends past the sheet. Cell
+ * keys use visible id space; formula refs resolve in full id space.
+ */
+function planCellWrites(
+  ctx: GridCommandContext,
+  rows: string[][],
+  destCol: number,
+  destRow: number,
+): { cellWrites: Array<[string, string]>; newRowEntries: Array<[string, any]>; newColEntries: Array<[string, any]>; allRowIds: string[]; allColIds: string[] } {
+  const sh = ctxSheet(ctx);
+  const rowEntries = sortedEntries(sh.rows);
+  const colEntries = sortedEntries(sh.columns);
+  const fullRowIds = rowEntries.map(([id]) => id);
+  const fullColIds = colEntries.map(([id]) => id);
+  const visRowIds = ctx.visibleRowIds;
+  const visColIds = ctx.visibleColIds;
+
+  const neededRows = destRow + rows.length;
+  const neededCols = destCol + Math.max(0, ...rows.map(r => r.length));
+  const lastRowIdx = rowEntries.length > 0 ? rowEntries[rowEntries.length - 1][1].index : 0;
+  const lastColIdx = colEntries.length > 0 ? colEntries[colEntries.length - 1][1].index : 0;
+  const newRowEntries: Array<[string, any]> = [];
+  const newColEntries: Array<[string, any]> = [];
+  for (let i = visRowIds.length; i < neededRows; i++) {
+    newRowEntries.push([shortId(), { index: lastRowIdx + (i - visRowIds.length + 1) }]);
+  }
+  for (let i = visColIds.length; i < neededCols; i++) {
+    newColEntries.push([shortId(), { index: lastColIdx + (i - visColIds.length + 1), name: '' }]);
+  }
+  const newRowIds = newRowEntries.map(([id]) => id);
+  const newColIds = newColEntries.map(([id]) => id);
+  // Visible id space (for cell keys) and full id space (for ref conversion),
+  // both extended with the newly-appended rows/cols.
+  const allRowIds = [...visRowIds, ...newRowIds];
+  const allColIds = [...visColIds, ...newColIds];
+  const refRowIds = [...fullRowIds, ...newRowIds];
+  const refColIds = [...fullColIds, ...newColIds];
+
+  const cellWrites: Array<[string, string]> = [];
+  for (let dr = 0; dr < rows.length; dr++) {
+    for (let dc = 0; dc < rows[dr].length; dc++) {
+      const r = destRow + dr;
+      const c = destCol + dc;
+      if (r >= allRowIds.length || c >= allColIds.length) continue;
+      const rowId = allRowIds[r];
+      const colId = allColIds[c];
+      const val = rows[dr][dc];
+      const stored = val.startsWith('=')
+        ? a1ToInternal(val, refRowIds.indexOf(rowId), refColIds.indexOf(colId), refRowIds, refColIds)
+        : val;
+      cellWrites.push([`${rowId}:${colId}`, stored]);
+    }
+  }
+  return { cellWrites, newRowEntries, newColEntries, allRowIds, allColIds };
+}
+
+/**
+ * One mutation for paste/autofill: new rows/cols, cell values, cut deletions,
+ * and format ranges. updateDoc serializes the callback, so all data goes via args.
+ */
+function applyCellWrites(
+  mutate: GridCommandContext['mutate'],
+  sheetId: string,
+  opts: {
+    cellWrites: Array<[string, string]>;
+    newRowEntries?: Array<[string, any]>; newColEntries?: Array<[string, any]>;
+    cutDeletes?: string[]; pasteFormatRanges?: Array<[string, any]>;
+  },
+): void {
+  const newRowEntries = opts.newRowEntries ?? [];
+  const newColEntries = opts.newColEntries ?? [];
+  const cutDeletes = opts.cutDeletes ?? [];
+  const pasteFormatRanges = opts.pasteFormatRanges ?? [];
+  mutate((d, currentSheetId, newRowEntries, newColEntries, cellWrites, cutDeletes, pasteFormatRanges) => {
+    const ms = d.sheets[currentSheetId];
+    for (const [id, entry] of newRowEntries) ms.rows[id] = entry;
+    for (const [id, entry] of newColEntries) ms.columns[id] = entry;
+    for (const [key, stored] of cellWrites) {
+      if (stored === '') { delete ms.cells[key]; }
+      else if (!ms.cells[key]) { ms.cells[key] = { value: stored }; }
+      else { ms.cells[key].value = stored; }
+    }
+    for (const key of cutDeletes) delete ms.cells[key];
+    if (pasteFormatRanges.length > 0) {
+      if (!ms.formats) ms.formats = {};
+      for (const [id, entry] of pasteFormatRanges) ms.formats[id] = entry;
+    }
+  }, [sheetId, newRowEntries, newColEntries, opts.cellWrites, cutDeletes, pasteFormatRanges]);
+}
+
+// ============================================================
 // Plugins
 // ============================================================
 
@@ -317,54 +414,11 @@ const clipboardPlugin: GridPlugin = {
         if (clipboardRef.current) {
           // Internal paste: pre-compute everything outside mutate
           const { values, formats: clipFormats, mode, range: srcRange } = clipboardRef.current;
-          const { sheet: doc } = ctx;
-          if (!doc) return;
           const sh = ctxSheet(ctx);
-          const rowEntries = sortedEntries(sh.rows);
-          const colEntries = sortedEntries(sh.columns);
-          const fullRowIds = rowEntries.map(([id]) => id);
-          const fullColIds = colEntries.map(([id]) => id);
-          // destCol/destRow (from selectedCell) are VISIBLE indices — write keys in
-          // visible id space; resolve A1/R1C1 refs in full id space (H4).
-          const visRowIds = ctx.visibleRowIds;
-          const visColIds = ctx.visibleColIds;
+          if (!sh) return;
+          const { cellWrites, allRowIds, allColIds, newRowEntries, newColEntries } =
+            planCellWrites(ctx, values, destCol, destRow);
 
-          const neededRows = destRow + values.length;
-          const neededCols = destCol + (values[0]?.length || 0);
-          const lastRowIdx = rowEntries.length > 0 ? rowEntries[rowEntries.length - 1][1].index : 0;
-          const lastColIdx = colEntries.length > 0 ? colEntries[colEntries.length - 1][1].index : 0;
-          const newRowEntries: Array<[string, { index: number }]> = [];
-          const newColEntries: Array<[string, { index: number; name: string }]> = [];
-          for (let i = visRowIds.length; i < neededRows; i++) {
-            newRowEntries.push([shortId(), { index: lastRowIdx + (i - visRowIds.length + 1) }]);
-          }
-          for (let i = visColIds.length; i < neededCols; i++) {
-            newColEntries.push([shortId(), { index: lastColIdx + (i - visColIds.length + 1), name: '' }]);
-          }
-          const newRowIds = newRowEntries.map(([id]) => id);
-          const newColIds = newColEntries.map(([id]) => id);
-          // Visible id space (for cell keys) and full id space (for ref conversion),
-          // both extended with the newly-appended rows/cols.
-          const allRowIds = [...visRowIds, ...newRowIds];
-          const allColIds = [...visColIds, ...newColIds];
-          const refRowIds = [...fullRowIds, ...newRowIds];
-          const refColIds = [...fullColIds, ...newColIds];
-
-          const cellWrites: Array<[string, string]> = [];
-          for (let dr = 0; dr < values.length; dr++) {
-            for (let dc = 0; dc < values[dr].length; dc++) {
-              const r = destRow + dr;
-              const c = destCol + dc;
-              if (r >= allRowIds.length || c >= allColIds.length) continue;
-              const rowId = allRowIds[r];
-              const colId = allColIds[c];
-              const val = values[dr][dc];
-              const stored = val.startsWith('=')
-                ? a1ToInternal(val, refRowIds.indexOf(rowId), refColIds.indexOf(colId), refRowIds, refColIds)
-                : val;
-              cellWrites.push([`${rowId}:${colId}`, stored]);
-            }
-          }
           const cutDeletes: string[] = [];
           if (mode === 'cut') {
             for (let r = srcRange.minRow; r <= srcRange.maxRow; r++) {
@@ -439,21 +493,9 @@ const clipboardPlugin: GridPlugin = {
             }
           }
 
-          mutate((d, currentSheetId, newRowEntries, newColEntries, cellWrites, cutDeletes, pasteFormatRanges) => {
-            const ms = d.sheets[currentSheetId];
-            for (const [id, entry] of newRowEntries) ms.rows[id] = entry;
-            for (const [id, entry] of newColEntries) ms.columns[id] = entry;
-            for (const [key, stored] of cellWrites) {
-              if (stored === '') { delete ms.cells[key]; }
-              else if (!ms.cells[key]) { ms.cells[key] = { value: stored }; }
-              else { ms.cells[key].value = stored; }
-            }
-            for (const key of cutDeletes) delete ms.cells[key];
-            if (pasteFormatRanges.length > 0) {
-              if (!ms.formats) ms.formats = {};
-              for (const [id, entry] of pasteFormatRanges) ms.formats[id] = entry;
-            }
-          }, [currentSheetId, newRowEntries, newColEntries, cellWrites, cutDeletes, pasteFormatRanges]);
+          applyCellWrites(mutate, currentSheetId, {
+            newRowEntries, newColEntries, cellWrites, cutDeletes, pasteFormatRanges,
+          });
 
           clipboardRef.current = null;
           setClipboardSource(null);
@@ -467,63 +509,10 @@ const clipboardPlugin: GridPlugin = {
           const doPaste = (rows: string[][]) => {
 
             const finalRows = rows;
-            // Pre-compute everything outside mutate using the ctx.sheet snapshot.
-            // ctx.sheet IS the active sheet object (has .rows/.columns/.cells) —
-            // it is NOT the whole document, so do not index `.sheets` here (H5).
-            const extSh = ctx.sheet;
-            if (!extSh) return;
-            const extRowEntries = sortedEntries(extSh.rows);
-            const extColEntries = sortedEntries(extSh.columns);
-            const extFullRowIds = extRowEntries.map(([id]) => id);
-            const extFullColIds = extColEntries.map(([id]) => id);
-            // destCol/destRow are VISIBLE indices — write keys in visible id space;
-            // resolve A1/R1C1 refs in full id space (H4).
-            const extVisRowIds = ctx.visibleRowIds;
-            const extVisColIds = ctx.visibleColIds;
-            const extNeededRows = destRow + finalRows.length;
-            const maxPasteCols = Math.max(...finalRows.map(r => r.length));
-            const extNeededCols = destCol + maxPasteCols;
-            const extLastRowIdx = extRowEntries.length > 0 ? extRowEntries[extRowEntries.length - 1][1].index : 0;
-            const extLastColIdx = extColEntries.length > 0 ? extColEntries[extColEntries.length - 1][1].index : 0;
-            const extNewRowEntries: Array<[string, { index: number }]> = [];
-            const extNewColEntries: Array<[string, { index: number; name: string }]> = [];
-            for (let i = extVisRowIds.length; i < extNeededRows; i++) {
-              extNewRowEntries.push([shortId(), { index: extLastRowIdx + (i - extVisRowIds.length + 1) }]);
-            }
-            for (let i = extVisColIds.length; i < extNeededCols; i++) {
-              extNewColEntries.push([shortId(), { index: extLastColIdx + (i - extVisColIds.length + 1), name: '' }]);
-            }
-            const extNewRowIds = extNewRowEntries.map(([id]) => id);
-            const extNewColIds = extNewColEntries.map(([id]) => id);
-            const extAllRowIds = [...extVisRowIds, ...extNewRowIds];
-            const extAllColIds = [...extVisColIds, ...extNewColIds];
-            const extRefRowIds = [...extFullRowIds, ...extNewRowIds];
-            const extRefColIds = [...extFullColIds, ...extNewColIds];
-            const extCellWrites: Array<[string, string]> = [];
-            for (let dr = 0; dr < finalRows.length; dr++) {
-              for (let dc = 0; dc < finalRows[dr].length; dc++) {
-                const r = destRow + dr;
-                const c = destCol + dc;
-                if (r >= extAllRowIds.length || c >= extAllColIds.length) continue;
-                const rowId = extAllRowIds[r];
-                const colId = extAllColIds[c];
-                const val = finalRows[dr][dc];
-                const stored = val.startsWith('=')
-                  ? a1ToInternal(val, extRefRowIds.indexOf(rowId), extRefColIds.indexOf(colId), extRefRowIds, extRefColIds)
-                  : val;
-                extCellWrites.push([`${rowId}:${colId}`, stored]);
-              }
-            }
-            mutate((d, currentSheetId, extNewRowEntries, extNewColEntries, extCellWrites) => {
-              const ms = d.sheets[currentSheetId];
-              for (const [id, entry] of extNewRowEntries) ms.rows[id] = entry;
-              for (const [id, entry] of extNewColEntries) ms.columns[id] = entry;
-              for (const [key, stored] of extCellWrites) {
-                if (stored === '') { delete ms.cells[key]; }
-                else if (!ms.cells[key]) { ms.cells[key] = { value: stored }; }
-                else { ms.cells[key].value = stored; }
-              }
-            }, [currentSheetId, extNewRowEntries, extNewColEntries, extCellWrites]);
+            if (!ctx.sheet) return;
+            const { cellWrites, newRowEntries, newColEntries } =
+              planCellWrites(ctx, finalRows, destCol, destRow);
+            applyCellWrites(mutate, currentSheetId, { newRowEntries, newColEntries, cellWrites });
 
             setClipboardSource(null);
 
@@ -1143,53 +1132,26 @@ function clearFormatFromSelection(ctx: GridCommandContext): void {
 // Formatting plugin
 // ============================================================
 
+/** Boolean style-toggle command (bold/italic/…) sharing toggleFormat with the FormatSheet. */
+function boolToggleCmd(
+  id: string, label: string, icon: string, key: ToggleableFormatKey, shortcuts: Shortcut[],
+): GridCommand {
+  const t = toggleFormat(key);
+  return {
+    id, defaultLabel: label, icon, shortcuts,
+    toggle: { isChecked: s => t.isChecked(s.currentCellFormat) },
+    isEnabled: s => s.hasSelection,
+    execute: (s, ctx) => applyFormatToSelection(ctx, t.patch(s.currentCellFormat)),
+  };
+}
+
 const formattingPlugin: GridPlugin = {
   id: 'formatting',
   commands: [
-    {
-      id: 'toggle-bold',
-      defaultLabel: 'Bold',
-      icon: 'format_bold',
-      shortcuts: [{ key: 'b', mod: true }],
-      toggle: { isChecked: s => !!s.currentCellFormat?.bold },
-      isEnabled: s => s.hasSelection,
-      execute: (s, ctx) => {
-        applyFormatToSelection(ctx, { bold: !s.currentCellFormat?.bold || undefined });
-      },
-    },
-    {
-      id: 'toggle-italic',
-      defaultLabel: 'Italic',
-      icon: 'format_italic',
-      shortcuts: [{ key: 'i', mod: true }],
-      toggle: { isChecked: s => !!s.currentCellFormat?.italic },
-      isEnabled: s => s.hasSelection,
-      execute: (s, ctx) => {
-        applyFormatToSelection(ctx, { italic: !s.currentCellFormat?.italic || undefined });
-      },
-    },
-    {
-      id: 'toggle-underline',
-      defaultLabel: 'Underline',
-      icon: 'format_underlined',
-      shortcuts: [{ key: 'u', mod: true }],
-      toggle: { isChecked: s => !!s.currentCellFormat?.underline },
-      isEnabled: s => s.hasSelection,
-      execute: (s, ctx) => {
-        applyFormatToSelection(ctx, { underline: !s.currentCellFormat?.underline || undefined });
-      },
-    },
-    {
-      id: 'toggle-strikethrough',
-      defaultLabel: 'Strikethrough',
-      icon: 'format_strikethrough',
-      shortcuts: [{ key: '5', mod: true }],
-      toggle: { isChecked: s => !!s.currentCellFormat?.strikethrough },
-      isEnabled: s => s.hasSelection,
-      execute: (s, ctx) => {
-        applyFormatToSelection(ctx, { strikethrough: !s.currentCellFormat?.strikethrough || undefined });
-      },
-    },
+    boolToggleCmd('toggle-bold', 'Bold', 'format_bold', 'bold', [{ key: 'b', mod: true }]),
+    boolToggleCmd('toggle-italic', 'Italic', 'format_italic', 'italic', [{ key: 'i', mod: true }]),
+    boolToggleCmd('toggle-underline', 'Underline', 'format_underlined', 'underline', [{ key: 'u', mod: true }]),
+    boolToggleCmd('toggle-strikethrough', 'Strikethrough', 'format_strikethrough', 'strikethrough', [{ key: '5', mod: true }]),
     {
       id: 'align-left',
       defaultLabel: 'Align left',
@@ -1432,14 +1394,7 @@ export function commitAutofill(
     });
   });
 
-  mutate((d, currentSheetId, cellWrites) => {
-    const ms = d.sheets[currentSheetId];
-    for (const [key, stored] of cellWrites) {
-      if (stored === '') { delete ms.cells[key]; }
-      else if (!ms.cells[key]) { ms.cells[key] = { value: stored }; }
-      else { ms.cells[key].value = stored; }
-    }
-  }, [currentSheetId, cellWrites]);
+  applyCellWrites(mutate, currentSheetId, { cellWrites });
 
   // Extend selection to cover source + fill range
   const totalRange = {

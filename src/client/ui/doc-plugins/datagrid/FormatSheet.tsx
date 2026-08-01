@@ -1,5 +1,6 @@
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { FONT_SIZES, NUMBER_FORMATS } from './format-presets';
+import { toggleFormat } from './formatting';
 import type { DataGridCellFormat } from '../../../../shared/schemas/datagrid';
 import type { ColorTarget } from './ColorSheet';
 
@@ -120,13 +121,13 @@ export function FormatSheet({
         {/* Style toggles + alignment */}
         <div className="flex items-center gap-1 mt-2 flex-wrap">
           <ToggleButton icon="format_bold" label="Bold" checked={!!currentFormat?.bold}
-            onClick={() => onApply({ bold: !currentFormat?.bold || undefined })} />
+            onClick={() => onApply(toggleFormat('bold').patch(currentFormat))} />
           <ToggleButton icon="format_italic" label="Italic" checked={!!currentFormat?.italic}
-            onClick={() => onApply({ italic: !currentFormat?.italic || undefined })} />
+            onClick={() => onApply(toggleFormat('italic').patch(currentFormat))} />
           <ToggleButton icon="format_underlined" label="Underline" checked={!!currentFormat?.underline}
-            onClick={() => onApply({ underline: !currentFormat?.underline || undefined })} />
+            onClick={() => onApply(toggleFormat('underline').patch(currentFormat))} />
           <ToggleButton icon="format_strikethrough" label="Strikethrough" checked={!!currentFormat?.strikethrough}
-            onClick={() => onApply({ strikethrough: !currentFormat?.strikethrough || undefined })} />
+            onClick={() => onApply(toggleFormat('strikethrough').patch(currentFormat))} />
           <span className="w-px h-6 bg-outline-variant mx-1" />
           <ToggleButton icon="format_align_left" label="Align left" checked={currentFormat?.hAlign === 'left'}
             onClick={() => onApply({ hAlign: 'left' })} />

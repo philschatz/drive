@@ -1,5 +1,5 @@
 import type { FormulaNode, CellRef, ErrorLiteral } from './formula-parser';
-import { parseInternal, serialize, serializeA1, serializeR1C1, parseFormula } from './formula-parser';
+import { parseInternal, serialize, serializeA1, serializeR1C1, parseFormula, mapFormulaNodes } from './formula-parser';
 
 /** Sort map entries by their float index. */
 export function sortedEntries<T extends { index: number }>(map: Record<string, T>): [string, T][] {
@@ -418,46 +418,48 @@ export function rewriteFormulaForDeletion(
   }
 
   function rewriteNode(node: FormulaNode): FormulaNode {
-    switch (node.type) {
-      case 'cellRef': {
-        if (deletedRowIds.has(node.row.id) || deletedColIds.has(node.col.id)) {
-          return makeError(node.start, node.end);
+    return mapFormulaNodes(node, (n, map) => {
+      switch (n.type) {
+        case 'cellRef': {
+          if (deletedRowIds.has(n.row.id) || deletedColIds.has(n.col.id)) {
+            return makeError(n.start, n.end);
+          }
+          return n;
         }
-        return node;
-      }
-      case 'range': {
-        const from = rewriteRangeEndpoint(node.from, 'from');
-        const to = rewriteRangeEndpoint(node.to, 'to');
-        if (from.type === 'error' || to.type === 'error') {
-          return makeError(node.start, node.end);
+        case 'range': {
+          const from = rewriteRangeEndpoint(n.from, 'from');
+          const to = rewriteRangeEndpoint(n.to, 'to');
+          if (from.type === 'error' || to.type === 'error') {
+            return makeError(n.start, n.end);
+          }
+          if (from === n.from && to === n.to) return n;
+          return { ...n, from, to };
         }
-        if (from === node.from && to === node.to) return node;
-        return { ...node, from, to };
+        case 'binary': {
+          const left = map(n.left);
+          const right = map(n.right);
+          if (left === n.left && right === n.right) return n;
+          return { ...n, left, right };
+        }
+        case 'unary': {
+          const operand = map(n.operand);
+          if (operand === n.operand) return n;
+          return { ...n, operand };
+        }
+        case 'function': {
+          const args = n.args.map(map);
+          if (args.every((a, i) => a === n.args[i])) return n;
+          return { ...n, args };
+        }
+        case 'paren': {
+          const expr = map(n.expr);
+          if (expr === n.expr) return n;
+          return { ...n, expr };
+        }
+        default:
+          return n;
       }
-      case 'binary': {
-        const left = rewriteNode(node.left);
-        const right = rewriteNode(node.right);
-        if (left === node.left && right === node.right) return node;
-        return { ...node, left, right };
-      }
-      case 'unary': {
-        const operand = rewriteNode(node.operand);
-        if (operand === node.operand) return node;
-        return { ...node, operand };
-      }
-      case 'function': {
-        const args = node.args.map(rewriteNode);
-        if (args.every((a, i) => a === node.args[i])) return node;
-        return { ...node, args };
-      }
-      case 'paren': {
-        const expr = rewriteNode(node.expr);
-        if (expr === node.expr) return node;
-        return { ...node, expr };
-      }
-      default:
-        return node;
-    }
+    });
   }
 
   const newBody = rewriteNode(ast.body);

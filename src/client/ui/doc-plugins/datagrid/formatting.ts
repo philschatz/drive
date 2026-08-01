@@ -51,6 +51,22 @@ function borderToCss(b: DataGridBorder): string {
 // formatDisplayValue — apply number format to display value
 // ============================================================
 
+/** Boolean format keys shared by the formatting commands and the FormatSheet. */
+export type ToggleableFormatKey = 'bold' | 'italic' | 'underline' | 'strikethrough';
+
+/** Shared toggle: a key is "checked" when set; the patch flips it (undefined deletes the key). */
+export function toggleFormat(
+  key: ToggleableFormatKey,
+): {
+  isChecked: (fmt: DataGridCellFormat | undefined) => boolean;
+  patch: (fmt: DataGridCellFormat | undefined) => Partial<DataGridCellFormat>;
+} {
+  return {
+    isChecked: fmt => !!fmt?.[key],
+    patch: fmt => ({ [key]: !fmt?.[key] || undefined }),
+  };
+}
+
 /** Check if a numFmt is an accounting-style format (currency left, number right). */
 export function isAccountingFormat(numFmt: string | undefined): boolean {
   if (!numFmt) return false;
@@ -271,4 +287,102 @@ function matchesCondition(value: string, type: string, conditionValue?: string):
     case 'isNotEmpty': return value !== '';
     default: return false;
   }
+}
+
+// ============================================================
+// buildCellStyle — the per-cell render pipeline
+// ============================================================
+
+export type CellRefInfo = {
+  color: string; active: boolean;
+  top: boolean; right: boolean; bottom: boolean; left: boolean;
+};
+
+type BuildCellStyleOpts = {
+  format: DataGridCellFormat | undefined;
+  display: string;
+  conditionalFormats: Record<string, ConditionalFormatRule> | undefined;
+  rowId: string; colId: string;
+  cfRowIdxMap: Map<string, number>; cfColIdxMap: Map<string, number>;
+  condFormatResults: { matches: Map<string, Set<string>> } | null;
+  peers: { color: string } | undefined;
+  refInfo: CellRefInfo | undefined;
+  clipboardSource: { minCol: number; maxCol: number; minRow: number; maxRow: number } | null;
+  ci: number; ri: number;
+  isFrozenCol: boolean; isFrozenRow: boolean;
+  frozenColOffsets: number[]; frozenRowTop: number | undefined;
+  isSpillTarget: boolean;
+};
+
+/**
+ * Per-cell render pipeline: base format → conditional → auto right-align
+ * numerics → number format → UI overlays → frozen sticky. numFmt runs AFTER
+ * conditional matching (conditions compare raw values) and the numeric
+ * right-align check (post-numFmt strings like "$1,234.00" no longer parse as Number).
+ */
+export function buildCellStyle(opts: BuildCellStyleOpts): { style: Record<string, string>; display: string } {
+  const { format, peers, refInfo, clipboardSource } = opts;
+  let { display } = opts;
+
+  const style: Record<string, string> = {};
+  const fmtCss = formatToCss(format);
+  if (fmtCss) Object.assign(style, fmtCss);
+
+  if (opts.conditionalFormats) {
+    const condFmt = resolveConditionalFormat(
+      opts.conditionalFormats, opts.rowId, opts.colId, display,
+      opts.cfRowIdxMap, opts.cfColIdxMap, opts.condFormatResults,
+    );
+    if (condFmt) {
+      const condCss = formatToCss(condFmt);
+      if (condCss) Object.assign(style, condCss);
+    }
+  }
+
+  if (!style.textAlign && display !== '' && !isNaN(Number(display))) {
+    style.textAlign = 'right';
+  }
+
+  if (format?.numFmt) display = formatDisplayValue(display, format.numFmt);
+
+  // UI overlays override formatting
+  if (peers) style.boxShadow = `inset 0 0 0 2px ${peers.color}`;
+  if (refInfo) {
+    const c = refInfo.color;
+    const dash = `2px dashed ${c}`;
+    const none = '1px solid var(--md-sys-color-outline-variant)';
+    style.borderTop = refInfo.top ? dash : none;
+    style.borderRight = refInfo.right ? dash : none;
+    style.borderBottom = refInfo.bottom ? dash : none;
+    style.borderLeft = refInfo.left ? dash : none;
+    if (refInfo.active) style.background = `${c}18`;
+  }
+  if (clipboardSource
+    && opts.ci >= clipboardSource.minCol && opts.ci <= clipboardSource.maxCol
+    && opts.ri >= clipboardSource.minRow && opts.ri <= clipboardSource.maxRow) {
+    const dash = '2px dashed var(--md-sys-color-primary)';
+    const none = '1px solid var(--md-sys-color-outline-variant)';
+    style.borderTop = opts.ri === clipboardSource.minRow ? dash : none;
+    style.borderBottom = opts.ri === clipboardSource.maxRow ? dash : none;
+    style.borderLeft = opts.ci === clipboardSource.minCol ? dash : none;
+    style.borderRight = opts.ci === clipboardSource.maxCol ? dash : none;
+  }
+
+  // Frozen sticky positioning (highest priority)
+  if (opts.isFrozenCol || opts.isFrozenRow) {
+    style.position = 'sticky';
+    // Frozen cells need an opaque backdrop so scrolled content doesn't show
+    // through — but only when nothing has already painted one. formatToCss
+    // writes the `backgroundColor` longhand, so testing only the `background`
+    // shorthand missed it and clobbered it, leaving formatted frozen cells white.
+    if (!style.background && !style.backgroundColor && !opts.isSpillTarget) {
+      style.backgroundColor = 'var(--md-sys-color-surface)';
+    }
+    if (opts.isFrozenCol) style.left = `${opts.frozenColOffsets[opts.ci] ?? 0}px`;
+    if (opts.isFrozenRow && opts.frozenRowTop !== undefined) style.top = `${opts.frozenRowTop}px`;
+    // z-index: frozen col+row intersection > frozen row > frozen col > normal
+    style.zIndex = opts.isFrozenCol && opts.isFrozenRow ? '3' : '2';
+  }
+
+  return { style, display };
 }

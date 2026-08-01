@@ -588,89 +588,88 @@ function quoteSheetName(name: string): string {
   return /[\s!':]/.test(name) ? `'${name.replace(/'/g, "''")}'` : name;
 }
 
-function serializeNodeA1(
+// ─── Shared serialization machinery ──────────────────────────────────────────
+
+type SheetRowColLookup = (sheetId: string) => {
+  idToRowIndex: (id: string) => number | undefined;
+  idToColIndex: (id: string) => number | undefined;
+  totalRows?: number;
+  totalCols?: number;
+} | undefined;
+
+type ResolvedRef = {
+  rowIdx: number | undefined;
+  colIdx: number | undefined;
+  isWholeCol: boolean;
+  isWholeRow: boolean;
+  sheetPrefix: string;
+  totalRows?: number;
+  totalCols?: number;
+};
+
+/**
+ * Resolve a cellRef to target indices. Cross-sheet refs use the target sheet's
+ * lookups (and its totals for whole-col/whole-row expansion); '#REF!' if unresolvable.
+ */
+function resolveRef(
+  node: CellRef,
+  idToRowIndex: (id: string) => number | undefined,
+  idToColIndex: (id: string) => number | undefined,
+  sheetNameLookup?: (sheetId: string) => string | undefined,
+  sheetRowColLookup?: SheetRowColLookup,
+  totalRows?: number,
+  totalCols?: number,
+): ResolvedRef | '#REF!' {
+  const targetLookups = node.sheet && sheetRowColLookup ? sheetRowColLookup(node.sheet.id) : undefined;
+  const rowLookup = targetLookups?.idToRowIndex ?? idToRowIndex;
+  const colLookup = targetLookups?.idToColIndex ?? idToColIndex;
+  const effectiveTotalRows = targetLookups?.totalRows ?? totalRows;
+  const effectiveTotalCols = targetLookups?.totalCols ?? totalCols;
+  const isWholeCol = node.row.id === '*';
+  const isWholeRow = node.col.id === '*';
+  const rowIdx = isWholeCol ? undefined : rowLookup(node.row.id);
+  const colIdx = isWholeRow ? undefined : colLookup(node.col.id);
+  if (!isWholeCol && rowIdx === undefined) return '#REF!';
+  if (!isWholeRow && colIdx === undefined) return '#REF!';
+  let sheetPrefix = '';
+  if (node.sheet && sheetNameLookup) {
+    const name = sheetNameLookup(node.sheet.id);
+    if (name === undefined) return '#REF!';
+    sheetPrefix = quoteSheetName(name) + '!';
+  }
+  return { rowIdx, colIdx, isWholeCol, isWholeRow, sheetPrefix, totalRows: effectiveTotalRows, totalCols: effectiveTotalCols };
+}
+
+/** Shared walker for A1/R1C1/canonical renderers; `ref`/`range` are the per-format pieces. */
+function serializeNodeFmt(
   node: FormulaNode,
+  ref: (node: CellRef, resolved: ResolvedRef) => string,
+  range: (node: RangeRef, map: (n: FormulaNode) => string) => string,
   cellRow: number, cellCol: number,
   idToRowIndex: (id: string) => number | undefined,
   idToColIndex: (id: string) => number | undefined,
   sheetNameLookup?: (sheetId: string) => string | undefined,
-  sheetRowColLookup?: (sheetId: string) => { idToRowIndex: (id: string) => number | undefined; idToColIndex: (id: string) => number | undefined; totalRows?: number; totalCols?: number } | undefined,
+  sheetRowColLookup?: SheetRowColLookup,
   totalRows?: number,
   totalCols?: number,
 ): string {
-  const s = (n: FormulaNode) => serializeNodeA1(n, cellRow, cellCol, idToRowIndex, idToColIndex, sheetNameLookup, sheetRowColLookup, totalRows, totalCols);
+  const map = (n: FormulaNode) => serializeNodeFmt(n, ref, range, cellRow, cellCol, idToRowIndex, idToColIndex, sheetNameLookup, sheetRowColLookup, totalRows, totalCols);
   switch (node.type) {
     case 'cellRef': {
-      // For cross-sheet refs, use the target sheet's row/col lookups
-      const targetLookups = node.sheet && sheetRowColLookup ? sheetRowColLookup(node.sheet.id) : undefined;
-      const rowLookup = targetLookups?.idToRowIndex ?? idToRowIndex;
-      const colLookup = targetLookups?.idToColIndex ?? idToColIndex;
-      const effectiveTotalRows = targetLookups?.totalRows ?? totalRows;
-      const effectiveTotalCols = targetLookups?.totalCols ?? totalCols;
-      const isWholeCol = node.row.id === '*';
-      const isWholeRow = node.col.id === '*';
-      const rowIdx = isWholeCol ? undefined : rowLookup(node.row.id);
-      const colIdx = isWholeRow ? undefined : colLookup(node.col.id);
-      if (!isWholeCol && rowIdx === undefined) return '#REF!';
-      if (!isWholeRow && colIdx === undefined) return '#REF!';
-      let cellA1: string;
-      if (isWholeCol) {
-        const colStr = (node.col.relative ? '' : '$') + colIndexToLetter(colIdx!);
-        if (effectiveTotalRows !== undefined) {
-          // Expand whole-column ref to concrete last row (HyperFormula doesn't support bare column refs)
-          cellA1 = colStr + '$' + effectiveTotalRows;
-        } else {
-          // Column-only ref: B or $B
-          cellA1 = colStr;
-        }
-      } else if (isWholeRow) {
-        const rowStr = (node.row.relative ? '' : '$') + (rowIdx! + 1);
-        if (effectiveTotalCols !== undefined) {
-          // Expand whole-row ref to concrete last column
-          cellA1 = '$' + colIndexToLetter(effectiveTotalCols - 1) + rowStr;
-        } else {
-          // Row-only ref: 1 or $1
-          cellA1 = rowStr;
-        }
-      } else {
-        const colStr = (node.col.relative ? '' : '$') + colIndexToLetter(colIdx!);
-        const rowStr = (node.row.relative ? '' : '$') + (rowIdx! + 1);
-        cellA1 = colStr + rowStr;
-      }
-      if (node.sheet && sheetNameLookup) {
-        const name = sheetNameLookup(node.sheet.id);
-        if (name === undefined) return '#REF!';
-        return `${quoteSheetName(name)}!${cellA1}`;
-      }
-      return cellA1;
+      const resolved = resolveRef(node, idToRowIndex, idToColIndex, sheetNameLookup, sheetRowColLookup, totalRows, totalCols);
+      if (resolved === '#REF!') return '#REF!';
+      return ref(node, resolved);
     }
-    case 'range': {
-      if (node.from.sheet) {
-        // Cross-sheet range: sheet name only on 'from' (e.g., Sheet!A1:B2)
-        const fromStr = s(node.from);
-        if (fromStr === '#REF!') return '#REF!';
-        const targetLookups = sheetRowColLookup ? sheetRowColLookup(node.from.sheet.id) : undefined;
-        const toRowLookup = targetLookups?.idToRowIndex ?? idToRowIndex;
-        const toColLookup = targetLookups?.idToColIndex ?? idToColIndex;
-        const toNoSheet: FormulaNode = { ...node.to, sheet: undefined };
-        const toTotalRows = targetLookups?.totalRows ?? totalRows;
-        const toTotalCols = targetLookups?.totalCols ?? totalCols;
-        const toStr = serializeNodeA1(toNoSheet, cellRow, cellCol, toRowLookup, toColLookup, sheetNameLookup, sheetRowColLookup, toTotalRows, toTotalCols);
-        if (toStr === '#REF!') return fromStr;
-        return fromStr + ':' + toStr;
-      }
-      const fromStr = s(node.from);
-      const toStr = s(node.to);
-      if (fromStr === '#REF!' || toStr === '#REF!') return '#REF!';
-      return fromStr + ':' + toStr;
-    }
-    case 'binary': return s(node.left) + node.operator + s(node.right);
-    case 'unary': return node.operator + s(node.operand);
-    case 'function': return node.name + '(' + node.args.map(s).join(',') + ')';
-    case 'paren': return '(' + s(node.expr) + ')';
+    case 'range': return range(node, map);
+    case 'binary': return map(node.left) + node.operator + map(node.right);
+    case 'unary': return node.operator + map(node.operand);
+    case 'function': return node.name + '(' + node.args.map(map).join(',') + ')';
+    case 'paren': return '(' + map(node.expr) + ')';
     default: return serializeNode(node);
   }
 }
+
+// ─── Serialize to A1 format ──────────────────────────────────────────────────
 
 /** Serialize an AST to A1 format. Relative refs become A1, absolute become $A$1. */
 export function serializeA1(
@@ -679,75 +678,61 @@ export function serializeA1(
   idToRowIndex: (id: string) => number | undefined,
   idToColIndex: (id: string) => number | undefined,
   sheetNameLookup?: (sheetId: string) => string | undefined,
-  sheetRowColLookup?: (sheetId: string) => { idToRowIndex: (id: string) => number | undefined; idToColIndex: (id: string) => number | undefined; totalRows?: number; totalCols?: number } | undefined,
+  sheetRowColLookup?: SheetRowColLookup,
   totalRows?: number,
   totalCols?: number,
 ): string {
-  return '=' + serializeNodeA1(ast.body, cellRow, cellCol, idToRowIndex, idToColIndex, sheetNameLookup, sheetRowColLookup, totalRows, totalCols);
+  const ref = (node: CellRef, r: ResolvedRef): string => {
+    let cellA1: string;
+    if (r.isWholeCol) {
+      const colStr = (node.col.relative ? '' : '$') + colIndexToLetter(r.colIdx!);
+      if (r.totalRows !== undefined) {
+        // HyperFormula doesn't support bare column refs — expand to concrete last row
+        cellA1 = colStr + '$' + r.totalRows;
+      } else {
+        cellA1 = colStr;
+      }
+    } else if (r.isWholeRow) {
+      const rowStr = (node.row.relative ? '' : '$') + (r.rowIdx! + 1);
+      if (r.totalCols !== undefined) {
+        cellA1 = '$' + colIndexToLetter(r.totalCols - 1) + rowStr;
+      } else {
+        cellA1 = rowStr;
+      }
+    } else {
+      const colStr = (node.col.relative ? '' : '$') + colIndexToLetter(r.colIdx!);
+      const rowStr = (node.row.relative ? '' : '$') + (r.rowIdx! + 1);
+      cellA1 = colStr + rowStr;
+    }
+    return r.sheetPrefix + cellA1;
+  };
+
+  const range = (node: RangeRef, map: (n: FormulaNode) => string): string => {
+    if (node.from.sheet) {
+      // Cross-sheet range: sheet name only on 'from' (e.g., Sheet!A1:B2), and the
+      // 'to' endpoint resolves against the target sheet's lookups.
+      const fromStr = map(node.from);
+      if (fromStr === '#REF!') return '#REF!';
+      const targetLookups = sheetRowColLookup ? sheetRowColLookup(node.from.sheet.id) : undefined;
+      const toRowLookup = targetLookups?.idToRowIndex ?? idToRowIndex;
+      const toColLookup = targetLookups?.idToColIndex ?? idToColIndex;
+      const toNoSheet: CellRef = { ...node.to, sheet: undefined };
+      const toTotalRows = targetLookups?.totalRows ?? totalRows;
+      const toTotalCols = targetLookups?.totalCols ?? totalCols;
+      const toStr = serializeNodeFmt(toNoSheet, ref, range, cellRow, cellCol, toRowLookup, toColLookup, sheetNameLookup, sheetRowColLookup, toTotalRows, toTotalCols);
+      if (toStr === '#REF!') return fromStr;
+      return fromStr + ':' + toStr;
+    }
+    const fromStr = map(node.from);
+    const toStr = map(node.to);
+    if (fromStr === '#REF!' || toStr === '#REF!') return '#REF!';
+    return fromStr + ':' + toStr;
+  };
+
+  return '=' + serializeNodeFmt(ast.body, ref, range, cellRow, cellCol, idToRowIndex, idToColIndex, sheetNameLookup, sheetRowColLookup, totalRows, totalCols);
 }
 
 // ─── Serialize to R1C1 format ────────────────────────────────────────────────
-
-function serializeNodeR1C1(
-  node: FormulaNode,
-  cellRow: number, cellCol: number,
-  idToRowIndex: (id: string) => number | undefined,
-  idToColIndex: (id: string) => number | undefined,
-  sheetNameLookup?: (sheetId: string) => string | undefined,
-  sheetRowColLookup?: (sheetId: string) => { idToRowIndex: (id: string) => number | undefined; idToColIndex: (id: string) => number | undefined } | undefined,
-): string {
-  const s = (n: FormulaNode) => serializeNodeR1C1(n, cellRow, cellCol, idToRowIndex, idToColIndex, sheetNameLookup, sheetRowColLookup);
-  switch (node.type) {
-    case 'cellRef': {
-      const targetLookups = node.sheet && sheetRowColLookup ? sheetRowColLookup(node.sheet.id) : undefined;
-      const rowLookup = targetLookups?.idToRowIndex ?? idToRowIndex;
-      const colLookup = targetLookups?.idToColIndex ?? idToColIndex;
-      const isWholeCol = node.row.id === '*';
-      const isWholeRow = node.col.id === '*';
-      const rowIdx = isWholeCol ? undefined : rowLookup(node.row.id);
-      const colIdx = isWholeRow ? undefined : colLookup(node.col.id);
-      if (!isWholeCol && rowIdx === undefined) return '#REF!';
-      if (!isWholeRow && colIdx === undefined) return '#REF!';
-      let r1c1: string;
-      if (isWholeCol) {
-        // Column-only: just C part
-        const colPart = node.col.relative ? `[${colIdx! - cellCol}]` : `${colIdx! + 1}`;
-        r1c1 = `C${colPart}`;
-      } else if (isWholeRow) {
-        // Row-only: just R part
-        const rowPart = node.row.relative ? `[${rowIdx! - cellRow}]` : `${rowIdx! + 1}`;
-        r1c1 = `R${rowPart}`;
-      } else {
-        const rowOffset = rowIdx! - cellRow;
-        const colOffset = colIdx! - cellCol;
-        const rowPart = node.row.relative ? (rowOffset === 0 ? '' : `[${rowOffset}]`) : `${rowIdx! + 1}`;
-        const colPart = node.col.relative ? (colOffset === 0 ? '' : `[${colOffset}]`) : `${colIdx! + 1}`;
-        r1c1 = `R${rowPart}C${colPart}`;
-      }
-      if (node.sheet && sheetNameLookup) {
-        const name = sheetNameLookup(node.sheet.id);
-        if (name === undefined) return '#REF!';
-        return `${quoteSheetName(name)}!${r1c1}`;
-      }
-      return r1c1;
-    }
-    case 'range': {
-      if (node.from.sheet) {
-        const fromStr = s(node.from);
-        const toStr = s(node.to);
-        // Strip redundant sheet prefix from the second endpoint (Sheet!A1:B2, not Sheet!A1:Sheet!B2)
-        const bangIdx = toStr.indexOf('!');
-        return fromStr + ':' + (bangIdx >= 0 ? toStr.slice(bangIdx + 1) : toStr);
-      }
-      return s(node.from) + ':' + s(node.to);
-    }
-    case 'binary': return s(node.left) + node.operator + s(node.right);
-    case 'unary': return node.operator + s(node.operand);
-    case 'function': return node.name + '(' + node.args.map(s).join(',') + ')';
-    case 'paren': return '(' + s(node.expr) + ')';
-    default: return serializeNode(node);
-  }
-}
 
 /** Serialize an AST to R1C1 format. Absolute = R1C1 (1-based), relative = R[offset]C[offset]. */
 export function serializeR1C1(
@@ -756,9 +741,39 @@ export function serializeR1C1(
   idToRowIndex: (id: string) => number | undefined,
   idToColIndex: (id: string) => number | undefined,
   sheetNameLookup?: (sheetId: string) => string | undefined,
-  sheetRowColLookup?: (sheetId: string) => { idToRowIndex: (id: string) => number | undefined; idToColIndex: (id: string) => number | undefined } | undefined,
+  sheetRowColLookup?: SheetRowColLookup,
 ): string {
-  return '=' + serializeNodeR1C1(ast.body, cellRow, cellCol, idToRowIndex, idToColIndex, sheetNameLookup, sheetRowColLookup);
+  const ref = (node: CellRef, r: ResolvedRef): string => {
+    let r1c1: string;
+    if (r.isWholeCol) {
+      const colPart = node.col.relative ? `[${r.colIdx! - cellCol}]` : `${r.colIdx! + 1}`;
+      r1c1 = `C${colPart}`;
+    } else if (r.isWholeRow) {
+      const rowPart = node.row.relative ? `[${r.rowIdx! - cellRow}]` : `${r.rowIdx! + 1}`;
+      r1c1 = `R${rowPart}`;
+    } else {
+      const rowOffset = r.rowIdx! - cellRow;
+      const colOffset = r.colIdx! - cellCol;
+      const rowPart = node.row.relative ? (rowOffset === 0 ? '' : `[${rowOffset}]`) : `${r.rowIdx! + 1}`;
+      const colPart = node.col.relative ? (colOffset === 0 ? '' : `[${colOffset}]`) : `${r.colIdx! + 1}`;
+      r1c1 = `R${rowPart}C${colPart}`;
+    }
+    return r.sheetPrefix + r1c1;
+  };
+
+  const range = (node: RangeRef, map: (n: FormulaNode) => string): string => {
+    if (node.from.sheet) {
+      const fromStr = map(node.from);
+      const toStr = map(node.to);
+      // Strip the redundant sheet prefix from the second endpoint (Sheet!A1:B2,
+      // not Sheet!A1:Sheet!B2)
+      const bangIdx = toStr.indexOf('!');
+      return fromStr + ':' + (bangIdx >= 0 ? toStr.slice(bangIdx + 1) : toStr);
+    }
+    return map(node.from) + ':' + map(node.to);
+  };
+
+  return '=' + serializeNodeFmt(ast.body, ref, range, cellRow, cellCol, idToRowIndex, idToColIndex, sheetNameLookup, sheetRowColLookup);
 }
 
 // ─── parseFormula (universal parser) ─────────────────────────────────────────
@@ -1214,19 +1229,31 @@ export function parseFormula(
 
 // ─── Utilities ───────────────────────────────────────────────────────────────
 
+/** Single home for the AST walk: `visit` recurses via the `map` it's given. */
+export function mapFormulaNodes<T>(
+  node: FormulaNode,
+  visit: (node: FormulaNode, map: (n: FormulaNode) => T) => T,
+): T {
+  const map = (n: FormulaNode): T => mapFormulaNodes(n, visit);
+  return visit(node, map);
+}
+
 /** Extract all cell references and range references from an AST. */
 export function extractCellRefs(ast: FormulaAST): (CellRef | RangeRef)[] {
   const refs: (CellRef | RangeRef)[] = [];
-  function walk(node: FormulaNode) {
+  mapFormulaNodes(ast.body, (node, map) => {
     switch (node.type) {
-      case 'cellRef': refs.push(node); break;
-      case 'range': refs.push(node); break;
-      case 'binary': walk(node.left); walk(node.right); break;
-      case 'unary': walk(node.operand); break;
-      case 'function': node.args.forEach(walk); break;
-      case 'paren': walk(node.expr); break;
+      case 'cellRef':
+      case 'range':
+        // Range endpoints aren't recursed, so refs inside a range aren't collected twice.
+        refs.push(node);
+        break;
+      case 'binary': map(node.left); map(node.right); break;
+      case 'unary': map(node.operand); break;
+      case 'function': node.args.forEach(map); break;
+      case 'paren': map(node.expr); break;
     }
-  }
-  walk(ast.body);
+    return 0;
+  });
   return refs;
 }

@@ -4,7 +4,7 @@ import { Label } from '@/components/ui/label';
 import { MdTextField } from '@/components/ui/md-text-field';
 import { MdSelect } from '@/components/ui/md-select';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
-import { colIndexToLetter, shortId } from './helpers';
+import { colIndexToLetter, letterToColIndex, shortId } from './helpers';
 import type { ConditionalFormatRule, ConditionalFormatRange, DataGridCellFormat } from '../../../../shared/schemas/datagrid';
 
 // ============================================================
@@ -438,10 +438,3 @@ export function ConditionalFormatSheet({
 // Helpers
 // ============================================================
 
-function letterToColIndex(letters: string): number {
-  let idx = 0;
-  for (let i = 0; i < letters.length; i++) {
-    idx = idx * 26 + (letters.charCodeAt(i) - 64);
-  }
-  return idx - 1;
-}

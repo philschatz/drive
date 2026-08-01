@@ -23,7 +23,8 @@ import { FormulaInsertSheet } from './FormulaInsertSheet';
 import { computeSelectionAggregates } from './aggregates';
 import { pointToCell, buildRowOffsets, rowAtOffset } from './grid-geometry';
 import { useHideOnScroll } from '../../common/useHideOnScroll';
-import { buildFormatCache, buildIndexMaps, formatToCss, formatDisplayValue, isAccountingFormat, resolveConditionalFormat } from './formatting';
+import { buildFormatCache, buildIndexMaps, formatDisplayValue, isAccountingFormat, buildCellStyle } from './formatting';
+import type { CellRefInfo } from './formatting';
 import type { DataGridCellFormat } from '../../../../shared/schemas/datagrid';
 import { SheetTabsBar } from './SheetTabsBar';
 import { SheetListSheet } from './SheetListSheet';
@@ -482,37 +483,24 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
 
   // -- Header selection handlers --
 
-  const handleRowHeaderClick = useCallback((ri: number, e: MouseEvent) => {
+  const handleHeaderClick = useCallback((type: 'row' | 'col', index: number, e: MouseEvent) => {
     if (justDraggedRef.current) return;
-    setSelectedCols(new Set());
+    const isRow = type === 'row';
+    if (isRow) setSelectedCols(new Set());
+    else setSelectedRows(new Set());
     setSelectedCell(null);
     setContextMenu(null);
-    if (e.shiftKey && lastClickedRowRef.current != null) {
-      const from = Math.min(lastClickedRowRef.current, ri);
-      const to = Math.max(lastClickedRowRef.current, ri);
+    const lastRef = isRow ? lastClickedRowRef : lastClickedColRef;
+    const setSelected = isRow ? setSelectedRows : setSelectedCols;
+    if (e.shiftKey && lastRef.current != null) {
+      const from = Math.min(lastRef.current, index);
+      const to = Math.max(lastRef.current, index);
       const range = new Set<number>();
       for (let i = from; i <= to; i++) range.add(i);
-      setSelectedRows(range);
+      setSelected(range);
     } else {
-      setSelectedRows(new Set([ri]));
-      lastClickedRowRef.current = ri;
-    }
-  }, []);
-
-  const handleColHeaderClick = useCallback((ci: number, e: MouseEvent) => {
-    if (justDraggedRef.current) return;
-    setSelectedRows(new Set());
-    setSelectedCell(null);
-    setContextMenu(null);
-    if (e.shiftKey && lastClickedColRef.current != null) {
-      const from = Math.min(lastClickedColRef.current, ci);
-      const to = Math.max(lastClickedColRef.current, ci);
-      const range = new Set<number>();
-      for (let i = from; i <= to; i++) range.add(i);
-      setSelectedCols(range);
-    } else {
-      setSelectedCols(new Set([ci]));
-      lastClickedColRef.current = ci;
+      setSelected(new Set([index]));
+      lastRef.current = index;
     }
   }, []);
 
@@ -651,18 +639,12 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
   }, [visibleColIds, mutate, currentSheetId]);
 
   // Unhide specific hidden rows/columns (used by gap buttons)
-  const unhideColumns = useCallback((ids: string[]) => {
+  const unhideLines = useCallback((kind: 'row' | 'col', ids: string[]) => {
     if (!currentSheetId || !canEditRef.current) return;
-    mutate((d, sid, ids) => {
-      for (const id of ids) delete d.sheets[sid].columns[id].hidden;
-    }, [currentSheetId, ids]);
-  }, [mutate, currentSheetId]);
-
-  const unhideRows = useCallback((ids: string[]) => {
-    if (!currentSheetId || !canEditRef.current) return;
-    mutate((d, sid, ids) => {
-      for (const id of ids) delete d.sheets[sid].rows[id].hidden;
-    }, [currentSheetId, ids]);
+    mutate((d, sid, kind, ids) => {
+      const map = kind === 'row' ? d.sheets[sid].rows : d.sheets[sid].columns;
+      for (const id of ids) delete map[id].hidden;
+    }, [currentSheetId, kind, ids]);
   }, [mutate, currentSheetId]);
 
   // -- Sheet management handlers --
@@ -840,35 +822,25 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
     setHeaderMenu({ kind, anchor, page: 'main' });
   }, []);
 
-  const handleRowContextMenu = useCallback((ri: number, e: MouseEvent) => {
+  const handleHeaderContextMenu = useCallback((kind: 'row' | 'col', index: number, e: MouseEvent) => {
     // The grid-wide Radix context menu handles cells; headers use their own
     // anchored menu, so keep the event away from the Radix trigger either way.
     e.preventDefault();
     e.stopPropagation();
     if (!canEditRef.current) {
       // Read-only: selecting via right-click still works, but no menu opens.
-      if (!selectedRowsRef.current.has(ri)) {
-        setSelectedRows(new Set([ri]));
-        setSelectedCols(new Set());
+      const isRow = kind === 'row';
+      const selectedRef = isRow ? selectedRowsRef : selectedColsRef;
+      if (!selectedRef.current.has(index)) {
+        if (isRow) setSelectedRows(new Set([index]));
+        else setSelectedCols(new Set([index]));
+        if (isRow) setSelectedCols(new Set());
+        else setSelectedRows(new Set());
         setSelectedCell(null);
       }
       return;
     }
-    openHeaderMenu('row', ri, e.currentTarget as HTMLElement);
-  }, [openHeaderMenu]);
-
-  const handleColContextMenu = useCallback((ci: number, e: MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (!canEditRef.current) {
-      if (!selectedColsRef.current.has(ci)) {
-        setSelectedCols(new Set([ci]));
-        setSelectedRows(new Set());
-        setSelectedCell(null);
-      }
-      return;
-    }
-    openHeaderMenu('col', ci, e.currentTarget as HTMLElement);
+    openHeaderMenu(kind, index, e.currentTarget as HTMLElement);
   }, [openHeaderMenu]);
 
   /**
@@ -1273,11 +1245,6 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
 
   // Build a map of cell positions → formula ref highlight info (for coloring grid cells)
   // All refs get a colored dashed border; only the cursor-active ref also gets a background fill.
-  type CellRefInfo = {
-    color: string;
-    active: boolean;
-    top: boolean; right: boolean; bottom: boolean; left: boolean;
-  };
   const refHighlightMap = useMemo(() => {
     if (!editingCell) return new Map<string, CellRefInfo>();
     const map = new Map<string, CellRefInfo>();
@@ -1588,7 +1555,7 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
                     return (
                       <>
                         {gap && (
-                          <th key={`unhide-col-${ci}`} className="datagrid-col-unhide" onClick={() => unhideColumns(gap.hiddenIds)} title={`Show ${gap.hiddenIds.length} hidden column${gap.hiddenIds.length > 1 ? 's' : ''}`}>
+                          <th key={`unhide-col-${ci}`} className="datagrid-col-unhide" onClick={() => unhideLines('col', gap.hiddenIds)} title={`Show ${gap.hiddenIds.length} hidden column${gap.hiddenIds.length > 1 ? 's' : ''}`}>
                             <span className="material-symbols-outlined" style={{ fontSize: '0.75rem' }}>unfold_more</span>
                           </th>
                         )}
@@ -1597,8 +1564,8 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
                           className={'datagrid-col-header' + (isColSelected ? ' selected' : selectedCell && selectedCell[0] === ci ? ' active' : '') + dropClass + (isLastFrozenCol ? ' frozen-col-last' : '')}
                           style={{ width: (resizingCol?.index === ci ? resizingCol.width : col.width) || 100, ...frozenStyle }}
                           data-col-index={ci}
-                          onClick={(e: any) => handleColHeaderClick(ci, e)}
-                          onContextMenu={(e: any) => handleColContextMenu(ci, e)}
+                          onClick={(e: any) => handleHeaderClick('col', ci, e)}
+                          onContextMenu={(e: any) => handleHeaderContextMenu('col', ci, e)}
                           onMouseDown={(e: any) => handleHeaderMouseDown('col', ci, e)}
                           {...headerLongPress('col', ci)}
                         >
@@ -1610,7 +1577,7 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
                   })}
                   {/* Trailing unhide button if columns are hidden at the end */}
                   {colHiddenGaps.find(g => g.beforeVisualIndex === columnDefs.length) && (
-                    <th className="datagrid-col-unhide" onClick={() => unhideColumns(colHiddenGaps.find(g => g.beforeVisualIndex === columnDefs.length)!.hiddenIds)}>
+                    <th className="datagrid-col-unhide" onClick={() => unhideLines('col', colHiddenGaps.find(g => g.beforeVisualIndex === columnDefs.length)!.hiddenIds)}>
                       <span className="material-symbols-outlined" style={{ fontSize: '0.75rem' }}>unfold_more</span>
                     </th>
                   )}
@@ -1659,7 +1626,7 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
                       )}
                       {rowGap && (
                         <tr key={`unhide-row-${ri}`} className="datagrid-row-unhide-tr">
-                          <td className="datagrid-row-unhide" colSpan={visibleColIds.length + 1} onClick={() => unhideRows(rowGap.hiddenIds)} title={`Show ${rowGap.hiddenIds.length} hidden row${rowGap.hiddenIds.length > 1 ? 's' : ''}`}>
+                          <td className="datagrid-row-unhide" colSpan={visibleColIds.length + 1} onClick={() => unhideLines('row', rowGap.hiddenIds)} title={`Show ${rowGap.hiddenIds.length} hidden row${rowGap.hiddenIds.length > 1 ? 's' : ''}`}>
                             <span className="material-symbols-outlined" style={{ fontSize: '0.75rem' }}>unfold_more</span>
                           </td>
                         </tr>
@@ -1672,8 +1639,8 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
                         // ladder in datagrid.css.
                         style={isFrozenRow ? { position: 'sticky', left: 0, top: frozenRowTop, zIndex: 5 } : undefined}
                         data-row-index={ri}
-                        onClick={(e: any) => handleRowHeaderClick(ri, e)}
-                        onContextMenu={(e: any) => handleRowContextMenu(ri, e)}
+                        onClick={(e: any) => handleHeaderClick('row', ri, e)}
+                        onContextMenu={(e: any) => handleHeaderContextMenu('row', ri, e)}
                         onMouseDown={(e: any) => handleHeaderMouseDown('row', ri, e)}
                         {...headerLongPress('row', ri)}
                       >
@@ -1698,76 +1665,25 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
                         const inAutofillTarget = autofillTarget && ci >= autofillTarget.minCol && ci <= autofillTarget.maxCol && ri >= autofillTarget.minRow && ri <= autofillTarget.maxRow;
                         const showAutofillHandle = autofillHandleCell && autofillHandleCell[0] === ci && autofillHandleCell[1] === ri && !autofillDragRef.current;
 
-                        // Apply cell formatting first (lowest priority)
-                        const cellStyle: Record<string, string> = {};
-                        const fmtCss = formatToCss(cellFmt);
-                        if (fmtCss) Object.assign(cellStyle, fmtCss);
-                        // Resolve conditional formatting BEFORE number formatting
-                        // (conditions compare raw numeric values, not formatted strings)
-                        if (currentSheet?.conditionalFormats) {
-                          const condFmt = resolveConditionalFormat(
-                            currentSheet.conditionalFormats, rowId, colId, display,
-                            cfRowIdxMap, cfColIdxMap, condFormatResultsRef.current,
-                          );
-                          if (condFmt) {
-                            const condCss = formatToCss(condFmt);
-                            if (condCss) Object.assign(cellStyle, condCss);
-                          }
-                        }
-                        // Auto-right-align numeric values if no explicit alignment is set
-                        // (numeric check uses the pre-numFmt display — after numFmt, values
-                        // like "$1,234.00" would not parse as Number).
-                        if (!cellStyle.textAlign && display !== '' && !isNaN(Number(display))) {
-                          cellStyle.textAlign = 'right';
-                        }
-                        // Apply number formatting AFTER conditional format resolution
-                        if (cellFmt?.numFmt) display = formatDisplayValue(display, cellFmt.numFmt);
-                        // UI overlays (peer, ref-highlight, clipboard) override formatting
-                        if (peers) cellStyle.boxShadow = `inset 0 0 0 2px ${peers.color}`;
-                        if (refInfo) {
-                          const c = refInfo.color;
-                          const dash = `2px dashed ${c}`;
-                          const none = '1px solid var(--md-sys-color-outline-variant)';
-                          cellStyle.borderTop = refInfo.top ? dash : none;
-                          cellStyle.borderRight = refInfo.right ? dash : none;
-                          cellStyle.borderBottom = refInfo.bottom ? dash : none;
-                          cellStyle.borderLeft = refInfo.left ? dash : none;
-                          if (refInfo.active) cellStyle.background = `${c}18`;
-                        }
-                        if (clipboardSource && ci >= clipboardSource.minCol && ci <= clipboardSource.maxCol && ri >= clipboardSource.minRow && ri <= clipboardSource.maxRow) {
-                          const dash = '2px dashed var(--md-sys-color-primary)';
-                          const none = '1px solid var(--md-sys-color-outline-variant)';
-                          cellStyle.borderTop = ri === clipboardSource.minRow ? dash : none;
-                          cellStyle.borderBottom = ri === clipboardSource.maxRow ? dash : none;
-                          cellStyle.borderLeft = ci === clipboardSource.minCol ? dash : none;
-                          cellStyle.borderRight = ci === clipboardSource.maxCol ? dash : none;
-                        }
+                        // Per-cell style pipeline (format → conditional → numFmt → overlays → frozen)
+                        const { style: cellStyle, display: formattedDisplay } = buildCellStyle({
+                          format: cellFmt,
+                          display,
+                          conditionalFormats: currentSheet?.conditionalFormats,
+                          rowId, colId,
+                          cfRowIdxMap, cfColIdxMap,
+                          condFormatResults: condFormatResultsRef.current,
+                          peers, refInfo, clipboardSource,
+                          ci, ri,
+                          isFrozenCol: ci < frozenColCount,
+                          isFrozenRow: ri < frozenRowCount,
+                          frozenColOffsets, frozenRowTop,
+                          isSpillTarget: spillTargetsRef.current.has(`${effectiveSheetId}:${rowId}:${colId}`),
+                        });
+                        display = formattedDisplay;
 
-                        // Frozen cell positioning (highest priority — overlays everything)
-                        const isFrozenCol = ci < frozenColCount;
                         const isLastFrozenCol = ci === frozenColCount - 1;
-                        const isSpillTarget = spillTargetsRef.current.has(`${effectiveSheetId}:${rowId}:${colId}`);
-                        if (isFrozenCol || isFrozenRow) {
-                          cellStyle.position = 'sticky';
-                          // Frozen cells need an opaque backdrop so scrolled content
-                          // doesn't show through — but only when nothing has already
-                          // painted one. `formatToCss` writes the `backgroundColor`
-                          // longhand, so testing only the `background` shorthand here
-                          // missed it and then clobbered it (the shorthand resets
-                          // background-color), leaving formatted frozen cells white.
-                          if (!cellStyle.background && !cellStyle.backgroundColor && !isSpillTarget) {
-                            cellStyle.backgroundColor = 'var(--md-sys-color-surface)';
-                          }
-                          if (isFrozenCol) {
-                            cellStyle.left = `${frozenColOffsets[ci]}px`;
-                          }
-                          if (isFrozenRow) {
-                            cellStyle.top = `${frozenRowTop}px`;
-                          }
-                          // z-index: frozen col+row intersection > frozen row > frozen col > normal
-                          cellStyle.zIndex = isFrozenCol && isFrozenRow ? '3' : '2';
-                        }
-
+                        const isLastFrozenRow = ri === frozenRowCount - 1;
                         const frozenClass = (isLastFrozenCol ? ' frozen-col-last' : '') + (isLastFrozenRow ? ' frozen-row-last' : '');
 
                         return (
