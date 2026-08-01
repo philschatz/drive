@@ -157,6 +157,24 @@ export async function idbDelPrefix(prefix: string): Promise<void> {
   });
 }
 
+/** Read every key/value pair in the store (the full tier of a backup). */
+export async function idbEntries(): Promise<[string, unknown][]> {
+  if (!idbAvailable()) return [];
+  const db = await getDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readonly');
+    const req = tx.objectStore(STORE_NAME).openCursor();
+    const out: [string, unknown][] = [];
+    req.onsuccess = () => {
+      const cursor = req.result;
+      if (!cursor) { resolve(out); return; }
+      if (typeof cursor.key === 'string') out.push([cursor.key, cursor.value]);
+      cursor.continue();
+    };
+    req.onerror = () => reject(req.error);
+  });
+}
+
 /** Reset the cached connection (for tests). */
 export function _resetConnectionForTest(): void {
   dbPromise = null;

@@ -69,6 +69,8 @@ export interface EnginePresenceSurface {
   cancelPending(docId: string): void;
   teardown(docId: string): void;
   isActive(docId: string): boolean;
+  /** Stop every running presence + pending retry (full-backup restore). */
+  clearAll(): void;
 }
 
 export function EnginePresence<C extends EngineCtor>(Base: C):
@@ -171,6 +173,12 @@ export function EnginePresence<C extends EngineCtor>(Base: C):
       if (entry.liveness) { clearInterval(entry.liveness); entry.liveness = null; }
       entry.presence.stop();
       this.presenceByDoc.delete(docId);
+    }
+
+    /** Stop every running presence + pending retry (full-backup restore). */
+    clearAll(): void {
+      for (const docId of [...this.presenceByDoc.keys()]) this.teardown(docId);
+      for (const docId of [...this.presencePending.keys()]) this.cancelPending(docId);
     }
 
     /** Whether a doc currently has running presence (watchClose keeps it open if so). */

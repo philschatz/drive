@@ -18,11 +18,13 @@ import type { ArchiveDocResult } from '../../shared/keyhive-types';
 import { startWebRTCBridge } from './webrtc-bridge';
 import { WorkerClient } from '../shared/worker-client';
 import type { RichTextOp, RichTextSpan } from '../../shared/rich-text-ops';
+import type { BackupTier, BackupPayload, BackupResult } from '../../shared/backup';
 
 // Re-export for convenience
 export { deepAssign };
 export type { ValidationError };
 export type { RichTextOp, RichTextSpan };
+export type { BackupTier, BackupPayload, BackupResult };
 
 /**
  * Worker-substituted rich-text bridge: pass this ref as an updateDoc arg and the
@@ -111,6 +113,26 @@ export function onFriendNamesUpdated(fn: () => void): () => void {
  */
 export function archiveDoc(docId: string): Promise<{ status: ArchiveDocResult['status'] }> {
   return khRequest('archive-doc', { docId });
+}
+
+// ── Tiered backup (assembled in the worker; full documents never hit main) ────
+
+/**
+ * Assemble a backup payload for the given tiers. `['docs','settings']` = the
+ * "documents & settings" snapshot; `['full']` = the full device backup (keys +
+ * keyhive docs). Serialize with `serializeBackup` to write the file.
+ */
+export function exportBackup(tiers: BackupTier[]): Promise<BackupPayload> {
+  return request('export-backup', { tiers });
+}
+
+/**
+ * Restore from a parsed backup: the tiered `BackupPayload` (snapshot or full).
+ * The matching restore runs in the worker and the result signals whether a
+ * reload is required.
+ */
+export function importBackup(payload: BackupPayload): Promise<BackupResult> {
+  return request('import-backup', { payload });
 }
 
 // Functions that the worker provides its own copy of. Callers pass the real ref;

@@ -13,14 +13,19 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/preact';
 let mockReachable: string | null;
 let mockEnableSettingsSync: jest.Mock;
 let mockDeleteAllData: jest.Mock;
+let mockExportBackup: jest.Mock;
+let mockImportBackup: jest.Mock;
 let mockIdentity: { deviceId: string; userGroupId: string | null };
 let mockShowToast: jest.Mock;
 let mockShowError: jest.Mock;
+let capturedInputs: HTMLInputElement[];
 
 jest.mock('../../worker-api', () => ({
   getReachableSettingsDoc: () => Promise.resolve(mockReachable),
   enableSettingsSync: (...args: any[]) => mockEnableSettingsSync(...args),
   deleteAllData: (...args: any[]) => mockDeleteAllData(...args),
+  exportBackup: (...args: any[]) => mockExportBackup(...args),
+  importBackup: (...args: any[]) => mockImportBackup(...args),
 }));
 
 jest.mock('../../common/keyhive-api', () => ({
@@ -62,9 +67,13 @@ beforeEach(() => {
   mockReachable = null;
   mockEnableSettingsSync = jest.fn(() => Promise.resolve());
   mockDeleteAllData = jest.fn(() => Promise.resolve());
+  mockExportBackup = jest.fn(() =>
+    Promise.resolve({ format: 'drive-backup', version: 1, kind: 'snapshot', exportedAt: 'x' }));
+  mockImportBackup = jest.fn(() => Promise.resolve({ imported: 0, skipped: [], reload: false }));
   mockIdentity = { deviceId: 'device-1', userGroupId: 'group-1' };
   mockShowToast = jest.fn();
   mockShowError = jest.fn();
+  capturedInputs = [];
   // Not stubbing window.location: neither it nor `reload` is redefinable in this
   // jsdom build. The success paths call reload(), which jsdom reports as
   // "Not implemented: navigation" on the virtual console rather than throwing — so
@@ -141,26 +150,98 @@ describe('DangerZone', () => {
 });
 
 describe('BackupSettings', () => {
-  it('confirms an export with a snackbar', async () => {
+  // BackupSettings builds its file input imperatively and clicks it, so tests
+  // capture that input via a click spy, then feed it a fake file through change.
+  const captureFileInput = () => {
+    jest.spyOn(HTMLInputElement.prototype, 'click').mockImplementation(function (this: HTMLInputElement) {
+      capturedInputs.push(this);
+    });
+  };
+  const selectFile = (input: HTMLInputElement, content: string) => {
+    const file = { text: jest.fn(() => Promise.resolve(content)) };
+    Object.defineProperty(input, 'files', { value: [file] });
+    fireEvent.change(input);
+  };
+
+  it('exports documents & settings and shows a snackbar', async () => {
     // The handler builds a detached <a download> and clicks it.
     const click = jest.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
     (URL as any).createObjectURL = jest.fn(() => 'blob:x');
     (URL as any).revokeObjectURL = jest.fn();
 
     render(<BackupSettings />);
-    fireEvent.click(screen.getByTestId('backup-export'));
+    fireEvent.click(screen.getByTestId('backup-export-snapshot'));
 
-    await waitFor(() => expect(mockShowToast).toHaveBeenCalledWith('Data exported.'));
+    await waitFor(() => expect(mockExportBackup).toHaveBeenCalledWith(['docs', 'settings']));
+    await waitFor(() => expect(mockShowToast).toHaveBeenCalledWith('Backup exported.'));
     expect(click).toHaveBeenCalled();
     click.mockRestore();
   });
 
-  it('reports an export failure as an error snackbar', async () => {
-    (URL as any).createObjectURL = jest.fn(() => { throw new Error('no blobs'); });
+  it('confirms the full export (it contains keys) before exporting', async () => {
     render(<BackupSettings />);
-    fireEvent.click(screen.getByTestId('backup-export'));
+    fireEvent.click(screen.getByTestId('backup-export-full'));
 
-    await waitFor(() => expect(mockShowError).toHaveBeenCalledWith(expect.stringContaining('no blobs')));
+    expect(await screen.findByTestId('confirm-backup-full-export')).toBeDefined();
+    expect(mockExportBackup).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId('confirm-accept'));
+    await waitFor(() => expect(mockExportBackup).toHaveBeenCalledWith(['full']));
+  });
+
+  it('imports a snapshot backup after its confirm', async () => {
+    captureFileInput();
+    render(<BackupSettings />);
+    fireEvent.click(screen.getByTestId('backup-import'));
+    selectFile(capturedInputs[0], JSON.stringify({
+      format: 'drive-backup', version: 1, kind: 'snapshot', exportedAt: 'x', docs: [],
+    }));
+
+    expect(await screen.findByTestId('confirm-backup-snapshot-import')).toBeDefined();
+    expect(mockImportBackup).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId('confirm-accept'));
+    await waitFor(() => expect(mockImportBackup).toHaveBeenCalled());
+    expect(mockImportBackup.mock.calls[0][0].kind).toBe('snapshot');
+    await waitFor(() => expect(mockShowToast).toHaveBeenCalledWith('Backup restored.'));
+  });
+
+  it('imports a full backup only through the destructive confirm', async () => {
+    captureFileInput();
+    render(<BackupSettings />);
+    fireEvent.click(screen.getByTestId('backup-import'));
+    selectFile(capturedInputs[0], JSON.stringify({
+      format: 'drive-backup', version: 1, kind: 'full', exportedAt: 'x',
+    }));
+
+    expect(await screen.findByTestId('confirm-backup-full-import')).toBeDefined();
+    fireEvent.click(screen.getByTestId('confirm-accept'));
+    await waitFor(() =>
+      expect(mockImportBackup).toHaveBeenCalledWith(expect.objectContaining({ kind: 'full' })));
+  });
+
+  it('declines an import and restores nothing', async () => {
+    captureFileInput();
+    render(<BackupSettings />);
+    fireEvent.click(screen.getByTestId('backup-import'));
+    selectFile(capturedInputs[0], JSON.stringify({
+      format: 'drive-backup', version: 1, kind: 'snapshot', exportedAt: 'x',
+    }));
+
+    await screen.findByTestId('confirm-backup-snapshot-import');
+    fireEvent.click(screen.getByTestId('confirm-cancel'));
+    await waitFor(() => expect(screen.queryByTestId('confirm-backup-snapshot-import')).toBeNull());
+    expect(mockImportBackup).not.toHaveBeenCalled();
+  });
+
+  it('rejects a file that is not a backup', async () => {
+    captureFileInput();
+    render(<BackupSettings />);
+    fireEvent.click(screen.getByTestId('backup-import'));
+    selectFile(capturedInputs[0], '{ nope');
+
+    await waitFor(() => expect(mockShowError).toHaveBeenCalledWith(expect.stringContaining('Import failed')));
+    expect(mockImportBackup).not.toHaveBeenCalled();
   });
 });
 

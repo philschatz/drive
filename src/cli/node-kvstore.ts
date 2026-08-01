@@ -62,6 +62,11 @@ export class NodeKVStore implements KVStore {
     if (changed) this.persist();
   }
 
+  async entries(): Promise<[string, unknown][]> {
+    this.ensureLoaded();
+    return Object.entries(this.data);
+  }
+
   async settingGet<K extends SettingName>(name: K): Promise<SettingsSchema[K]> {
     this.ensureLoaded();
     const v = this.data[SETTINGS_PREFIX + name];

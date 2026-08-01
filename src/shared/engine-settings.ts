@@ -37,6 +37,10 @@ export interface EngineSettingsSurface {
   driveSettingsDoc(): any | null;
   ensureDriveSettingsDoc(opts?: { create?: boolean }): Promise<any | null>;
   assertValidSettingsChange(handle: any, mutator: (d: any) => void): void;
+  /** Commit a DriveSettings mutation validate-before-commit (backup import merges entries through this). */
+  changeDriveSettings(mutator: (d: any) => void): void;
+  /** Flip LOCAL → SHARED and drop the local facade so the synced doc can be created (backup import). */
+  openSharedSettingsForImport(): void;
   broadcastNames(field: 'friends' | 'deviceNames'): void;
   getArchivedTombstones(): ArchivedDocTombstones;
   setArchivedTombstone(docId: string, entry: { grantSigs: string[] }): void;
@@ -46,6 +50,8 @@ export interface EngineSettingsSurface {
   addKnownFriendGroup(groupId: string): Promise<boolean>;
   putFriendName(agentId: string, name: string | undefined): Promise<void>;
   putDeviceName(agentId: string, name: string | undefined): Promise<void>;
+  /** Drop all DriveSettings state (full-backup restore: a reload re-resolves from the restored store). */
+  resetDriveSettings(): void;
 }
 
 export function EngineSettings<C extends EngineCtor>(Base: C):
@@ -128,6 +134,17 @@ export function EngineSettings<C extends EngineCtor>(Base: C):
       if (!handle) throw new Error('DriveSettings document is not loaded');
       this.assertValidSettingsChange(handle, mutator);
       handle.change(mutator);
+    }
+
+    /** Flip LOCAL → SHARED and drop the local facade (backup settings import, and
+     * the local→shared opt-in's first half). No-op when already shared. */
+    openSharedSettingsForImport(): void {
+      if (this.settingsMode === 'shared') return;
+      this.settingsMode = 'shared';
+      this.driveSettingsHandle = null;
+      this.driveSettingsDocId = null;
+      this.driveSettingsDeferredHandle = null;
+      this.ensureSettingsInFlight = null;
     }
 
     /**
@@ -400,6 +417,19 @@ export function EngineSettings<C extends EngineCtor>(Base: C):
       if (typeof handle.on === 'function') handle.on('doc', onChange);
     }
 
+    /** Drop all in-memory DriveSettings state (full-backup restore). The next
+     * init() re-resolves the mode from the restored KEYS.driveSettings value. */
+    resetDriveSettings(): void {
+      this.settingsMode = 'local';
+      this.driveSettingsHandle = null;
+      this.driveSettingsDocId = null;
+      this.driveSettingsDeferredHandle = null;
+      this.ensureSettingsInFlight = null;
+      this.ensureLocalInFlight = null;
+      this.localSettings = null;
+      this.legacyMerged = false;
+    }
+
     /** Rebroadcast names (called on load + on any local or remote edit). */
     refreshFromSettingsDoc(): void {
       this.broadcastNames('friends');
@@ -559,10 +589,7 @@ export function EngineSettings<C extends EngineCtor>(Base: C):
           );
           // Flip to shared and drop the local handle so its change() can't write the blob
           // back over the docId string createDriveSettingsDoc is about to persist.
-          this.settingsMode = 'shared';
-          this.driveSettingsHandle = null;
-          this.driveSettingsDocId = null;
-          this.ensureSettingsInFlight = null;
+          this.openSharedSettingsForImport();
           // Reuse an existing reachable DriveSettings doc (e.g. one already synced from
           // another of this user's devices) rather than minting a duplicate. Skip the
           // member/permission check — a synced-but-not-yet-CGKA-complete doc fails it, and

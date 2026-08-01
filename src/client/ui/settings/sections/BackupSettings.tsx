@@ -1,34 +1,66 @@
 /**
- * Data Backup — export/import of the doc list and friend/device names.
+ * Data Backup — tiered export/import of documents, settings, and (full tier)
+ * identity keys.
  *
- * Both handlers build their file element imperatively and `.click()` it rather than
- * rendering one: the click has to happen in the same task as the user's gesture,
- * and a permanently-mounted hidden `<input type="file">` would be a stray
- * focusable node sitting in a list.
+ * Layout: two exports + one import.
+ *   - "Export documents & settings" → `exportBackup(['docs','settings'])` — a
+ *     snapshot of every document's current state + the DriveSettings surface.
+ *   - "Export full device backup" → `exportBackup(['full'])` — every kv pair and
+ *     automerge/keyhive chunk, i.e. a device-migration backup that includes the
+ *     identity keys. Confirmed first because it contains keys.
+ *   - "Import backup" → a file input that auto-detects the tier (snapshot / full),
+ *     confirms the matching restore, and reloads.
+ *
+ * All handlers build their file element imperatively and `.click()` it rather
+ * than rendering one: the click has to happen in the same task as the user's
+ * gesture, and a permanently-mounted hidden `<input type="file">` would be a
+ * stray focusable node sitting in a list.
  */
 import { showToast, showError } from '@/components/ui/toast';
-import { idbGet, idbSet, KEYS } from '../../../shared/idb-storage';
-import { getAllFriendNames, setFriendName } from '../../friend-names';
-import { getAllDeviceNames, setDeviceName } from '../../device-names';
+import { useConfirm } from '../../common/ConfirmSheet';
+import { exportBackup, importBackup } from '../../worker-api';
+import { parseBackup, serializeBackup, type BackupTier } from '../../../../shared/backup';
 import { SettingsGroup, SettingsProse } from '../SettingsGroup';
 
 export function BackupSettings() {
-  const handleExport = async () => {
+  const { confirm, confirmSheet } = useConfirm();
+
+  const doExport = async (tiers: BackupTier[], label: string): Promise<void> => {
+    const payload = await exportBackup(tiers);
+    const text = serializeBackup(payload);
+    const blob = new Blob([text], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `drive-${label}-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast('Backup exported.');
+  };
+
+  const handleExportSnapshot = async () => {
     try {
-      // Contact/device names now live in the synced DriveSettings doc; read them
-      // from the worker-hydrated caches. docList stays a device-local hint.
-      const docList = await idbGet<unknown[]>(KEYS.docIds).then(v => v ?? []);
-      const friendNames = getAllFriendNames();
-      const deviceNames = getAllDeviceNames();
-      const payload = { version: 2, exportedAt: new Date().toISOString(), docList, friendNames, deviceNames };
-      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `drive-backup-${new Date().toISOString().slice(0, 10)}.json`;
-      a.click();
-      URL.revokeObjectURL(url);
-      showToast('Data exported.');
+      await doExport(['docs', 'settings'], 'backup');
+    } catch (err: any) {
+      showError('Export failed: ' + err.message);
+    }
+  };
+
+  const handleExportFull = async () => {
+    if (!await confirm({
+      title: 'Export full device backup?',
+      body: (
+        <p>
+          The file contains your identity keys and every document. Anyone who gets it can
+          read your data, so store it somewhere safe.
+        </p>
+      ),
+      confirmLabel: 'Export backup',
+      confirmIcon: 'download',
+      'data-testid': 'confirm-backup-full-export',
+    })) return;
+    try {
+      await doExport(['full'], 'full-backup');
     } catch (err: any) {
       showError('Export failed: ' + err.message);
     }
@@ -42,28 +74,30 @@ export function BackupSettings() {
       const file = input.files?.[0];
       if (!file) return;
       try {
-        const text = await file.text();
-        const payload = JSON.parse(text);
-        if (!payload || (payload.version !== 1 && payload.version !== 2))
-          throw new Error('Invalid backup file (wrong version).');
-        if (!Array.isArray(payload.docList)) throw new Error('Invalid backup: docList must be an array.');
-        // v1 called this `contactNames`; v2 renamed it to `friendNames`. Accept
-        // either so backups taken before the rename still restore.
-        const friendNames = payload.friendNames ?? payload.contactNames;
-        if (typeof friendNames !== 'object' || Array.isArray(friendNames))
-          throw new Error('Invalid backup: friendNames must be an object.');
-        // Legacy backups may carry an `invites` field — it's no longer used, so ignore it.
-        // `deviceNames` was added later; older backups omit it, so default to {}.
-        const deviceNames: Record<string, string> = (payload.deviceNames && typeof payload.deviceNames === 'object' && !Array.isArray(payload.deviceNames))
-          ? payload.deviceNames : {};
-        await idbSet(KEYS.docIds, payload.docList);
-        // Friend/device names live in the synced DriveSettings doc now — restore
-        // them through the worker so they land in (and re-sync from) that document.
-        await Promise.all([
-          ...Object.entries(friendNames as Record<string, string>).map(([id, name]) => setFriendName(id, name)),
-          ...Object.entries(deviceNames).map(([id, name]) => setDeviceName(id, name)),
-        ]);
-        window.location.reload();
+        const parsed = parseBackup(await file.text());
+        if (parsed.kind === 'invalid') throw new Error(parsed.error);
+
+        const ok = parsed.kind === 'full'
+          ? await confirm({
+              title: 'Restore full device backup?',
+              body: <p>Replaces ALL local data — your keys, documents, and settings — with the backup's contents, then reloads.</p>,
+              confirmLabel: 'Restore backup',
+              confirmIcon: 'restore',
+              destructive: true,
+              'data-testid': 'confirm-backup-full-import',
+            })
+          : await confirm({
+              title: 'Restore documents & settings?',
+              body: <p>Recreates your documents and merges your settings. This device's identity is kept; on a fresh device a new user group is created.</p>,
+              confirmLabel: 'Restore',
+              confirmIcon: 'restore',
+              'data-testid': 'confirm-backup-snapshot-import',
+            });
+        if (!ok) return;
+
+        const result = await importBackup(parsed.payload);
+        showToast('Backup restored.');
+        if (result.reload) window.location.reload();
       } catch (err: any) {
         showError('Import failed: ' + err.message);
       }
@@ -74,22 +108,33 @@ export function BackupSettings() {
   return (
     <>
       <SettingsProse>
-        Export or import your document list and friends. Document contents are not included —
-        those sync via Automerge.
+        Export a snapshot of your documents and settings, or a full device backup that also
+        includes your identity keys (for moving to a new device). Imports restore the matching
+        tier — the file kind is detected automatically.
       </SettingsProse>
 
-      <SettingsGroup>
-        <md-list-item type="button" data-testid="backup-export" onClick={handleExport}>
+      <SettingsGroup label="Export">
+        <md-list-item type="button" data-testid="backup-export-snapshot" onClick={handleExportSnapshot}>
           <md-icon slot="start">download</md-icon>
-          <div slot="headline">Export backup</div>
-          <div slot="supporting-text">Document list, friend and device names</div>
+          <div slot="headline">Export documents &amp; settings</div>
+          <div slot="supporting-text">Current versions of your documents plus friends and devices</div>
         </md-list-item>
+        <md-list-item type="button" data-testid="backup-export-full" onClick={handleExportFull}>
+          <md-icon slot="start">key</md-icon>
+          <div slot="headline">Export full device backup</div>
+          <div slot="supporting-text">Everything, including your identity keys — for moving devices</div>
+        </md-list-item>
+      </SettingsGroup>
+
+      <SettingsGroup label="Import">
         <md-list-item type="button" data-testid="backup-import" onClick={handleImport}>
           <md-icon slot="start">upload</md-icon>
           <div slot="headline">Import backup</div>
-          <div slot="supporting-text">Replaces your document list, then reloads</div>
+          <div slot="supporting-text">Restores a documents/settings or full device backup, then reloads</div>
         </md-list-item>
       </SettingsGroup>
+
+      {confirmSheet}
     </>
   );
 }

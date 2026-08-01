@@ -7,6 +7,7 @@
 import type { RendezvousStatus } from './rendezvous-protocol';
 import type { RichTextSpan } from './rich-text-ops';
 import type { WebRTCSignal } from './webrtc-signal';
+import type { BackupTier, BackupPayload } from './backup';
 
 // ── worker ↔ WebRTC bridge (a MessagePort, not the worker's main channel) ────
 // RTCPeerConnection is window-only, so the peer connections live on the main
@@ -45,6 +46,12 @@ export type MainToWorker =
   | { type: 'set-presence-timing'; id: number; staleMs?: number; heartbeatMs?: number; livenessCheckMs?: number }
   | { type: 'clear-caches'; id: number }
   | { type: 'get-doc-list'; id: number }
+  // Tiered backup. `export-backup` returns a BackupPayload assembled in the
+  // worker (the full documents never cross to the main thread); `import-backup`
+  // accepts a parsed BackupPayload and runs the matching restore, returning a
+  // BackupResult.
+  | { type: 'export-backup'; id: number; tiers: BackupTier[] }
+  | { type: 'import-backup'; id: number; payload: BackupPayload }
   // `peek: true` = "don't count this read as the user viewing the doc" (home
   // page summary, source inspector/export, background tooling). Default
   // (absent) = viewing: the doc's last-viewed heads are updated, clearing its

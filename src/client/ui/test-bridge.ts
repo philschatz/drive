@@ -13,14 +13,16 @@
 
 import * as workerApi from './worker-api';
 import { workerReady, keyhiveReady } from './worker-api';
-import { getAllFriendNames } from './friend-names';
+import { getAllFriendNames, setFriendName } from './friend-names';
 import { getAllDeviceNames } from './device-names';
 
 const bridge = {
   ...workerApi, // includes the doc-list helpers (archiveDoc/getDocList/onDocListUpdated)
   // contact-name cache (worker-owned, mirrored to the main thread) so tests can
-  // assert names the worker assigns (e.g. auto-naming during the rendezvous).
+  // assert names the worker assigns (e.g. auto-naming during the rendezvous),
+  // plus the writer so tests can seed a name (e.g. the backup-restore spec).
   getAllFriendNames,
+  setFriendName,
   // device-name cache (same mirroring) so tests can assert the names exchanged
   // between two devices during the link rendezvous.
   getAllDeviceNames,

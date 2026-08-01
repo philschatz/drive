@@ -32,6 +32,9 @@ import { EngineSettings, type EngineSettingsSurface } from './engine-settings';
 import { EnginePresence, type EnginePresenceSurface } from './engine-presence';
 import { EngineRendezvous, type EngineRendezvousSurface } from './engine-rendezvous';
 import { EngineWatch, type EngineWatchSurface } from './engine-watch';
+import type {
+  BackupPayload, BackupTier, BackupResult, BackupDocEntry, BackupSettings,
+} from './backup';
 
 /** JSON with recursively sorted object keys — for value comparisons where the
  * producer's key order is nondeterministic (e.g. Automerge span block values). */
@@ -290,6 +293,199 @@ export class EngineCore {
       }
     }
     return saved;
+  }
+
+  // ── Backup (tiers) ──────────────────────────────────────────────────────────
+  /**
+   * Assemble a backup payload for the requested tiers. Runs inside the engine so
+   * the full document states never cross to the main thread (only the assembled
+   * payload does).
+   * - 'docs': one materialized doc state per home-list doc; unreadable docs are
+   *   skipped with a warning, never aborting the export.
+   * - 'settings': the DriveSettings surface (friends / deviceNames / archivedDocIds).
+   * - 'full': every non-cache app-storage kv pair + every automerge documents
+   *   chunk (which also covers keyhive's keyhive-db keys).
+   */
+  protected async exportBackup(tiers: BackupTier[]): Promise<BackupPayload> {
+    const want = new Set(tiers);
+    const payload: BackupPayload = {
+      format: 'drive-backup',
+      version: 1,
+      kind: want.has('full') ? 'full' : 'snapshot',
+      exportedAt: new Date().toISOString(),
+    };
+
+    if (want.has('full')) {
+      const chunks = await this.host.storage.loadRange([]);
+      payload.storage = chunks.map((c: any) => ({ key: c.key, data: c.data }));
+      const kvEntries = (await this.host.kv.entries()).filter(([k]) => !k.startsWith(CACHE_PREFIX));
+      payload.kv = kvEntries.map(([key, value]) => ({ key, value }));
+      return payload;
+    }
+
+    if (want.has('docs')) {
+      const list = (await this.host.kv.get<StoredDocEntry[]>(KEYS.docIds)) ?? [];
+      const docs: BackupDocEntry[] = [];
+      for (const entry of list) {
+        try {
+          const handle = await this.getOrLoadHandle(entry.id);
+          const doc = handle.doc();
+          if (!doc) throw new Error('Document not ready');
+          docs.push({
+            doc: JSON.parse(JSON.stringify(doc)),
+            metadata: entry.type || entry.name ? { type: entry.type, name: entry.name } : undefined,
+          });
+        } catch (err) {
+          console.warn(`[engine] export-backup: skipping unreadable doc ${entry.id}:`, errMsg(err));
+        }
+      }
+      payload.docs = docs;
+    }
+
+    if (want.has('settings')) {
+      const doc = this.settingsSurface.driveSettingsDoc();
+      if (doc) {
+        const clone = (v: any) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));
+        payload.settings = {
+          friends: clone(doc.friends),
+          deviceNames: clone(doc.deviceNames),
+          archivedDocIds: clone(doc.archivedDocIds),
+        };
+      }
+    }
+
+    return payload;
+  }
+
+  /** Restore from a parsed backup (snapshot / full). Every tier returns
+   * `reload: true` so the UI rebuilds from the restored state. */
+  protected async importBackup(payload: BackupPayload): Promise<BackupResult> {
+    if (payload.kind === 'full') return this.importFullBackup(payload);
+    return this.importSnapshotBackup(payload);
+  }
+
+  /**
+   * Snapshot restore: recreate each materialized doc state as a fresh keyhive
+   * doc, then merge settings. Creating a doc mints a user-group on a fresh
+   * device (that group becomes admin of every imported doc) or reuses this
+   * device's existing group — identity is decided by what's present, never reset.
+   */
+  private async importSnapshotBackup(payload: BackupPayload): Promise<BackupResult> {
+    const skipped: string[] = [];
+    let imported = 0;
+
+    if (payload.docs?.length) {
+      const list = (await this.host.kv.get<StoredDocEntry[]>(KEYS.docIds)) ?? [];
+      for (const item of payload.docs) {
+        const doc = item?.doc;
+        const label = item?.metadata?.name || doc?.name || '(unnamed)';
+        if (!doc || typeof doc !== 'object') { skipped.push(label); continue; }
+        const errors = validateDocument(doc);
+        if (errors.length) {
+          skipped.push(label);
+          console.warn(`[engine] import-backup: skipping invalid doc ${label}:`, errors.slice(0, 3).map(e => e.message).join('; '));
+          continue;
+        }
+        try {
+          const handle = await this.createKeyhiveDocHandle(doc);
+          const docId = handle.documentId;
+          list.unshift({ id: docId, type: item.metadata?.type ?? doc['@type'], name: item.metadata?.name });
+          if (this.repo?.storageSubsystem && handle.doc()) {
+            void this.repo.storageSubsystem.saveDoc(docId, handle.doc());
+          }
+          this.getOrCreateEntry(docId, handle);
+          imported++;
+        } catch (err) {
+          skipped.push(label);
+          console.warn(`[engine] import-backup: doc creation failed for ${label}:`, errMsg(err));
+        }
+      }
+      if (imported) {
+        await this.host.kv.set(KEYS.docIds, list);
+        this.emit({ type: 'doc-list-updated', list });
+      }
+    }
+
+    if (payload.settings) await this.importSettings(payload.settings);
+
+    return { imported, skipped, reload: true };
+  }
+
+  /**
+   * Merge imported settings into the DriveSettings doc (synced) when a user-group
+   * exists — creating the doc if absent — or keep LOCAL mode and seed the blob
+   * when there is none (settings-only snapshot on a fresh device).
+   */
+  private async importSettings(settings: BackupSettings): Promise<void> {
+    const userGroupId = this.khOps ? await this.khOps.getUserGroupId() : null;
+    if (userGroupId) {
+      this.settingsSurface.openSharedSettingsForImport();
+      await this.settingsSurface.ensureDriveSettingsDoc({ create: true });
+    } else {
+      await this.settingsSurface.ensureDriveSettingsDoc(); // LOCAL facade (or null)
+    }
+    this.mergeImportedSettings(settings);
+  }
+
+  /** Per-entry, validate-before-commit settings merge; a bad entry is skipped,
+   * never failing the whole restore. */
+  private mergeImportedSettings(settings: BackupSettings): void {
+    const setOrSkip = (what: string, mutate: (d: any) => void) => {
+      try { this.settingsSurface.changeDriveSettings(mutate); }
+      catch (err) { console.warn(`[engine] import-backup: skipped invalid ${what}:`, errMsg(err)); }
+    };
+
+    for (const [id, name] of Object.entries(settings.friends ?? {})) {
+      setOrSkip(`friend ${id}`, d => { if (!d.friends) d.friends = {}; d.friends[id] = name ?? null; });
+    }
+    for (const [id, name] of Object.entries(settings.deviceNames ?? {})) {
+      setOrSkip(`device ${id}`, d => { if (!d.deviceNames) d.deviceNames = {}; d.deviceNames[id] = name; });
+    }
+    for (const [docId, tomb] of Object.entries(settings.archivedDocIds ?? {})) {
+      const grantSigs = Array.isArray(tomb?.grantSigs) ? [...tomb.grantSigs] : [];
+      setOrSkip(`archived doc ${docId}`, d => {
+        if (!d.archivedDocIds) d.archivedDocIds = {};
+        d.archivedDocIds[docId] = { grantSigs };
+      });
+    }
+    this.settingsSurface.broadcastNames('friends');
+    this.settingsSurface.broadcastNames('deviceNames');
+  }
+
+  /**
+   * Destructive full restore: wipe the automerge/keyhive storage and the kv
+   * store, rewrite them from the payload, reset in-memory state, then signal
+   * reload — the new worker boots fresh from the restored keyhive data.
+   */
+  private async importFullBackup(payload: BackupPayload): Promise<BackupResult> {
+    await this.host.storage.removeRange([]);
+    for (const chunk of payload.storage ?? []) {
+      if (!Array.isArray(chunk?.key) || !(chunk?.data instanceof Uint8Array)) continue;
+      await this.host.storage.save(chunk.key, chunk.data);
+    }
+    await this.host.kv.delPrefix('data:');
+    await this.host.kv.delPrefix('settings:');
+    await this.host.kv.delPrefix(CACHE_PREFIX);
+    for (const pair of payload.kv ?? []) {
+      if (typeof pair?.key !== 'string') continue;
+      if (pair.key.startsWith(CACHE_PREFIX)) continue;
+      await this.host.kv.set(pair.key, pair.value);
+    }
+
+    // Drop every in-memory doc/query/subscription so nothing stale survives to
+    // the reload; the new worker boots fresh from the restored stores.
+    this.docRegistry.clear();
+    this.subIdToDocId.clear();
+    this.pendingSubs.clear();
+    this.cursorSubs.clear();
+    this.queryResultCache.clear();
+    this.jqCache.clear();
+    this.unseenChanges = {};
+    this.lastViewedHeads = {};
+    this.presenceSurface.clearAll();
+    this.settingsSurface.resetDriveSettings();
+
+    return { imported: 0, skipped: [], reload: true };
   }
 
   // ── "New changes since last viewed" ────────────────────────────────────────
@@ -886,6 +1082,16 @@ export class EngineCore {
         this.jqCache.clear();
         await this.host.kv.delPrefix(CACHE_PREFIX);
       });
+      return;
+    }
+
+    if (msg.type === 'export-backup') {
+      await this.respond(msg.id, () => this.exportBackup(msg.tiers));
+      return;
+    }
+
+    if (msg.type === 'import-backup') {
+      await this.respond(msg.id, () => this.importBackup(msg.payload), '[engine] import-backup failed:');
       return;
     }
 

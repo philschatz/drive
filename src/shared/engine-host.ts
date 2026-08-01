@@ -23,6 +23,8 @@ export interface KVStore {
   del(key: string): Promise<void>;
   /** Delete every entry whose key starts with `prefix`. */
   delPrefix(prefix: string): Promise<void>;
+  /** Every stored key/value pair (the full tier of a backup reads the whole store). */
+  entries(): Promise<[string, unknown][]>;
   settingGet<K extends SettingName>(name: K): Promise<SettingsSchema[K]>;
   settingSet<K extends SettingName>(name: K, value: SettingsSchema[K]): Promise<void>;
 }
