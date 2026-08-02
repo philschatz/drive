@@ -10,18 +10,17 @@ import { DevicesSettings } from './sections/DevicesSettings';
 import { StorageSettings } from './sections/StorageSettings';
 import { BackupSettings } from './sections/BackupSettings';
 import { DebuggingSettings } from './sections/DebuggingSettings';
-import { DangerZone } from './sections/DangerZone';
 
 export const SETTINGS_SECTIONS: Record<string, { title: string; icon: string; Component: ComponentType }> = {
   profile: { title: 'Profile', icon: 'person', Component: ProfileSettings },
   devices: { title: 'Devices', icon: 'devices', Component: DevicesSettings },
   storage: { title: 'Settings Storage', icon: 'sync', Component: StorageSettings },
   backup: { title: 'Data Backup', icon: 'save', Component: BackupSettings },
-  // 'developer' (Open Link) folded into Debugging — a developer utility didn't
-  // warrant a top-level row. `#/settings/developer` falls to the unknown-section
-  // fallback below, matching the app's no-legacy-redirects convention.
+  // 'developer' (Open Link) folded into Debugging, and 'danger' (Delete all data)
+  // into Data Backup — neither warranted a top-level row. `#/settings/developer`
+  // and `#/settings/danger` fall to the unknown-section fallback below, matching
+  // the app's no-legacy-redirects convention.
   debugging: { title: 'Debugging', icon: 'bug_report', Component: DebuggingSettings },
-  danger: { title: 'Danger Zone', icon: 'warning', Component: DangerZone },
 };
 
 export function SettingsSection({ section }: { section?: string; path?: string }) {

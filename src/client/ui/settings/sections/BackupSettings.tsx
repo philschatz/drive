@@ -2,7 +2,7 @@
  * Data Backup — tiered export/import of documents, settings, and (full tier)
  * identity keys.
  *
- * Layout: two exports + one import.
+ * Layout: two exports + one import + the danger zone.
  *   - "Export documents & settings" → `exportBackup(['docs','settings'])` — a
  *     snapshot of every document's current state + the DriveSettings surface.
  *   - "Export full device backup" → `exportBackup(['full'])` — every kv pair and
@@ -10,6 +10,8 @@
  *     identity keys. Confirmed first because it contains keys.
  *   - "Import backup" → a file input that auto-detects the tier (snapshot / full),
  *     confirms the matching restore, and reloads.
+ *   - "Delete all data" — the full local-data erase (formerly its own Danger Zone
+ *     section), kept last on the page it undoes.
  *
  * All handlers build their file element imperatively and `.click()` it rather
  * than rendering one: the click has to happen in the same task as the user's
@@ -18,7 +20,7 @@
  */
 import { showToast, showError } from '@/components/ui/toast';
 import { useConfirm } from '../../common/ConfirmSheet';
-import { exportBackup, importBackup } from '../../worker-api';
+import { exportBackup, importBackup, deleteAllData } from '../../worker-api';
 import { parseBackup, serializeBackup, type BackupTier } from '../../../../shared/backup';
 import { SettingsGroup, SettingsProse } from '../SettingsGroup';
 
@@ -105,6 +107,28 @@ export function BackupSettings() {
     input.click();
   };
 
+  const handleDeleteAllData = async () => {
+    if (!await confirm({
+      title: 'Erase all local data?',
+      body: (
+        <>
+          Every document, your identity and keys, friends and settings will be deleted, and the app
+          reloads as a fresh install. <strong>Documents not shared with another device are lost
+          forever.</strong>
+        </>
+      ),
+      confirmLabel: 'Erase everything',
+      confirmIcon: 'delete_forever',
+      destructive: true,
+      'data-testid': 'confirm-delete-all',
+    })) return;
+    try {
+      await deleteAllData(); // terminates the worker, deletes all IndexedDB + localStorage, reloads
+    } catch (err: any) {
+      showError('Failed to delete data: ' + err.message);
+    }
+  };
+
   return (
     <>
       <SettingsProse>
@@ -131,6 +155,19 @@ export function BackupSettings() {
           <md-icon slot="start">upload</md-icon>
           <div slot="headline">Import backup</div>
           <div slot="supporting-text">Restores a documents/settings or full device backup, then reloads</div>
+        </md-list-item>
+      </SettingsGroup>
+
+      <SettingsProse>
+        Erasing reloads the app as a fresh install — use it to recover from a corrupted local
+        state. Documents not shared with another device are lost forever.
+      </SettingsProse>
+
+      <SettingsGroup label="Danger Zone">
+        <md-list-item type="button" data-testid="danger-delete-all" onClick={handleDeleteAllData}>
+          <md-icon slot="start" style={{ color: 'var(--md-sys-color-error)' }}>delete_forever</md-icon>
+          <div slot="headline" style={{ color: 'var(--md-sys-color-error)' }}>Delete all data</div>
+          <div slot="supporting-text">Every document, your keys, friends and settings</div>
         </md-list-item>
       </SettingsGroup>
 

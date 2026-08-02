@@ -1,7 +1,7 @@
 /**
- * The four action-only settings sections: Storage, Backup, Danger Zone, Developer.
- * Grouped because they share one mock preamble and each contributes a couple of
- * assertions.
+ * The action-only settings sections: Storage and Backup (which now also hosts the
+ * Danger Zone rows). Grouped because they share one mock preamble and each
+ * contributes a couple of assertions.
  *
  * The most valuable case here is Storage's probe-before-ask ordering: adopting an
  * already-reachable synced settings doc must NOT raise the scary "this is permanent"
@@ -61,7 +61,6 @@ jest.mock('@/components/ui/sheet', () => ({
 
 import { StorageSettings } from './StorageSettings';
 import { BackupSettings } from './BackupSettings';
-import { DangerZone } from './DangerZone';
 
 beforeEach(() => {
   mockReachable = null;
@@ -121,9 +120,9 @@ describe('StorageSettings', () => {
   });
 });
 
-describe('DangerZone', () => {
+describe('BackupSettings danger zone', () => {
   it('erases only after the destructive confirmation', async () => {
-    render(<DangerZone />);
+    render(<BackupSettings />);
     fireEvent.click(screen.getByTestId('danger-delete-all'));
 
     expect(await screen.findByTestId('confirm-delete-all')).toBeDefined();
@@ -134,7 +133,7 @@ describe('DangerZone', () => {
   });
 
   it('erases nothing when declined', async () => {
-    render(<DangerZone />);
+    render(<BackupSettings />);
     fireEvent.click(screen.getByTestId('danger-delete-all'));
     fireEvent.click(await screen.findByTestId('confirm-cancel'));
     await waitFor(() => expect(screen.queryByTestId('confirm-delete-all')).toBeNull());
@@ -142,7 +141,7 @@ describe('DangerZone', () => {
   });
 
   it('error-tones the row itself, both glyph and label', () => {
-    render(<DangerZone />);
+    render(<BackupSettings />);
     const row = screen.getByTestId('danger-delete-all');
     expect([...row.children].filter(el =>
       (el as HTMLElement).style.color === 'var(--md-sys-color-error)')).toHaveLength(2);
