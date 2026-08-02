@@ -2,98 +2,14 @@
  * Spans ↔ Markdown. Covers exactly the document vocabulary (headings, quotes,
  * nested lists, dividers, strong/em/links) — no tables or images by design.
  * Round-trip stable: markdownToSpans(spansToMarkdown(s)) preserves structure.
+ *
+ * `spansToMarkdown` (the export direction) lives in src/shared so the worker's
+ * backup export can render it; this module re-exports it for the UI.
  */
 import type { BlockValue, RichTextSpan } from '../../../../shared/rich-text-ops';
-import { blocksFromSpans, blockDepth, blockType, orderedListNumbers, type BlockNode, type InlineRun } from './blocks';
+import { spansToMarkdown } from '../../../../shared/rich-text-markdown';
 
-// ── Spans → Markdown ─────────────────────────────────────────────────────────
-
-const ESCAPE_RE = /([\\`*_[\]])/g;
-
-function escapeText(s: string): string {
-  return s.replace(ESCAPE_RE, '\\$1');
-}
-
-function linkHref(marks: Record<string, unknown> | null): string | null {
-  const raw = marks?.link;
-  if (typeof raw !== 'string') return null;
-  try {
-    const parsed = JSON.parse(raw);
-    return typeof parsed?.href === 'string' ? parsed.href : null;
-  } catch {
-    return null;
-  }
-}
-
-/** Inline runs → markdown with well-nested delimiters (link ⊃ strong ⊃ em). */
-function runsToMarkdown(runs: InlineRun[]): string {
-  type Open = { name: 'link' | 'strong' | 'em'; href?: string };
-  const stack: Open[] = [];
-  let out = '';
-
-  const closeSym = (o: Open) => (o.name === 'link' ? `](${o.href ?? ''})` : o.name === 'strong' ? '**' : '*');
-  const openSym = (o: Open) => (o.name === 'link' ? '[' : o.name === 'strong' ? '**' : '*');
-
-  for (const r of runs) {
-    const href = linkHref(r.marks);
-    const want: Open[] = [];
-    if (href !== null) want.push({ name: 'link', href });
-    if (r.marks?.strong) want.push({ name: 'strong' });
-    if (r.marks?.em) want.push({ name: 'em' });
-
-    // Keep the longest common prefix open; close the rest (innermost first).
-    let common = 0;
-    while (
-      common < stack.length && common < want.length &&
-      stack[common].name === want[common].name &&
-      stack[common].href === want[common].href
-    ) common++;
-    while (stack.length > common) out += closeSym(stack.pop()!);
-    for (let i = common; i < want.length; i++) { stack.push(want[i]); out += openSym(want[i]); }
-
-    out += escapeText(r.text);
-  }
-  while (stack.length > 0) out += closeSym(stack.pop()!);
-  return out;
-}
-
-function blockPrefix(b: BlockNode, num: number | null): string {
-  switch (blockType(b)) {
-    case 'heading': {
-      const level = Math.min(6, Math.max(1, Number(b.block?.attrs?.level) || 1));
-      return '#'.repeat(level) + ' ';
-    }
-    case 'blockquote': return '> ';
-    case 'unordered-list-item': return '  '.repeat(blockDepth(b)) + '- ';
-    case 'ordered-list-item': return '  '.repeat(blockDepth(b)) + `${num ?? 1}. `;
-    default: return '';
-  }
-}
-
-export function spansToMarkdown(spans: RichTextSpan[]): string {
-  const blocks = blocksFromSpans(spans);
-  const numbers = orderedListNumbers(blocks);
-  const lines: string[] = [];
-  let prevType: string | null = null;
-
-  blocks.forEach((b, i) => {
-    const t = blockType(b);
-    if (b.block === null && b.text.length === 0 && blocks.length > 1) return; // empty implicit leader
-    const line = t === 'divider' ? '---' : blockPrefix(b, numbers[i]) + runsToMarkdown(b.runs);
-    if (lines.length > 0) {
-      // Consecutive list items / quote lines sit on adjacent lines; everything
-      // else gets a blank line between blocks.
-      const tight =
-        ((t === 'unordered-list-item' || t === 'ordered-list-item') &&
-          (prevType === 'unordered-list-item' || prevType === 'ordered-list-item')) ||
-        (t === 'blockquote' && prevType === 'blockquote');
-      if (!tight) lines.push('');
-    }
-    lines.push(line);
-    prevType = t;
-  });
-  return lines.join('\n');
-}
+export { spansToMarkdown };
 
 // ── Markdown → Spans ─────────────────────────────────────────────────────────
 

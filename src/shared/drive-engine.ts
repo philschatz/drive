@@ -28,6 +28,7 @@ import { RELAY_PEER_ID } from './relay-identity';
 import type { EngineHost } from './engine-host';
 import type { MainToWorker, WorkerToMain } from './worker-protocol';
 import { applyRichTextOps, richTextAwareStringSync, type RichTextOp } from './rich-text-ops';
+import { spansToMarkdown } from './rich-text-markdown';
 import { EngineSettings, type EngineSettingsSurface } from './engine-settings';
 import { EnginePresence, type EnginePresenceSurface } from './engine-presence';
 import { EngineRendezvous, type EngineRendezvousSurface } from './engine-rendezvous';
@@ -192,6 +193,21 @@ export class EngineCore {
     return handle;
   }
 
+  /**
+   * Mint a keyhive-backed automerge doc from a lossless binary (an Automerge.save
+   * payload). `create2`'s `Automerge.from` JSON hydration would flatten Peritext
+   * fields, so the empty minted handle adopts the loaded binary directly — the
+   * same adoption pattern Repo.import uses — preserving marks and block markers.
+   */
+  protected async createKeyhiveDocHandleFromBinary(binary: Uint8Array): Promise<any> {
+    const { docIdBytes } = await this.khOps!.createKeyhiveDoc();
+    this.setNextDocId!(docIdBytes);
+    const handle = await this.repo!.create2();
+    handle.update(() => this.Automerge.load(binary));
+    await this.khOps!.enableSharing(handle.documentId, docIdBytes);
+    return handle;
+  }
+
   /** Overwrite a doc with a target snapshot, unpin it, and push subscribers. */
   private async restoreDoc(docId: string, targetDoc: any): Promise<void> {
     const handle = await this.getOrLoadHandle(docId);
@@ -331,10 +347,18 @@ export class EngineCore {
           const handle = await this.getOrLoadHandle(entry.id);
           const doc = handle.doc();
           if (!doc) throw new Error('Document not ready');
-          docs.push({
-            doc: JSON.parse(JSON.stringify(doc)),
+          const item: BackupDocEntry = {
+            bin: this.Automerge.save(doc),
             metadata: entry.type || entry.name ? { type: entry.type, name: entry.name } : undefined,
-          });
+          };
+          if (doc['@type'] === 'Sentences') {
+            // The JSON projection is a flat string (marks/block markers live
+            // only in the binary); carry the readable Markdown rendering.
+            item.markdown = spansToMarkdown(this.Automerge.spans(doc, ['content']));
+          } else {
+            item.doc = JSON.parse(JSON.stringify(doc));
+          }
+          docs.push(item);
         } catch (err) {
           console.warn(`[engine] export-backup: skipping unreadable doc ${entry.id}:`, errMsg(err));
         }
@@ -377,19 +401,35 @@ export class EngineCore {
     if (payload.docs?.length) {
       const list = (await this.host.kv.get<StoredDocEntry[]>(KEYS.docIds)) ?? [];
       for (const item of payload.docs) {
+        const bin = item?.bin;
         const doc = item?.doc;
         const label = item?.metadata?.name || doc?.name || '(unnamed)';
-        if (!doc || typeof doc !== 'object') { skipped.push(label); continue; }
-        const errors = validateDocument(doc);
-        if (errors.length) {
-          skipped.push(label);
-          console.warn(`[engine] import-backup: skipping invalid doc ${label}:`, errors.slice(0, 3).map(e => e.message).join('; '));
-          continue;
-        }
         try {
-          const handle = await this.createKeyhiveDocHandle(doc);
+          let handle: any;
+          if (bin instanceof Uint8Array) {
+            // Lossless binary (Automerge.save) — preserves Peritext markup the
+            // JSON projection would drop.
+            const loaded = this.Automerge.load(bin);
+            const errors = validateDocument(loaded);
+            if (errors.length) {
+              skipped.push(label);
+              console.warn(`[engine] import-backup: skipping invalid doc ${label}:`, errors.slice(0, 3).map(e => e.message).join('; '));
+              continue;
+            }
+            handle = await this.createKeyhiveDocHandleFromBinary(bin);
+          } else {
+            // Legacy plain-JSON entries (pre-bin backups).
+            if (!doc || typeof doc !== 'object') { skipped.push(label); continue; }
+            const errors = validateDocument(doc);
+            if (errors.length) {
+              skipped.push(label);
+              console.warn(`[engine] import-backup: skipping invalid doc ${label}:`, errors.slice(0, 3).map(e => e.message).join('; '));
+              continue;
+            }
+            handle = await this.createKeyhiveDocHandle(doc);
+          }
           const docId = handle.documentId;
-          list.unshift({ id: docId, type: item.metadata?.type ?? doc['@type'], name: item.metadata?.name });
+          list.unshift({ id: docId, type: item.metadata?.type ?? handle.doc()?.['@type'], name: item.metadata?.name });
           if (this.repo?.storageSubsystem && handle.doc()) {
             void this.repo.storageSubsystem.saveDoc(docId, handle.doc());
           }

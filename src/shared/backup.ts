@@ -3,9 +3,13 @@
  * "Export full device backup", and the shared import path.
  *
  * The payload maps 1:1 onto the local persistence it captures:
- *   - `docs`     — one materialized Automerge document state per home-list doc
- *     (plain JSON; recreating a doc re-runs it through Automerge.from, the same
- *     path the JSON importer uses).
+ *   - `docs`     — one document per home-list doc. Every entry carries the
+ *     lossless binary state (`bin`, an Automerge.save payload — the only form
+ *     that preserves Peritext markup, e.g. a Sentences doc's marks and block
+ *     markers). Non-rich-text docs also carry the plain-JSON projection
+ *     (`doc`); Sentences docs carry a readable Markdown rendering (`markdown`)
+ *     instead, since their flat JSON projection can't represent the rich
+ *     structure. Import recreates from `bin` when present, else `doc`.
  *   - `settings` — the DriveSettings surface: friends, deviceNames, and the
  *     archived-doc tombstones.
  *   - `kv`       — the app-storage keyval pairs (data:*, data:auth:*, settings:*;
@@ -21,8 +25,13 @@
 export type BackupTier = 'docs' | 'settings' | 'full';
 
 export interface BackupDocEntry {
-  /** The document's materialized state (plain JSON). */
-  doc: any;
+  /** Lossless binary state (Automerge.save). Always written for new exports;
+   * import recreates from this when present. */
+  bin?: Uint8Array;
+  /** Materialized plain-JSON state. Excluded for Sentences (see `markdown`). */
+  doc?: any;
+  /** Sentences only: the rich content rendered as readable Markdown. */
+  markdown?: string;
   /** Metadata re-applied when the doc is recreated (type/name). */
   metadata?: { type?: string; name?: string };
 }

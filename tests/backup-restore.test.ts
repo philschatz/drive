@@ -16,10 +16,15 @@ const ID = 'A'.repeat(43) + '=';   // valid keyhive user-group id
 const ID2 = 'B'.repeat(43) + '=';
 const DOC = '1'.repeat(48);        // valid automerge docId shape
 
-/** Minimal Automerge stub: clone + change over plain objects. */
+/** Minimal Automerge stub: clone + change over plain objects, plus a marker
+ * `save`/`load` round-trip for the lossless binary field and a trivial
+ * `spans` for the Sentences export path. */
 const Automerge = {
   clone: (d: any) => structuredClone(d),
   change: (d: any, fn: (x: any) => void) => { const c = structuredClone(d); fn(c); return c; },
+  save: (d: any) => Uint8Array.from(JSON.stringify(d), (c: string) => c.charCodeAt(0)),
+  load: (bytes: Uint8Array) => JSON.parse(String.fromCharCode(...bytes)),
+  spans: (d: any, _path: (string | number)[]) => [{ type: 'text', value: d.content ?? '' }],
 };
 
 /** Plain-object handle stub: doc/change/isReady/on, no heads (never "seen"). */
@@ -117,13 +122,21 @@ function makeEngine(opts: HarnessOpts = {}) {
     return h;
   };
 
-  // Stand-in for createKeyhiveDocHandle: mints a user-group on first use when the
-  // device has none, then returns a plain handle.
+  // Stand-ins for createKeyhiveDocHandle (JSON) / createKeyhiveDocHandleFromBinary
+  // (lossless binary): mint a user-group on first use when the device has none,
+  // then return a plain handle wrapping the (rehydrated) doc.
   let nextImportDoc = 0;
   (engine as any).createKeyhiveDocHandle = async (initialJson: any) => {
     if (!group.id) group.id = 'G'.repeat(43) + '=';
     const docId = `imported-doc-${++nextImportDoc}`;
     const handle = docHandle(initialJson, docId);
+    docHandles.set(docId, handle);
+    return handle;
+  };
+  (engine as any).createKeyhiveDocHandleFromBinary = async (binary: Uint8Array) => {
+    if (!group.id) group.id = 'G'.repeat(43) + '=';
+    const docId = `imported-doc-${++nextImportDoc}`;
+    const handle = docHandle(Automerge.load(binary), docId);
     docHandles.set(docId, handle);
     return handle;
   };
@@ -181,10 +194,25 @@ describe('exportBackup (tiers)', () => {
     const payload = await engine.exportBackup(['docs', 'settings']);
     expect(payload.kind).toBe('snapshot');
     expect(payload.docs).toHaveLength(1);
+    expect(payload.docs![0].bin).toBeInstanceOf(Uint8Array);
     expect(payload.docs![0].doc).toEqual({ '@type': 'Calendar', name: 'Trip', events: {} });
+    expect(payload.docs![0].markdown).toBeUndefined();
     expect(payload.docs![0].metadata).toEqual({ type: 'Calendar', name: 'Trip' });
     expect(payload.settings!.friends).toEqual({ [ID]: 'Alice' });
     expect(payload.kv).toBeUndefined();
+  });
+
+  it('writes a Markdown rendering (not the JSON projection) for Sentences docs', async () => {
+    const { engine, kv, docHandles } = makeEngine();
+    kv.set(KEYS.docIds, [{ id: DOC, type: 'Sentences', name: 'Notes' }]);
+    docHandles.set(DOC, docHandle({ '@type': 'Sentences', name: 'Notes', content: 'hello world' }, DOC));
+
+    const payload = await engine.exportBackup(['docs']);
+    expect(payload.docs).toHaveLength(1);
+    expect(payload.docs![0].bin).toBeInstanceOf(Uint8Array);
+    // The flat JSON projection would lose marks/block markers — carry Markdown.
+    expect(payload.docs![0].markdown).toBe('hello world');
+    expect(payload.docs![0].doc).toBeUndefined();
   });
 
   it('skips a doc that fails to load instead of aborting the export', async () => {
@@ -254,6 +282,52 @@ describe('importBackup (snapshot)', () => {
     }));
     expect(result.imported).toBe(1);
     expect(result.skipped).toEqual(['Bad', 'Null']);
+  });
+
+  it('recreates a doc from its lossless binary, preferring it over doc', async () => {
+    const { engine, savedDocs } = makeEngine({ userGroupId: ID });
+    const result = await engine.importBackup(snapshot({
+      docs: [
+        {
+          // The stale JSON projection must be ignored when the binary is present.
+          bin: Automerge.save({ '@type': 'TaskList', name: 'FromBin', tasks: {} }),
+          doc: { '@type': 'TaskList', name: 'FromDoc', tasks: {} },
+          metadata: { type: 'TaskList', name: 'FromBin' },
+        },
+      ],
+    }));
+    expect(result.imported).toBe(1);
+    const saved = [...savedDocs.values()][0];
+    expect(saved.name).toBe('FromBin');
+  });
+
+  it('restores a Sentences doc from its binary with content intact', async () => {
+    const { engine, savedDocs } = makeEngine({ userGroupId: ID });
+    const result = await engine.importBackup(snapshot({
+      docs: [
+        {
+          bin: Automerge.save({ '@type': 'Sentences', name: 'Notes', content: 'rich text' }),
+          markdown: 'rich text',
+          metadata: { type: 'Sentences', name: 'Notes' },
+        },
+      ],
+    }));
+    expect(result.imported).toBe(1);
+    const saved = [...savedDocs.values()][0];
+    expect(saved['@type']).toBe('Sentences');
+    expect(saved.content).toBe('rich text');
+  });
+
+  it('skips a doc whose binary cannot be loaded, reporting its name', async () => {
+    const { engine } = makeEngine({ userGroupId: ID });
+    const result = await engine.importBackup(snapshot({
+      docs: [
+        { bin: new Uint8Array([1, 2, 3]), metadata: { name: 'Corrupt' } },
+        { bin: Automerge.save({ '@type': 'TaskList', name: 'OK', tasks: {} }), metadata: { name: 'OK' } },
+      ],
+    }));
+    expect(result.imported).toBe(1);
+    expect(result.skipped).toEqual(['Corrupt']);
   });
 });
 
