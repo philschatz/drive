@@ -185,7 +185,14 @@ test('idle peers stay visible; a silently-dropped peer disappears', async () => 
 
   // Shrink the presence windows before any presence setup so the
   // idle/silent-drop assertions run in seconds, not past the 12s default.
-  const timing = { staleMs: 3_000, heartbeatMs: 1_000, livenessCheckMs: 1_000 };
+  // The ratio matters more than the absolute values: the idle assertion below
+  // waits out the stale window and expects heartbeats to have kept alice alive,
+  // so the window must hold several heartbeats. At 3s/1s it held three, and two
+  // delayed in a row — routine when the whole suite is running on one worker —
+  // read as "peer went stale" and failed a test about nothing of the sort.
+  // Eight heartbeats of margin, and the silent-drop check below still resolves
+  // in ~5s against its 15s budget.
+  const timing = { staleMs: 4_000, heartbeatMs: 500, livenessCheckMs: 500 };
   for (const p of [alice, bob]) {
     await p.page.evaluate((t) => (window as any).__drive.setPresenceTiming(t), timing);
   }
@@ -226,9 +233,9 @@ test('idle peers stay visible; a silently-dropped peer disappears', async () => 
     { label: 'bob sees alice viewing', timeout: 60_000, interval: 1_000 }
   );
 
-  // 1. Idle-but-alive: no presence traffic for 4s (> the 3s stale
-  // window). Only heartbeats flow, and they must keep alice visible.
-  await bob.page.waitForTimeout(4_000);
+  // 1. Idle-but-alive: no presence traffic for 6s (> the 4s stale window).
+  // Only heartbeats flow, and they must keep alice visible.
+  await bob.page.waitForTimeout(6_000);
   const idleStates = await bob.page.evaluate(() => (window as any).__pwPeers ?? {});
   expect(
     Object.values(idleStates).some((p: any) => p?.value?.viewing === true),

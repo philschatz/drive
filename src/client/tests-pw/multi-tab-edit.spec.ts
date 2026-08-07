@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import type { BrowserContext, Page } from '@playwright/test';
-import { setupFriendPair, type FriendPair } from './support/scenarios';
+import { setupFriendPair, shareNewDoc, type FriendPair } from './support/scenarios';
 import { waitFor } from './support/peer';
 import { openApp, createDocViaUI, type App } from './ui/support';
 
@@ -158,24 +158,15 @@ test.describe('multiple tabs, one engine', () => {
     let secondTab: Page | null = null;
     try {
       pair = await setupFriendPair(browser);
-      const { alice, bob, bobGroup } = pair;
+      const { alice, bob } = pair;
 
-      const { docId } = await alice.call('createDoc', {
+      // Via shareNewDoc rather than hand-rolled: this used to inline the same
+      // create/addMember/await-access sequence, which meant it also inlined the
+      // passive wait for bob's access — and so kept the flake that helper has
+      // since been taught to recover from (see its relay-rejoin comment).
+      const docId = await shareNewDoc(pair, 'edit', {
         '@type': 'TaskList', name: 'From a second tab', tasks: {},
       });
-      await waitFor(
-        async () => {
-          try { await alice.call('addMember', bobGroup, docId, 'edit'); return true; }
-          catch (err) {
-            if (/Agent not found/.test((err as Error).message)) return false;
-            throw err;
-          }
-        },
-        (ok) => ok === true,
-        { label: 'alice shares with bob', timeout: 60_000, interval: 500 },
-      );
-      await waitFor(() => bob.call('getMyAccess', docId), (a) => a?.toLowerCase() === 'edit',
-        { label: 'bob gains edit', timeout: 45_000 });
 
       // A second tab in ALICE's context — same device, same identity, no Worker.
       secondTab = await alice.context.newPage();

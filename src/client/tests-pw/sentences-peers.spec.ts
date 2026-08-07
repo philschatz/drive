@@ -83,8 +83,37 @@ async function parkCaretAt(page: Page, target: number, timeout = 30_000): Promis
   throw new Error(`caret did not settle at ${target}; last=${await caretOffset(page)}`);
 }
 
-/** Select `needle` inside the rich-text editor with a real DOM Range. */
-async function selectText(page: Page, needle: string): Promise<void> {
+/**
+ * Select `needle` inside the rich-text editor with a real DOM Range, and make it
+ * STICK.
+ *
+ * Setting it once is not enough, for the same reason parkCaretAt exists. The
+ * editor restores its own last-known selection on every spans re-render, and it
+ * only learns about this one when the `selectionchange` it queued is delivered —
+ * so a push that re-renders in between finds `lastSelectionRef` still holding the
+ * previous caret and writes that back, collapsing the range we just made. A real
+ * user never hits this (their selectionchange is long since delivered by the time
+ * a push lands), but a programmatic selection followed immediately by an
+ * assertion is exactly the window. Re-apply until it survives a quiet moment.
+ */
+async function selectText(page: Page, needle: string, timeout = 30_000): Promise<void> {
+  const current = () => page.evaluate(() => getSelection()?.toString() ?? '');
+  const start = Date.now();
+  let last = '';
+  do {
+    // Only re-apply when it is actually wrong: re-selecting mints a fresh pair
+    // of cursor tokens, so calling this to *verify* a selection must not
+    // needlessly replace the tokens the test is about to depend on.
+    if ((last = await current()) !== needle) await applySelection(page, needle);
+    if ((await current()) === needle) {
+      await page.waitForTimeout(500);
+      if ((last = await current()) === needle) return;
+    }
+  } while (Date.now() - start < timeout);
+  throw new Error(`selection did not hold at ${JSON.stringify(needle)}; last=${JSON.stringify(last)}`);
+}
+
+async function applySelection(page: Page, needle: string): Promise<void> {
   await page.evaluate((needle) => {
     const root = document.querySelector('[data-testid="rt-editor"]');
     if (!root) throw new Error('selectText: no rt-editor');
@@ -115,7 +144,6 @@ async function selectText(page: Page, needle: string): Promise<void> {
     sel.removeAllRanges();
     sel.addRange(range);
   }, needle);
-  expect(await page.evaluate(() => getSelection()?.toString())).toBe(needle);
 }
 
 /**
@@ -286,19 +314,35 @@ test('a selection overlapping a peer edit keeps the words that survive', async (
   await editor(bob.page).click();
 
   // Two overlapping selections: alice's ends inside bob's, sharing `and pitch`.
-  await selectText(alice.page, OVERLAP_ALICE);
   await selectText(bob.page, OVERLAP_BOB);
 
-  // Bob's selection just triggered a cursor MINT — a worker round-trip that
-  // resolves against the worker's CURRENT doc state. If alice's replacement
-  // ops reach bob's worker before that mint lands, the cursors are minted
-  // against a doc with part of her edit applied, and their later resolution
-  // comes out shifted ("t up the t" instead of "the tents"). Drain bob's
-  // worker queue twice: the first drain guarantees the selState effect has
-  // dispatched the mint (FIFO behind it), the second that it has processed —
-  // both strictly before alice starts typing.
+  // Bob's selection triggers a cursor MINT — a worker round-trip that resolves
+  // against the worker's CURRENT doc state. If alice's replacement ops reach
+  // bob's worker before that mint lands, the cursors are minted against a doc
+  // with part of her edit already applied, and their later resolution comes out
+  // shifted ("t up the t" instead of "the tents").
+  //
+  // Waiting for ALICE to draw bob's highlight is the end-to-end proof that it
+  // landed: the highlight only exists once bob's mint resolved, populated his
+  // `focusedField` with the cursor pair, broadcast it, and alice's worker
+  // resolved it back to a range. Draining bob's queue a fixed number of times
+  // could not prove that, because the mint is dispatched from an effect that may
+  // not have run when the drain was issued.
+  await expect(alice.page.getByTestId('peer-highlight').first())
+    .toBeVisible({ timeout: 45_000 });
+  // …and one drain so bob's worker has processed the subscribe-cursors that
+  // registers those tokens for resolution, not merely minted them.
   await bob.call('queryDoc', docId, '.name');
-  await bob.call('queryDoc', docId, '.name');
+
+  // Alice's own selection goes last, immediately before she types over it: a
+  // push arriving during the wait above could otherwise have collapsed it.
+  await selectText(alice.page, OVERLAP_ALICE);
+  // …and bob's is re-verified at the last possible moment, for the same reason.
+  // The whole test rests on his tokens describing THIS range at the instant
+  // alice's ops land; a selection that drifted during the waits above would be
+  // re-minted against her already-applied edit, and resolve into the middle of
+  // her new text. Cheap — selectText re-applies only if it actually drifted.
+  await selectText(bob.page, OVERLAP_BOB);
 
   // Alice types over hers, destroying the two shared words along the way.
   await alice.page.keyboard.type(OVERLAP_ALICE_TYPES);
