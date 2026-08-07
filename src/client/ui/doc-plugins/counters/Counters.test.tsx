@@ -220,6 +220,59 @@ describe('Counters container', () => {
     confirmSpy.mockRestore();
   });
 
+  it('overdue and to-do rows show the clock, not the recurrence', async () => {
+    const d = (n: number) => Temporal.Now.plainDateISO().subtract({ days: n }).toString();
+    mock.__setDoc(DOC, {
+      '@type': 'Calendar+Counters', name: 'C',
+      events: {
+        // Created 10 days ago, never done → overdue, and today's all-day window
+        // is still OPEN, which is the case whose deadline lies in the future.
+        e1: dailyHabit('Meditate', d(10)),
+        // Done yesterday, today's window open → pending.
+        e2: { ...dailyHabit('Stretch', d(5)), completions: { [`${d(1)}T09:00:00`]: '' } },
+      },
+    });
+    render(<Counters docId={DOC} />);
+    await waitFor(() => expect(screen.getByText('Meditate')).toBeTruthy());
+
+    const overdue = within(rowOf('Meditate')).getByTestId('counter-due');
+    expect(overdue.textContent).toMatch(/^\d+ days overdue$/);
+    expect(overdue.textContent!.startsWith('in ')).toBe(false); // never a future time
+    // The recurrence left the badge for the tooltip.
+    expect(within(rowOf('Meditate')).queryByText('daily')).toBeNull();
+    expect(overdue.getAttribute('title')).toContain('daily');
+    expect(overdue.getAttribute('title')).toContain('overdue since');
+
+    expect(within(rowOf('Stretch')).getByTestId('counter-due').textContent).toMatch(/ left$/);
+
+    // Recording it flips the row to Done, where the recurrence badge returns.
+    fireEvent.click(within(rowOf('Stretch')).getByRole('button', { name: 'Record completion for Stretch' }));
+    expect(rowOf('Stretch').getAttribute('data-status')).toBe('done');
+    expect(within(rowOf('Stretch')).queryByTestId('counter-due')).toBeNull();
+    expect(within(rowOf('Stretch')).getByText('daily')).toBeTruthy();
+  });
+
+  it('an overdue habit shows no streak flame — the chain is broken', async () => {
+    const d = (n: number) => Temporal.Now.plainDateISO().subtract({ days: n }).toString();
+    const done = (...days: number[]) =>
+      Object.fromEntries(days.map(n => [`${d(n)}T08:30:00`, '']));
+    mock.__setDoc(DOC, {
+      '@type': 'Calendar+Counters', name: 'C',
+      events: {
+        // A timed habit done three days running, whose window shut unmet today.
+        e1: {
+          '@type': 'Event', title: 'Meditate', start: d(10), startTime: '00:01:00', duration: 'PT1M',
+          recurrenceRule: { '@type': 'RecurrenceRule', frequency: 'daily' },
+          completions: done(3, 2, 1),
+        },
+      },
+    });
+    render(<Counters docId={DOC} />);
+    await waitFor(() => expect(screen.getByText('Meditate')).toBeTruthy());
+    expect(rowOf('Meditate').getAttribute('data-status')).toBe('overdue');
+    expect(within(rowOf('Meditate')).queryByTitle(/streak/)).toBeNull();
+  });
+
   it('non-recurring tallies keep the lifetime N× badge', async () => {
     mock.__setDoc(DOC, {
       '@type': 'Calendar+Counters', name: 'C',

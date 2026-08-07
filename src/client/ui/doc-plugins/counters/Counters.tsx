@@ -17,6 +17,7 @@ import { Fab } from '@/components/ui/fab';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import type { CounterEvent } from '../../../../shared/schemas/counters';
 import { describeRecurrence } from '../calendar/recurrence';
+import { relativeDuration } from '../../../../shared/relative-time';
 import { MATERIAL_ORANGE } from '../../common/categorical-colors';
 import { sortedCounters, metMissedByWeek, isArchived, lastCompletionAnchor, createdStampFor, type CounterEntry, type CounterStatus, type RewardProgress } from './occurrences';
 import { MetMissedChart } from './Chart';
@@ -69,6 +70,18 @@ function describeSchedule(ev: CounterEvent): string | null {
   return describeRecurrence(ev.recurrenceRule, ev.startTime);
 }
 
+/**
+ * A deadline as the user holds it. `windowEnd` returns the *next* day's midnight
+ * for a habit with no duration, so rendering it literally shows a date a day
+ * later than the day the habit belongs to.
+ */
+function describeDeadline(at: string): string {
+  if (at.endsWith('T00:00:00')) {
+    return 'end of ' + Temporal.PlainDate.from(at.substring(0, 10)).subtract({ days: 1 }).toString();
+  }
+  return at.substring(0, 16).replace('T', ' '); // seconds are noise on a deadline
+}
+
 /** Streak tooltip, e.g. "5-day streak" (unit follows the recurrence frequency). */
 function streakTitle(streak: number, frequency?: string): string {
   const unit = { daily: 'day', weekly: 'week', monthly: 'month', yearly: 'year' }[frequency || ''];
@@ -80,13 +93,15 @@ function streakTitle(streak: number, frequency?: string): string {
  * clicking the leading icon or the title records a completion. Long-press /
  * right-click / Shift+F10 / the trailing kebab open the editor too.
  */
-function CounterListItem({ uid, ev, status, streak, reward, canEdit, peerEditingEvents, onRecord, onEdit, onShowCompletions }: {
+function CounterListItem({ uid, ev, status, streak, reward, dueAt, canEdit, peerEditingEvents, onRecord, onEdit, onShowCompletions }: {
   uid: string;
   ev: CounterEvent;
   status: CounterStatus;
-  /** Both come from the sorted entry, which has already computed them. */
+  /** These three come from the sorted entry, which has already computed them. */
   streak: number;
   reward?: RewardProgress;
+  /** The deadline the status is about; always past when the status is overdue. */
+  dueAt?: string;
   canEdit: boolean;
   peerEditingEvents: Record<string, PeerFieldInfo>;
   onRecord: (uid: string) => void;
@@ -95,6 +110,13 @@ function CounterListItem({ uid, ev, status, streak, reward, canEdit, peerEditing
 }) {
   const clickCount = Object.keys(ev.completions || {}).length;
   const schedule = describeSchedule(ev);
+  // Safe to word this off the status: `dueAt` is the moment the habit became
+  // overdue (always past) for an overdue row, and the moment its window shuts
+  // (always future) for a pending one — see CounterEntry.dueAt.
+  const late = status === 'overdue';
+  const timing = dueAt && (late || status === 'pending')
+    ? { late, text: relativeDuration(dueAt) + (late ? ' overdue' : ' left') }
+    : null;
   const title = ev.title || 'Untitled';
   const iconColor = status === 'done'
     ? 'var(--md-sys-color-primary)'
@@ -139,7 +161,20 @@ function CounterListItem({ uid, ev, status, streak, reward, canEdit, peerEditing
         )}
       </div>
       <span slot="end" className="flex items-center gap-1.5">
-        {schedule && <Badge variant="secondary">{schedule}</Badge>}
+        {/* Overdue and To-do rows answer "when?", not "how often?" — the
+            recurrence moves into the tooltip and the clock takes its place. */}
+        {timing ? (
+          <Badge
+            variant="secondary"
+            data-testid="counter-due"
+            className={'whitespace-nowrap' + (timing.late ? ' bg-error-container text-on-error-container' : '')}
+            title={(schedule ? schedule + ' · ' : '')
+              + (timing.late ? 'overdue since ' : 'due by ')
+              + describeDeadline(dueAt!)}
+          >
+            {timing.text}
+          </Badge>
+        ) : schedule && <Badge variant="secondary">{schedule}</Badge>}
         {/* The treasure: how many more in a row until the reward unlocks. */}
         {reward && (
           <Badge
@@ -457,7 +492,7 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
           <div key={status}>
             <h3 className="text-xs font-semibold uppercase text-muted-foreground mt-3 mb-1">{SECTION_LABELS[status]}</h3>
             <md-list style={{ background: 'transparent' }}>
-              {entries.map(({ uid, ev, streak, reward }) => (
+              {entries.map(({ uid, ev, streak, reward, dueAt }) => (
                 <CounterListItem
                   key={uid}
                   uid={uid}
@@ -465,6 +500,7 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
                   status={status}
                   streak={streak}
                   reward={reward}
+                  dueAt={dueAt}
                   canEdit={canEdit}
                   peerEditingEvents={peerEditingEvents}
                   onRecord={recordClick}

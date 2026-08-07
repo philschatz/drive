@@ -70,12 +70,12 @@ describe('the schedule restarts at each completion', () => {
       '2026-07-20', '2026-07-23', '2026-07-26',
     ]);
     // Next due is 3 days after it was done (the 23rd), not after the 22nd.
-    expect(currentStatus(ev, NOW)).toEqual({ status: 'done', occurrence: '2026-07-20' });
+    expect(currentStatus(ev, NOW)).toEqual({ status: 'done', occurrence: '2026-07-20', dueAt: '2026-07-21T00:00:00' });
   });
 
   it('without a completion the grid still runs from `created`', () => {
     expect(expectedOccurrences(every3(), '2026-07-01', '2026-07-10')).toEqual(['2026-07-01', '2026-07-04', '2026-07-07', '2026-07-10']);
-    expect(currentStatus(every3(), NOW)).toEqual({ status: 'overdue', occurrence: '2026-07-19' });
+    expect(currentStatus(every3(), NOW)).toEqual({ status: 'overdue', occurrence: '2026-07-19', dueAt: '2026-07-02T00:00:00' });
   });
 
   it('a streak counts through the re-anchors', () => {
@@ -146,6 +146,21 @@ describe('rewards', () => {
     expect(sorted[0].reward).toEqual({ goal: 2, text: 'tea', remaining: 2, unlocked: false });
   });
 
+  it('an overdue habit has broken its chain, so its reward starts over', () => {
+    // Done for three days, then the timed window shut unmet today. The raw
+    // streak is still salvageable (a late completion would count), but the row
+    // shows a broken chain: no flame, and the reward back to its full goal.
+    const ev = daily({
+      start: '2026-07-14', startTime: '08:00:00', duration: 'PT1H', description: '5: cake',
+      completions: { '2026-07-18T08:30:00': '', '2026-07-19T08:30:00': '', '2026-07-20T08:30:00': '' },
+    });
+    expect(currentStreak(ev, NOW)).toBe(3); // the history still knows
+    const [entry] = sortedCounters({ a: ev }, NOW);
+    expect(entry.status).toBe('overdue');
+    expect(entry.streak).toBe(0);
+    expect(entry.reward).toMatchObject({ goal: 5, remaining: 5 });
+  });
+
   it('an unlocked reward drops back into normal order', () => {
     const done = { completions: { '2026-07-21T08:00:00': '' } };
     const events: Record<string, CounterEvent> = {
@@ -200,25 +215,25 @@ describe('metInPeriod / windowEnd', () => {
 
 describe('currentStatus', () => {
   it('daily created a week ago with no completions → overdue (previous occurrence missed)', () => {
-    expect(currentStatus(daily({ start: '2026-07-14' }), NOW)).toEqual({ status: 'overdue', occurrence: '2026-07-21' });
+    expect(currentStatus(daily({ start: '2026-07-14' }), NOW)).toEqual({ status: 'overdue', occurrence: '2026-07-21', dueAt: '2026-07-15T00:00:00' });
   });
 
   it('daily with yesterday met and today unmet (window open) → pending', () => {
     const ev = daily({ start: '2026-07-14', completions: { '2026-07-20T09:00:00': '' } });
-    expect(currentStatus(ev, NOW)).toEqual({ status: 'pending', occurrence: '2026-07-21' });
+    expect(currentStatus(ev, NOW)).toEqual({ status: 'pending', occurrence: '2026-07-21', dueAt: '2026-07-22T00:00:00' });
   });
 
   it('daily created today, unmet, window open → pending', () => {
-    expect(currentStatus(daily({ start: '2026-07-21' }), NOW)).toEqual({ status: 'pending', occurrence: '2026-07-21' });
+    expect(currentStatus(daily({ start: '2026-07-21' }), NOW)).toEqual({ status: 'pending', occurrence: '2026-07-21', dueAt: '2026-07-22T00:00:00' });
   });
 
   it('daily with today met → done', () => {
-    expect(currentStatus(daily({ completions: { '2026-07-21T08:00:00': '' } }), NOW)).toEqual({ status: 'done', occurrence: '2026-07-21' });
+    expect(currentStatus(daily({ completions: { '2026-07-21T08:00:00': '' } }), NOW)).toEqual({ status: 'done', occurrence: '2026-07-21', dueAt: '2026-07-22T00:00:00' });
   });
 
   it('weekly Monday, now Tuesday, missed → overdue until the next occurrence', () => {
     const ev = daily({ recurrenceRule: { '@type': 'RecurrenceRule', frequency: 'weekly', byDay: [{ '@type': 'NDay', day: 'mo' }] } });
-    expect(currentStatus(ev, NOW)).toEqual({ status: 'overdue', occurrence: '2026-07-20' });
+    expect(currentStatus(ev, NOW)).toEqual({ status: 'overdue', occurrence: '2026-07-20', dueAt: '2026-07-21T00:00:00' });
   });
 
   it('weekly Monday, now Tuesday, done Monday → done', () => {
@@ -238,6 +253,68 @@ describe('currentStatus', () => {
 
   it('no rule and no start → free tally', () => {
     expect(currentStatus({ '@type': 'Event', title: 'pushups' }, NOW).status).toBe('tally');
+  });
+});
+
+describe('currentStatus → dueAt (what the row renders as a relative time)', () => {
+  it('a still-open window never yields a future dueAt on an overdue row', () => {
+    // The trap: this row is overdue because *yesterday* was missed, but today's
+    // all-day window runs until 2026-07-22T00:00 — tomorrow. A dueAt built from
+    // it would read "in 12 hours" under a red Overdue heading.
+    const ev = daily({ start: '2026-07-14' });
+    const r = currentStatus(ev, NOW);
+    expect(r.dueAt).toBe('2026-07-15T00:00:00'); // the first deadline it blew
+    expect(r.dueAt! < NOW).toBe(true);
+    expect(r.dueAt).not.toBe(windowEnd(ev, '2026-07-21'));
+  });
+
+  it('measures from the start of the current run of misses, so it keeps growing', () => {
+    // Neglected since it was created: five days of misses, not "12 hours".
+    expect(currentStatus(daily({ start: '2026-07-16' }), NOW).dueAt).toBe('2026-07-17T00:00:00');
+  });
+
+  it('the run stops at the last completion', () => {
+    const ev = daily({ created: createdOn('2026-07-14'), start: '2026-07-19', completions: { '2026-07-19T09:00:00': '' } });
+    expect(currentStatus(ev, NOW).dueAt).toBe('2026-07-21T00:00:00'); // not back to the 15th
+  });
+
+  it('a counter with no known origin reports only its most recent blown deadline', () => {
+    // No `created`/`start`, so the grid is synthetic (anchored 400 days back).
+    // Walking it would claim the habit had been overdue for over a year.
+    const ev = daily({ startTime: '08:00:00', duration: 'PT1H' });
+    expect(currentStatus(ev, NOW)).toEqual({ status: 'overdue', occurrence: '2026-07-21T08:00:00', dueAt: '2026-07-21T09:00:00' });
+  });
+
+  it('a pending row counts down to the moment its window shuts', () => {
+    const timed = daily({ start: '2026-07-14', startTime: '11:00:00', duration: 'PT4H', completions: { '2026-07-20T11:00:00': '' } });
+    expect(currentStatus(timed, NOW).dueAt).toBe('2026-07-21T15:00:00');
+  });
+
+  it('a free tally has no deadline at all', () => {
+    expect(currentStatus({ '@type': 'Event', title: 'pushups' }, NOW)).toEqual({ status: 'tally' });
+  });
+
+  it('survives the spread into the sorted entry', () => {
+    expect(sortedCounters({ a: daily({ start: '2026-07-14' }) }, NOW)[0].dueAt).toBe('2026-07-15T00:00:00');
+  });
+
+  // The fence: whatever else changes, an overdue row must never render a future
+  // time and a pending row must never render a past one.
+  it.each([
+    ['all-day, unmet since creation', daily({ start: '2026-07-14' })],
+    ['timed, window shut', daily({ start: '2026-07-14', startTime: '10:00:00', duration: 'PT1H', completions: { '2026-07-20T10:30:00': '' } })],
+    ['no anchor, timed', daily({ startTime: '08:00:00', duration: 'PT1H' })],
+    ['weekly Monday missed', daily({ recurrenceRule: { '@type': 'RecurrenceRule', frequency: 'weekly', byDay: [{ '@type': 'NDay', day: 'mo' }] } })],
+    ['every 3 days, never done', every3()],
+    ['one-shot, day passed', { '@type': 'Event', start: '2026-07-20' } as CounterEvent],
+    ['overlapping 30-day windows', daily({ start: '2026-07-14', duration: 'P30D' })],
+    ['neglected for months', daily({ created: createdOn('2026-03-01') })],
+    ['pending all-day', daily({ start: '2026-07-14', completions: { '2026-07-20T09:00:00': '' } })],
+    ['pending timed', daily({ start: '2026-07-14', startTime: '11:00:00', duration: 'PT4H', completions: { '2026-07-20T11:00:00': '' } })],
+  ])('%s: overdue is in the past, pending is in the future', (_name, ev) => {
+    const r = currentStatus(ev, NOW);
+    if (r.status === 'overdue') expect(r.dueAt! <= NOW).toBe(true);
+    if (r.status === 'pending') expect(r.dueAt! > NOW).toBe(true);
   });
 });
 

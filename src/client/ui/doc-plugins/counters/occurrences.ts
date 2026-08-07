@@ -16,11 +16,26 @@ export interface CounterEntry {
   status: CounterStatus;
   /** The occurrence the status refers to (window start datetime), if any. */
   occurrence?: string;
+  /**
+   * The deadline this row's status is about, as a local datetime — what the row
+   * renders as a relative time.
+   *   pending / upcoming / done — when the window shuts (in the future)
+   *   overdue — when the habit *became* overdue: the close of the earliest
+   *             occurrence in the current unbroken run of misses, so the number
+   *             keeps growing while the habit is left undone. Guaranteed <= now,
+   *             so an overdue row can never read "in 12 hours".
+   * Absent for 'tally' and for a counter with no occurrences at all.
+   */
+  dueAt?: string;
   /** Consecutive met occurrences; 0 for non-recurring counters. */
   streak: number;
   /** Reward goal and how far off it is, when the description encodes one. */
   reward?: RewardProgress;
 }
+
+/** What `currentStatus` returns. Kept as a slice of the entry so the two cannot
+ * drift — `sortedCounters` spreads one into the other. */
+export type StatusResult = Pick<CounterEntry, 'status' | 'occurrence' | 'dueAt'>;
 
 /** A reward unlocked by a streak, encoded in the item's description as
  * "<goal>: <text>" — e.g. "10: Ice cream". */
@@ -261,6 +276,32 @@ export function currentStreak(ev: CounterEvent, now: string): number {
 }
 
 /**
+ * When the current run of misses started: the close of the earliest consecutive
+ * unmet occurrence at or before `from`. This is what "overdue since" means — a
+ * habit last done nine days ago is nine days overdue, not twelve hours overdue
+ * every night as each fresh window shuts.
+ *
+ * Always <= `now`: occurrences whose window is still open are skipped, so the
+ * result can never render as a future time on an overdue row.
+ *
+ * `anchored` must be false when the counter has no `created`/`start`, because
+ * then the grid is synthetic — anchored at the query range 400 days back (see
+ * expandOccurrences) — and every occurrence before today would be counted as a
+ * miss the habit never actually had.
+ */
+function overdueSince(ev: CounterEvent, occs: string[], from: number, now: string, anchored: boolean): string | undefined {
+  let since: string | undefined;
+  for (let i = from; i >= 0; i--) {
+    const end = windowEnd(ev, occs[i]);
+    if (end > now) continue; // window still open — nothing owed for it yet
+    if (metInPeriod(ev, occs[i], occs[i + 1])) break; // the run ends at the last one done
+    since = end;
+    if (!anchored) break; // synthetic grid: trust only the most recent deadline
+  }
+  return since;
+}
+
+/**
  * Status of a counter's current period, used for sectioning/sorting:
  *   'tally'    — no schedule at all: a free-running counter, always clickable
  *   'upcoming' — its first occurrence is still in the future
@@ -271,7 +312,7 @@ export function currentStreak(ev: CounterEvent, now: string): number {
  *                next occurrence hasn't begun), or the current window is open
  *                but the previous occurrence went unmet
  */
-export function currentStatus(ev: CounterEvent, now: string): { status: CounterStatus; occurrence?: string } {
+export function currentStatus(ev: CounterEvent, now: string): StatusResult {
   if (!ev.recurrenceRule && !ev.start) return { status: 'tally' };
 
   const today = dateOf(now);
@@ -280,22 +321,45 @@ export function currentStatus(ev: CounterEvent, now: string): { status: CounterS
   const occs = expectedOccurrences(ev, from, to);
   if (occs.length === 0) return { status: 'upcoming' };
 
-  let prev: string | undefined;
-  let curr: string | undefined;
-  let next: string | undefined;
-  for (const o of occs) {
-    if (toDateTime(o) <= now) { prev = curr; curr = o; }
-    else { next = o; break; }
+  // Indexed so the overdue walk below can start at `curr` (or the one before it)
+  // without re-deriving them. Equivalent to the prev/curr/next scan it replaces.
+  let ci = -1;
+  for (let i = 0; i < occs.length; i++) {
+    if (toDateTime(occs[i]) <= now) ci = i;
+    else break;
   }
-  if (!curr) return { status: 'upcoming', occurrence: occs[0] };
+  if (ci < 0) return { status: 'upcoming', occurrence: occs[0], dueAt: windowEnd(ev, occs[0]) };
+  const curr = occs[ci];
+  const prev = occs[ci - 1];
+  const next = occs[ci + 1];
 
-  if (metInPeriod(ev, curr, next)) return { status: 'done', occurrence: curr };
-  if (now >= windowEnd(ev, curr)) return { status: 'overdue', occurrence: curr };
+  if (metInPeriod(ev, curr, next)) return { status: 'done', occurrence: curr, dueAt: windowEnd(ev, curr) };
+
+  // Both the retroactive-miss rule and the walk need this, and it parses an
+  // Instant, so resolve it once.
+  const anchored = !!createdDate(ev);
+
+  if (now >= windowEnd(ev, curr)) {
+    return {
+      status: 'overdue',
+      occurrence: curr,
+      dueAt: overdueSince(ev, occs, ci, now, anchored) ?? windowEnd(ev, curr),
+    };
+  }
   // Window still open — but a missed previous occurrence keeps it overdue.
   // Without a creation anchor the expansion is synthetic (anchored at the query
   // range), so "previous" doesn't imply the habit existed then; skip the check.
-  if (createdDate(ev) && prev && !metInPeriod(ev, prev, curr)) return { status: 'overdue', occurrence: curr };
-  return { status: 'pending', occurrence: curr };
+  if (anchored && prev && !metInPeriod(ev, prev, curr)) {
+    return {
+      status: 'overdue',
+      occurrence: curr,
+      // Never windowEnd(curr): that window is still open, i.e. in the future,
+      // and would render as "in 12 hours" on a row filed under Overdue. Walk
+      // back from `prev`; `curr` itself (<= now by construction) is the floor.
+      dueAt: overdueSince(ev, occs, ci - 1, now, anchored) ?? toDateTime(curr),
+    };
+  }
+  return { status: 'pending', occurrence: curr, dueAt: windowEnd(ev, curr) };
 }
 
 /** Overdue first, then pending, upcoming, done, and finally schedule-less
@@ -304,8 +368,13 @@ const STATUS_ORDER: Record<CounterStatus, number> = { overdue: 0, pending: 1, up
 
 export function sortedCounters(events: Record<string, CounterEvent>, now: string): CounterEntry[] {
   const entries: CounterEntry[] = Object.entries(events).map(([uid, ev]) => {
-    const streak = currentStreak(ev, now);
-    return { uid, ev, streak, reward: rewardProgress(ev, streak) ?? undefined, ...currentStatus(ev, now) };
+    const status = currentStatus(ev, now);
+    // An overdue habit's chain is broken: no flame badge, and its reward starts
+    // over. `currentStreak` itself still reports the salvageable streak (a late
+    // completion inside the credit period does restore it, and the chart counts
+    // that occurrence as met) — this is the row's view, not the history's.
+    const streak = status.status === 'overdue' ? 0 : currentStreak(ev, now);
+    return { uid, ev, streak, reward: rewardProgress(ev, streak) ?? undefined, ...status };
   });
   entries.sort((a, b) => {
     if (STATUS_ORDER[a.status] !== STATUS_ORDER[b.status]) return STATUS_ORDER[a.status] - STATUS_ORDER[b.status];

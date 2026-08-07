@@ -16,3 +16,13 @@ export function relativeTime(ts: string | number | Date | null | undefined): str
   if (ts == null) return '';
   return dayjs(ts).fromNow();
 }
+
+/**
+ * The same magnitude without the direction — "3 hours", "a day" — for callers
+ * that phrase the direction themselves ("3 hours left", "3 hours overdue").
+ * Works for past and future timestamps alike.
+ */
+export function relativeDuration(ts: string | number | Date | null | undefined): string {
+  if (ts == null) return '';
+  return dayjs(ts).fromNow(true);
+}
