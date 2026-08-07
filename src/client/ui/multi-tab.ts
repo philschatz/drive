@@ -1,15 +1,20 @@
 /**
  * Tab leadership via the Web Locks API.
  *
- * Multiple tabs of this app on one device cannot both sync: they share one
- * peerId (`<agentId>-drive`), so the relay rejects the second tab's join and a
- * sibling tab's presence encrypt would hit the keyhive CGKA panic (see the
- * `same-device-multitab-sync` memory). We detect the extra tab(s) so the UI can
- * warn the user (see the multi-tab notice in components/Notifications.tsx).
+ * Only one engine may exist per device — all tabs share one peerId
+ * (`<agentId>-drive`), so the relay rejects a second socket, and two keyhive
+ * instances of one identity destroy each other's CGKA key material. The lock elects
+ * the tab that owns that engine: the leader boots the Worker and routes for everyone
+ * else (ui/tab-transport.ts), so extra tabs edit and sync normally rather than
+ * sitting idle behind a warning.
  *
  * The first tab acquires an exclusive lock and holds it for its lifetime; any
  * other tab's request stays pending → that tab is *secondary*. When the leader
  * closes or crashes the lock auto-releases and a waiting tab becomes leader.
+ *
+ * A dedicated Worker cannot outlive its tab and the lock releases exactly when the
+ * tab dies, so two engines are never live at once — the property the whole design
+ * rests on.
  */
 const LOCK_NAME = 'drive-tab-leader';
 

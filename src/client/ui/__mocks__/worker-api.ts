@@ -315,6 +315,8 @@ export function getConnectedPeers(): string[] { return []; }
 export function usePeerList(): string[] { return []; }
 export function useConnectionStatus(): boolean { return true; }
 export function useWsStatus(): boolean { return true; }
+/** Under the mock there is no tab transport, so report the single-tab case. */
+export function useTabRole(): 'unknown' | 'leader' | 'follower' { return 'leader'; }
 export function whenWsConnected(): Promise<void> { return Promise.resolve(); }
 
 // Doc list + unseen flags: subscribable, so a Home test can drive the two pushes
@@ -379,5 +381,3 @@ export function rendezvousCreateDeviceLink(): Promise<any> { return Promise.reso
 export function rendezvousJoinDeviceLink(): Promise<{ ok: boolean }> { return Promise.resolve({ ok: false }); }
 export function rendezvousCancel(): void {}
 export function onRendezvousEvent(): () => void { return noop; }
-
-export function sendHfPort(): void {}

@@ -1,6 +1,6 @@
 import { useCallback, useEffect } from 'preact/hooks';
 import type { Dispatch, StateUpdater } from 'preact/hooks';
-import { subscribeQuery, sendHfPort } from '../../worker-api';
+import { subscribeQuery } from '../../worker-api';
 import { createHfBridge } from './hf-bridge';
 import type { HfBridge, MCResults, CondFormatResults } from './hf-bridge';
 import { sortedEntries } from './helpers';
@@ -73,7 +73,7 @@ export function useDataGridDoc(opts: {
     let mounted = true;
 
     // Set up HF bridge for formula evaluation
-    const bridge = createHfBridge(sendHfPort);
+    const bridge = createHfBridge(subscribeQuery);
     hfBridgeRef.current = bridge;
     const unsubValues = bridge.onComputedValues((values, spillTargets, errors) => {
       computedValuesRef.current = values;

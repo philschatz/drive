@@ -1,9 +1,19 @@
 /**
  * Thin API layer for the HyperFormula evaluation worker.
  *
- * Creates the HF worker and a MessageChannel connecting it to the automerge
- * worker for direct communication. The main thread only receives computed
- * formula values and Monte Carlo results.
+ * Creates the HF worker and a MessageChannel for its document reads. The main thread
+ * only receives computed formula values and Monte Carlo results.
+ *
+ * The far end of that channel used to be transferred into the automerge worker so HF
+ * could query the engine directly. It can't be any more: the engine may live in
+ * another tab and a `MessagePort` cannot cross a `BroadcastChannel`. So this side
+ * keeps the port and proxies the only two messages that ever crossed it —
+ * `subscribe-query` / `unsubscribe-query` — through the normal worker API. HF itself
+ * is unchanged; it still speaks the same protocol over the same port.
+ *
+ * This also retires a latent id collision: HF used to mint its own `subId` from 1
+ * into the engine's single flat subscription map, where the UI's ids start at 1 too.
+ * Its subscriptions now share the one allocator every other caller uses.
  */
 
 import type { DistributionStats } from './distributions';
@@ -31,19 +41,54 @@ export interface HfBridge {
 }
 
 /**
- * Create an HF bridge. Requires a function that sends a MessagePort to the
- * automerge worker (so the HF worker can subscribe to doc queries directly).
+ * The subset of `subscribeQuery` this bridge needs. Injected so the DataGrid's
+ * worker-api import stays in one place (and so a test can stub the read path).
  */
-export function createHfBridge(sendPortToAutomerge: (port: MessagePort) => void): HfBridge {
+export type QuerySubscriber = (
+  docId: string,
+  filter: string,
+  onResult: (result: any, heads: string[]) => void,
+  onError?: (error: string) => void,
+  opts?: { peek?: boolean },
+) => () => void;
+
+/**
+ * Create an HF bridge. Requires the doc-query subscriber the HF worker reads through
+ * (its reads are machine-driven, so they always `peek` — they must not count as the
+ * user viewing a document, which would clear its unseen-changes marker).
+ */
+export function createHfBridge(subscribeQuery: QuerySubscriber): HfBridge {
   const worker = new Worker(
     new URL('./hf-worker.ts', import.meta.url),
     { type: 'module' },
   );
 
-  // Create a MessageChannel: port1 → automerge worker, port2 → hf worker
+  // port2 → hf worker; port1 stays here and is proxied into the engine below.
   const channel = new MessageChannel();
-  sendPortToAutomerge(channel.port1);
+  const enginePort = channel.port1;
   worker.postMessage({ type: 'init', port: channel.port2 }, [channel.port2]);
+
+  // HF's document reads. Each `subscribe-query` becomes a real subscription whose
+  // results are handed back over the port in the shape HF already expects.
+  const hfSubs = new Map<number, () => void>();
+  enginePort.onmessage = (e) => {
+    const msg = e.data;
+    if (msg.type === 'subscribe-query') {
+      const { subId, docId, filter } = msg;
+      hfSubs.get(subId)?.(); // a re-subscribe on the same id supersedes the old one
+      hfSubs.set(subId, subscribeQuery(
+        docId,
+        filter,
+        (result, heads) => enginePort.postMessage({ type: 'query-result', subId, result, heads }),
+        (error) => enginePort.postMessage({ type: 'query-result', subId, result: null, heads: [], error }),
+        { peek: true },
+      ));
+    } else if (msg.type === 'unsubscribe-query') {
+      hfSubs.get(msg.subId)?.();
+      hfSubs.delete(msg.subId);
+    }
+  };
+  enginePort.start();
 
   const valueListeners = new Set<(values: Map<string, string | number>, spillTargets: Set<string>, errors: Map<string, string>) => void>();
   const mcListeners = new Set<(results: MCResults) => void>();
@@ -100,6 +145,11 @@ export function createHfBridge(sendPortToAutomerge: (port: MessagePort) => void)
     destroy() {
       worker.postMessage({ type: 'unwatch' });
       worker.terminate();
+      // The worker is gone and can no longer send `unsubscribe-query`, so release its
+      // engine subscriptions here or they leak for the life of the tab.
+      for (const off of hfSubs.values()) off();
+      hfSubs.clear();
+      enginePort.close();
       valueListeners.clear();
       mcListeners.clear();
       cfListeners.clear();

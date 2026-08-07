@@ -3,7 +3,6 @@ import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import { onWorkerError } from '@/worker-api';
 import { settingSet, settingSetSync } from '@client/shared/idb-storage';
-import { watchTabLeadership } from '@/multi-tab';
 import { useVersionCheck } from '@/common/useVersionCheck';
 import { upsertToast } from './ui/toast';
 
@@ -12,10 +11,13 @@ dayjs.extend(relativeTime);
 /**
  * Drives the app's persistent, actionable notices as Radix toasts (see ui/toast.tsx):
  *   - worker crash / fatal init failure — destructive, "Reload app"
- *   - multiple tabs open — warning; auto-clears when this tab becomes the leader
  *   - new version available — click "Reload"
  * Renders nothing itself; each notice is upserted by a stable key so re-renders
  * don't stack duplicates and clearing the condition removes the toast.
+ *
+ * There is no longer a multi-tab warning: every tab shares the one engine owned by
+ * the leadership-lock holder (ui/tab-transport.ts), so extra tabs edit and sync
+ * normally. Which role a tab has is shown in Settings → Debugging.
  */
 
 /** Reload to Home, clearing the remembered doc so startup doesn't bounce back into it. */
@@ -37,21 +39,6 @@ export function Notifications() {
         durationMs: null,
         action: { label: 'Reload app', onClick: reloadAtHome },
       });
-    }), []);
-
-  // Multi-tab: remote sync only works in one tab per device (keyhive limitation).
-  // Warn on the secondary tab(s); clear when this tab becomes the sole/leader tab.
-  useEffect(() =>
-    watchTabLeadership((secondary) => {
-      upsertToast('multi-tab', secondary ? {
-        message:
-          "Remote real-time syncing with multiple tabs is not supported yet (keyhive limitation). " +
-          "This tab won't sync — use a single tab, or close the others to sync here.",
-        tone: 'warning',
-        icon: 'warning',
-        durationMs: null,
-        testId: 'multi-tab-banner',
-      } : null);
     }), []);
 
   // New deployed version available.

@@ -45,9 +45,9 @@ Each top-level directory under `src/` is one program or one runtime, and the bou
 
 **Browser** (`src/client/`) — split by *thread*, because the two halves cannot import each other:
 
-- `src/client/ui/` — everything Preact/DOM. `main.tsx`, `App.tsx`, `worker-api.ts` (the main thread's handle on the worker), `webrtc-bridge.ts`, and the feature dirs: `doc-plugins/` (`calendar/`, `tasks/`, `datagrid/`, `counters/`, `sentences/` + the registry `index.ts`/`types.ts`), `home/`, `source/`, `friends/`, `sharing/`, `settings/`, `debug/`, `components/`, `lib/`, and `common/` (shared UI hooks + components)
+- `src/client/ui/` — everything Preact/DOM. `main.tsx`, `App.tsx`, `worker-api.ts` (the main thread's handle on the worker), `tab-transport.ts`/`tab-router.ts`/`multi-tab.ts` (the cross-tab layer — see Tabs & the single engine), `webrtc-bridge.ts`, and the feature dirs: `doc-plugins/` (`calendar/`, `tasks/`, `datagrid/`, `counters/`, `sentences/` + the registry `index.ts`/`types.ts`), `home/`, `source/`, `friends/`, `sharing/`, `settings/`, `debug/`, `components/`, `lib/`, and `common/` (shared UI hooks + components)
 - `src/client/worker/` — the Web Worker: `automerge-worker.ts` and the things only it loads (`webrtc-relay-adapter.ts`, `idb-kvstore.ts`)
-- `src/client/shared/` — the small set of modules genuinely used by *both* threads: `idb-storage.ts`, `webrtc-chunk.ts`, `worker-client.ts`
+- `src/client/shared/` — the small set of modules genuinely used by *both* threads: `idb-storage.ts`, `webrtc-chunk.ts`, `worker-client.ts`, `tab-channel.ts`
 - `src/client/assets/` — `globals.css` and `public/` (favicon, PWA icons). `index.html` stays at `src/client/` because it is Vite's root entry
 - `src/client/tests-pw/` — Playwright E2E (editor UI specs + two-peer sync harness)
 
@@ -110,6 +110,26 @@ Transport, from the bottom up:
 
 Per-peer transport is surfaced to the UI via the worker's `p2p-status` message → `usePeerTransports()`; the shared `PeerDot` (`src/client/ui/common/presence.tsx`) renders a **filled** dot for a direct channel and a **hollow ring** (the default) for relay, so a relayed connection is never mistaken for P2P.
 
+### Tabs & the single engine
+
+**There may only ever be one engine per device**, and it is a hard constraint, not a preference. The keyhive archive is a single fixed IndexedDB key (`sha256(peerIdSuffix)`, and the suffix is pinned to `'drive'`) written as a *whole-state snapshot*, and CGKA leaf secrets live only in WASM memory plus that snapshot — so two instances silently destroy each other's key material. All tabs also share one peerId, which the relay's duplicate-join rejection would reduce to one socket anyway.
+
+So the engine is per *device*, not per tab. The tab that wins the `drive-tab-leader` Web Lock (`ui/multi-tab.ts`) boots the Worker and runs `ui/tab-router.ts`; every other tab forwards the same worker protocol to it over a `BroadcastChannel` (`ui/tab-transport.ts`, envelopes in `client/shared/tab-channel.ts`). `SharedWorker` is deliberately **not** used — Chrome for Android has none, and module-type SharedWorker is explicitly excluded there.
+
+The seam is `WorkerClient`, which depends on nothing but `postMessage`: `worker-api.ts` is handed a `WorkerTransport` and is unaware which case it got. Nothing in `src/shared/drive-engine.ts` or the worker shell knows tabs exist — the router earns that by fixing up what is per-client:
+
+- **ids.** Every `WorkerClient` mints request ids and subIds from 1, so two tabs both send `id: 1`. The router rewrites them to globally-unique ids inbound and restores each client's own outbound.
+- **doc-scoped subscriptions.** `subscribe-presence` / `-validation` carry no id, so they are refcounted across clients (first subscribe and last unsubscribe only) and deliveries fan out; a client that subscribes second is caught up from the router's cached delivery, since the engine only re-announces on a subscribe it actually receives. `subscribe-cursors` forwards the *union* of every tab's caret tokens, because the engine stores them wholesale per docId+path.
+- **outbound routing.** `result`/`query-result`/`open-doc-progress` unicast by id; presence/validation by doc-sub set; `kh-rdv-event` by the rendezvous its tab created; everything else broadcasts. Sticky broadcasts are replayed to a tab joining a warm leader (`peer-connected`/`-disconnected` share one slot so a stale disconnect can't look newest).
+
+Consequences worth knowing:
+
+- **A `MessagePort` cannot cross a `BroadcastChannel`.** Only the leader bridges WebRTC (`transport.onLeader`), and the HyperFormula worker no longer gets a port into the engine — `doc-plugins/datagrid/hf-bridge.ts` proxies its `subscribe-query`/`unsubscribe-query` through `subscribeQuery` instead.
+- **A change of leader reloads the other tabs.** A follower's ids and subscriptions live in the leader's router; when it disappears there is nothing to re-bind them to. Closing a *follower* costs nothing.
+- **Version pinning is engine state**, so a history-pinned view in one tab pins that doc in all of them.
+- **Presence is one state per device** (one peerId, one `Presence`), so `useFocusPathSync` only broadcasts from a *visible* tab and re-asserts on becoming visible.
+- A backgrounded leader that the browser freezes pauses sync for followers until it is revisited. Not corrupting — a frozen tab's worker is suspended too.
+
 ### Routing
 
 `src/client/ui/App.tsx` defines hash routes via preact-router (custom `hashHistory`). Document URLs are **type-free**: `#/d/<docId>` for every doc type — the document's `@type` selects the view (see `DocRoute`), never the URL.
@@ -135,7 +155,7 @@ The backend implements CalDAV (RFC 4791) at `/dav/`. `src/bitrot-caldav/parser.t
 - **Jest** (`jest.config.js`; `*.test.ts` = node project, `*.test.tsx` = jsdom `ui` project): unit + UI component/container tests. Editor containers (Tasks, Counters, …) run in jsdom via `jest.mock('../../worker-api')` (two levels up from a `doc-plugins/<type>/` dir), which picks up `src/client/ui/__mocks__/worker-api.ts` (Jest finds it only because that `__mocks__/` sits directly beside `worker-api.ts`; the containers assert `__isMock` so a drift fails loudly) — it backs `subscribeQuery`/`updateDoc` with an in-memory doc projected through the real jq engine (`src/shared/jq.ts`) and stubs the rest. Seed with `__setDoc(id, doc)`; assert store state with `__getDoc(id)`; reset in `beforeEach` with `__reset()`. It projects against a **clone** so each result has fresh refs (else `setState` bails on `Object.is` and nothing re-renders). `common/keyhive-api` re-exports worker-api, so this one mock also covers access/presence. Components that read `Temporal` need `import 'temporal-polyfill/global'` first.
 
 **Material form fields.** The `md-*` custom elements are registered only in `main.tsx`, so under jsdom they never upgrade — which is why editor tests work at all (rows are inert hosts, handlers still fire). A raw `md-outlined-text-field` would break them outright: testing-library's `fireEvent.input` needs a `value` *setter* and throws without one. So use the two-mode wrappers `components/ui/md-text-field.tsx` and `md-select.tsx`, which fall back to a real `input`/`textarea`/`select` when the element isn't defined. Bind `input`, never `change` — preact/compat rewrites `onChange` to an input listener on form elements. The `MdSelect` fallback is a native `<select>`, so selects *can* now be driven in jsdom with `fireEvent.input`.
-- **Playwright** (`src/client/tests-pw/`): two-peer sync (`support/peer.ts`, `window.__drive`), multi-tab (Web Locks), real-worker/IndexedDB behavior, and heavy browser-only rendering (schedule-x calendar, HyperFormula datagrid).
+- **Playwright** (`src/client/tests-pw/`): two-peer sync (`support/peer.ts`, `window.__drive`), multiple tabs sharing one engine (`multi-tab-edit.spec.ts` — real Web Locks + a real BroadcastChannel; the routing rules themselves are unit-tested in `tests/tab-router.test.ts`), real-worker/IndexedDB behavior, and heavy browser-only rendering (schedule-x calendar, HyperFormula datagrid).
 
 **Throwaway files are named `tmp-*`** (gitignored — the repo auto-commits everything else). That covers one-off node scripts (`tmp-codemod.mjs`), scratch data, and verification specs: a probe spec is `tmp-<name>.probe.spec.ts`, which still ends in `.spec.ts` so Playwright's default `testMatch` discovers and runs it.
 

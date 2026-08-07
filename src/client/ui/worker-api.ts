@@ -2,6 +2,11 @@
  * Single owner of the automerge web worker lifecycle.
  * Provides typed APIs for document operations and keyhive operations.
  * The full document is never sent to the main thread — query is the only read path.
+ *
+ * The engine itself is per *device*, not per tab: `tab-transport.ts` either boots the
+ * Worker here (this tab holds the leadership lock) or forwards the identical protocol
+ * to the tab that did. Everything below is written against that transport and is
+ * unaware of which case it got.
  */
 
 import { useState, useEffect, useRef } from 'preact/hooks';
@@ -17,6 +22,8 @@ import { generateDefaultDeviceName } from './lib/device-name';
 import type { ArchiveDocResult } from '../../shared/keyhive-types';
 import { startWebRTCBridge } from './webrtc-bridge';
 import { WorkerClient } from '../shared/worker-client';
+import { makeWorkerTransport, type TabRole } from './tab-transport';
+export type { TabRole };
 import type { RichTextOp, RichTextSpan } from '../../shared/rich-text-ops';
 import type { BackupTier, BackupPayload, BackupResult } from '../../shared/backup';
 
@@ -141,19 +148,27 @@ const WORKER_FNS = new Map<unknown, string>([[deepAssign, 'deepAssign'], [richTe
 
 // ── Worker setup ────────────────────────────────────────────────────────────
 
-const worker = new Worker(
-  new URL('../worker/automerge-worker.ts', import.meta.url),
-  { type: 'module' },
-);
+// Either the Worker this tab owns, or a channel to the tab that owns it. Buffers
+// until leadership resolves, which is invisible here because WorkerClient gates
+// every send on `workerReady`.
+const transport = makeWorkerTransport();
 
 function logSend(msg: { type: string } & Record<string, any>): void {
   console.log('[main] → send', msg.type, msg);
 }
 
+// Another tab is running deleteAllData. Release this tab's 'app-storage' connection —
+// it would otherwise block deleteDatabase — and hold still until the delete completes,
+// because reloading early would reopen the database mid-delete.
+transport.onWipe((phase) => {
+  if (phase === 'begin') { console.log('[tab] another tab is deleting local data'); closeDb(); }
+  else window.location.reload();
+});
+
 // The resilient request/response + subscription core. Owns pending requests, the
 // ready gates, the fatal-error fan-out, and query/presence/validation subs. The
 // on-the-wire protocol is unchanged — worker-api just wires the real Worker to it.
-const client = new WorkerClient(worker, { log: logSend });
+const client = new WorkerClient(transport, { log: logSend });
 
 // Wire up the contact-names dispatch hook (avoids a circular import with contact-names)
 setFriendNamesDispatch((type, agentId, name) =>
@@ -171,7 +186,9 @@ const initMsg = {
   type: 'init' as const,
 };
 console.log('[main] → send', initMsg.type, initMsg);
-worker.postMessage(initMsg);
+// Buffered until leadership resolves; the router drops it from follower tabs so the
+// engine is only ever initialized once.
+transport.postMessage(initMsg);
 
 // Best-effort: heal the synchronous localStorage mirror of the debug-enable setting from
 // its IDB source of truth, in case localStorage was cleared but IDB still holds the flag.
@@ -192,18 +209,34 @@ export function onWorkerError(fn: (message: string) => void): () => void {
 // The repo's network adapter lives in the worker, but RTCPeerConnection is
 // window-only. Wire a MessagePort between the worker's WebRTCRelayAdapter and the
 // main-thread bridge that owns the peer connections + data channels.
-{
+//
+// Only the tab that owns the Worker may do this: a MessagePort cannot cross the
+// cross-tab BroadcastChannel, the adapter holds a single port slot, and signaling is
+// stamped with one senderId. Follower tabs never bridge — their P2P rides the
+// leader's channels, and the adapter's port can therefore never be swapped out from
+// under an open data channel.
+transport.onLeader((postToWorker) => {
   const channel = new MessageChannel();
   startWebRTCBridge(channel.port2);
   // Gate on workerReady so the adapter exists when the port arrives.
   workerReady.then(() => {
-    worker.postMessage({ type: 'webrtc-port', port: channel.port1 }, [channel.port1]);
+    postToWorker({ type: 'webrtc-port', port: channel.port1 }, [channel.port1]);
   }).catch(() => { /* worker never became ready — nothing to bridge */ });
-}
+});
 
 // ── Worker peer ID ──────────────────────────────────────────────────────────
 
 export function getWorkerPeerId(): string { return client.getWorkerPeerId(); }
+
+/**
+ * Whether this tab owns the device's engine or routes through the tab that does.
+ * Diagnostic only — both roles read and write documents identically.
+ */
+export function useTabRole(): TabRole {
+  const [role, setRole] = useState<TabRole>('unknown');
+  useEffect(() => transport.onRole(setRole), []);
+  return role;
+}
 
 // This user's own user-group id (base64), cached for sync access so presence
 // consumers can hide ALL of the local user's devices (not just the current one)
@@ -319,8 +352,7 @@ export function onRendezvousEvent(fn: RendezvousEventListener): () => void {
 
 // ── Worker message router ───────────────────────────────────────────────────
 
-worker.onmessage = (e: MessageEvent<WorkerToMain>) => {
-  const msg = e.data;
+transport.onMessage((msg: WorkerToMain) => {
   // Skip routine traffic; keep diagnostically useful events.
   const quiet = msg.type === 'result'
     || msg.type === 'query-result'
@@ -382,22 +414,17 @@ worker.onmessage = (e: MessageEvent<WorkerToMain>) => {
       for (const fn of rdvEventListeners) fn(msg);
       break;
   }
-};
+});
 
 // The worker crashed or sent an unreadable message (e.g. a hostile peer payload
 // crashed it). Reject every in-flight request, settle the ready gates, mark the
 // worker dead so future requests reject instead of hanging, and show the banner.
-// `.message` is empty for cross-origin/module load failures, so fall back.
-worker.onerror = (e) => {
-  console.error('Automerge worker crashed:', e.message);
-  client.fail(e.message
-    ? `The document engine crashed: ${e.message}. Reload the page to reconnect.`
-    : 'The document engine crashed unexpectedly. Reload the page to reconnect.');
-};
-worker.onmessageerror = () => {
-  console.error('Automerge worker sent an unreadable message');
-  client.fail('The document engine sent a message that could not be read (it may have crashed). Reload the page.');
-};
+// In a follower tab the crash happened in the leader's Worker; the transport relays
+// it over the bus so every tab surfaces the same banner.
+transport.onFatal((message) => {
+  console.error('Automerge worker crashed:', message);
+  client.fail(message);
+});
 
 // ── Connection status hooks ─────────────────────────────────────────────────
 
@@ -569,11 +596,17 @@ export async function clearAllCaches(): Promise<void> {
  * IndexedDB connections (otherwise deleteDatabase blocks). Irreversible.
  */
 export async function deleteAllData(): Promise<void> {
-  // Terminate the worker so 'automerge-secure' (and its own idb connections) close,
-  // then close the main thread's 'app-storage' connection. Both must be released before
+  // Every OTHER tab of this device also holds an 'app-storage' connection, and any one
+  // of them keeps deleteDatabase blocked. Tell them to close it and stop touching IDB
+  // (they wait for 'wiped' before reloading, so nothing reopens mid-delete).
+  transport.broadcastWipe();
+
+  // Release the engine's 'automerge-secure' connections. Whichever tab owns the Worker
+  // terminates it — this one directly, a follower by asking the leader.
+  await transport.shutdown();
+  // Then close this tab's own 'app-storage' connection. Both must be released before
   // deleteDatabase can complete (otherwise it blocks). closeDb is fire-and-forget so a
   // pending/blocked open can't hang the reset.
-  worker.terminate();
   closeDb();
 
   const known = ['app-storage', 'automerge-secure'];
@@ -604,6 +637,7 @@ export async function deleteAllData(): Promise<void> {
   })));
 
   localStorage.clear();
+  transport.broadcastWiped(); // release the sibling tabs so they reload onto empty storage
   window.location.reload();
 }
 
@@ -951,11 +985,7 @@ export function changeRole(agentId: string, docId: string, newRole: string): Pro
   return khRequest('kh-change-role', { agentId, docId, newRole });
 }
 
-// ── HyperFormula worker port ─────────────────────────────────────────────────
-
-/** Transfer a MessagePort to the automerge worker for direct HF worker communication. */
-export function sendHfPort(port: MessagePort): void {
-  workerReady.then(() => {
-    worker.postMessage({ type: 'hf-port', port }, [port]);
-  });
-}
+// The HyperFormula worker used to be handed a MessagePort straight into the engine.
+// A MessagePort cannot cross the cross-tab BroadcastChannel, so a follower tab's
+// DataGrid had no route; hf-bridge.ts now proxies its two query messages through
+// subscribeQuery() instead. See src/client/ui/doc-plugins/datagrid/hf-bridge.ts.

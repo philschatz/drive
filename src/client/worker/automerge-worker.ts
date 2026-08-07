@@ -186,25 +186,6 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
     else pendingWebrtcPort = port;
     return;
   }
-  if (msg.type === 'hf-port') {
-    const hfPort = (msg as any).port as MessagePort;
-    const post = (m: any) => hfPort.postMessage(m);
-    hfPort.onmessage = async (pe: MessageEvent) => {
-      const pm = pe.data;
-      if (pm.type === 'subscribe-query') {
-        try {
-          // HyperFormula's cross-doc reads are machine-driven — always peek.
-          await engine!.subscribeQuery(pm.docId, pm.subId, pm.filter, post, true);
-        } catch (err: any) {
-          post({ type: 'query-result', subId: pm.subId, result: null, heads: [], error: errMsg(err) });
-        }
-      } else if (pm.type === 'unsubscribe-query') {
-        engine!.unsubscribeQuery(pm.subId);
-      }
-    };
-    return;
-  }
-
   await engine.handleMessage(msg);
 }
 

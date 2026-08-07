@@ -61,6 +61,14 @@ interface SubInfo {
   spansPath?: (string | number)[];
   lastSpansJson?: string;
   lastCursorsJson?: string;
+  /**
+   * The projection this subscriber was last sent. The query cache is keyed by
+   * (docId, filter), NOT by subId, so with two subscriptions sharing a filter the
+   * first one to be pushed writes the cache and every later one is told the result
+   * is unchanged. That happens whenever two tabs view the same document, so
+   * "changed" is decided per subscriber against this instead.
+   */
+  lastJson?: string;
 }
 
 interface DocEntry {
@@ -606,7 +614,7 @@ export class EngineCore {
 
   private async runCachedQuery(
     docId: string, filter: string, doc: any, heads: string[], lastModified?: number,
-  ): Promise<{ result: any; heads: string[]; lastModified?: number; changed: boolean }> {
+  ): Promise<{ result: any; heads: string[]; lastModified?: number; changed: boolean; json?: string }> {
     const result = await this.runQuery(filter, doc);
     if (this.debugEnabled) return { result, heads, lastModified, changed: true };
 
@@ -619,45 +627,47 @@ export class EngineCore {
       // cache replay, and meta subscriptions, carry the current timestamp.
       cached.heads = heads;
       cached.lastModified = lastModified;
-      return { result, heads, lastModified, changed: false };
+      return { result, heads, lastModified, changed: false, json };
     }
 
     const entry: QueryCacheEntry = { result, json, lastModified, heads };
     this.queryResultCache.set(cacheKey, entry);
     void this.host.kv.set(cacheKey, entry);
-    return { result, heads, lastModified, changed: true };
+    return { result, heads, lastModified, changed: true, json };
   }
 
   /** Subscribe to a jq query, routing results to the given poster. */
   async subscribeQuery(docId: string, subId: number, filter: string, post: (m: any) => void, peek?: boolean, meta?: boolean, spansPath?: (string | number)[]): Promise<void> {
     this.subIdToDocId.set(subId, docId);
+    const sub: SubInfo = { filter, post, peek, meta, spansPath };
 
     // The query cache stores only the jq projection; a spans sub must wait for
     // a real push (a cached result without spans would look like an empty doc).
     if (!this.debugEnabled && !spansPath) {
       const cacheKey = queryCacheKey(docId, filter);
-      const memoryCached = this.queryResultCache.get(cacheKey);
-      if (memoryCached) {
-        post({ type: 'query-result', subId, result: memoryCached.result, heads: memoryCached.heads, lastModified: memoryCached.lastModified });
-      } else {
+      let cached = this.queryResultCache.get(cacheKey);
+      if (!cached) {
         const idbCached = await this.host.kv.get<QueryCacheEntry>(cacheKey);
-        if (idbCached) {
-          this.queryResultCache.set(cacheKey, idbCached);
-          post({ type: 'query-result', subId, result: idbCached.result, heads: idbCached.heads, lastModified: idbCached.lastModified });
-        }
+        if (idbCached) { this.queryResultCache.set(cacheKey, idbCached); cached = idbCached; }
+      }
+      if (cached) {
+        post({ type: 'query-result', subId, result: cached.result, heads: cached.heads, lastModified: cached.lastModified });
+        // Record what this subscriber has now seen so the push that immediately
+        // follows dedupes against it instead of repeating the same result.
+        sub.lastJson = cached.json;
       }
     }
 
     const entry = this.docRegistry.get(docId);
     if (entry) {
-      entry.subscriptions.set(subId, { filter, post, peek, meta, spansPath });
+      entry.subscriptions.set(subId, sub);
       // A non-peek sub on an already-loaded doc = the user started viewing it.
       this.refreshSeenState(docId);
       await this.pushToSubscriptions(docId);
     } else {
       let pending = this.pendingSubs.get(docId);
       if (!pending) { pending = new Map(); this.pendingSubs.set(docId, pending); }
-      pending.set(subId, { filter, post, peek, meta, spansPath });
+      pending.set(subId, sub);
       if (OPEN_DOCS_IN_BACKGROUND) {
         this.getOrLoadHandle(docId)
           .then(handle => this.getOrCreateEntry(docId, handle))
@@ -711,7 +721,13 @@ export class EngineCore {
     for (const [subId, sub] of entry.subscriptions) {
       activeHashes.add(hashStr(sub.filter));
       try {
-        const { result, changed } = await this.runCachedQuery(docId, sub.filter, activeDoc, heads, lastModified);
+        const { result, changed: cacheChanged, json } = await this.runCachedQuery(docId, sub.filter, activeDoc, heads, lastModified);
+        // The cache is shared by every sub with this filter, so `cacheChanged` only
+        // reports whether the FIRST one to be pushed saw a change. Fall back to what
+        // this subscriber itself was last sent, which is what makes a second tab
+        // viewing the same doc receive the update too.
+        const changed = cacheChanged || (json !== undefined && json !== sub.lastJson);
+        if (json !== undefined) sub.lastJson = json;
         // Rich-text subs also carry the Peritext spans of their field. Marks
         // and block attributes are invisible to the jq projection, so "did it
         // change?" must consider the serialized spans too. The comparison MUST

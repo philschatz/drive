@@ -128,8 +128,8 @@ export type MainToWorker =
   | { type: 'open-doc'; id: number; docId: string }
   | { type: 'subscribe-validation'; docId: string }
   | { type: 'unsubscribe-validation'; docId: string }
-  | { type: 'hf-port'; port: MessagePort }
   // Main-thread WebRTC bridge port (RTCPeerConnection lives on the main thread).
+  // Only the tab that owns the Worker sends this — see ui/tab-transport.ts.
   | { type: 'webrtc-port'; port: MessagePort };
 
 export type ValidationError = { path: (string | number)[]; message: string; kind?: 'schema' | 'dependency' | 'warning' };

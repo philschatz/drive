@@ -30,6 +30,7 @@ import {
   setDebugEnabled,
   clearAllCaches,
   onDeviceNamesUpdated,
+  useTabRole,
 } from '../../worker-api';
 import { navigateToUrlOrHash } from '../../common/navigate-url';
 import { peerIdentityKey } from '../../common/presence';
@@ -62,6 +63,7 @@ export function DebuggingSettings() {
   const peerConnected = useConnectionStatus();
   const peers = usePeerList();
   const transports = usePeerTransports();
+  const tabRole = useTabRole();
 
   const [workerError, setWorkerError] = useState<string | null>(() => getWorkerError());
   useEffect(() => onWorkerError(setWorkerError), []);
@@ -172,6 +174,19 @@ export function DebuggingSettings() {
         </md-list-item>
         <CopyRow icon="fingerprint" label="Peer ID" value={myPeerId} empty="(not ready)" data-testid="my-peer-id" />
         <CopyRow icon="group" label="User group" value={getWorkerUserGroupId()} empty="(none)" data-testid="my-user-group" />
+        {/* Which tab owns the device's single engine. Both roles edit and sync the
+            same; this only explains where the work is actually happening. */}
+        <md-list-item type="text" data-testid="tab-role">
+          <md-icon slot="start">tab_group</md-icon>
+          <div slot="headline">Engine</div>
+          <div slot="supporting-text">
+            {tabRole === 'leader'
+              ? 'This tab (other tabs route through it)'
+              : tabRole === 'follower'
+                ? 'Another tab (this one routes through it)'
+                : 'Starting…'}
+          </div>
+        </md-list-item>
       </SettingsGroup>
 
       {/* Peers — other devices/friends. NOT the server. */}

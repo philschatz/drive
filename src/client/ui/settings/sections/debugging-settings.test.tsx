@@ -20,12 +20,14 @@ let mockDebugEnabled: boolean;
 let mockNames: Record<string, string>;
 let mockShowError: jest.Mock;
 let mockNavigate: jest.Mock;
+let mockTabRole: 'unknown' | 'leader' | 'follower';
 
 jest.mock('../../worker-api', () => ({
   useWsStatus: () => mockWsConnected,
   useConnectionStatus: () => mockPeers.length > 0,
   usePeerList: () => mockPeers,
   usePeerTransports: () => mockTransports,
+  useTabRole: () => mockTabRole,
   getWorkerPeerId: () => 'myagent-drive',
   getWorkerUserGroupId: () => 'my-user-group',
   getWorkerError: () => mockWorkerError,
@@ -83,6 +85,20 @@ beforeEach(() => {
   mockClearAllCaches = jest.fn(() => Promise.resolve());
   mockShowError = jest.fn();
   mockNavigate = jest.fn(() => undefined);
+  mockTabRole = 'leader';
+});
+
+describe('engine row', () => {
+  it('says this tab owns the engine when it is the leader', () => {
+    render(<DebuggingSettings />);
+    expect(screen.getByTestId('tab-role').textContent).toContain('This tab');
+  });
+
+  it('says another tab owns it when this one is a follower', () => {
+    mockTabRole = 'follower';
+    render(<DebuggingSettings />);
+    expect(screen.getByTestId('tab-role').textContent).toContain('Another tab');
+  });
 });
 
 describe('connection status', () => {
