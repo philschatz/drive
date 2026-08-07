@@ -45,9 +45,13 @@ export function SentencesView({ docId, readOnly }: { docId?: string; rest?: stri
   // state (each echoes ops 1..n while we're at n+k) — applying one would snap
   // the text backwards mid-typing. Skip them and apply the last one when the
   // writes drain (it then equals the optimistic state, plus any remote merge).
+  //
+  // A composition is deliberately NOT a reason to hold. The editor keeps
+  // rendering its frozen blocks while an IME owns the DOM, so a push cannot
+  // disturb it — and the model must stay current, because the ops the editor
+  // reconciles at compositionend are merged against exactly these spans.
   const pendingWritesRef = useRef(0);
-  const skippedSpansRef = useRef<RichTextSpan[] | null>(null);
-  const skippedCursorsRef = useRef<Record<string, number | null> | undefined>(undefined);
+  const heldRef = useRef<{ spans: RichTextSpan[]; cursors?: Record<string, number | null> } | null>(null);
   // Registered cursor tokens → their position in the spans currently in state.
   // Delivered by the same push as the spans, which is what lets a peer caret be
   // drawn (and the local caret rebased) against exactly the text being rendered.
@@ -79,14 +83,21 @@ export function SentencesView({ docId, readOnly }: { docId?: string; rest?: stri
     setCursorPositions(cursors);
   }, []);
 
+  const flushHeld = useCallback(() => {
+    if (pendingWritesRef.current > 0) return;
+    const held = heldRef.current;
+    if (!held) return;
+    heldRef.current = null;
+    applyRemoteSpans(held.spans, held.cursors);
+  }, [applyRemoteSpans]);
+
   useEffect(() => {
     if (!docId) return;
     let mounted = true;
     const unsubscribe = subscribeQuery(docId, DOC_QUERY, (result, heads, _lastModified, docSpans, cursors) => {
       if (!mounted || !result) return;
       if (pendingWritesRef.current > 0) {
-        skippedSpansRef.current = docSpans ?? [];
-        skippedCursorsRef.current = cursors;
+        heldRef.current = { spans: docSpans ?? [], cursors };
       } else {
         applyRemoteSpans(docSpans ?? [], cursors);
       }
@@ -108,15 +119,9 @@ export function SentencesView({ docId, readOnly }: { docId?: string; rest?: stri
     updateDoc(docId, (d, richText, ops) => { richText(d, ['content'], ops); }, richText, ops)
       .finally(() => {
         pendingWritesRef.current--;
-        if (pendingWritesRef.current === 0 && skippedSpansRef.current) {
-          const s = skippedSpansRef.current;
-          const c = skippedCursorsRef.current;
-          skippedSpansRef.current = null;
-          skippedCursorsRef.current = undefined;
-          applyRemoteSpans(s, c);
-        }
+        flushHeld();
       });
-  }, [docId, applyRemoteSpans]);
+  }, [docId, flushHeld]);
 
   // ── Cursors (Peritext convention) ─────────────────────────────────────────
   // Carets travel as Automerge Cursor tokens, not indices — a cursor keeps

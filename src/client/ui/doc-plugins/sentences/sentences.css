@@ -42,6 +42,13 @@
   color: var(--md-sys-color-on-surface);
   font-size: 1rem;
   line-height: 1.6;
+  /* Spaces are stored, so they must render — and `normal` here corrupts the
+     document rather than merely restyling it: when the BROWSER inserts text
+     (the IME composition path, which on Android is ordinary typing) Chrome
+     writes U+00A0 for any space that would collapse, and that non-breaking
+     space gets spliced into the CRDT verbatim. pre-wrap stops it at the source.
+     Wrapping still comes from overflow-wrap below. */
+  white-space: pre-wrap;
   overflow-wrap: break-word;
   caret-color: var(--md-sys-color-primary);
 }

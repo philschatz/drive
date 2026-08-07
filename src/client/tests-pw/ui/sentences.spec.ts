@@ -157,3 +157,45 @@ test('dragging a selection upward keeps growing the highlight', async () => {
   expect(text).toContain('gamma');
   expect(text).toContain('alpha');
 });
+
+/**
+ * A REAL IME composition, driven through CDP.
+ *
+ * This is the only test in the suite that can catch the bug it guards: the
+ * editor's composition handlers were registered as JSX props, and Preact only
+ * lowercases an `onFoo` prop into a DOM event name when the lowercase form is an
+ * IDL property of the element. `oncompositionstart` is not one, so
+ * `onCompositionStart` became a listener for the literal event name
+ * 'CompositionStart' — which nothing fires. The handlers had never run, in any
+ * browser, and because Android's GBoard composes ordinary Latin typing, every
+ * word typed on a phone went into the DOM and never into the document.
+ *
+ * jsdom pins the registration (RichTextEditor.test.tsx), but only a real engine
+ * proves the whole chain: a genuine composition, the non-cancelable
+ * `insertCompositionText` the editor must not fight, the browser writing the DOM
+ * itself, and the reconcile at compositionend putting it in the CRDT.
+ *
+ * Chromium-only by nature — Input.imeSetComposition is a CDP command.
+ */
+test('a real IME composition reaches the document', async () => {
+  await seed('start\n\nend', 'end');
+  const para = editor().locator('p').first();
+  await para.click();
+  await app.page.keyboard.press('End');
+
+  const cdp = await app.page.context().newCDPSession(app.page);
+  // Composing, one keystroke at a time, exactly as a soft keyboard does.
+  await cdp.send('Input.imeSetComposition', { text: 'i', selectionStart: 1, selectionEnd: 1 });
+  await cdp.send('Input.imeSetComposition', { text: 'in', selectionStart: 2, selectionEnd: 2 });
+  await cdp.send('Input.imeSetComposition', { text: 'ing', selectionStart: 3, selectionEnd: 3 });
+  // Committing the composition fires compositionend, which is what reconciles.
+  await cdp.send('Input.insertText', { text: 'ing' });
+
+  await expect(editor().locator('p').first()).toHaveText('starting');
+  // In the DOCUMENT, not merely on screen — the whole point. A reload reads it
+  // back out of the worker's storage.
+  await app.page.evaluate(() => (window as any).__drive.flushStorage());
+  await app.page.reload();
+  await app.page.waitForFunction(() => !!(window as any).__drive, undefined, { timeout: 60_000 });
+  await expect(editor().locator('p').first()).toHaveText('starting', { timeout: 30_000 });
+});

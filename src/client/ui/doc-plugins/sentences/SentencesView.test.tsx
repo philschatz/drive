@@ -399,6 +399,74 @@ describe('SentencesView container', () => {
     await waitFor(() => expect(screen.queryByTestId('peer-caret')).toBeNull());
   });
 
+  /**
+   * Android, through the whole container.
+   *
+   * GBoard composes ordinary Latin typing, so a word arrives as
+   * compositionstart → non-cancelable `insertCompositionText` per key (with the
+   * browser writing the DOM itself) → compositionend. Meanwhile the caret moves
+   * on every keystroke, which mints a cursor token, which registers it, which
+   * makes the worker re-push the subscription — so a spans push lands inside
+   * essentially every word. That combination is what garbled the document.
+   */
+  describe('IME composition', () => {
+    const compose = async (runText: string, at: number, word: string) => {
+      const runEl = Array.from(editor().querySelectorAll('[data-from]'))
+        .find(el => el.textContent === runText) as HTMLElement;
+      expect(runEl).toBeTruthy();
+      const node = runEl.firstChild as Text;
+      fireEvent(editor(), new CompositionEvent('compositionstart', { bubbles: true }));
+      for (let i = 0; i < word.length; i++) {
+        node.data = node.data.slice(0, at + i) + word[i] + node.data.slice(at + i);
+        window.getSelection()!.setBaseAndExtent(node, at + i + 1, node, at + i + 1);
+        document.dispatchEvent(new Event('selectionchange'));
+        fireEvent(editor(), new InputEvent('beforeinput', {
+          inputType: 'insertCompositionText', data: word[i],
+          isComposing: true, cancelable: false, bubbles: true,
+        }));
+        // Let the cursor mint → subscribeCursors → worker re-push land mid-word,
+        // exactly as it does on a device.
+        await act(async () => { await Promise.resolve(); });
+      }
+      fireEvent(editor(), new CompositionEvent('compositionend', { data: word, bubbles: true }));
+    };
+
+    it('saves a composed word even though a push lands mid-word', async () => {
+      await renderWithCaret('hello', 'hello', 5);
+      await compose('hello', 5, 'world');
+      await waitFor(() => expect(currentMarkdown()).toBe('helloworld'));
+    });
+
+    it('types two words in a row without scrambling them', async () => {
+      await renderWithCaret('a', 'a', 1);
+      await compose('a', 1, 'bc');
+      await waitFor(() => expect(currentMarkdown()).toBe('abc'));
+      typeChar(' ');
+      await waitFor(() => expect(currentMarkdown()).toBe('abc '));
+      await compose('abc ', 4, 'de');
+      await waitFor(() => expect(currentMarkdown()).toBe('abc de'));
+    });
+
+    it('holds a peer edit until the composition ends, then merges it', async () => {
+      await renderWithCaret('hello', 'hello', 5);
+      fireEvent(editor(), new CompositionEvent('compositionstart', { bubbles: true }));
+      const node = (Array.from(editor().querySelectorAll('[data-from]'))
+        .find(el => el.textContent === 'hello') as HTMLElement).firstChild as Text;
+      node.data = 'hellowo';
+      window.getSelection()!.setBaseAndExtent(node, 7, node, 7);
+
+      // A peer prepends while the IME is mid-word. Applying that push now would
+      // rewrite the text node the composition lives in.
+      mock.__applyRemoteOps(DOC, ['content'], [{ op: 'splice', index: 1, del: 0, text: 'XY' }]);
+      await act(async () => { await Promise.resolve(); });
+      expect(editor().textContent).toBe('hellowo');
+
+      fireEvent(editor(), new CompositionEvent('compositionend', { data: 'wo', bubbles: true }));
+      // Both survive: the peer's insert and the composed word.
+      await waitFor(() => expect(currentMarkdown()).toBe('XYhellowo'));
+    });
+  });
+
   it('stays read-only without the edit role', async () => {
     seed('nope [docs](https://x.dev)');
     render(<SentencesView docId={DOC} readOnly />);

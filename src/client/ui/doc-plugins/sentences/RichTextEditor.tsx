@@ -1,16 +1,36 @@
 /**
  * Controlled contenteditable renderer for a Peritext spans model.
  *
- * The DOM is always a pure function of `spans`: every editing gesture is
+ * Normally the DOM is a pure function of `spans`: every editing gesture is
  * intercepted in `beforeinput` (preventDefault), translated to RichTextOps by
- * the pure builders in edit-ops.ts, and emitted via `onOps` — the parent
- * applies them optimistically (spans-model) and to the worker doc, and the
- * re-render puts the caret back. The only browser-driven mutation allowed is
- * IME composition, reconciled by a text diff on compositionend.
+ * the pure builders in edit-ops.ts, and emitted via `onOps` — the parent applies
+ * them optimistically (spans-model) and to the worker doc, and the re-render puts
+ * the caret back.
  *
- * Position mapping is integer arithmetic over data attributes: every inline
- * run carries `data-from` (global index of its first char) and every block
+ * Position mapping is integer arithmetic over data attributes: every inline run
+ * carries `data-from` (global index of its first char) and every block
  * `data-bfrom`/`data-bi`, so DOM points ↔ global offsets without guessing.
+ *
+ * ── The exception: IME composition ──
+ *
+ * Between `compositionstart` and `compositionend` the browser owns the DOM and
+ * we cannot stop it — `insertCompositionText` is not cancelable. This is not an
+ * edge case: Android's GBoard composes *ordinary Latin typing*, so on a phone it
+ * is the only typing path there is. For that window the editor inverts:
+ *
+ *  - the model is frozen (`blocksRef` keeps describing what the DOM was built
+ *    from) and the rendered blocks come from it, not from the incoming prop — so
+ *    every text vnode is unchanged and Preact leaves the composed characters be;
+ *  - no selection is written and no selection state is reported, since DOM
+ *    offsets mid-composition are not valid model indices;
+ *  - at the end, dom-reconcile.ts diffs the DOM back into the model. Pushes keep
+ *    arriving during the composition, so the two halves genuinely fork and that
+ *    reconcile is a three-way merge (see `reconcileFromDom`).
+ *
+ * `resyncEpoch` is the backstop for anything the reconcile cannot express:
+ * Preact writes a text node only when the vdom text changed, so a block the
+ * browser wrote into that the model never learned about could otherwise never be
+ * repaired. Changing the block keys discards those subtrees instead.
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { RefObject } from 'preact';
@@ -24,7 +44,12 @@ import {
   toggleMarkOps, setLinkOps, setBlockTypeOps, toggleListOps, indentOps, outdentOps, insertDividerOps,
   type Edit, type PendingMarks,
 } from './edit-ops';
-import { applyOpsToSpans } from './spans-model';
+import { applyOpsToSpans, shiftPositionThroughOps } from './spans-model';
+import { reconcileDomToOps } from './dom-reconcile';
+
+/** How long a composition may go silent before we assume the IME dropped its
+ * `compositionend` (Android does, on an app or keyboard switch). */
+const COMPOSITION_TIMEOUT_MS = 4000;
 
 export function linkHrefOf(marks: Record<string, unknown> | null | undefined): string | null {
   const raw = marks?.link;
@@ -75,6 +100,10 @@ export interface RichTextEditorApi {
    *  back to the last known selection, so an unfocused editor must not be taken
    *  to own a caret. */
   isFocused(): boolean;
+  /** True while an IME owns the DOM (between compositionstart and
+   *  compositionend). The editor renders frozen blocks and writes no selection
+   *  for the duration; nothing outside should try to move the caret either. */
+  isComposing(): boolean;
   /**
    * Move the caret to `next` for the spans about to be committed — the rebase
    * for a concurrent remote edit, resolved from an Automerge cursor. Applies only
@@ -246,8 +275,11 @@ export function RichTextEditor({
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
+  // Composing = the IME owns the DOM. Declared first because the render itself
+  // branches on it (see `model` below).
+  const composingRef = useRef(false);
+  const compositionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const blocks = useMemo(() => blocksFromSpans(spans), [spans]);
-  const numbers = useMemo(() => orderedListNumbers(blocks), [blocks]);
   // The live model can be AHEAD of the rendered DOM: a keystroke's optimistic
   // ops advance it immediately, while the parent's setState → re-render lands a
   // beat later. Rapid input (typing faster than a render cycle) must compute
@@ -256,18 +288,41 @@ export function RichTextEditor({
   const spansPropRef = useRef(spans);
   const spansLiveRef = useRef(spans);
   const blocksRef = useRef(blocks);
-  if (spansPropRef.current !== spans) {
+  // Guarded BEFORE the spansPropRef write, deliberately: the comparison then
+  // stays true, so the first render after the composition adopts the prop by
+  // itself. Adopting it mid-composition would swap the model out from under the
+  // DOM the IME is still writing into.
+  if (!composingRef.current && spansPropRef.current !== spans) {
     spansPropRef.current = spans;
     spansLiveRef.current = spans;
     blocksRef.current = blocks;
   }
+  // While composing, render the FROZEN blocks rather than the incoming prop:
+  // every text vnode is then byte-identical to the last render, so Preact skips
+  // its `dom.data` write for the whole subtree and the characters the IME has
+  // put there are left strictly alone.
+  const model = composingRef.current ? blocksRef.current : blocks;
+  const numbers = useMemo(() => orderedListNumbers(model), [model]);
   // Caret (global offsets) to restore after the next spans render; while set,
   // it IS the selection (the DOM hasn't caught up yet).
   const pendingCaretRef = useRef<Sel | null>(null);
   // Last known selection, so remote-edit re-renders don't drop the caret.
   const lastSelectionRef = useRef<Sel | null>(null);
   const pendingMarksRef = useRef<PendingMarks>({});
-  const composingRef = useRef(false);
+  /**
+   * Bumped into every block's key to force Preact to REBUILD those subtrees.
+   *
+   * The escape from a trap that would otherwise be permanent: Preact writes a
+   * text node only when the vdom text actually changed (diff/index.js), so a
+   * block the browser wrote into but the model never learned about can never be
+   * repaired by an ordinary re-render — the stray characters survive forever
+   * while every data-from after them is stale. Changing the key discards the
+   * subtree instead. contentEditable lives on the root, not on the blocks, so
+   * remounting them neither blurs the editor nor dismisses the keyboard.
+   */
+  const [resyncEpoch, setResyncEpoch] = useState(0);
+  const resyncPendingRef = useRef(false);
+  const requestResync = () => setResyncEpoch(n => n + 1);
 
   /** The live DOM selection, direction included. */
   const readDomSelection = (): Sel | null => {
@@ -282,6 +337,12 @@ export function RichTextEditor({
 
   const readSelection = (): Sel | null => {
     if (pendingCaretRef.current) return { ...pendingCaretRef.current };
+    // Mid-composition the DOM carries characters the model has never seen, so a
+    // DOM point mapped through the (now stale) data-from attributes is not a
+    // valid model index. The last known model caret is.
+    if (composingRef.current) {
+      return lastSelectionRef.current ? { ...lastSelectionRef.current } : null;
+    }
     return readDomSelection();
   };
 
@@ -351,20 +412,64 @@ export function RichTextEditor({
     onOps(ops);
   };
 
+  /**
+   * The range a gesture actually targets, which is NOT always the selection.
+   * Autocorrect is the case that matters: `insertReplacementText` targets the
+   * mistyped word while the caret sits after it, so using the selection inserted
+   * the correction without deleting what it was correcting ("teh" → "tehthe").
+   * Absent in jsdom and older Safari, hence the optional call and the fallback.
+   */
+  const targetRange = (e: InputEvent): { from: number; to: number } | null => {
+    const root = rootRef.current;
+    const r = e.getTargetRanges?.()[0];
+    if (!r || !root) return null;
+    const a = posFromDomPoint(root, r.startContainer, r.startOffset);
+    const b = posFromDomPoint(root, r.endContainer, r.endOffset);
+    if (a === null || b === null) return null;
+    return { from: Math.min(a, b), to: Math.max(a, b) };
+  };
+
   const handleBeforeInput = (e: InputEvent) => {
     if (!editable) { e.preventDefault(); return; }
     const type = e.inputType;
-    if (type === 'insertCompositionText' || composingRef.current) return; // IME owns the DOM until compositionend
+    // Non-cancelable by spec — the IME will write to the DOM whatever we do, and
+    // compositionend reconciles the result.
+    if (type === 'insertCompositionText' || type === 'deleteCompositionText') return;
+    if (composingRef.current) {
+      // A cancelable gesture arriving mid-composition (a suggestion tap, Enter,
+      // backspace). Fold what the IME has put in the DOM into the model FIRST so
+      // the gesture below computes against a model that matches what is on
+      // screen; endComposition leaves `pendingCaretRef` set, which readSelection
+      // prefers, so no intervening render is needed.
+      if (!e.cancelable) return;
+      endComposition();
+    }
     e.preventDefault();
     const sel = readSelection();
     if (!sel) return;
     const bl = blocksRef.current;
+    /** Deletions may target a range the selection does not describe (a whole
+     *  grapheme cluster for an emoji, a word for GBoard's word-delete) — but only
+     *  within one block, so the structural paths in opsForDeleteBackward
+     *  (outdent, blockquote demote, joinBlock, backspace-into-divider) still run. */
+    const deleteRange = (): Sel => {
+      const t = targetRange(e);
+      if (!t || t.from === t.to) return sel;
+      if (blockIndexAt(bl, t.from) !== blockIndexAt(bl, t.to)) return sel;
+      return { ...t, backward: false };
+    };
 
     switch (type) {
-      case 'insertText':
-      case 'insertReplacementText': {
+      case 'insertText': {
         const text = e.data ?? e.dataTransfer?.getData('text/plain') ?? '';
         if (text) emitEdit(opsForInsertText(bl, sel.from, sel.to, text, pendingMarksRef.current));
+        break;
+      }
+      case 'insertReplacementText':
+      case 'insertFromComposition': {
+        const text = e.data ?? e.dataTransfer?.getData('text/plain') ?? '';
+        const t = targetRange(e) ?? sel;
+        if (text) emitEdit(opsForInsertText(bl, t.from, t.to, text, pendingMarksRef.current));
         break;
       }
       case 'insertParagraph':
@@ -374,14 +479,24 @@ export function RichTextEditor({
       case 'deleteContentBackward':
       case 'deleteWordBackward':
       case 'deleteSoftLineBackward':
-      case 'deleteByCut':
-        emitEdit(opsForDeleteBackward(bl, sel.from, sel.to));
+      case 'deleteHardLineBackward':
+      case 'deleteEntireSoftLine':
+      case 'deleteByComposition':
+      case 'deleteByCut': {
+        const d = deleteRange();
+        emitEdit(opsForDeleteBackward(bl, d.from, d.to));
         break;
+      }
       case 'deleteContentForward':
       case 'deleteWordForward':
-        emitEdit(opsForDeleteForward(bl, sel.from, sel.to));
+      case 'deleteSoftLineForward':
+      case 'deleteHardLineForward': {
+        const d = deleteRange();
+        emitEdit(opsForDeleteForward(bl, d.from, d.to));
         break;
+      }
       case 'insertFromPaste':
+      case 'insertFromPasteAsQuotation':
       case 'insertFromDrop': {
         const text = e.dataTransfer?.getData('text/plain') ?? '';
         if (text) emitEdit(opsForPasteText(bl, sel.from, sel.to, text));
@@ -400,7 +515,10 @@ export function RichTextEditor({
         onRedo?.();
         break;
       default:
-        break; // swallowed (preventDefault above): unsupported gestures are no-ops
+        // Swallowed by the preventDefault above. Safe precisely because these
+        // are cancelable: the browser has not touched the DOM, so dropping the
+        // gesture leaves the model and the DOM in step.
+        break;
     }
   };
 
@@ -426,36 +544,153 @@ export function RichTextEditor({
     }
   };
 
-  const handleCompositionEnd = () => {
-    composingRef.current = false;
-    const root = rootRef.current;
-    if (!root) return;
-    const domSel = window.getSelection();
-    const anchorEl = domSel?.anchorNode instanceof Element
-      ? domSel.anchorNode : domSel?.anchorNode?.parentElement;
-    const blockEl = (anchorEl as Element | null)?.closest?.('[data-bi]') as HTMLElement | null;
-    if (!blockEl) return;
-    const bi = Number(blockEl.dataset.bi);
-    const b = blocksRef.current[bi];
-    if (!b) return;
-    const domText = runTextLength(blockEl) === 0 ? '' : collectText(blockEl);
-    if (domText === b.text) return;
-    // Common prefix/suffix diff between the model text and the composed DOM.
-    let p = 0;
-    while (p < b.text.length && p < domText.length && b.text[p] === domText[p]) p++;
-    let s = 0;
-    while (
-      s < b.text.length - p && s < domText.length - p &&
-      b.text[b.text.length - 1 - s] === domText[domText.length - 1 - s]
-    ) s++;
-    const inserted = domText.slice(p, domText.length - s);
-    emitEdit({
-      ops: [{ op: 'splice', index: b.textFrom + p, del: b.text.length - s - p, text: inserted }],
-      caret: b.textFrom + p + inserted.length,
-    });
+  /** The top-level block elements, which ARE the rendered blocks positionally. */
+  const blockEls = (root: HTMLElement): HTMLElement[] =>
+    Array.from(root.children).filter((c): c is HTMLElement => c instanceof HTMLElement);
+
+  /** Text offset of a DOM point within `container`, by pure text arithmetic —
+   * never through data-from, which the browser's own writes have invalidated. */
+  const textOffsetWithin = (container: HTMLElement, node: Node, offset: number): number => {
+    let pos = node.nodeType === Node.TEXT_NODE
+      ? Math.min(offset, node.nodeValue?.length ?? 0)
+      : Array.from(node.childNodes).slice(0, offset).reduce((n, k) => n + runTextLength(k), 0);
+    for (let cur: Node | null = node; cur && cur !== container; cur = cur.parentNode) {
+      for (let sib = cur.previousSibling; sib; sib = sib.previousSibling) pos += runTextLength(sib);
+    }
+    return pos;
   };
 
-  const collectText = (blockEl: HTMLElement): string => {
+  /**
+   * The caret as (block index, offset within that block's text) — deliberately
+   * NOT a global index.
+   *
+   * A global one would have to be carried through the very ops that insert the
+   * composed text, and the DOM caret already counts those characters, so it
+   * would double-count and walk off the end of the block into the next
+   * paragraph. Block-relative survives untouched: after the reconcile that
+   * block's model text equals its DOM text, so the offset is still valid and
+   * only its base needs looking up.
+   */
+  const caretFromDom = (root: HTMLElement, els: HTMLElement[]): { block: number; offset: number } | null => {
+    const sel = window.getSelection();
+    if (!sel?.focusNode) return null;
+    let el: HTMLElement | null = sel.focusNode instanceof HTMLElement
+      ? sel.focusNode : sel.focusNode.parentElement;
+    while (el && el.parentElement !== root) el = el.parentElement;
+    const block = el ? els.indexOf(el) : -1;
+    if (block < 0) return null;
+    return { block, offset: textOffsetWithin(el!, sel.focusNode, sel.focusOffset) };
+  };
+
+  /**
+   * Fold browser-authored DOM text back into the model.
+   *
+   * This is a three-way merge, because while an IME holds the DOM the two
+   * halves genuinely fork: pushes keep arriving and re-render the container, but
+   * the editor deliberately keeps rendering the frozen blocks so the composition
+   * survives. So at the end there are three states — the frozen blocks the DOM
+   * was built from (the base), what the browser wrote (ours), and the spans that
+   * arrived meanwhile (theirs) — and our ops are in base coordinates while the
+   * document they will be applied to is at theirs. Emitting them untransported
+   * splices the composed word into the middle of the peer's text.
+   */
+  const reconcileFromDom = () => {
+    const root = rootRef.current;
+    if (!root) return;
+    const base = blocksRef.current;
+    const els = blockEls(root);
+    // Explicit arrow, not point-free: Array.map would pass the index as `normalize`.
+    const { ops: ourOps, resync } = reconcileDomToOps(base, els.map(el => collectText(el, true)));
+    let ops = ourOps;
+    const domCaret = caretFromDom(root, els);
+
+    // The prop was withheld from the model during the composition (see the
+    // guard on spansPropRef), so this is exactly "a push arrived meanwhile".
+    if (spansPropRef.current !== spans) {
+      // Derive the peer's edit by diffing base against it — the same diff, used
+      // only to transport indices, so an approximation of *how* they got there
+      // is fine as long as the text matches.
+      const theirs = reconcileDomToOps(base, blocks.map(b => b.text));
+      if (theirs.resync) {
+        // Their block structure changed under us; nothing in base coordinates
+        // can be trusted. Drop the composed text rather than misplace it.
+        ops = [];
+        requestResync();
+      } else {
+        // Only the op indices need carrying; the caret is block-relative and so
+        // is already independent of where the peer's edits moved things.
+        const carry = (i: number) => shiftPositionThroughOps(i, theirs.ops) ?? i;
+        ops = ourOps.map(o => (o.op === 'splice' ? { ...o, index: carry(o.index) } : o));
+      }
+      // Adopt their model: the ops above now address it, and emitEdit advances
+      // the live model from here.
+      spansPropRef.current = spans;
+      spansLiveRef.current = spans;
+      blocksRef.current = blocks;
+    }
+
+    if (resync) requestResync();
+    if (ops.length === 0) return;
+    // Resolve the caret against the model these ops PRODUCE, where the block's
+    // text matches the DOM again. Falling back to the end of the highest splice
+    // keeps the caret in the text just reconciled when the DOM point is
+    // unreadable (a composition that ended on the root, say).
+    const first = ops[0] as Extract<RichTextOp, { op: 'splice' }>;
+    let caret = first.index + (first.text?.length ?? 0);
+    if (domCaret) {
+      const next = blocksFromSpans(applyOpsToSpans(spansLiveRef.current, ops));
+      const b = next[Math.min(domCaret.block, next.length - 1)];
+      if (b) caret = Math.min(b.textFrom + domCaret.offset, b.textTo);
+    }
+    emitEdit({ ops, caret });
+  };
+
+  /**
+   * Fold whatever the IME left in the DOM back into the model, then leave the
+   * composing state. Idempotent — the watchdog and a real compositionend can
+   * both reach it.
+   */
+  const endComposition = () => {
+    if (compositionTimerRef.current !== null) {
+      clearTimeout(compositionTimerRef.current);
+      compositionTimerRef.current = null;
+    }
+    if (!composingRef.current) return;
+    // Cleared before the reconcile, and the notify runs in a `finally`: a throw
+    // below would otherwise leave the editor composing forever, and every later
+    // gesture would bail at the guard in handleBeforeInput.
+    composingRef.current = false;
+    reconcileFromDom();
+  };
+
+  /** Android does not always send compositionend — switching apps or keyboards
+   * can drop it — and an open composition wedges every gesture. Treat silence
+   * as an end. */
+  const armCompositionWatchdog = () => {
+    if (compositionTimerRef.current !== null) clearTimeout(compositionTimerRef.current);
+    compositionTimerRef.current = setTimeout(endComposition, COMPOSITION_TIMEOUT_MS);
+  };
+
+  const handleCompositionStart = () => {
+    composingRef.current = true;
+    armCompositionWatchdog();
+  };
+
+  /**
+   * A block's text as the model would spell it.
+   *
+   * `normalize` folds U+00A0 back to a plain space: when the BROWSER inserts
+   * text — which only the composition path lets it do — Chrome writes a
+   * non-breaking space for any space that would otherwise collapse, and it would
+   * be spliced into the document verbatim. (`white-space: pre-wrap` on
+   * .rt-editor stops that at the source; this catches what is already in the
+   * DOM.) One-for-one, so it cannot disturb offset arithmetic.
+   *
+   * The divergence check deliberately does NOT normalize — a document that
+   * legitimately contains a non-breaking space would otherwise look permanently
+   * diverged and resync on every render.
+   */
+  const collectText = (blockEl: HTMLElement, normalize = false): string => {
     let out = '';
     const walk = (n: Node) => {
       if (n.nodeType === Node.TEXT_NODE) { out += n.nodeValue ?? ''; return; }
@@ -463,7 +698,7 @@ export function RichTextEditor({
       for (const c of Array.from(n.childNodes)) walk(c);
     };
     walk(blockEl);
-    return out;
+    return normalize ? out.replace(/ /g, ' ') : out;
   };
 
   const api: RichTextEditorApi = {
@@ -531,6 +766,7 @@ export function RichTextEditor({
     },
     getSelection: () => readSelection() ?? lastSelectionRef.current,
     isFocused: () => !!rootRef.current?.contains(document.activeElement),
+    isComposing: () => composingRef.current,
     rebaseCaret(expect, next) {
       // Refuse if the caret has moved on since the position was resolved: the
       // local user typing past it makes the resolution describe an older caret,
@@ -563,6 +799,29 @@ export function RichTextEditor({
     if (!editable) return;
     const root = rootRef.current;
     if (!root) return;
+    // The IME owns the DOM *and* the caret until the composition ends. Writing
+    // the selection here is what dragged the caret back into the middle of the
+    // word being composed — once per push, and a push lands inside nearly every
+    // word on Android.
+    if (composingRef.current) return;
+    // Cheap standing check that the DOM still says what the model says. It is
+    // the only thing that catches a browser-authored mutation nobody told us
+    // about (Chrome's own async spellcheck replacement, an extension), and
+    // without it that block diverges permanently — see resyncEpoch.
+    const els = blockEls(root);
+    const diverged = els.length !== blocks.length
+      || els.some((el, i) => collectText(el) !== blocks[i].text);
+    if (!diverged) {
+      resyncPendingRef.current = false;
+    } else if (!resyncPendingRef.current) {
+      // At most ONE rebuild per divergence. This effect re-runs on resyncEpoch,
+      // so re-requesting unconditionally would spin the renderer forever in the
+      // one case that matters most — the one where the rebuild did not help.
+      resyncPendingRef.current = true;
+      requestResync();
+    } else {
+      console.warn('[sentences] editor DOM still diverges from the model after a rebuild');
+    }
     const target = pendingCaretRef.current ??
       (root.contains(document.activeElement) ? lastSelectionRef.current : null);
     pendingCaretRef.current = null;
@@ -573,7 +832,50 @@ export function RichTextEditor({
     // granularity mid-gesture, which collapsed the highlight on every drag step.
     if (!sameSel(readDomSelection(), target)) setDomSelection(target);
     reportSelection();
-  }, [spans, editable]);
+  }, [spans, editable, resyncEpoch]);
+
+  /**
+   * Composition listeners, attached imperatively — NOT as JSX props.
+   *
+   * Preact infers a DOM event name by lowercasing an `onFoo` prop only when the
+   * lowercase form is an IDL property of the element (diff/props.js), and
+   * `oncompositionstart` is not one: composition handlers are absent from
+   * GlobalEventHandlers. So `onCompositionStart` quietly registered a listener
+   * for the literal event name 'CompositionStart', which nothing ever fires —
+   * these handlers had never run, in any browser. On Android, where GBoard
+   * composes ordinary Latin typing, that meant every word typed was written to
+   * the DOM and never to the document. Verified in Chromium 149 and jsdom 26.
+   *
+   * addEventListener takes the name we actually mean, and TypeScript checks it.
+   * The ref indirection keeps the listeners off stale closures (they reach
+   * `onOps` through emitEdit, and that prop's identity changes every render).
+   */
+  const compositionHandlersRef = useRef({
+    start: handleCompositionStart, update: armCompositionWatchdog, end: endComposition,
+  });
+  compositionHandlersRef.current = {
+    start: handleCompositionStart, update: armCompositionWatchdog, end: endComposition,
+  };
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root || !editable) return;
+    const start = () => compositionHandlersRef.current.start();
+    const update = () => compositionHandlersRef.current.update();
+    const end = () => compositionHandlersRef.current.end();
+    root.addEventListener('compositionstart', start);
+    root.addEventListener('compositionupdate', update);
+    root.addEventListener('compositionend', end);
+    // A composition left open would wedge every later gesture at the guard in
+    // handleBeforeInput, so it must not survive losing focus or unmounting.
+    root.addEventListener('focusout', end);
+    return () => {
+      root.removeEventListener('compositionstart', start);
+      root.removeEventListener('compositionupdate', update);
+      root.removeEventListener('compositionend', end);
+      root.removeEventListener('focusout', end);
+      compositionHandlersRef.current.end();
+    };
+  }, [editable]);
 
   // Toolbar state tracking.
   useEffect(() => {
@@ -667,14 +969,22 @@ export function RichTextEditor({
         className={'rt-editor' + (editable ? ' rt-editable' : '')}
         contentEditable={editable}
         spellcheck={editable}
+        role="textbox"
+        aria-multiline="true"
+        autocapitalize="sentences"
+        enterkeyhint="enter"
+        // Boolean, NOT the string "no": `translate` is an IDL property, so a
+        // string would be assigned to it and any non-empty one is truthy —
+        // producing translate="yes", the exact opposite. This matters because
+        // Google Translate rewrites contenteditable subtrees wholesale, with no
+        // beforeinput at all, which the model could never learn about.
+        translate={false}
         data-testid="rt-editor"
         onBeforeInput={handleBeforeInput as any}
         onKeyDown={handleKeyDown}
-        onCompositionStart={() => { composingRef.current = true; }}
-        onCompositionEnd={handleCompositionEnd}
       >
-        {blocks.map((b, bi) => (
-          <BlockEl key={bi} b={b} bi={bi} num={numbers[bi]} editable={editable} />
+        {model.map((b, bi) => (
+          <BlockEl key={`${bi}:${resyncEpoch}`} b={b} bi={bi} num={numbers[bi]} editable={editable} />
         ))}
       </div>
       {remoteCursors.map(c => {

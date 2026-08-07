@@ -184,7 +184,13 @@ function project(filter: string, doc: Doc): any {
 function deliver(s: QuerySub): void {
   s.cb(
     project(s.filter, docs.get(s.docId)), ['h'], undefined,
-    s.spansPath ? getSpans(s.docId, s.spansPath) : undefined,
+    // A FRESH array per delivery, for the same reason `project` clones (above):
+    // the engine calls Automerge.spans() anew on every push and posts whenever
+    // the resolved cursors changed, so a pure cursor registration re-pushes
+    // identical content in a new array and the subscriber re-renders. Handing
+    // out the stored array by identity made setState bail on Object.is, so the
+    // mock silently lost the mid-edit re-render the real app has.
+    s.spansPath ? getSpans(s.docId, s.spansPath).map(v => ({ ...v })) : undefined,
     s.spansPath ? resolveCursors(s.docId, s.spansPath) : undefined,
   );
 }
