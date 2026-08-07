@@ -5,9 +5,10 @@ import { MdTextField } from '@/components/ui/md-text-field';
 import { MdSelect } from '@/components/ui/md-select';
 import { PropertySheet, SheetActions, SheetActionItem } from '../../common/PropertySheet';
 import type { PropertyDef } from '../../common/PropertySheet';
-import { FieldEditor } from '../../common/FieldEditor';
+import { FieldEditor, GroupEditor } from '../../common/FieldEditor';
 import type { PeerFieldInfo } from '../../common/presence';
 import { describeRecurrence } from '../calendar/recurrence';
+import { parseReward, formatReward, windowEndTime, windowDuration, createdStampFor, lastCompletionAnchor } from './occurrences';
 import type { CounterEvent } from '../../../../shared/schemas/counters';
 import type { RecurrenceRule, NDay } from '../../../../shared/schemas/calendar';
 
@@ -19,7 +20,8 @@ const FIELD_TO_PROP: Record<string, string> = {
   'ced-interval': 'recurrenceRule',
   'ced-bydays': 'recurrenceRule',
   'ced-time': 'startTime',
-  'ced-duration': 'duration',
+  'ced-end': 'duration',
+  'ced-reward': 'description',
 };
 
 /** The freq/interval/weekday inputs all live behind the one "Repeat" row. */
@@ -39,6 +41,20 @@ const WEEKDAYS: { day: NDay['day']; label: string }[] = [
   { day: 'su', label: 'Sun' },
 ];
 
+/** The Repeat pane's whole value — one draft, one change. */
+interface RepeatDraft {
+  frequency: string;
+  /** Blank means "every one" — the rule simply carries no interval. */
+  interval: number | null;
+  byDay: NDay['day'][];
+}
+
+/** The Reward pane's whole value; both halves live in `description`. */
+interface RewardDraft {
+  goal: string;
+  text: string;
+}
+
 interface CounterEditorProps {
   uid: string;
   event: CounterEvent;
@@ -53,6 +69,8 @@ interface CounterEditorProps {
   onClose: () => void;
   /** Rapid entry: after saving a NEW counter via Enter, reopen a fresh blank one. */
   onAddAnother?: () => void;
+  /** A new counter now exists in the document — stop treating it as new. */
+  onCreated?: (uid: string) => void;
   /** End/resume the recurrence (recurring items only). */
   onArchive?: (uid: string) => void;
   onUnarchive?: (uid: string) => void;
@@ -62,7 +80,7 @@ interface CounterEditorProps {
   peerFocusedFields?: Record<string, PeerFieldInfo>;
 }
 
-export function CounterEditor({ uid, event, isNew, opened, canEdit = true, onSave, onDelete, onShowCompletions, onClose, onAddAnother, onArchive, onUnarchive, onFieldFocus, peerFocusedFields }: CounterEditorProps) {
+export function CounterEditor({ uid, event, isNew, opened, canEdit = true, onSave, onDelete, onShowCompletions, onClose, onAddAnother, onCreated, onArchive, onUnarchive, onFieldFocus, peerFocusedFields }: CounterEditorProps) {
   const fieldToPath = useMemo(() => {
     const map: Record<string, (string | number)[]> = {};
     for (const [inputId, prop] of Object.entries(FIELD_TO_PROP)) {
@@ -81,10 +99,11 @@ export function CounterEditor({ uid, event, isNew, opened, canEdit = true, onSav
   const [title, setTitle] = useState(event.title || '');
   const [startTime, setStartTime] = useState(event.startTime ? event.startTime.substring(0, 5) : '');
   const [duration, setDuration] = useState(event.duration || '');
+  const [description, setDescription] = useState(event.description || '');
   // A brand-new habit defaults to daily recurrence (so new users start with a
   // repeating habit); an existing schedule-less tally keeps 'none'.
   const [frequency, setFrequency] = useState(event.recurrenceRule?.frequency || (isNew ? 'daily' : 'none'));
-  const [interval, setInterval] = useState(event.recurrenceRule?.interval || 1);
+  const [interval, setInterval] = useState<number | null>(event.recurrenceRule?.interval ?? null);
   const [byDay, setByDay] = useState<NDay['day'][]>((event.recurrenceRule?.byDay || []).map(d => d.day));
 
   const prevRef = useRef(event);
@@ -95,41 +114,49 @@ export function CounterEditor({ uid, event, isNew, opened, canEdit = true, onSav
     setTitle(event.title || '');
     setStartTime(event.startTime ? event.startTime.substring(0, 5) : '');
     setDuration(event.duration || '');
+    setDescription(event.description || '');
     setFrequency(event.recurrenceRule?.frequency || (isNew ? 'daily' : 'none'));
-    setInterval(event.recurrenceRule?.interval || 1);
+    setInterval(event.recurrenceRule?.interval ?? null);
     setByDay((event.recurrenceRule?.byDay || []).map(d => d.day));
   }, [event]);
 
   const recurring = frequency !== 'none';
   const completionCount = Object.keys(event.completions ?? {}).length;
+  // The document stores a duration (calendar spec); the editor edits an end time.
+  const endTime = windowEndTime(startTime, duration);
+  const reward = parseReward(description);
 
   /**
-   * Commit the full current field set, with optional not-yet-in-state overrides —
-   * a pane's Save, or the Repeat pane's auto-save on change. A NEW counter is only
-   * created once it has a title, so dismissing an untouched editor never creates
-   * anything.
+   * Write the full current field set, with optional not-yet-in-state overrides —
+   * one document change per pane Save. A NEW counter is only created once it has a title, so
+   * dismissing an untouched editor never creates anything (and a repeat or reward
+   * chosen first rides along with the title itself, out of local state).
    */
-  const commit = (overrides: Partial<{
+  const change = (overrides: Partial<{
     title: string;
     startTime: string;
     duration: string;
+    description: string;
     frequency: string;
-    interval: number;
+    interval: number | null;
     byDay: NDay['day'][];
   }> = {}) => {
     const effTitle = ((overrides.title ?? title) || '').trim();
     if (isNew && !effTitle) return;
     const effFrequency = overrides.frequency ?? frequency;
-    const effInterval = overrides.interval ?? interval;
+    // `interval` and `duration` are clearable, so an explicit override of either
+    // must win even when it is null/'' — `??` would fall through to the old value.
+    const effInterval = 'interval' in overrides ? overrides.interval! : interval;
     const effByDay = overrides.byDay ?? byDay;
     const effStartTime = overrides.startTime ?? startTime;
-    const effDuration = overrides.duration ?? duration;
+    const effDuration = 'duration' in overrides ? overrides.duration! : duration;
+    const effDescription = overrides.description ?? description;
     const isRecurring = effFrequency !== 'none';
 
     let recurrenceRule: RecurrenceRule | undefined;
     if (isRecurring) {
       recurrenceRule = { '@type': 'RecurrenceRule', frequency: effFrequency as RecurrenceRule['frequency'] };
-      if (effInterval > 1) recurrenceRule.interval = effInterval;
+      if (effInterval && effInterval > 1) recurrenceRule.interval = effInterval;
       if (effFrequency === 'weekly' && effByDay.length > 0) {
         recurrenceRule.byDay = effByDay.map(day => ({ '@type': 'NDay', day }));
       }
@@ -139,13 +166,19 @@ export function CounterEditor({ uid, event, isNew, opened, canEdit = true, onSav
     }
     onSave(uid, {
       '@type': 'Event',
+      // Stamped once, never edited: the occurrence grid is anchored here, so the
+      // habit's history survives `start` moving with each completion.
+      created: event.created || createdStampFor(event),
       title: effTitle || 'Untitled',
-      // Recurring items get a date anchor so occurrences (and the chart) begin
-      // when the item was created, not retroactively; a new one defaults to
-      // today. A schedule-less tally has no start. Time-of-day is separate.
-      start: isRecurring ? (event.start || Temporal.Now.plainDateISO().toString()) : undefined,
+      // `start` is the *schedule* anchor now — the day of the most recent
+      // completion, which the schema checks. Deriving it rather than carrying it
+      // through covers the one case that would otherwise break the invariant: a
+      // free tally with clicks being given a schedule. A brand-new recurring
+      // counter has no anchor until it is first done; a tally has none at all.
+      start: isRecurring ? (lastCompletionAnchor(event) ?? event.start) : undefined,
       startTime: isRecurring && effStartTime ? effStartTime + ':00' : undefined,
       duration: isRecurring && effDuration ? effDuration : undefined,
+      description: effDescription || undefined,
       recurrenceRule,
     });
   };
@@ -161,6 +194,11 @@ export function CounterEditor({ uid, event, isNew, opened, canEdit = true, onSav
   };
 
   const isArchivedNow = !!event.recurrenceRule?.until;
+
+  // Enter in the title pane chains into another new counter; the Save button
+  // lands on the property list so the schedule and reward can be set as part of
+  // creating it. Both arrive through the one FieldEditor `onSave`.
+  const titleViaEnterRef = useRef(false);
 
   const properties: PropertyDef[] = [
     {
@@ -179,18 +217,23 @@ export function CounterEditor({ uid, event, isNew, opened, canEdit = true, onSav
           validate={v => !!v.trim()} // no accidental empty counters
           onCancel={back}
           onSave={v => {
-            commit({ title: v });
-            if (isNew) {
+            const viaEnter = titleViaEnterRef.current;
+            titleViaEnterRef.current = false;
+            change({ title: v });
+            if (isNew && viaEnter) {
               // Rapid entry: keep the sheet open on a fresh blank counter. Clear
               // `title` here rather than leaving it to the per-uid reset effect —
               // that effect runs *after* the keyed remount, which would seed the
               // new draft from the old title.
               setTitle('');
               onAddAnother?.();
-            } else {
-              setTitle(v);
-              back();
+              return;
             }
+            setTitle(v);
+            // The counter exists in the document now, so the rest of the editor
+            // (and its footer) applies to a real item.
+            if (isNew) onCreated?.(uid);
+            back();
           }}
         >
           {({ value, onInput, save }) => (
@@ -201,7 +244,7 @@ export function CounterEditor({ uid, event, isNew, opened, canEdit = true, onSav
               onInput={onInput}
               onFocus={() => focusField('ced-title')}
               onBlur={blurField}
-              onEnter={save}
+              onEnter={() => { titleViaEnterRef.current = true; save(); }}
             />
           )}
         </FieldEditor>
@@ -210,73 +253,89 @@ export function CounterEditor({ uid, event, isNew, opened, canEdit = true, onSav
     {
       // One row for the whole rule. Split across rows, "Every" and "On days"
       // would appear and vanish from the list as the frequency changes —
-      // exactly the jitter the property list exists to remove.
+      // exactly the jitter the property list exists to remove. One draft, so
+      // ticking three weekdays is one document change, not three.
       id: 'ced-repeat',
       label: 'Repeat',
       icon: 'repeat',
       presenceIds: REPEAT_FIELDS,
+      transactional: true,
       summary: () =>
         recurring
-          ? describeRecurrence({ frequency, interval, byDay: byDay.map(day => ({ day })) })
+          ? describeRecurrence({ frequency, interval: interval ?? undefined, byDay: byDay.map(day => ({ day })) })
           : 'No repeat',
-      render: () => (
-        <div className="flex flex-col gap-4">
-          <MdSelect
-            label="Repeat"
-            data-testid="ced-freq"
-            value={frequency}
-            options={FREQ_OPTIONS}
-            onFocus={() => focusField('ced-freq')}
-            onValueChange={v => {
-              const next = (v || 'none') as any;
-              setFrequency(next);
-              commit({ frequency: next });
-              blurField();
-            }}
-          />
+      render: ({ back }) => (
+        <GroupEditor<RepeatDraft>
+          key={uid}
+          data-testid="ced-repeat"
+          value={{ frequency, interval, byDay }}
+          onCancel={back}
+          onSave={v => {
+            // State first: while a new counter has no title `change` writes
+            // nothing, and the title pane's save then carries these along.
+            setFrequency(v.frequency);
+            setInterval(v.interval);
+            setByDay(v.byDay);
+            change(v);
+            back();
+          }}
+        >
+          {({ draft, patch }) => (
+            <div className="flex flex-col gap-4">
+              <MdSelect
+                label="Repeat"
+                data-testid="ced-freq"
+                value={draft.frequency}
+                options={FREQ_OPTIONS}
+                onFocus={() => focusField('ced-freq')}
+                onValueChange={v => patch({ frequency: (v || 'none') as any })}
+              />
 
-          {recurring && (
-            <MdTextField
-              label="Every"
-              type="number"
-              min={1}
-              data-testid="ced-interval"
-              value={String(interval)}
-              onInput={v => setInterval(Math.max(1, parseInt(v) || 1))}
-              onFocus={() => focusField('ced-interval')}
-              onBlur={blurField}
-              onCommit={v => commit({ interval: Math.max(1, parseInt(v) || 1) })}
-            />
-          )}
+              {draft.frequency !== 'none' && (
+                <MdTextField
+                  label="Every"
+                  type="number"
+                  min={1}
+                  data-testid="ced-interval"
+                  value={draft.interval === null ? '' : String(draft.interval)}
+                  supportingText="Leave blank to repeat every time."
+                  onInput={v => {
+                    const n = parseInt(v, 10);
+                    patch({ interval: Number.isFinite(n) && n >= 1 ? n : null });
+                  }}
+                  onFocus={() => focusField('ced-interval')}
+                  onBlur={blurField}
+                />
+              )}
 
-          {frequency === 'weekly' && (
-            <div data-testid="ced-bydays">
-              <Label className="mb-1 block">On days</Label>
-              <div className="flex flex-wrap gap-3 mt-1">
-                {WEEKDAYS.map(({ day, label }) => (
-                  <label key={day} className="flex items-center gap-1 text-sm">
-                    <Checkbox
-                      checked={byDay.includes(day)}
-                      onFocus={() => focusField('ced-bydays')}
-                      onBlur={blurField}
-                      onCheckedChange={(checked: boolean) => {
-                        const next = checked ? [...byDay, day] : byDay.filter(d => d !== day);
-                        setByDay(next);
-                        commit({ byDay: next });
-                      }}
-                    />
-                    {label}
-                  </label>
-                ))}
-              </div>
+              {draft.frequency === 'weekly' && (
+                <div data-testid="ced-bydays">
+                  <Label className="mb-1 block">On days</Label>
+                  <div className="flex flex-wrap gap-3 mt-1">
+                    {WEEKDAYS.map(({ day, label }) => (
+                      <label key={day} className="flex items-center gap-1 text-sm">
+                        <Checkbox
+                          checked={draft.byDay.includes(day)}
+                          onFocus={() => focusField('ced-bydays')}
+                          onBlur={blurField}
+                          onCheckedChange={(checked: boolean) => {
+                            patch({ byDay: checked ? [...draft.byDay, day] : draft.byDay.filter(d => d !== day) });
+                          }}
+                        />
+                        {label}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
-        </div>
+        </GroupEditor>
       ),
     },
     {
       id: 'ced-time',
-      label: 'Time of day',
+      label: 'Start time',
       icon: 'schedule',
       hidden: !recurring,
       summary: () => startTime,
@@ -286,11 +345,11 @@ export function CounterEditor({ uid, event, isNew, opened, canEdit = true, onSav
           data-testid="ced-time"
           value={startTime}
           onCancel={back}
-          onSave={v => { setStartTime(v); commit({ startTime: v }); back(); }}
+          onSave={v => { setStartTime(v); change({ startTime: v }); back(); }}
         >
           {({ value, onInput }) => (
             <MdTextField
-              label="Time of day"
+              label="Start time"
               type="time"
               data-testid="ced-time"
               value={value}
@@ -304,33 +363,89 @@ export function CounterEditor({ uid, event, isNew, opened, canEdit = true, onSav
       ),
     },
     {
-      id: 'ced-duration',
-      label: 'Duration',
+      // Stored as a duration (calendar spec), edited as the clock time the
+      // window shuts. Moving the start time therefore shifts the whole window;
+      // only this pane changes how long it is.
+      id: 'ced-end',
+      label: 'End time',
       icon: 'timelapse',
       hidden: !recurring,
-      summary: () => duration,
+      summary: () => endTime,
       transactional: true,
       render: ({ back }) => (
         <FieldEditor
-          data-testid="ced-duration"
-          value={duration}
+          data-testid="ced-end"
+          value={endTime}
           onCancel={back}
-          onSave={v => { setDuration(v); commit({ duration: v }); back(); }}
+          onSave={v => {
+            const next = windowDuration(startTime, v);
+            setDuration(next);
+            change({ duration: next });
+            back();
+          }}
         >
-          {({ value, onInput, save }) => (
+          {({ value, onInput }) => (
             <MdTextField
-              label="Duration"
-              data-testid="ced-duration"
+              label="End time"
+              type="time"
+              data-testid="ced-end"
               value={value}
-              placeholder="PT1H"
-              supportingText="How long you have to do it before it counts as missed (e.g. PT30M)."
+              supportingText="When the window shuts and it counts as missed. Leave blank for the rest of the day."
               onInput={onInput}
-              onFocus={() => focusField('ced-duration')}
+              onFocus={() => focusField('ced-end')}
               onBlur={blurField}
-              onEnter={save}
             />
           )}
         </FieldEditor>
+      ),
+    },
+    {
+      // Both halves live in `description`, encoded "<goal>: <reward>" — with no
+      // goal it is just a note on the habit.
+      id: 'ced-reward',
+      label: 'Reward',
+      icon: 'redeem',
+      hidden: !recurring,
+      summary: () => (reward ? `${reward.text || 'Reward'} at ${reward.goal} in a row` : description),
+      transactional: true,
+      render: ({ back }) => (
+        <GroupEditor<RewardDraft>
+          key={uid}
+          data-testid="ced-reward"
+          value={{ goal: reward ? String(reward.goal) : '', text: reward ? reward.text : description }}
+          onCancel={back}
+          onSave={v => {
+            const next = formatReward(parseInt(v.goal, 10) || null, v.text);
+            setDescription(next);
+            change({ description: next });
+            back();
+          }}
+        >
+          {({ draft, patch }) => (
+            <div className="flex flex-col gap-4">
+              <MdTextField
+                label="Unlock after a streak of"
+                type="number"
+                min={1}
+                data-testid="ced-reward-goal"
+                value={draft.goal}
+                supportingText="How many in a row it takes. Leave blank for a plain note."
+                onInput={v => patch({ goal: v })}
+                onFocus={() => focusField('ced-reward')}
+                onBlur={blurField}
+              />
+              <MdTextField
+                label="Reward"
+                data-testid="ced-reward-text"
+                value={draft.text}
+                placeholder="Ice cream"
+                onInput={v => patch({ text: v })}
+                onFocus={() => focusField('ced-reward')}
+                onBlur={blurField}
+              />
+            </div>
+          )}
+        </GroupEditor>
       ),
     },
   ];
@@ -344,7 +459,8 @@ export function CounterEditor({ uid, event, isNew, opened, canEdit = true, onSav
       peerFocusedFields={peerFocusedFields}
       initialDetailId={isNew ? 'ced-title' : null}
       onClose={onClose}
-      flushOnClose
+      // No flushOnClose: every pane here is transactional and writes on its own
+      // Save, so there is nothing pending for a blur-on-close to rescue.
       footer={!isNew ? (
         <SheetActions>
           <SheetActionItem

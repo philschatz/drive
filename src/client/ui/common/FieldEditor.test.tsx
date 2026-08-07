@@ -4,7 +4,7 @@
  * items, and the blur that has to happen before the commit.
  */
 import { render, screen, fireEvent } from '@testing-library/preact';
-import { FieldEditor, FieldSheet } from './FieldEditor';
+import { FieldEditor, FieldSheet, GroupEditor } from './FieldEditor';
 
 /** The plain-input stand-in for an MdTextField pane, bound the way the panes bind. */
 function TextPane({
@@ -129,6 +129,87 @@ describe('FieldEditor', () => {
     fireEvent.keyDown(screen.getByTestId('f-input'), { key: 'Enter' });
     // Chrome fires no focusout for an element that is merely unmounted, so the
     // blur has to happen first or the peer's dot sticks on a field nobody is in.
+    expect(events).toEqual(['blur', 'save']);
+  });
+});
+
+describe('GroupEditor', () => {
+  /** A two-control pane, bound the way the counter editor's Repeat pane binds. */
+  function GroupPane({ value, onSave, onCancel, validate }: {
+    value: { freq: string; days: string[] };
+    onSave: (v: { freq: string; days: string[] }) => void;
+    onCancel: () => void;
+    validate?: (v: { freq: string; days: string[] }) => boolean;
+  }) {
+    return (
+      <GroupEditor data-testid="g" value={value} onSave={onSave} onCancel={onCancel} validate={validate}>
+        {({ draft, patch }) => (
+          <>
+            <input
+              data-testid="g-freq"
+              value={draft.freq}
+              onBlur={() => events.push('blur')}
+              onInput={(e: any) => patch({ freq: e.currentTarget.value })}
+            />
+            {['mo', 'tu', 'we'].map(d => (
+              <button
+                key={d}
+                data-testid={`g-${d}`}
+                onClick={() => patch({ days: draft.days.includes(d) ? draft.days.filter(x => x !== d) : [...draft.days, d] })}
+              />
+            ))}
+          </>
+        )}
+      </GroupEditor>
+    );
+  }
+  let events: string[] = [];
+  beforeEach(() => { events = []; });
+
+  it('accumulates every control into one draft and commits it once', () => {
+    const onSave = jest.fn();
+    render(<GroupPane value={{ freq: 'daily', days: [] }} onSave={onSave} onCancel={jest.fn()} />);
+
+    fireEvent.input(screen.getByTestId('g-freq'), { target: { value: 'weekly' } });
+    fireEvent.click(screen.getByTestId('g-mo'));
+    fireEvent.click(screen.getByTestId('g-we'));
+    fireEvent.click(screen.getByTestId('g-we')); // and untick it again
+    expect(onSave).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId('g-save'));
+    expect(onSave).toHaveBeenCalledTimes(1);
+    expect(onSave).toHaveBeenCalledWith({ freq: 'weekly', days: ['mo'] });
+  });
+
+  it('Cancel commits nothing, and a failing validate disables Save', () => {
+    const onSave = jest.fn();
+    const onCancel = jest.fn();
+    render(
+      <GroupPane
+        value={{ freq: '', days: [] }}
+        onSave={onSave}
+        onCancel={onCancel}
+        validate={v => !!v.freq}
+      />,
+    );
+
+    expect((screen.getByTestId('g-save') as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByTestId('g-mo'));
+    fireEvent.click(screen.getByTestId('g-cancel'));
+    expect(onCancel).toHaveBeenCalled();
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it('blurs the focused control before committing, like FieldEditor', () => {
+    render(
+      <GroupPane
+        value={{ freq: 'daily', days: [] }}
+        onSave={() => events.push('save')}
+        onCancel={jest.fn()}
+      />,
+    );
+    screen.getByTestId('g-freq').focus();
+    fireEvent.click(screen.getByTestId('g-save'));
     expect(events).toEqual(['blur', 'save']);
   });
 });

@@ -1,16 +1,18 @@
 /**
  * The transactional editor for a *single* field: the control, then a Cancel/Save
- * row beneath it.
+ * row beneath it. {@link GroupEditor} is the same thing for a pane of several
+ * controls that make up one value (a recurrence rule, a reward).
  *
- * Everywhere else in the app a field auto-saves — it commits on `focusout`, and
+ * Everywhere else in the app a field auto-saves — it writes on `focusout`, and
  * the sheet blurs the focused element on close so nothing is lost. That is
  * invisible: typing into a field and tapping Back looks like a cancel but is a
- * save, and there is no way to abandon an edit. So a pane that edits one field
- * owns its draft here and only pushes it outward on Save.
+ * save, and there is no way to abandon an edit. So a pane that edits one value
+ * owns its draft here and only pushes it outward on Save. It also keeps the
+ * write atomic: ticking three weekdays is one document change, not three.
  *
- * Multi-control panes (a calendar event's When, a recurrence rule) keep
- * auto-saving — there is no single value to buffer — and so do dropdowns, where
- * picking from a menu is already the deliberate gesture a Save button would add.
+ * Dropdowns are the remaining exception — picking from a menu is already the
+ * deliberate gesture a Save button would add — as is the calendar event editor,
+ * whose When and Repeat panes still auto-save.
  *
  * Used two ways: inside a {@link PropertySheet} detail pane (which drops its Back
  * arrow for these, so Cancel is the one way out), and via {@link FieldSheet} as a
@@ -26,20 +28,20 @@ export interface FieldRenderCtx {
   value: string;
   /** Bind to the control's `onInput`. */
   onInput: (v: string) => void;
-  /** Commit the draft. Bind to `onEnter` on a single-line field. */
+  /** Save the draft. Bind to `onEnter` on a single-line field. */
   save: () => void;
 }
 
 export interface FieldEditorProps {
   /**
-   * Committed value; seeds the draft on mount and *deliberately never re-seeds*.
+   * The saved value; seeds the draft on mount and *deliberately never re-seeds*.
    * That is what transactional means — a peer editing the same field concurrently
    * does not yank text out from under you mid-sentence. The presence dot beside
    * the field title is the warning. Pass `key` to force a fresh draft (e.g. the
    * task editor swapping to a new item without closing the pane).
    */
   value: string;
-  /** Commit the draft. Also responsible for leaving the pane, if it should. */
+  /** Save the draft. Also responsible for leaving the pane, if it should. */
   onSave: (value: string) => void;
   /** Discard — inside a PropertySheet this is the render ctx's `back`. */
   onCancel: () => void;
@@ -63,7 +65,7 @@ export function FieldEditor({
 
   const save = useCallback(() => {
     if (validate && !validate(draft)) return;
-    // Blur before committing, for the mirror of the reason PropertySheet's
+    // Blur before writing, for the mirror of the reason PropertySheet's
     // `flushOnClose` blurs before closing: Chrome fires no `focusout` when a
     // focused element is simply unmounted, so the control's onBlur — which clears
     // this peer's presence — would never run and the dot would stick on a field
@@ -75,22 +77,93 @@ export function FieldEditor({
   return (
     <>
       {children({ value: draft, onInput: setDraft, save })}
-      <div className="flex items-center justify-end gap-2 mt-4">
-        <Button
-          variant="outline"
-          data-testid={testId ? `${testId}-cancel` : undefined}
-          onClick={onCancel}
-        >
-          Cancel
-        </Button>
-        <Button
-          disabled={!valid}
-          data-testid={testId ? `${testId}-save` : undefined}
-          onClick={save}
-        >
-          Save
-        </Button>
-      </div>
+      <PaneActions onCancel={onCancel} onSave={save} saveDisabled={!valid} data-testid={testId} />
+    </>
+  );
+}
+
+/** The Cancel/Save row a transactional pane ends with. Shared so the two
+ * editors' buttons (and their testids) cannot drift apart. */
+export function PaneActions({ onCancel, onSave, saveDisabled, 'data-testid': testId }: {
+  onCancel: () => void;
+  onSave: () => void;
+  saveDisabled?: boolean;
+  'data-testid'?: string;
+}) {
+  return (
+    <div className="flex items-center justify-end gap-2 mt-4">
+      <Button
+        variant="outline"
+        data-testid={testId ? `${testId}-cancel` : undefined}
+        onClick={onCancel}
+      >
+        Cancel
+      </Button>
+      <Button
+        disabled={saveDisabled}
+        data-testid={testId ? `${testId}-save` : undefined}
+        onClick={onSave}
+      >
+        Save
+      </Button>
+    </div>
+  );
+}
+
+export interface GroupRenderCtx<T> {
+  /** The draft record. Bind each control to its own key. */
+  draft: T;
+  /** Merge one control's change into the draft. */
+  patch: (part: Partial<T>) => void;
+  /** Save the draft — for a control that is itself a terminal gesture. */
+  save: () => void;
+}
+
+export interface GroupEditorProps<T extends object> {
+  /**
+   * The saved values; seed the draft on mount and *deliberately never re-seeds*
+   * (see {@link FieldEditorProps.value}). Pass `key` to force a fresh draft.
+   */
+  value: T;
+  /** Save the draft. Also responsible for leaving the pane, if it should. */
+  onSave: (value: T) => void;
+  /** Discard — inside a PropertySheet this is the render ctx's `back`. */
+  onCancel: () => void;
+  validate?: (value: T) => boolean;
+  children: (ctx: GroupRenderCtx<T>) => ComponentChildren;
+  /** Stem for the buttons' testids: `${testId}-save` / `${testId}-cancel`. */
+  'data-testid'?: string;
+}
+
+/**
+ * {@link FieldEditor} for a pane whose several controls make up one value. The
+ * whole draft is written at once, so a multi-control edit is a single document
+ * change (and a single undo step) instead of one per control.
+ */
+export function GroupEditor<T extends object>({
+  value,
+  onSave,
+  onCancel,
+  validate,
+  children,
+  'data-testid': testId,
+}: GroupEditorProps<T>) {
+  const [draft, setDraft] = useState(value);
+  const valid = validate ? validate(draft) : true;
+
+  const patch = useCallback((part: Partial<T>) => setDraft(d => ({ ...d, ...part })), []);
+
+  const save = useCallback(() => {
+    if (validate && !validate(draft)) return;
+    // Blur before writing — see FieldEditor.save.
+    (document.activeElement as HTMLElement | null)?.blur?.();
+    onSave(draft);
+  }, [draft, onSave, validate]);
+
+  return (
+    <>
+      {children({ draft, patch, save })}
+      <PaneActions onCancel={onCancel} onSave={save} saveDisabled={!valid} data-testid={testId} />
     </>
   );
 }

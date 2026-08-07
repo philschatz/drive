@@ -1,5 +1,9 @@
-import type { CounterEvent } from '../../../../shared/schemas/counters';
+import { reanchorDate, type CounterEvent } from '../../../../shared/schemas/counters';
 import { generateDates, parseDuration } from '../calendar/recurrence';
+
+// Re-exported so the plugin has one import for its date logic; it lives in the
+// schema module because the document validator enforces the same rule.
+export { reanchorDate, lastCompletionAnchor } from '../../../../shared/schemas/counters';
 
 /** All functions take `now` as a local datetime string ("YYYY-MM-DDTHH:mm:ss")
  * so the logic stays pure and testable. */
@@ -12,6 +16,23 @@ export interface CounterEntry {
   status: CounterStatus;
   /** The occurrence the status refers to (window start datetime), if any. */
   occurrence?: string;
+  /** Consecutive met occurrences; 0 for non-recurring counters. */
+  streak: number;
+  /** Reward goal and how far off it is, when the description encodes one. */
+  reward?: RewardProgress;
+}
+
+/** A reward unlocked by a streak, encoded in the item's description as
+ * "<goal>: <text>" — e.g. "10: Ice cream". */
+export interface Reward {
+  goal: number;
+  text: string;
+}
+
+export interface RewardProgress extends Reward {
+  /** Completions still needed; 0 once the streak has reached the goal. */
+  remaining: number;
+  unlocked: boolean;
 }
 
 export interface WeekStat {
@@ -41,15 +62,82 @@ function normTime(t: string): string {
   return t.length === 5 ? t + ':00' : t;
 }
 
-// Recurring counters don't carry a start date — occurrences follow the rule
-// alone. generateDates needs an anchor to expand from (and caps how far it
-// walks), so the query's own range start is used as the anchor; the (optional)
-// time-of-day window comes from `startTime` + `duration`, not a start date.
-function anchorFor(ev: CounterEvent, rangeStart: string): string {
-  const date = ev.start ? dateOf(ev.start) : rangeStart;
-  let timePart = ev.start && ev.start.length > 10 ? ev.start.substring(10) : '';
+/** An anchor date turned into an occurrence datetime: the time-of-day window
+ * comes from `startTime` when set, else from the anchor's own time part. */
+function anchorFor(ev: CounterEvent, anchor: string): string {
+  const date = dateOf(anchor);
+  let timePart = anchor.length > 10 ? anchor.substring(10) : '';
   if (ev.startTime) timePart = 'T' + normTime(ev.startTime);
   return date + timePart;
+}
+
+/**
+ * The local date the counter was created — the base of its occurrence grid.
+ * `created` is a UTC timestamp (JSCalendar); counters written before that field
+ * existed fall back to `start`, which used to hold the creation anchor. A
+ * recurring counter with neither has no known origin (see expandOccurrences).
+ */
+export function createdDate(ev: CounterEvent): string | undefined {
+  if (ev.created) {
+    try {
+      return Temporal.Instant.from(ev.created).toZonedDateTimeISO(Temporal.Now.timeZoneId()).toPlainDate().toString();
+    } catch {
+      // Not a real instant — fall through to the legacy anchor.
+    }
+  }
+  return ev.start ? dateOf(ev.start) : undefined;
+}
+
+/**
+ * A `created` stamp for a counter that has none — either brand new, or written
+ * before the field existed. It is local midnight of the oldest thing known
+ * about the habit (its legacy `start` anchor, or its first completion), because
+ * stamping "now" would cut the occurrence grid off there and take the streak
+ * and the met/missed chart with it.
+ */
+export function createdStampFor(ev: CounterEvent): string {
+  const known: string[] = [];
+  if (ev.start) known.push(dateOf(ev.start));
+  for (const ts of Object.keys(ev.completions ?? {})) known.push(dateOf(ts));
+  known.sort();
+  try {
+    if (known.length) {
+      return Temporal.PlainDateTime.from(known[0] + 'T00:00:00')
+        .toZonedDateTime(Temporal.Now.timeZoneId())
+        .toInstant()
+        .toString({ smallestUnit: 'second' });
+    }
+  } catch {
+    // Unparseable legacy anchor — fall back to now.
+  }
+  return Temporal.Now.instant().toString({ smallestUnit: 'second' });
+}
+
+/**
+ * True for a rule whose grid is the same whatever it is anchored at: every day,
+ * or named weekdays every week. Those need no segmented walk at all — which is
+ * what keeps the common case (a daily habit with hundreds of completions) at a
+ * single expansion.
+ */
+function anchorInvariant(rule: any): boolean {
+  const interval = typeof rule.interval === 'number' && rule.interval > 1 ? rule.interval : 1;
+  if (interval > 1) return false;
+  if (rule.frequency === 'daily') return true;
+  return rule.frequency === 'weekly' && !!rule.byDay?.length;
+}
+
+/** Grid anchors oldest-first: the creation date, then each completion (the
+ * schedule restarts at every one). */
+function scheduleAnchors(ev: CounterEvent, base: string | undefined, rangeEnd: string): string[] {
+  const seen = new Set<string>();
+  if (base) seen.add(base);
+  for (const ts of Object.keys(ev.completions ?? {})) {
+    const d = reanchorDate(ev, ts);
+    if (base && d < base) continue; // predates the habit — imported or clock-skewed
+    if (d > rangeEnd) continue;
+    seen.add(d);
+  }
+  return [...seen].sort();
 }
 
 /** End of an occurrence's pending window: window start + duration, or end of
@@ -63,15 +151,68 @@ export function windowEnd(ev: CounterEvent, occ: string): string {
   return Temporal.PlainDate.from(dateOf(occ)).add({ days: 1 }).toString() + 'T00:00:00';
 }
 
-/** Occurrence window-start datetimes in [rangeStart, rangeEnd] (inclusive date
- * strings — generateDates range semantics), sorted ascending. */
+/**
+ * Occurrence window-start datetimes in [rangeStart, rangeEnd] (inclusive date
+ * strings — generateDates range semantics), sorted ascending.
+ *
+ * A recurring counter's schedule **restarts at every completion**, so the grid
+ * is a chain of segments: one per anchor, each expanded from its own anchor and
+ * ending where the next begins. The last occurrence of a closed segment is
+ * dropped, because that is the occurrence the completion credits — it is
+ * replaced by the completion's own date. Without that, a habit done a day late
+ * would score one missed *and* one met for the same period.
+ *
+ * The grid starts at `created`, not at the moving `start`, so past occurrences
+ * (and with them the streak and the met/missed chart) survive the re-anchoring.
+ */
 export function expectedOccurrences(ev: CounterEvent, rangeStart: string, rangeEnd: string): string[] {
+  const cached = cacheGet(ev, rangeStart, rangeEnd);
+  if (cached) return cached;
+  return cacheSet(ev, rangeStart, rangeEnd, expandOccurrences(ev, rangeStart, rangeEnd));
+}
+
+function expandOccurrences(ev: CounterEvent, rangeStart: string, rangeEnd: string): string[] {
   if (!ev.recurrenceRule) {
     if (!ev.start) return [];
     const d = dateOf(ev.start);
     return d >= rangeStart && d <= rangeEnd ? [ev.start] : [];
   }
-  return generateDates(anchorFor(ev, rangeStart), ev.recurrenceRule, rangeStart, rangeEnd);
+  const rule = ev.recurrenceRule;
+  const base = createdDate(ev);
+
+  // No origin and no reset to apply: expand from the query range, as before.
+  if (anchorInvariant(rule)) return generateDates(anchorFor(ev, base ?? rangeStart), rule, rangeStart, rangeEnd);
+
+  const anchors = scheduleAnchors(ev, base, rangeEnd);
+  if (anchors.length === 0) return generateDates(anchorFor(ev, rangeStart), rule, rangeStart, rangeEnd);
+
+  const out: string[] = [];
+  for (let i = 0; i < anchors.length; i++) {
+    const nextAnchor = anchors[i + 1];
+    const segEnd = nextAnchor ?? rangeEnd;
+    if (anchors[i] > segEnd) continue;
+    const dates = generateDates(anchorFor(ev, anchors[i]), rule, anchors[i], segEnd);
+    if (nextAnchor) dates.pop(); // credited by the completion that opens the next segment
+    for (const d of dates) if (dateOf(d) >= rangeStart) out.push(d);
+  }
+  return out;
+}
+
+// Every counter is expanded three times per render (status, streak, chart), and
+// the segmented walk is one generateDates call per completion. Automerge hands
+// out a fresh snapshot object per change, so keying on the event identity gives
+// a per-render cache that invalidates itself.
+const expansionCache = new WeakMap<CounterEvent, Map<string, string[]>>();
+
+function cacheGet(ev: CounterEvent, rangeStart: string, rangeEnd: string): string[] | undefined {
+  return expansionCache.get(ev)?.get(rangeStart + '|' + rangeEnd);
+}
+
+function cacheSet(ev: CounterEvent, rangeStart: string, rangeEnd: string, dates: string[]): string[] {
+  let byRange = expansionCache.get(ev);
+  if (!byRange) expansionCache.set(ev, (byRange = new Map()));
+  byRange.set(rangeStart + '|' + rangeEnd, dates);
+  return dates;
 }
 
 /** True when a click was recorded within an occurrence's credit period — from
@@ -151,20 +292,29 @@ export function currentStatus(ev: CounterEvent, now: string): { status: CounterS
   if (metInPeriod(ev, curr, next)) return { status: 'done', occurrence: curr };
   if (now >= windowEnd(ev, curr)) return { status: 'overdue', occurrence: curr };
   // Window still open — but a missed previous occurrence keeps it overdue.
-  // Without a start anchor the expansion is synthetic (anchored at the query
+  // Without a creation anchor the expansion is synthetic (anchored at the query
   // range), so "previous" doesn't imply the habit existed then; skip the check.
-  if (ev.start && prev && !metInPeriod(ev, prev, curr)) return { status: 'overdue', occurrence: curr };
+  if (createdDate(ev) && prev && !metInPeriod(ev, prev, curr)) return { status: 'overdue', occurrence: curr };
   return { status: 'pending', occurrence: curr };
 }
 
 /** Overdue first, then pending, upcoming, done, and finally schedule-less
- * tallies — ties broken by occurrence time then title. */
+ * tallies — ties broken by an unclaimed reward, then occurrence time, then title. */
 const STATUS_ORDER: Record<CounterStatus, number> = { overdue: 0, pending: 1, upcoming: 2, done: 3, tally: 4 };
 
 export function sortedCounters(events: Record<string, CounterEvent>, now: string): CounterEntry[] {
-  const entries: CounterEntry[] = Object.entries(events).map(([uid, ev]) => ({ uid, ev, ...currentStatus(ev, now) }));
+  const entries: CounterEntry[] = Object.entries(events).map(([uid, ev]) => {
+    const streak = currentStreak(ev, now);
+    return { uid, ev, streak, reward: rewardProgress(ev, streak) ?? undefined, ...currentStatus(ev, now) };
+  });
   entries.sort((a, b) => {
     if (STATUS_ORDER[a.status] !== STATUS_ORDER[b.status]) return STATUS_ORDER[a.status] - STATUS_ORDER[b.status];
+    // Habits working towards a reward rise within their section, closest first.
+    // An unlocked one drops back into normal order rather than pinning forever.
+    const ar = a.reward && !a.reward.unlocked ? 0 : 1;
+    const br = b.reward && !b.reward.unlocked ? 0 : 1;
+    if (ar !== br) return ar - br;
+    if (ar === 0 && a.reward!.remaining !== b.reward!.remaining) return a.reward!.remaining - b.reward!.remaining;
     const ao = a.occurrence || '';
     const bo = b.occurrence || '';
     if (ao !== bo) return ao < bo ? -1 : 1;
@@ -174,6 +324,73 @@ export function sortedCounters(events: Record<string, CounterEvent>, now: string
     return a.uid < b.uid ? -1 : 1;
   });
   return entries;
+}
+
+// ---------------------------------------------------------------------------
+// Rewards
+// ---------------------------------------------------------------------------
+
+/** "10: Ice cream" → a reward unlocked at a streak of 10. Anything without the
+ * leading "<digits>: " is an ordinary note and yields null. */
+export function parseReward(description?: string): Reward | null {
+  if (!description) return null;
+  const m = description.match(/^(\d+):\s([\s\S]*)$/);
+  if (!m) return null;
+  const goal = parseInt(m[1], 10);
+  if (!goal || goal < 1) return null;
+  return { goal, text: m[2] };
+}
+
+/** The inverse of {@link parseReward}. Without a goal the text is stored as-is,
+ * so the description doubles as a plain note. */
+export function formatReward(goal: number | null, text: string): string {
+  const t = text.trim();
+  if (!goal || goal < 1) return t;
+  return goal + ': ' + t;
+}
+
+export function rewardProgress(ev: CounterEvent, streak: number): RewardProgress | null {
+  const reward = parseReward(ev.description);
+  if (!reward) return null;
+  const remaining = Math.max(0, reward.goal - streak);
+  return { ...reward, remaining, unlocked: remaining === 0 };
+}
+
+// ---------------------------------------------------------------------------
+// The daily window, as start/end clock times
+// ---------------------------------------------------------------------------
+
+/**
+ * "HH:mm" the window closes, from its start time and stored ISO duration —
+ * the editor edits an end time but the document stores a duration, per the
+ * calendar spec. Wraps past midnight. A whole-day duration (P1D) has no clock
+ * end and yields '', since the field cannot express it.
+ */
+export function windowEndTime(startTime: string, duration: string): string {
+  if (!duration) return '';
+  const d = parseDuration(duration);
+  if (!d.hours && !d.minutes) return '';
+  return Temporal.PlainTime.from(normTime(startTime || '00:00'))
+    .add({ hours: d.hours, minutes: d.minutes })
+    .toString()
+    .substring(0, 5);
+}
+
+/**
+ * The ISO duration for a window running from `startTime` to `endTime`. An end
+ * at or before the start crosses midnight; a full day (or a blank end) is '',
+ * which leaves the default "you have until the end of the day" window.
+ */
+export function windowDuration(startTime: string, endTime: string): string {
+  if (!endTime) return '';
+  const from = Temporal.PlainTime.from(normTime(startTime || '00:00'));
+  const to = Temporal.PlainTime.from(normTime(endTime));
+  let minutes = Math.round(to.since(from).total({ unit: 'minutes' }));
+  if (minutes <= 0) minutes += 24 * 60;
+  if (minutes >= 24 * 60) return '';
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return 'PT' + (h ? h + 'H' : '') + (m ? m + 'M' : '');
 }
 
 /**

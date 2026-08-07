@@ -89,6 +89,19 @@ export const MdTextField = forwardRef<MdTextFieldHandle, MdTextFieldProps>(funct
 
   const multiline = type === 'textarea';
 
+  // Non-text fields hold one short token (a count, a date, a time) that is
+  // always replaced rather than appended to, so focusing one selects it — you
+  // can type straight over it instead of clearing it first. `select()` is safe
+  // on the md host and on a number input; `setSelectionRange` is not, and some
+  // input types have no text selection at all, hence the guard.
+  const selectOnFocus = type === 'number' || type === 'date' || type === 'time';
+  const handleFocus = (e: any) => {
+    if (selectOnFocus) {
+      try { e.currentTarget.select?.(); } catch { /* type has no text selection */ }
+    }
+    onFocus?.();
+  };
+
   const handleInput = (e: any) => onInput?.(e.currentTarget.value, e);
   // preact/compat aliases onBlur → focusout, which (unlike blur) is composed and
   // so escapes the md element's shadow root.
@@ -123,7 +136,7 @@ export const MdTextField = forwardRef<MdTextFieldHandle, MdTextFieldProps>(funct
         disabled={disabled || undefined}
         style={{ width: '100%' }}
         onInput={handleInput}
-        onFocus={onFocus}
+        onFocus={handleFocus}
         onBlur={handleBlur}
         onKeyDown={handleKeyDown}
       />
@@ -137,7 +150,7 @@ export const MdTextField = forwardRef<MdTextFieldHandle, MdTextFieldProps>(funct
     placeholder,
     disabled,
     onInput: handleInput,
-    onFocus,
+    onFocus: handleFocus,
     onBlur: handleBlur,
     onKeyDown: handleKeyDown,
   };

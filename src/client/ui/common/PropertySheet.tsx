@@ -8,11 +8,12 @@
  * that property's editor alone. This is the standard MD3 mobile pattern, and it
  * removes the "wall of form controls" the flat editors had.
  *
- * A pane editing a single field marks itself `transactional` and wraps its control
- * in a `FieldEditor`, which owns the draft and offers Cancel/Save. Those panes lose
- * the Back arrow, so the edit has exactly one discard gesture and one commit
- * gesture. Multi-control panes (an event's When, a recurrence rule) and dropdowns
- * still auto-save and keep Back.
+ * A pane marks itself `transactional` and wraps its controls in a `FieldEditor`
+ * (one field) or a `GroupEditor` (several controls making up one value, like a
+ * recurrence rule), which owns the draft and offers Cancel/Save. Those panes lose
+ * the Back arrow, so the edit has exactly one discard gesture and one save
+ * gesture — and makes one document change. Dropdowns still auto-save and keep Back, as
+ * does the calendar event editor, whose When and Repeat panes are not converted.
  *
  * Peer presence rides along at both levels: a list row carries a PresenceDot in
  * its trailing slot, so you can see which property a peer is editing without
@@ -60,10 +61,10 @@ export interface PropertyDef {
   inline?: () => ComponentChildren;
   hidden?: boolean;
   /**
-   * This pane edits one field and supplies its own Cancel/Save (see `FieldEditor`),
+   * This pane supplies its own Cancel/Save (see `FieldEditor` / `GroupEditor`),
    * so the header's Back arrow is dropped: Cancel is the single discard gesture and
-   * Save the single commit gesture, rather than Back silently meaning "save".
-   * Grouped panes leave this off — they auto-save and keep Back.
+   * Save the single one that writes, rather than Back silently meaning "save".
+   * A pane that leaves this off auto-saves and keeps Back.
    */
   transactional?: boolean;
   /**
@@ -90,12 +91,12 @@ export interface PropertySheetProps {
   /** Extra classes for the sheet surface (e.g. the calendar editor's `.panel` hook). */
   contentClassName?: string;
   /**
-   * Blur the focused element before closing so an auto-save commit-on-blur runs.
+   * Blur the focused element before closing so an auto-save write-on-blur runs.
    * Chrome fires no `focusout` when a focused element is simply removed from the
    * DOM, so Escape-to-close would otherwise drop what you just typed. Only the
-   * auto-saving panes need it — a `transactional` pane commits on Save, and in
+   * auto-saving panes need it — a `transactional` pane writes on Save, and in
    * jsdom a click on Close doesn't move focus, so an unconditional blur would fire
-   * a spurious commit.
+   * a spurious write.
    */
   flushOnClose?: boolean;
   'data-testid'?: string;
@@ -162,7 +163,7 @@ function PropertySheetBody({
   const back = useCallback(() => setDetailId(null), []);
 
   const close = useCallback(() => {
-    // Commit-on-blur editors need the focused field to blur while it is still in
+    // Write-on-blur editors need the focused field to blur while it is still in
     // the document; removing it silently discards the edit.
     if (flushOnClose) (document.activeElement as HTMLElement | null)?.blur?.();
     onClose();

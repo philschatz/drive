@@ -1,6 +1,7 @@
 import 'temporal-polyfill/global';
 import {
   expectedOccurrences, metInPeriod, windowEnd, currentStatus, currentStreak, sortedCounters, metMissedByWeek, isArchived,
+  createdDate, reanchorDate, parseReward, formatReward, windowEndTime, windowDuration,
 } from './occurrences';
 import type { CounterEvent } from '../../../../shared/schemas/counters';
 
@@ -10,6 +11,23 @@ const daily = (extra: Partial<CounterEvent> = {}): CounterEvent => ({
   '@type': 'Event',
   title: 'stretch',
   recurrenceRule: { '@type': 'RecurrenceRule', frequency: 'daily' },
+  ...extra,
+});
+
+/** `created` is a UTC instant; build it from a local date so the test reads the
+ * same calendar day back whatever zone it runs in. */
+const createdOn = (date: string): string =>
+  Temporal.PlainDateTime.from(date + 'T09:00:00')
+    .toZonedDateTime(Temporal.Now.timeZoneId())
+    .toInstant()
+    .toString({ smallestUnit: 'second' });
+
+/** Every 3 days from `created`, i.e. a rule whose grid depends on its anchor. */
+const every3 = (extra: Partial<CounterEvent> = {}): CounterEvent => ({
+  '@type': 'Event',
+  title: 'water plants',
+  created: createdOn('2026-07-01'),
+  recurrenceRule: { '@type': 'RecurrenceRule', frequency: 'daily', interval: 3 },
   ...extra,
 });
 
@@ -38,6 +56,124 @@ describe('expectedOccurrences', () => {
 
   it('no rule and no start: nothing expected', () => {
     expect(expectedOccurrences({ '@type': 'Event' }, '2026-01-01', '2026-12-31')).toEqual([]);
+  });
+});
+
+describe('the schedule restarts at each completion', () => {
+  it('re-anchors to the day it was done, without losing the occurrences before it', () => {
+    // Due Jul 19, done a day late on the 20th (still inside its credit period).
+    const ev = every3({ completions: { '2026-07-20T09:00:00': '' } });
+    expect(expectedOccurrences(ev, '2026-07-01', '2026-07-26')).toEqual([
+      // history from `created` survives …
+      '2026-07-01', '2026-07-04', '2026-07-07', '2026-07-10', '2026-07-13', '2026-07-16',
+      // … and Jul 19 is *replaced* by the completion, not counted missed beside it
+      '2026-07-20', '2026-07-23', '2026-07-26',
+    ]);
+    // Next due is 3 days after it was done (the 23rd), not after the 22nd.
+    expect(currentStatus(ev, NOW)).toEqual({ status: 'done', occurrence: '2026-07-20' });
+  });
+
+  it('without a completion the grid still runs from `created`', () => {
+    expect(expectedOccurrences(every3(), '2026-07-01', '2026-07-10')).toEqual(['2026-07-01', '2026-07-04', '2026-07-07', '2026-07-10']);
+    expect(currentStatus(every3(), NOW)).toEqual({ status: 'overdue', occurrence: '2026-07-19' });
+  });
+
+  it('a streak counts through the re-anchors', () => {
+    const ev = every3({
+      completions: { '2026-07-15T09:00:00': '', '2026-07-18T09:00:00': '', '2026-07-21T09:00:00': '' },
+    });
+    expect(currentStreak(ev, NOW)).toBe(3);
+    // …and the missed weeks before the habit got going are still charted, which
+    // is what anchoring the grid at `created` (not at the moving `start`) buys.
+    expect(metMissedByWeek({ a: ev }, NOW, 4)).toEqual([
+      { weekStart: '2026-06-29', met: 0, missed: 2 }, // Jul 1, Jul 4
+      { weekStart: '2026-07-06', met: 0, missed: 2 }, // Jul 7, Jul 10
+      { weekStart: '2026-07-13', met: 2, missed: 0 }, // done on the 15th and 18th
+      { weekStart: '2026-07-20', met: 0, missed: 0 }, // today's period is still open
+    ]);
+  });
+
+  it('a click before the window opens belongs to the previous day', () => {
+    const ev: CounterEvent = { '@type': 'Event', startTime: '08:00:00' };
+    expect(reanchorDate(ev, '2026-07-21T07:00:00')).toBe('2026-07-20');
+    expect(reanchorDate(ev, '2026-07-21T08:30:00')).toBe('2026-07-21');
+    expect(reanchorDate({ '@type': 'Event' }, '2026-07-21T00:30:00')).toBe('2026-07-21');
+
+    // So an early tick doesn't push the habit a day out of phase.
+    const early = every3({ startTime: '08:00:00', completions: { '2026-07-21T07:00:00': '' } });
+    expect(expectedOccurrences(early, '2026-07-20', '2026-07-26')).toEqual(['2026-07-20T08:00:00', '2026-07-23T08:00:00', '2026-07-26T08:00:00']);
+    expect(currentStatus(early, NOW).status).toBe('done'); // credited, not "upcoming"
+  });
+
+  it('daily and weekly-byDay grids are anchor-invariant, so completions leave them alone', () => {
+    const before = expectedOccurrences(daily({ created: createdOn('2026-07-01') }), '2026-07-19', '2026-07-21');
+    const after = expectedOccurrences(daily({ created: createdOn('2026-07-01'), completions: { '2026-07-20T09:00:00': '' } }), '2026-07-19', '2026-07-21');
+    expect(after).toEqual(before);
+  });
+
+  it('createdDate falls back to `start` for counters written before the field existed', () => {
+    expect(createdDate({ '@type': 'Event', created: createdOn('2026-07-04') })).toBe('2026-07-04');
+    expect(createdDate({ '@type': 'Event', start: '2026-07-04' })).toBe('2026-07-04');
+    expect(createdDate({ '@type': 'Event', created: 'not-an-instant', start: '2026-07-05' })).toBe('2026-07-05');
+    expect(createdDate({ '@type': 'Event' })).toBeUndefined();
+  });
+});
+
+describe('rewards', () => {
+  it('parses "<goal>: <text>" and leaves plain notes alone', () => {
+    expect(parseReward('10: Ice cream')).toEqual({ goal: 10, text: 'Ice cream' });
+    expect(parseReward('3: ')).toEqual({ goal: 3, text: '' });
+    expect(parseReward('just a note')).toBeNull();
+    expect(parseReward('10:no space')).toBeNull();
+    expect(parseReward('0: nothing')).toBeNull();
+    expect(parseReward(undefined)).toBeNull();
+  });
+
+  it('round-trips through formatReward', () => {
+    expect(formatReward(10, 'Ice cream')).toBe('10: Ice cream');
+    expect(formatReward(null, 'just a note')).toBe('just a note');
+    expect(parseReward(formatReward(4, 'Cake'))).toEqual({ goal: 4, text: 'Cake' });
+  });
+
+  it('sorts unclaimed rewards first within a status, closest to unlocking at the top', () => {
+    const events: Record<string, CounterEvent> = {
+      far: daily({ title: 'far', description: '5: cake' }),
+      near: daily({ title: 'near', description: '2: tea' }),
+      plain: daily({ title: 'plain' }),
+    };
+    const sorted = sortedCounters(events, NOW);
+    expect(sorted.map(e => e.uid)).toEqual(['near', 'far', 'plain']);
+    expect(sorted[0].reward).toEqual({ goal: 2, text: 'tea', remaining: 2, unlocked: false });
+  });
+
+  it('an unlocked reward drops back into normal order', () => {
+    const done = { completions: { '2026-07-21T08:00:00': '' } };
+    const events: Record<string, CounterEvent> = {
+      zzz: daily({ title: 'zzz', description: '1: prize', ...done }),
+      aaa: daily({ title: 'aaa', ...done }),
+    };
+    const sorted = sortedCounters(events, NOW);
+    expect(sorted.map(e => e.uid)).toEqual(['aaa', 'zzz']); // by title, not pinned to the top
+    expect(sorted[1].reward).toMatchObject({ remaining: 0, unlocked: true });
+  });
+});
+
+describe('the daily window as start/end times', () => {
+  it('converts an end time to a stored duration', () => {
+    expect(windowDuration('08:00', '09:30')).toBe('PT1H30M');
+    expect(windowDuration('08:00', '09:00')).toBe('PT1H');
+    expect(windowDuration('22:00', '02:00')).toBe('PT4H'); // crosses midnight
+    expect(windowDuration('', '01:00')).toBe('PT1H'); // no start time → from midnight
+    expect(windowDuration('08:00', '08:00')).toBe(''); // a full day is the default window
+    expect(windowDuration('08:00', '')).toBe('');
+  });
+
+  it('converts a stored duration back to an end time', () => {
+    expect(windowEndTime('08:00', 'PT1H30M')).toBe('09:30');
+    expect(windowEndTime('22:00', 'PT4H')).toBe('02:00');
+    expect(windowEndTime('', 'PT1H')).toBe('01:00');
+    expect(windowEndTime('08:00', '')).toBe('');
+    expect(windowEndTime('08:00', 'P1D')).toBe(''); // no clock end to show
   });
 });
 

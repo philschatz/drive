@@ -2,10 +2,10 @@ import 'temporal-polyfill/global';
 import { render, screen, fireEvent, within, waitFor } from '@testing-library/preact';
 
 // In-memory + jq mock so the real Counters container runs in jsdom (single
-// browser, no peers). The editor's repeat Select is a Radix popover that jsdom
-// can't drive, so schedule variety is seeded directly via __setDoc; the
-// default-Daily FAB-add path is still exercised live. md-* custom elements are
-// NOT registered here, so rows are inert hosts driven by their own handlers.
+// browser, no peers). Schedule variety is seeded directly via __setDoc; the
+// default-Daily FAB-add path is still exercised live, and the editor's own panes
+// are driven in CounterEditor.test.tsx. md-* custom elements are NOT registered
+// here, so rows are inert hosts driven by their own handlers.
 jest.mock('../../worker-api');
 import * as api from '../../worker-api';
 import { Counters } from './Counters';
@@ -40,8 +40,8 @@ describe('Counters container', () => {
     expect(document.querySelector('svg[aria-label="Met vs missed occurrences per week"]')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
 
-    // FAB → New Counter sheet; Enter commits (auto-save) and chains to a fresh
-    // blank counter; dismiss the sheet with its Close button.
+    // FAB → New Counter sheet; Enter saves and chains to a fresh blank
+    // counter; dismiss the sheet with its Close button.
     fireEvent.click(document.querySelector('md-fab')!);
     expect(screen.getByText('New Counter')).toBeTruthy();
     const input = screen.getByTestId('ced-title');
@@ -144,6 +144,80 @@ describe('Counters container', () => {
     render(<Counters docId={DOC} />);
     await waitFor(() => expect(screen.getByText('Meditate')).toBeTruthy());
     expect(within(rowOf('Meditate')).getByTitle('2-day streak')).toBeTruthy();
+  });
+
+  it('recording moves the schedule anchor to the day it was done', async () => {
+    const today = Temporal.Now.plainDateISO().toString();
+    const sixDaysAgo = Temporal.Now.plainDateISO().subtract({ days: 6 }).toString();
+    const created = Temporal.PlainDateTime.from(sixDaysAgo + 'T09:00:00')
+      .toZonedDateTime(Temporal.Now.timeZoneId()).toInstant().toString({ smallestUnit: 'second' });
+    mock.__setDoc(DOC, {
+      '@type': 'Calendar+Counters', name: 'C',
+      events: {
+        e1: {
+          '@type': 'Event', title: 'Water plants', created,
+          recurrenceRule: { '@type': 'RecurrenceRule', frequency: 'daily', interval: 3 },
+        },
+      },
+    });
+    render(<Counters docId={DOC} />);
+    await waitFor(() => expect(screen.getByText('Water plants')).toBeTruthy());
+    expect(rowOf('Water plants').getAttribute('data-status')).toBe('overdue');
+
+    fireEvent.click(within(rowOf('Water plants')).getByRole('button', { name: 'Record completion for Water plants' }));
+    // The recurrence restarts from today; `created` is untouched, so the habit's
+    // history (and the chart) still runs from when it was made.
+    expect(mock.__getDoc(DOC).events.e1.start).toBe(today);
+    expect(mock.__getDoc(DOC).events.e1.created).toBe(created);
+    expect(rowOf('Water plants').getAttribute('data-status')).toBe('done');
+  });
+
+  it('a habit written before `created` existed keeps its history when first recorded', async () => {
+    const today = Temporal.Now.plainDateISO().toString();
+    const d = (n: number) => Temporal.Now.plainDateISO().subtract({ days: n }).toString();
+    mock.__setDoc(DOC, {
+      '@type': 'Calendar+Counters', name: 'C',
+      events: {
+        // Legacy shape: `start` is the creation anchor and there is no `created`.
+        e1: {
+          '@type': 'Event', title: 'Meditate', start: d(10),
+          recurrenceRule: { '@type': 'RecurrenceRule', frequency: 'daily' },
+          completions: { [`${d(2)}T09:00:00`]: '', [`${d(1)}T09:00:00`]: '' },
+        },
+      },
+    });
+    render(<Counters docId={DOC} />);
+    await waitFor(() => expect(screen.getByText('Meditate')).toBeTruthy());
+
+    fireEvent.click(within(rowOf('Meditate')).getByRole('button', { name: 'Record completion for Meditate' }));
+    const ev = mock.__getDoc(DOC).events.e1;
+    expect(ev.start).toBe(today); // the anchor moved…
+    expect(ev.created.substring(0, 10)).toBe(d(10)); // …and the origin was preserved
+    // Three days in a row, so the flame keeps counting across the re-anchor.
+    expect(within(rowOf('Meditate')).getByTitle('3-day streak')).toBeTruthy();
+  });
+
+  it('deleting a completion rewinds the schedule anchor to the one before it', async () => {
+    const confirmSpy = jest.spyOn(window, 'confirm').mockReturnValue(true);
+    const d = (n: number) => Temporal.Now.plainDateISO().subtract({ days: n }).toString();
+    mock.__setDoc(DOC, {
+      '@type': 'Calendar+Counters', name: 'C',
+      events: {
+        e1: {
+          '@type': 'Event', title: 'Water plants', created: `${d(9)}T09:00:00Z`, start: d(1),
+          recurrenceRule: { '@type': 'RecurrenceRule', frequency: 'daily', interval: 3 },
+          completions: { [`${d(4)}T09:00:00`]: '', [`${d(1)}T09:00:00`]: '' },
+        },
+      },
+    });
+    render(<Counters docId={DOC} />);
+    await waitFor(() => expect(screen.getByText('Water plants')).toBeTruthy());
+
+    fireEvent.click(within(rowOf('Water plants')).getByTitle('Completions for Water plants'));
+    // Newest first, so the first delete button is yesterday's mis-click.
+    fireEvent.click(within(screen.getByTestId('completions-sheet')).getAllByTitle('Delete completion')[0]);
+    expect(mock.__getDoc(DOC).events.e1.start).toBe(d(4));
+    confirmSpy.mockRestore();
   });
 
   it('non-recurring tallies keep the lifetime N× badge', async () => {

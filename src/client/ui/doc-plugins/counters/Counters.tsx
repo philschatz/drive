@@ -18,7 +18,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sh
 import type { CounterEvent } from '../../../../shared/schemas/counters';
 import { describeRecurrence } from '../calendar/recurrence';
 import { MATERIAL_ORANGE } from '../../common/categorical-colors';
-import { sortedCounters, metMissedByWeek, isArchived, currentStreak, type CounterEntry, type CounterStatus } from './occurrences';
+import { sortedCounters, metMissedByWeek, isArchived, lastCompletionAnchor, createdStampFor, type CounterEntry, type CounterStatus, type RewardProgress } from './occurrences';
 import { MetMissedChart } from './Chart';
 import { CounterEditor } from './CounterEditor';
 import { CompletionsSheet } from './CompletionsSheet';
@@ -44,7 +44,8 @@ const SECTION_LABELS: Record<CounterStatus, string> = {
 const PATH_PROP_TO_FIELDS: Record<string, string[]> = {
   title: ['ced-title'],
   startTime: ['ced-time'],
-  duration: ['ced-duration'],
+  duration: ['ced-end'],
+  description: ['ced-reward'],
   recurrenceRule: ['ced-freq', 'ced-interval', 'ced-bydays'],
 };
 
@@ -79,11 +80,13 @@ function streakTitle(streak: number, frequency?: string): string {
  * clicking the leading icon or the title records a completion. Long-press /
  * right-click / Shift+F10 / the trailing kebab open the editor too.
  */
-function CounterListItem({ uid, ev, status, now, canEdit, peerEditingEvents, onRecord, onEdit, onShowCompletions }: {
+function CounterListItem({ uid, ev, status, streak, reward, canEdit, peerEditingEvents, onRecord, onEdit, onShowCompletions }: {
   uid: string;
   ev: CounterEvent;
   status: CounterStatus;
-  now: string;
+  /** Both come from the sorted entry, which has already computed them. */
+  streak: number;
+  reward?: RewardProgress;
   canEdit: boolean;
   peerEditingEvents: Record<string, PeerFieldInfo>;
   onRecord: (uid: string) => void;
@@ -91,7 +94,6 @@ function CounterListItem({ uid, ev, status, now, canEdit, peerEditingEvents, onR
   onShowCompletions: (uid: string) => void;
 }) {
   const clickCount = Object.keys(ev.completions || {}).length;
-  const streak = ev.recurrenceRule ? currentStreak(ev, now) : 0;
   const schedule = describeSchedule(ev);
   const title = ev.title || 'Untitled';
   const iconColor = status === 'done'
@@ -138,6 +140,21 @@ function CounterListItem({ uid, ev, status, now, canEdit, peerEditingEvents, onR
       </div>
       <span slot="end" className="flex items-center gap-1.5">
         {schedule && <Badge variant="secondary">{schedule}</Badge>}
+        {/* The treasure: how many more in a row until the reward unlocks. */}
+        {reward && (
+          <Badge
+            variant={reward.unlocked ? 'default' : 'outline'}
+            data-testid="counter-reward"
+            title={reward.unlocked
+              ? `Unlocked${reward.text ? ': ' + reward.text : ''}`
+              : `${reward.remaining} more in a row${reward.text ? ' to unlock: ' + reward.text : ''}`}
+          >
+            <span className="material-symbols-outlined" style={{ fontSize: 14 }}>
+              {reward.unlocked ? 'emoji_events' : 'redeem'}
+            </span>
+            {!reward.unlocked && reward.remaining}
+          </Badge>
+        )}
         {ev.recurrenceRule
           ? streak > 1 && (
               <Badge
@@ -193,14 +210,21 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
   const { peers, peerList, broadcast } = usePresence(docId);
   const editorStateRef = useRef(editorState);
   editorStateRef.current = editorState;
+  // The mutations below need the current event to compute anchors before handing
+  // a plain value to the worker's change callback.
+  const eventsRef = useRef(events);
+  eventsRef.current = events;
   const pendingEventIdRef = useRef(eventId);
 
-  // Auto-save: commits arrive on field blur/change while the editor stays open
-  // (dismissing the sheet is the only "done" gesture).
+  // One document change per pane Save in the editor (every pane is transactional).
+  // Replaces the event definition wholesale, so the click log is re-attached below.
   const saveCounter = useCallback((uid: string, data: CounterEvent) => {
     if (!canEditRef.current || !docId) return;
     updateDoc(docId, (d, uid, data) => {
-      // Replace the event's definition but never the click log.
+      // Replace the event's definition but never the click log. `data.start` was
+      // derived from this tab's snapshot, so a completion recorded by a peer
+      // between the snapshot and this save leaves the anchor one behind until the
+      // next click or edit — last-write-wins per field, self-healing.
       const prev = d.events[uid];
       const completions = prev && prev.completions ? Object.assign({}, prev.completions) : null;
       const clean: any = {};
@@ -232,23 +256,58 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
 
   const recordClick = useCallback((uid: string) => {
     if (!canEditRef.current || !docId) return;
+    const key = clickKey();
     setNow(nowLocal());
-    updateDoc(docId, (d, uid, key) => {
+    // Recording moves the schedule anchor to the day it was actually done, so
+    // the recurrence restarts from there; `created` (stamped once) is what keeps
+    // the history. Both are computed here because the change callback is
+    // serialized into the worker, where Temporal isn't available. A free tally
+    // gets no anchor — that would move it out of "No schedule" and start booking
+    // misses against it.
+    const ev = eventsRef.current[uid];
+    const recurring = !!ev?.recurrenceRule;
+    // Over the log *including* this click, not the click alone: a completion
+    // dated later than now (imported, or a peer's skewed clock) still owns the
+    // anchor, and the schema requires `start` to match the most recent one.
+    const anchor = recurring ? lastCompletionAnchor({ ...ev!, completions: { ...ev!.completions, [key]: '' } }) ?? null : null;
+    const created = recurring && !ev!.created ? createdStampFor(ev!) : null;
+    updateDoc(docId, (d, uid, key, anchor, created) => {
       const ev = d.events[uid];
       if (!ev) return;
       if (!ev.completions) ev.completions = {};
       ev.completions[key] = '';
-    }, uid, clickKey());
+      // Re-check against the document: a peer may have changed the schedule
+      // since this tab's snapshot.
+      if (!anchor || !ev.recurrenceRule) return;
+      if (created && !ev.created) ev.created = created;
+      if (ev.start !== anchor) ev.start = anchor;
+    }, uid, key, anchor, created);
   }, [docId]);
 
   // Remove a single recorded completion (a mis-click). This is its own mutation:
   // saveCounter re-attaches the completions map wholesale and never deletes keys.
   const deleteCompletion = useCallback((uid: string, key: string) => {
     if (!canEditRef.current || !docId) return;
-    updateDoc(docId, (d, uid, key) => {
+    // Rewind the schedule anchor to the completion before it, so removing a
+    // mis-click doesn't leave the habit shifted with nothing explaining why.
+    const ev = eventsRef.current[uid];
+    let anchor: string | null = null;
+    if (ev?.recurrenceRule) {
+      const remaining = { ...ev.completions };
+      delete remaining[key];
+      anchor = lastCompletionAnchor({ ...ev, completions: remaining }) ?? null;
+    }
+    // With no completions left there is no anchor — unless `start` is a legacy
+    // creation anchor that was never copied to `created`, which must not be lost.
+    const clearStart = !anchor && !!ev?.recurrenceRule && !!ev.created;
+    updateDoc(docId, (d, uid, key, anchor, clearStart) => {
       const ev = d.events[uid];
-      if (ev?.completions) delete ev.completions[key];
-    }, uid, key);
+      if (!ev?.completions) return;
+      delete ev.completions[key];
+      if (!ev.recurrenceRule) return;
+      if (anchor) { if (ev.start !== anchor) ev.start = anchor; }
+      else if (clearStart) delete ev.start;
+    }, uid, key, anchor, clearStart);
   }, [docId]);
 
   const openEditor = useCallback((uid: string | null, event: CounterEvent | null) => {
@@ -398,13 +457,14 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
           <div key={status}>
             <h3 className="text-xs font-semibold uppercase text-muted-foreground mt-3 mb-1">{SECTION_LABELS[status]}</h3>
             <md-list style={{ background: 'transparent' }}>
-              {entries.map(({ uid, ev }) => (
+              {entries.map(({ uid, ev, streak, reward }) => (
                 <CounterListItem
                   key={uid}
                   uid={uid}
                   ev={ev}
                   status={status}
-                  now={now}
+                  streak={streak}
+                  reward={reward}
                   canEdit={canEdit}
                   peerEditingEvents={peerEditingEvents}
                   onRecord={recordClick}
@@ -476,6 +536,9 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
         onShowCompletions={setCompletionsUid}
         onClose={() => setEditorState(null)}
         onAddAnother={() => openEditor(null, null)}
+        // Saving a new counter's title creates it, so the rest of the editor
+        // (schedule, reward, footer) now applies to a real document item.
+        onCreated={() => setEditorState(prev => (prev ? { ...prev, isNew: false } : prev))}
         onArchive={archiveCounter}
         onUnarchive={unarchiveCounter}
         onFieldFocus={handleFieldFocus}
