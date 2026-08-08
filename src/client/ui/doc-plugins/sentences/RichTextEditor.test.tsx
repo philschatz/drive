@@ -423,6 +423,115 @@ describe('caret at a block boundary', () => {
   });
 });
 
+/**
+ * Outdenting an empty list item changes no text and no index — only the block's
+ * TYPE. That still replaces the DOM node (a list item renders as `<div
+ * class="rt-li">`, a paragraph as `<p class="rt-p">`, and Preact rebuilds a
+ * subtree whose type changed instead of patching it), so the element holding the
+ * collapsed caret is torn out and the browser lifts the selection to the editor
+ * root — where it paints no caret at all.
+ *
+ * The restore is supposed to repair that, but `posFromDomPoint` resolves a root
+ * point to a block EDGE, which for a first block IS the index being restored. So
+ * the "already there" check compared equal and wrote nothing. Confirmed in
+ * Chromium: after backspacing an empty leading list item the selection was
+ * `anchorNode === the editor root`, in no block.
+ *
+ * jsdom cannot stage that by editing — it leaves the selection on the DETACHED
+ * node, which `posFromDomPoint` rejects outright (`root.contains`), so the
+ * restore fires and the bug hides. Hence the first test parks the selection on
+ * the root directly: that IS the state Chromium leaves behind, and it is the
+ * one the guard has to recognise.
+ */
+describe('a block whose element type changes', () => {
+  //  ￼a￼￼plain — an empty item between a list item and a paragraph.
+  const withEmptyItem = (): RichTextSpan[] => [
+    blockSpan('unordered-list-item'), textSpan('a'),
+    blockSpan('unordered-list-item'),
+    blockSpan('paragraph'), textSpan('plain'),
+  ];
+
+  /** The caret's block, whether it landed on the element or in a text node. */
+  const caretBlock = () => {
+    const n = window.getSelection()!.anchorNode!;
+    return n.nodeType === Node.TEXT_NODE
+      ? (n.parentElement?.closest('[data-bi]') as HTMLElement | null)
+      : ((n as HTMLElement).closest?.('[data-bi]') as HTMLElement | null);
+  };
+
+  it('re-places a caret the browser parked on the editor root', () => {
+    const { root, push } = setup(withEmptyItem());
+    // Where Chromium leaves the selection once the block element the caret was
+    // in has been replaced. It resolves to index 1 — the leading block's edge,
+    // and for a first block that is exactly where the caret belongs, so the
+    // index comparison alone called it correct and left it there.
+    put(root, 0, root, 0);
+    push();
+    expect(caretBlock()).toBe(root.querySelector('[data-bi="0"]'));
+    expect(window.getSelection()!.anchorNode).not.toBe(root);
+  });
+
+  it('leaves a RANGE resting on the root alone', () => {
+    // Ctrl+A and a drag that wanders out of the text both park an endpoint on
+    // the root legitimately. Rewriting those resets the browser's drag anchor
+    // and collapses the highlight on every step, which is what the skip is for.
+    const { root, push } = setup(withEmptyItem());
+    const a = runNode(root, 'a');
+    put(a, 0, root, root.children.length);
+    const before = window.getSelection()!;
+    const anchor = [before.anchorNode, before.anchorOffset] as const;
+    push();
+    const after = window.getSelection()!;
+    expect([after.anchorNode, after.anchorOffset]).toEqual([...anchor]);
+  });
+
+  it('keeps the caret in an empty list item that backspaces into a paragraph', () => {
+    const spans = withEmptyItem();
+    const { root, ops, settle } = setup(spans);
+    const empty = root.querySelector('[data-bi="1"]') as HTMLElement;
+    put(empty, 0, empty, 0); // the empty item, global index 3
+    key(root, 'deleteContentBackward');
+    // Outdent, not a merge: a depth-0 item becomes a paragraph, text untouched.
+    expect(ops).toEqual([[{ op: 'updateBlock', index: 2, block: { type: 'paragraph', parents: [] } }]]);
+    settle();
+    expect(root.querySelectorAll('.rt-li')).toHaveLength(1);
+    expect(caretBlock()).toBe(root.querySelector('[data-bi="1"]'));
+    expect(window.getSelection()!.isCollapsed).toBe(true);
+  });
+
+  it('keeps the caret when Enter exits the list the same way', () => {
+    // Identical ops to the backspace above, so identical breakage.
+    const spans = withEmptyItem();
+    const { root, ops, settle } = setup(spans);
+    const empty = root.querySelector('[data-bi="1"]') as HTMLElement;
+    put(empty, 0, empty, 0);
+    key(root, 'insertParagraph');
+    expect(ops).toEqual([[{ op: 'updateBlock', index: 2, block: { type: 'paragraph', parents: [] } }]]);
+    settle();
+    expect(caretBlock()).toBe(root.querySelector('[data-bi="1"]'));
+    expect(window.getSelection()!.isCollapsed).toBe(true);
+  });
+
+  it('keeps the caret when a nested empty item outdents one level', () => {
+    // The half that already worked: `<div class="rt-li">` on both sides, so
+    // Preact patches in place and the caret's node survives. Pinned so the fix
+    // above cannot regress it.
+    const spans: RichTextSpan[] = [
+      blockSpan('unordered-list-item'), textSpan('a'),
+      { type: 'block', value: { type: 'unordered-list-item', parents: ['unordered-list-item'] } },
+    ];
+    const { root, ops, settle } = setup(spans);
+    const empty = root.querySelector('[data-bi="1"]') as HTMLElement;
+    put(empty, 0, empty, 0);
+    key(root, 'deleteContentBackward');
+    expect(ops[0]).toEqual([{ op: 'updateBlock', index: 2, block: { type: 'unordered-list-item', parents: [] } }]);
+    settle();
+    expect(root.querySelectorAll('.rt-li')).toHaveLength(2);
+    expect(caretBlock()).toBe(root.querySelector('[data-bi="1"]'));
+    expect(window.getSelection()!.isCollapsed).toBe(true);
+  });
+});
+
 describe('selection direction', () => {
   it('preserves a backward selection across a push', () => {
     const spans = markdownToSpans('hello world');

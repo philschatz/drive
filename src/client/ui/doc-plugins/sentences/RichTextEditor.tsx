@@ -368,6 +368,25 @@ export function RichTextEditor({
   const sameSel = (a: Sel | null, b: Sel | null): boolean =>
     !!a && !!b && a.from === b.from && a.to === b.to && a.backward === b.backward;
 
+  /**
+   * Whether a DOM point sits INSIDE a rendered block, rather than on the editor
+   * root (or on a block we have already detached).
+   *
+   * The distinction the index arithmetic cannot make: `posFromDomPoint` resolves
+   * a root-level point to a block EDGE, so such a point reads as the very index
+   * the caret belongs at while painting no caret at all. The browser parks the
+   * selection there whenever we REPLACE the element the caret was in — an empty
+   * list item outdenting to a paragraph swaps `<div class="rt-li">` for
+   * `<p class="rt-p">`, and Preact rebuilds a subtree whose type changed instead
+   * of patching it, so the live-range fixup lifts the selection to the root.
+   */
+  const pointInBlock = (node: Node | null | undefined): boolean => {
+    const root = rootRef.current;
+    const el = node?.nodeType === Node.TEXT_NODE ? node.parentElement : (node as Element | null);
+    const block = el?.closest?.('[data-bfrom]') ?? null;
+    return !!root && !!block && root.contains(block);
+  };
+
   const setDomSelection = (target: Sel) => {
     const root = rootRef.current;
     if (!root) return;
@@ -849,7 +868,18 @@ export function RichTextEditor({
     // carry resolved peer caret positions), so most renders here need no write at
     // all. Writing anyway reset the browser's drag anchor and selection
     // granularity mid-gesture, which collapsed the highlight on every drag step.
-    if (!sameSel(readDomSelection(), target)) setDomSelection(target);
+    //
+    // But matching indices are not on their own proof the selection is where we
+    // want it: a CARET must also be inside a block. After an edit that changed a
+    // block's element type the browser leaves the selection on the root, which
+    // resolves to the same index and paints nothing — so backspacing an empty
+    // list item into a paragraph read as "the cursor vanished". Ranges are
+    // exempt on purpose: Ctrl+A and a drag that leaves the text legitimately sit
+    // on the root, and rewriting those is exactly what the skip above prevents.
+    const dom = window.getSelection();
+    const placed = target.from !== target.to
+      || (pointInBlock(dom?.anchorNode) && pointInBlock(dom?.focusNode));
+    if (!placed || !sameSel(readDomSelection(), target)) setDomSelection(target);
     reportSelection();
   }, [spans, editable, resyncEpoch]);
 

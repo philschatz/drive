@@ -119,6 +119,39 @@ test('double-click selects a word, and Ctrl+Z takes back the edit that replaced 
 });
 
 /**
+ * Backspacing an empty list item outdents it — and at depth 0 turns it into a
+ * paragraph, which is a change of ELEMENT (`<div class="rt-li">` → `<p>`). Preact
+ * rebuilds a subtree whose type changed rather than patching it, so the element
+ * holding the collapsed caret is torn out and the browser lifts the selection to
+ * the editor root. Only a real engine does that: jsdom leaves the selection on the
+ * detached node instead, which the offset mapping rejects outright, so the restore
+ * fires there and the bug is invisible.
+ *
+ * The restore's "the selection is already right" check compares INDICES, and a
+ * root point resolves to a block edge — which for a leading block is exactly the
+ * index being restored. So it wrote nothing and the caret was left in no block at
+ * all: it vanished. RichTextEditor.test.tsx pins the guard itself by parking a
+ * selection on the root; this pins that the browser really produces that state.
+ */
+test('the caret survives an empty leading list item outdenting to a paragraph', async () => {
+  await seed('- alpha\n\n- beta', 'beta');
+  await editor().locator('.rt-li').first().click();
+  await app.page.keyboard.press('Home');
+  await app.page.keyboard.press('Enter');     // an empty item is now block 0
+  await app.page.keyboard.press('ArrowLeft'); // ...with the caret back inside it
+  await app.page.keyboard.press('Backspace'); // depth 0 → paragraph
+
+  await expect(editor().locator('.rt-li')).toHaveCount(2);
+  const caret = await app.page.evaluate(() => {
+    const root = document.querySelector('[data-testid="rt-editor"]') as HTMLElement;
+    const n = window.getSelection()?.anchorNode ?? null;
+    const el = n?.nodeType === Node.TEXT_NODE ? n.parentElement : (n as Element | null);
+    return { onRoot: n === root, bi: (el?.closest('[data-bi]') as HTMLElement | null)?.dataset.bi ?? null };
+  });
+  expect(caret).toEqual({ onRoot: false, bi: '0' });
+});
+
+/**
  * A native mouse drag, upward. Moving the caret mints Automerge cursor tokens;
  * registering them makes the worker re-push the subscription, and that push
  * re-runs the editor's caret-restore effect — so a background round trip lands
