@@ -411,6 +411,15 @@ describe('caret at a block boundary', () => {
       ?? (sel.anchorNode!.parentElement?.closest('[data-bi]') as HTMLElement)?.dataset.bi;
     expect(bi).toBe('1');
     expect(root.querySelectorAll('.rt-li')).toHaveLength(2);
+    // And it lands ON the block element, exactly as an empty paragraph does.
+    // This is the mobile bug: an empty list item used to wrap its (absent) text
+    // in an inline `<span class="rt-li-text">`, so the caret was anchored inside
+    // an empty INLINE box. Blink on Android adjusts such a selection into one
+    // spanning the whole line and draws it with selection handles — so Enter in a
+    // list "selected the current line" instead of starting a new item, while
+    // paragraphs (whose empty caret target is the block itself) worked fine.
+    expect(sel.anchorNode).toBe(root.querySelector('[data-bi="1"]'));
+    expect(sel.isCollapsed).toBe(true);
   });
 });
 
@@ -535,16 +544,42 @@ describe('block and run rendering', () => {
     expect(pad(items[1])).toBeGreaterThan(pad(items[0]));
   });
 
+  // The bullet/number is drawn by a CSS ::before from `data-marker`, so it is not
+  // a DOM node at all. Two Android hazards go away with it: Blink mis-selects a
+  // caret anchored in an empty inline box (which the old `.rt-li-text` wrapper
+  // was, in an empty item), and it selects a `contenteditable=false` inline child
+  // when that child is tapped. A pseudo-element is invisible to the Selection and
+  // Range APIs, so neither can arise. (The absent contentEditable is not asserted
+  // here for the same reason as the divider above: jsdom has no such property.)
+  const shape = (el: Element) => Array.from(el.children).map(c => c.tagName.toLowerCase());
+
   it('numbers an ordered list', () => {
     const { root } = setup(markdownToSpans('1. one\n2. two'));
-    expect(Array.from(root.querySelectorAll('.rt-marker')).map(m => m.textContent))
+    expect(Array.from(root.querySelectorAll('.rt-li')).map(m => m.getAttribute('data-marker')))
       .toEqual(['1.', '2.']);
   });
 
   it('bullets an unordered list', () => {
     const { root } = setup(markdownToSpans('- one\n- two'));
-    expect(Array.from(root.querySelectorAll('.rt-marker')).map(m => m.textContent))
+    expect(Array.from(root.querySelectorAll('.rt-li')).map(m => m.getAttribute('data-marker')))
       .toEqual(['•', '•']);
+  });
+
+  it('gives a list item the same DOM shape as a paragraph', () => {
+    const { root } = setup(markdownToSpans('- one\n\ntwo'));
+    const li = root.querySelector('.rt-li')!;
+    // Runs are direct children, with nothing wrapping them — so every DOM point
+    // inside a list item is a point inside a run, as it is in a paragraph.
+    expect(shape(li)).toEqual(shape(root.querySelector('.rt-p')!));
+    expect(shape(li)).toEqual(['span']);
+  });
+
+  it('gives an EMPTY list item the same DOM shape as an empty paragraph', () => {
+    // The shape that decides where the caret goes after Enter: a lone <br> whose
+    // parent is the block itself, so `domPointAt` resolves to the block element.
+    const { root } = setup([blockSpan('unordered-list-item'), blockSpan('paragraph')]);
+    expect(shape(root.querySelector('.rt-li')!)).toEqual(['br']);
+    expect(shape(root.querySelector('.rt-p')!)).toEqual(['br']);
   });
 });
 

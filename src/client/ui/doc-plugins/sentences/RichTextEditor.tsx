@@ -167,7 +167,6 @@ function posFromDomPoint(root: HTMLElement, node: Node, offset: number): number 
 
 function runTextLength(node: Node): number {
   if (node.nodeType === Node.TEXT_NODE) return node.nodeValue?.length ?? 0;
-  if (node instanceof HTMLElement && node.classList.contains('rt-marker')) return 0;
   let len = 0;
   for (const child of Array.from(node.childNodes)) len += runTextLength(child);
   return len;
@@ -188,8 +187,11 @@ function domPointAt(root: HTMLElement, blocks: BlockNode[], index: number): { no
       if (textNode && textNode.nodeType === Node.TEXT_NODE) return { node: textNode, offset: i - r.from };
     }
   }
-  const container = (blockEl.querySelector('.rt-li-text') as HTMLElement | null) ?? blockEl;
-  return { node: container, offset: 0 };
+  // No run matched: the block is empty (or its runs are not in the DOM yet), so
+  // the caret goes at the start of the block element itself — where an empty
+  // block's lone <br> sits. Every block type resolves the same way here, which is
+  // the point: a list item must not offer some inner element instead.
+  return { node: blockEl, offset: 0 };
 }
 
 // ── Rendering ────────────────────────────────────────────────────────────────
@@ -237,12 +239,29 @@ function BlockEl({ b, bi, num, editable }: { b: BlockNode; bi: number; num: numb
       return <div {...attrs} className="rt-divider" contentEditable={false}><hr /></div>;
     case 'unordered-list-item':
     case 'ordered-list-item':
+      // The bullet/number is drawn by `.rt-li::before` from `data-marker`, so the
+      // item's children are its runs and nothing else — the same shape as a
+      // paragraph, deliberately.
+      //
+      // It used to be a real `contenteditable=false` span, with the runs in a
+      // second `.rt-li-text` span, and both halves of that broke touch editing.
+      // An EMPTY item's caret target was that wrapper — an empty inline box, which
+      // Blink on Android adjusts into a selection over the whole line and draws
+      // with selection handles, so Enter in a list appeared to select the current
+      // line instead of starting a new item (paragraphs, whose empty caret target
+      // is the block element, were unaffected). And tapping a non-editable inline
+      // child inside a contenteditable makes Chrome Android select that child.
+      // A pseudo-element cannot be reached by the Selection or Range APIs at all,
+      // so it also needs no `aria-hidden` and no exclusion from the offset
+      // arithmetic in `runTextLength`/`collectText`.
       return (
-        <div {...attrs} className="rt-li" style={{ paddingLeft: `${1.5 + blockDepth(b) * 1.5}rem` }}>
-          <span className="rt-marker" contentEditable={false} aria-hidden="true">
-            {t === 'ordered-list-item' ? `${num ?? 1}.` : '•'}
-          </span>
-          <span className="rt-li-text">{children}</span>
+        <div
+          {...attrs}
+          className="rt-li"
+          data-marker={t === 'ordered-list-item' ? `${num ?? 1}.` : '•'}
+          style={{ paddingLeft: `${1.5 + blockDepth(b) * 1.5}rem` }}
+        >
+          {children}
         </div>
       );
     default:
@@ -694,7 +713,7 @@ export function RichTextEditor({
     let out = '';
     const walk = (n: Node) => {
       if (n.nodeType === Node.TEXT_NODE) { out += n.nodeValue ?? ''; return; }
-      if (n instanceof HTMLElement && (n.classList.contains('rt-marker') || n.tagName === 'BR')) return;
+      if (n instanceof HTMLElement && n.tagName === 'BR') return;
       for (const c of Array.from(n.childNodes)) walk(c);
     };
     walk(blockEl);

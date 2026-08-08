@@ -82,7 +82,12 @@
   position: relative;
   margin: 0 0 0.125rem;
 }
-.rt-marker {
+/* The bullet/number, deliberately NOT a DOM node: a pseudo-element is
+   unreachable by the Selection and Range APIs, so it can never take a caret, be
+   tapped into a selection, or perturb the DOM-point ↔ offset arithmetic. See the
+   list case in RichTextEditor's BlockEl. */
+.rt-li::before {
+  content: attr(data-marker);
   position: absolute;
   transform: translateX(calc(-100% - 0.5rem));
   user-select: none;
