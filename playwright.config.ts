@@ -1,4 +1,5 @@
 import { defineConfig, devices } from '@playwright/test';
+import { execFileSync } from 'child_process';
 import { existsSync } from 'fs';
 
 /**
@@ -22,12 +23,44 @@ const executablePath = existsSync(chromiumPath) ? chromiumPath : undefined;
 // Run against the built app served by the production server, on a non-3000 port
 // so it never collides with a running `npm run dev`.
 //
-// `npm run test:pw` pins PW_PORT=4446 — a port nothing else in this repo serves,
-// which matters because of `reuseExistingServer` below: anything already
-// listening makes Playwright skip the build and test a stale dist/, which
-// invents convincing failures. The 4445 default is the deliberate opt-in to that
-// reuse (see the webServer comment).
-const PORT = Number(process.env.PW_PORT) || 4445;
+// With no PW_PORT we probe for a port nothing is listening on. That is what makes
+// `reuseExistingServer` below safe: a free port has no server to reuse, so every
+// run rebuilds. Setting PW_PORT explicitly is therefore the deliberate opt-in to
+// reuse — pre-run `PORT=4445 npm start` after a build, then `PW_PORT=4445
+// playwright test` to iterate without the multi-minute rebuild.
+function pickPort(): number {
+  const explicit = Number(process.env.PW_PORT);
+  if (explicit) return explicit;
+  // Node has no synchronous bind, and Playwright never awaits an async default
+  // export — so probe in a child process. Candidates sit below Linux's ephemeral
+  // range (32768+) so the kernel never hands one out to an outgoing socket.
+  const probe = `
+    const net = require('net');
+    const free = (p) => new Promise((res) => {
+      const s = net.createServer();
+      s.once('error', () => res(false));
+      s.listen(p, '0.0.0.0', () => s.close(() => res(true)));
+    });
+    (async () => {
+      for (let i = 0; i < 100; i++) {
+        const p = 4500 + Math.floor(Math.random() * 500);
+        if (await free(p)) return process.stdout.write(String(p));
+      }
+      process.exit(1);
+    })();
+  `;
+  const out = execFileSync(process.execPath, ['-e', probe], { encoding: 'utf8' }).trim();
+  const port = Number(out);
+  if (!port) throw new Error('playwright.config: found no free port in 4500-4999');
+  // Playwright re-requires this config in the loader and in every worker process,
+  // all forked with the parent's env — so publish the choice or they would each
+  // roll their own port and point baseURL somewhere the server is not.
+  process.env.PW_PORT = String(port);
+  console.log(`[playwright] auto-selected port ${port}`);
+  return port;
+}
+
+const PORT = pickPort();
 const baseURL = `http://localhost:${PORT}`;
 
 export default defineConfig({
@@ -67,8 +100,9 @@ export default defineConfig({
   // server — which also attaches the in-memory WebSocket relay the peers sync
   // through. `reuseExistingServer` lets a developer pre-run
   // `PORT=4445 npm start` (after a build) and then `PW_PORT=4445 playwright test`
-  // to skip the rebuild while iterating. That shortcut is opt-in by port:
-  // `npm run test:pw` uses 4446 precisely so it always rebuilds.
+  // to skip the rebuild while iterating. That shortcut is opt-in by port: a run
+  // without PW_PORT gets a port that was free a moment ago, so there is nothing
+  // to reuse and it always rebuilds.
   webServer: {
     // VITE_SYNC_INTERVAL_MS shrinks keyhive's cross-peer sync round from the 2000ms
     // production default so the two-peer specs converge in a fraction of the time
