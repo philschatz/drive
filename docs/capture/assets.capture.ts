@@ -611,8 +611,9 @@ test('new-doc.gif', async ({ browser }) => {
     await expect(page.getByTestId('doc-title')).toBeVisible({ timeout: 30_000 });
     await beat(page, 600);
 
-    // Renaming is deliberate now: kebab -> Rename -> a Material sheet. (This is
-    // why the beat still reads on camera — the old window.prompt was an OS
+    // Renaming opens a Material sheet, reached from the kebab or by tapping the
+    // title. The kebab is filmed because it shows where the action lives. (This
+    // is why the beat still reads on camera — the old window.prompt was an OS
     // dialog the recorder couldn't see.)
     await tap(page, page.getByRole('button', { name: 'More actions' }));
     await beat(page, 500);

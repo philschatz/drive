@@ -21,11 +21,16 @@ const habit = (extra: Record<string, any> = {}) => ({
   ...extra,
 });
 
-/** Open the editor on the seeded habit and navigate into one property pane. */
+/**
+ * Open the editor on the seeded habit and navigate into one property pane.
+ * A tap on the row records a completion — the editor is the row's SECONDARY
+ * surface, reached by holding it (right-click is the same gesture, and the one
+ * jsdom can dispatch synchronously).
+ */
 async function openPane(paneId: string, title = 'Stretch') {
   render(<Counters docId={DOC} />);
   await waitFor(() => expect(screen.getByText(title)).toBeTruthy());
-  fireEvent.click(rowOf(title));
+  fireEvent.contextMenu(rowOf(title));
   fireEvent.click(screen.getByTestId(`${paneId}-row`));
 }
 

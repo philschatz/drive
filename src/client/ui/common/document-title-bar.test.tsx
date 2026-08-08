@@ -73,18 +73,47 @@ describe('DocumentTitleBar', () => {
     expect(screen.getByText('My Calendar')).toBeDefined();
   });
 
-  it('renders title as plain text when not editable', () => {
+  it('renders title as inert text when not editable, and tapping it does nothing', () => {
     render(<DocumentTitleBar icon="grid" title="Sheet" />);
-    const el = screen.getByText('Sheet');
+    const el = screen.getByTestId('doc-title');
     expect(el.tagName).toBe('SPAN');
+    fireEvent.click(el);
+    expect(screen.queryByTestId('rename-input')).toBeNull();
   });
 
-  // Renaming is deliberate — kebab → Rename → a sheet. The title itself is
-  // never an input, so tapping it can't start an accidental rename.
-  it('renders title as plain text even when renameable', () => {
+  // Tapping the title renames, but never in place: it opens the same
+  // transactional sheet the kebab does, so a stray tap costs one Cancel.
+  it('renders the title as a button when renameable, and tapping it opens the rename sheet', () => {
     render(<DocumentTitleBar icon="grid" title="Sheet" titleEditable />);
-    expect(screen.getByTestId('doc-title').tagName).toBe('SPAN');
+    const el = screen.getByTestId('doc-title');
+    expect(el.tagName).toBe('BUTTON');
+    // Never an input in place.
     expect(screen.queryByTestId('doc-title-input')).toBeNull();
+    expect(screen.queryByTestId('rename-input')).toBeNull();
+
+    fireEvent.click(el);
+    expect((screen.getByTestId('rename-input') as HTMLInputElement).value).toBe('Sheet');
+  });
+
+  it('title tap → rename reports the new name', () => {
+    const onRename = jest.fn();
+    render(<DocumentTitleBar icon="grid" title="Old" titleEditable onRename={onRename} />);
+
+    fireEvent.click(screen.getByTestId('doc-title'));
+    fireEvent.input(screen.getByTestId('rename-input'), { target: { value: 'New' } });
+    fireEvent.click(screen.getByTestId('rename-save'));
+
+    expect(onRename).toHaveBeenCalledWith('New');
+    expect(screen.queryByTestId('rename-input')).toBeNull();
+  });
+
+  // The title's own tooltip is the document name (a truncated title needs it).
+  // It must NOT be "Rename" — that is how every spec locates the kebab item,
+  // and a second exact match would break `getByTitle('Rename')` everywhere.
+  it('does not collide with the kebab Rename item', () => {
+    render(<DocumentTitleBar icon="grid" title="Sheet" titleEditable />);
+    expect(screen.getByTitle('Rename').tagName).not.toBe('BUTTON');
+    expect(screen.getByTestId('doc-title').getAttribute('title')).toBe('Sheet');
   });
 
   it('offers Rename in the kebab only when renameable', () => {

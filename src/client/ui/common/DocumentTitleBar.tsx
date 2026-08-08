@@ -139,9 +139,10 @@ export function DocumentTitleBar<P extends PeerLike>({
 }: {
   icon: string;
   title: string;
-  /** Whether the user may rename — gates the kebab's Rename item. */
+  /** Whether the user may rename — makes the title itself tappable and gates
+   * the kebab's Rename item (both open the same sheet). */
   titleEditable?: boolean;
-  /** Commit a new document name (from the kebab's Rename prompt). */
+  /** Commit a new document name (from the rename sheet). */
   onRename?: (value: string) => void;
   docId?: string;
   peers?: P[];
@@ -249,10 +250,26 @@ export function DocumentTitleBar<P extends PeerLike>({
         {icon}
       </span>
 
-      {/* The title is always static text. Renaming is a deliberate act, reached
-          through the kebab's Rename item (or Home's doc-actions sheet) — an
-          always-live input made accidental renames a tap away. */}
-      <span data-testid="doc-title" className="md-title-large font-bold truncate flex-1 min-w-12">{title}</span>
+      {/* Tapping the title renames it — but it is never an input in place. It
+          opens the same transactional RenameSheet the kebab does, so the edit
+          still has one explicit Save and one Cancel and a stray tap costs
+          nothing. A title you may not edit stays inert text.
+          `title` is the document's own name (a truncated title needs the
+          tooltip); it must NOT be "Rename", which is how every spec locates the
+          kebab item — see document-title-bar.test.tsx and tests-pw/ui/support.ts. */}
+      {titleEditable ? (
+        <button
+          data-testid="doc-title"
+          aria-label={`Rename ${title}`}
+          title={title}
+          onClick={() => setRenaming(true)}
+          className="md-title-large font-bold truncate flex-1 min-w-12 text-left state-layer rounded"
+        >
+          {title}
+        </button>
+      ) : (
+        <span data-testid="doc-title" className="md-title-large font-bold truncate flex-1 min-w-12">{title}</span>
+      )}
 
       {children}
 

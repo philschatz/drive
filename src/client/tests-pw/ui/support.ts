@@ -100,8 +100,8 @@ type CreateLabel = 'Calendar' | 'Task list' | 'Spreadsheet' | 'Habit Tracker' | 
 /**
  * Create a document through the home page FAB → Create sheet. Docs are created
  * as "Untitled", so the requested name is applied afterwards through the
- * editor's kebab → Rename → rename sheet (the title bar is plain text now, and
- * renaming is deliberate).
+ * editor's kebab → Rename → rename sheet. (Tapping the title opens the same
+ * sheet, but the kebab is the path with a stable, unambiguous locator.)
  */
 export async function createDocViaUI(
   app: App,

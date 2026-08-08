@@ -89,9 +89,10 @@ function streakTitle(streak: number, frequency?: string): string {
 }
 
 /**
- * One counter row: tap opens the editor (which also holds Archive and Delete);
- * clicking the leading icon or the title records a completion. Long-press /
- * right-click / Shift+F10 / the trailing kebab open the editor too.
+ * One counter row: tap anywhere records a completion — the thing you came to
+ * do. Long-press / right-click / Shift+F10 / the trailing kebab open the editor
+ * (which also holds Archive and Delete), the same secondary-surface gesture
+ * Home and Tasks use.
  */
 function CounterListItem({ uid, ev, status, streak, reward, dueAt, canEdit, peerEditingEvents, onRecord, onEdit, onShowCompletions }: {
   uid: string;
@@ -123,12 +124,9 @@ function CounterListItem({ uid, ev, status, streak, reward, dueAt, canEdit, peer
     : status === 'overdue' ? 'var(--md-sys-color-error)' : undefined;
   const icon = status === 'done' ? 'check_circle' : status === 'overdue' ? 'error' : status === 'tally' ? 'exposure_plus_1' : 'radio_button_unchecked';
   const lp = useLongPress({
-    onTap: () => { if (canEdit) onEdit(uid, ev); },
+    onTap: () => { if (canEdit) onRecord(uid); },
     onLongPress: () => { if (canEdit) onEdit(uid, ev); },
   });
-  // Real <button>s so useLongPress ignores presses on them (interactive child)
-  // and keyboard users can tab to the record action.
-  const record = (e: MouseEvent) => { e.stopPropagation(); onRecord(uid); };
 
   return (
     <md-list-item
@@ -138,28 +136,19 @@ function CounterListItem({ uid, ev, status, streak, reward, dueAt, canEdit, peer
       style={{ opacity: peerEditingEvents[uid] ? 0.5 : status === 'done' ? 0.6 : 1 }}
       {...lp}
     >
-      {canEdit ? (
-        <button
-          slot="start"
-          aria-label={`Record completion for ${title}`}
-          className="material-symbols-outlined text-lg state-layer rounded-full"
-          style={{ color: iconColor }}
-          onClick={record}
-        >
-          {icon}
-        </button>
-      ) : (
-        <span slot="start" className="material-symbols-outlined text-lg" style={{ color: iconColor }}>
+      {/* Inert, like the checkbox on a task row: the row owns the gesture, so a
+          <button> here would make useLongPress skip the press (interactive
+          child) and kill long-press on the two biggest targets. The glyph is
+          hidden from AT — it would otherwise be read as the literal ligature
+          text ("check_circle") — and the status it encodes is carried instead
+          by the same wording as the visible section heading. */}
+      <span slot="start" className="flex items-center">
+        <span aria-hidden="true" className="material-symbols-outlined text-lg" style={{ color: iconColor }}>
           {icon}
         </span>
-      )}
-      <div slot="headline">
-        {canEdit ? (
-          <button className="text-left" onClick={record}>{title}</button>
-        ) : (
-          title
-        )}
-      </div>
+        <span className="sr-only">{SECTION_LABELS[status]}</span>
+      </span>
+      <div slot="headline">{title}</div>
       <span slot="end" className="flex items-center gap-1.5">
         {/* Overdue and To-do rows answer "when?", not "how often?" — the
             recurrence moves into the tooltip and the clock takes its place. */}

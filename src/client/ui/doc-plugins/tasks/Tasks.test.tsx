@@ -108,6 +108,37 @@ describe('Tasks container CRUD', () => {
     confirmSpy.mockRestore();
   });
 
+  // The row's SECONDARY surface. Tap is the primary action (toggle), so every
+  // path to the editor must leave `progress` alone. jsdom can't run the real
+  // 450ms hold, but right-click and Shift+F10 route through the same
+  // useLongPress `onLongPress` and dispatch synchronously.
+  it('opens the editor via right-click and Shift+F10 without toggling', async () => {
+    mock.__setDoc(DOC, {
+      '@type': 'TaskList', name: 'Test Tasks',
+      tasks: { t1: { '@type': 'Task', title: 'Buy milk', progress: 'needs-action' } },
+    });
+    render(<Tasks docId={DOC} />);
+    await waitFor(() => expect(screen.getByText('Buy milk')).toBeTruthy());
+
+    // button 2 = a real mouse right-click, which produces NO follow-up click.
+    fireEvent.contextMenu(rowOf('Buy milk'), { button: 2 });
+    expect(screen.getByText('Edit Task')).toBeTruthy();
+    closeSheet();
+    expect(mock.__getDoc(DOC).tasks.t1.progress).toBe('needs-action');
+
+    fireEvent.keyDown(rowOf('Buy milk'), { key: 'F10', shiftKey: true });
+    expect(screen.getByText('Edit Task')).toBeTruthy();
+    closeSheet();
+    expect(mock.__getDoc(DOC).tasks.t1.progress).toBe('needs-action');
+
+    // …and the NEXT tap still toggles. Regression guard: the post-long-press
+    // click-swallow used to be armed by right-click too, so it outlived its
+    // gesture and silently ate this tap.
+    fireEvent.click(rowOf('Buy milk'));
+    expect(screen.queryByText('Edit Task')).toBeNull();
+    expect(mock.__getDoc(DOC).tasks.t1.progress).toBe('completed');
+  });
+
   it('shows the empty state with no tasks', async () => {
     render(<Tasks docId={DOC} />);
     await waitFor(() => expect(screen.getByText('No tasks yet.')).toBeTruthy());

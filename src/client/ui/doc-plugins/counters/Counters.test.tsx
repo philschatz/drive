@@ -27,7 +27,7 @@ const dailyHabit = (title: string, start = '2026-07-01') => ({
 describe('Counters container', () => {
   beforeEach(() => { mock.__reset(); });
 
-  it('adds a daily habit via the FAB and records a completion via the icon/title buttons', async () => {
+  it('adds a daily habit via the FAB and records a completion by tapping the row', async () => {
     mock.__setDoc(DOC, { '@type': 'Calendar+Counters', name: 'Test Counters', events: {} });
     render(<Counters docId={DOC} />);
     await waitFor(() => expect(document.querySelector('md-fab')).toBeTruthy());
@@ -54,26 +54,26 @@ describe('Counters container', () => {
     expect(screen.getByRole('heading', { name: 'To do' })).toBeTruthy();
     expect(rowOf('Stretch').getAttribute('data-status')).toBe('pending');
 
-    // Clicking the leading icon records a completion → moves to "Done".
-    // A single-day streak is not a streak yet: the flame badge only renders
-    // once the streak reaches 2+ (recurring items show a streak, not a total).
-    fireEvent.click(within(rowOf('Stretch')).getByRole('button', { name: 'Record completion for Stretch' }));
+    // Tapping the row records a completion → moves to "Done". A single-day
+    // streak is not a streak yet: the flame badge only renders once the streak
+    // reaches 2+ (recurring items show a streak, not a total).
+    fireEvent.click(rowOf('Stretch'));
     expect(rowOf('Stretch').getAttribute('data-status')).toBe('done');
     expect(screen.getByRole('heading', { name: 'Done' })).toBeTruthy();
     expect(within(rowOf('Stretch')).queryByTitle('1-day streak')).toBeNull();
 
-    // The title text is a record button too — a second click adds another
-    // completion (streak stays 1: same day) without opening the editor.
-    fireEvent.click(within(rowOf('Stretch')).getByRole('button', { name: 'Stretch' }));
+    // Tapping is the primary action, so a second tap adds another completion
+    // (streak stays 1: same day) rather than opening the editor.
+    fireEvent.click(rowOf('Stretch'));
     expect(screen.queryByText('Edit Counter')).toBeNull();
     const events = mock.__getDoc(DOC).events as Record<string, any>;
     const uid = Object.keys(events).find(k => events[k].title === 'Stretch')!;
     expect(Object.keys(events[uid].completions).length).toBe(2);
     expect(within(rowOf('Stretch')).queryByTitle('1-day streak')).toBeNull();
 
-    // Clicking the row itself (outside icon/title) opens the editor — and must
-    // NOT record another completion.
-    fireEvent.click(rowOf('Stretch'));
+    // A hold (proxied by right-click) opens the editor instead — and must NOT
+    // record another completion.
+    fireEvent.contextMenu(rowOf('Stretch'));
     expect(screen.getByText('Edit Counter')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
     expect(Object.keys(mock.__getDoc(DOC).events[uid].completions).length).toBe(2);
@@ -85,10 +85,11 @@ describe('Counters container', () => {
     render(<Counters docId={DOC} />);
     await waitFor(() => expect(screen.getByText('Meditate')).toBeTruthy());
 
-    // Archive lives in the editor: open it by clicking the row, then Archive.
-    // It's an md-list-item, which carries no implicit role while unregistered
-    // under jsdom — address it by testid.
-    fireEvent.click(rowOf('Meditate'));
+    // Archive lives in the editor: open it by holding the row (right-click is
+    // the same secondary gesture), then Archive. It's an md-list-item, which
+    // carries no implicit role while unregistered under jsdom — address it by
+    // testid.
+    fireEvent.contextMenu(rowOf('Meditate'));
     fireEvent.click(screen.getByTestId('ced-archive'));
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
     expect(screen.getByRole('heading', { name: 'Archived' })).toBeTruthy();
@@ -164,7 +165,7 @@ describe('Counters container', () => {
     await waitFor(() => expect(screen.getByText('Water plants')).toBeTruthy());
     expect(rowOf('Water plants').getAttribute('data-status')).toBe('overdue');
 
-    fireEvent.click(within(rowOf('Water plants')).getByRole('button', { name: 'Record completion for Water plants' }));
+    fireEvent.click(rowOf('Water plants'));
     // The recurrence restarts from today; `created` is untouched, so the habit's
     // history (and the chart) still runs from when it was made.
     expect(mock.__getDoc(DOC).events.e1.start).toBe(today);
@@ -189,7 +190,7 @@ describe('Counters container', () => {
     render(<Counters docId={DOC} />);
     await waitFor(() => expect(screen.getByText('Meditate')).toBeTruthy());
 
-    fireEvent.click(within(rowOf('Meditate')).getByRole('button', { name: 'Record completion for Meditate' }));
+    fireEvent.click(rowOf('Meditate'));
     const ev = mock.__getDoc(DOC).events.e1;
     expect(ev.start).toBe(today); // the anchor moved…
     expect(ev.created.substring(0, 10)).toBe(d(10)); // …and the origin was preserved
@@ -246,7 +247,7 @@ describe('Counters container', () => {
     expect(within(rowOf('Stretch')).getByTestId('counter-due').textContent).toMatch(/ left$/);
 
     // Recording it flips the row to Done, where the recurrence badge returns.
-    fireEvent.click(within(rowOf('Stretch')).getByRole('button', { name: 'Record completion for Stretch' }));
+    fireEvent.click(rowOf('Stretch'));
     expect(rowOf('Stretch').getAttribute('data-status')).toBe('done');
     expect(within(rowOf('Stretch')).queryByTestId('counter-due')).toBeNull();
     expect(within(rowOf('Stretch')).getByText('daily')).toBeTruthy();

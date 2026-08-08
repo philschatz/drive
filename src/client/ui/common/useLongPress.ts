@@ -8,6 +8,11 @@
  * the ContextMenu key) and the row's always-visible trailing kebab, so long-press
  * is never the only way to reach it.
  *
+ * The click-swallow that follows a long-press is scoped to the gesture that
+ * armed it: a new `pointerdown` clears it, and a mouse right-click never arms
+ * it at all. Otherwise the flag outlives its press and eats the next real tap —
+ * which, now that a tap is the row's primary action, silently drops the edit.
+ *
  * Wiring: spread the returned handlers on the row element (e.g. an `md-list-item`).
  * Do NOT also add your own `onClick` — the primary action is `onTap`, invoked from
  * the real click event so keyboard Enter/Space on a focusable row still works. The
@@ -85,6 +90,9 @@ export function useLongPress(opts: UseLongPressOptions): LongPressHandlers {
       active.current = true;
       fired.current = false;
       moved.current = false;
+      // A new press is a new gesture: whatever armed the swallow belongs to the
+      // last one and must not eat this press's click.
+      suppressClick.current = false;
       start.current = { x: e.clientX, y: e.clientY };
       clear();
       const { delay = 450 } = cb.current;
@@ -126,7 +134,13 @@ export function useLongPress(opts: UseLongPressOptions): LongPressHandlers {
       const { contextMenuAsLongPress = true } = cb.current;
       if (!contextMenuAsLongPress) return;
       e.preventDefault();
-      suppressClick.current = true;
+      // Only arm the click-swallow when a click is actually coming. A mouse
+      // right-click (button 2) never produces one — `click` is primary-button
+      // only, `auxclick` carries the rest — so arming here would leave the flag
+      // set and eat the user's NEXT genuine tap. A touch long-press, which also
+      // raises contextmenu (Android), reports button 0 and IS followed by a
+      // click, so that one still needs swallowing.
+      if (e.button !== 2) suppressClick.current = true;
       cb.current.onLongPress(e);
     },
     // Keyboard path to the secondary action: the standard "open context
