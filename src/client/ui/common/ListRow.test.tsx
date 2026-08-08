@@ -126,6 +126,48 @@ describe('ListRow', () => {
     expect(onTap).toHaveBeenCalledTimes(1);
   });
 
+  describe('as a link', () => {
+    const renderLink = (onSelect = jest.fn()) => {
+      render(
+        <ListRow data-testid="row" href="#/d/abc" actions={[{ icon: 'edit', label: 'Rename', onSelect }]}>
+          <div slot="headline">Doc</div>
+        </ListRow>,
+      );
+      return onSelect;
+    };
+
+    it('navigates on a plain click and leaves modified clicks to the browser', () => {
+      window.location.hash = '#/';
+      renderLink();
+      expect(row().getAttribute('type')).toBe('link');
+      expect(row().getAttribute('href')).toBe('#/d/abc');
+
+      // Each of these means "somewhere else" — a new tab or window. Navigating
+      // here too would open the target in both.
+      for (const mod of [{ metaKey: true }, { ctrlKey: true }, { shiftKey: true }, { altKey: true }]) {
+        fireEvent.click(row(), mod);
+        expect(window.location.hash).toBe('#/');
+      }
+
+      fireEvent.click(row());
+      expect(window.location.hash).toBe('#/d/abc');
+    });
+
+    it('gives right-click back to the link, keeping the hold and Shift+F10', () => {
+      const onSelect = renderLink();
+
+      // Taking the context menu here would cost "Open in new tab" and "Copy
+      // link address" to buy a third route to an action two gestures reach.
+      const menu = new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2 });
+      row().dispatchEvent(menu);
+      expect(menu.defaultPrevented).toBe(false);
+      expect(onSelect).not.toHaveBeenCalled();
+
+      fireEvent.keyDown(row(), { key: 'F10', shiftKey: true });
+      expect(onSelect).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it('a press on the trailing control fires neither the tap nor the hold', () => {
     const onTap = jest.fn();
     const onSelect = jest.fn();

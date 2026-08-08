@@ -111,18 +111,21 @@ describe('the "All calendars" menu item', () => {
   });
 
   /**
-   * A document row's gestures. Tap opens the doc; the four things you do *to* a
-   * document live behind the kebab, and a hold runs the first of them — so the
-   * order below is a contract, not presentation. Right-click stands in for the
-   * 450ms hold (useLongPress routes both to the same callback); `button: 2` is a
-   * genuine mouse right-click, which produces no follow-up click and so must not
-   * arm the post-hold click-swallow.
+   * A document row's gestures. The row is a real LINK, which is what makes the
+   * rest of this different from every other list in the app: right-click belongs
+   * to the browser here (Open in new tab, Copy link address), so the secondary
+   * action is reached by a hold or Shift+F10 and NOT by right-click. The kebab's
+   * order is a contract rather than presentation, because a hold runs the first
+   * item.
    */
-  it('holds a row to rename it, and lists Rename first in the kebab', async () => {
+  it('is a link, and lists Rename first in the kebab', async () => {
     seed([{ id: 'd1', type: 'Calendar', name: 'Work' }]);
     (api as any).getMyAccess = jest.fn(() => Promise.resolve('admin'));
     render(<Home />);
     const [row] = await rows(1);
+
+    expect(row.getAttribute('type')).toBe('link');
+    expect(row.getAttribute('href')).toBe('#/d/d1');
 
     // Read the headline slot, not the item: md-icon never upgrades under jsdom,
     // so its ligature text ("edit") would otherwise be part of textContent.
@@ -130,19 +133,29 @@ describe('the "All calendars" menu item', () => {
     expect([...row.querySelectorAll('md-menu-item [slot="headline"]')].map(i => i.textContent?.trim()))
       .toEqual(['Rename', 'Share', 'Archive', 'View source']);
 
-    fireEvent.contextMenu(row, { button: 2 });
+    // Shift+F10 is the keyboard route to the first action; right-click is not a
+    // route at all on a link, so the browser's own menu survives.
+    const menu = new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2 });
+    row.dispatchEvent(menu);
+    expect(menu.defaultPrevented).toBe(false);
+    expect(screen.queryByTestId('rename-sheet')).toBeNull();
+
+    fireEvent.keyDown(row, { key: 'F10', shiftKey: true });
     expect(await screen.findByTestId('rename-sheet')).toBeTruthy();
   });
 
-  it('opens the doc on a plain tap, even after a hold', async () => {
+  it('opens the doc on a plain click, and leaves a modified click to the browser', async () => {
     seed([{ id: 'd1', type: 'Calendar', name: 'Work' }]);
     (api as any).getMyAccess = jest.fn(() => Promise.resolve('admin'));
+    window.location.hash = '#/';
     render(<Home />);
     const [row] = await rows(1);
 
-    fireEvent.contextMenu(row, { button: 2 });
-    await screen.findByTestId('rename-sheet');
-    // The swallow that follows a hold must not outlive its own gesture.
+    // Cmd/Ctrl+click means "open a new tab" — ours must not also navigate this
+    // one, or the doc would open in both.
+    fireEvent.click(row, { metaKey: true });
+    expect(window.location.hash).toBe('#/');
+
     fireEvent.click(row);
     expect(window.location.hash).toContain('d1');
   });

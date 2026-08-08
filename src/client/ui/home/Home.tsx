@@ -44,8 +44,10 @@ function applyQueryResult(prev: DocEntry[], docId: string, result: any, lastModi
 }
 
 /**
- * One document row: a Material two-line list item. Tap opens the doc; the four
- * things you can do *to* it rather than *in* it live behind the kebab.
+ * One document row: a Material two-line list item. It is a real link, so opening
+ * a doc in a new tab (Cmd/Ctrl+click, middle-click) works and right-click still
+ * offers Copy link address. The four things you can do *to* a document rather
+ * than *in* it live behind the kebab.
  *
  * Rename leads, because a hold runs the first action and holding a row means
  * "edit this" everywhere else in the app — renaming is the nearest a document
@@ -54,10 +56,9 @@ function applyQueryResult(prev: DocEntry[], docId: string, result: any, lastModi
  * means no hold at all: which action a gesture runs shouldn't depend on
  * permissions, and the kebab still reaches the rest.
  */
-function DocListItem({ entry, unseenFlag, onOpen, onShare, onRename, onArchive }: {
+function DocListItem({ entry, unseenFlag, onShare, onRename, onArchive }: {
   entry: DocEntry;
   unseenFlag: boolean;
-  onOpen: (entry: DocEntry) => void;
   onShare: (entry: DocEntry) => void;
   onRename: (entry: DocEntry) => void;
   onArchive: (entry: DocEntry) => void;
@@ -74,7 +75,7 @@ function DocListItem({ entry, unseenFlag, onOpen, onShare, onRename, onArchive }
   return (
     <ListRow
       data-testid="doc-row"
-      onTap={() => onOpen(entry)}
+      href={docUrl(entry.documentId)}
       actionsLabel={`More actions for ${entry.name || 'Untitled'}`}
       actions={[
         { icon: 'edit', label: 'Rename', onSelect: () => onRename(entry), disabled: !canRename },
@@ -404,7 +405,6 @@ export function Home({ path }: { path?: string }) {
             key={entry.documentId}
             entry={entry}
             unseenFlag={!!unseen[entry.documentId]}
-            onOpen={e => { window.location.hash = docUrl(e.documentId); }}
             onShare={e => { window.location.hash = shareUrl(e.documentId); }}
             onRename={e => setRenameEntry(e)}
             onArchive={e => {

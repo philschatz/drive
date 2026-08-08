@@ -483,6 +483,7 @@ export function SourceViewer({ docId, rest, readOnly }: { docId?: string; rest?:
             levelPath={level.levelPath}
             value={levelValue}
             editable={editable}
+            docId={docId}
             richPaths={richPaths}
             markerCounts={markerCounts}
             selectedKey={level.selectedKey}

@@ -33,6 +33,14 @@ export type RowAction = OverflowMenuItem & { testId?: string };
 export type ListRowProps = JSX.IntrinsicElements['md-list-item'] & {
   /** Primary action: a tap anywhere on the row, or keyboard activation. */
   onTap?: (e: MouseEvent) => void;
+  /**
+   * Makes the row a real link, for a row whose primary action is navigation
+   * (`docUrl(id)`, `sourceUrl(id, path)`). Use this rather than an `onTap` that
+   * assigns `location.hash`: the browser then gives Cmd/Ctrl+click and
+   * middle-click a new tab for free, AT announces a link rather than a button,
+   * and the target shows in the status bar. Pass one or the other, not both.
+   */
+  href?: string;
   /** Secondary actions. Length picks the trailing control; [0] is the hold. */
   actions?: RowAction[];
   /** Trailing content that is NOT an action — badges, presence dots, chevrons. */
@@ -43,7 +51,7 @@ export type ListRowProps = JSX.IntrinsicElements['md-list-item'] & {
 };
 
 export function ListRow({
-  onTap, actions = [], end, actionsLabel, children, ...rest
+  onTap, href, actions = [], end, actionsLabel, children, ...rest
 }: ListRowProps) {
   const [first] = actions;
   // A disabled first action means no hold rather than a hold that falls through
@@ -55,15 +63,40 @@ export function ListRow({
         else if (first.href) window.location.hash = first.href;
       }
     : undefined;
-  const lp = useLongPress({ onTap, onLongPress: run });
+  // The standard SPA-link click. The browser keeps every gesture that means
+  // "somewhere else" — Cmd/Ctrl+click and middle-click for a new tab, Shift for
+  // a window — and we handle only the plain left-click, because this is a hash
+  // route and `hashHistory.push` is exactly this assignment. Handling it here
+  // rather than leaving it to the anchor is also what keeps a link row testable:
+  // md-list-item never upgrades under jsdom, so its internal <a> doesn't exist
+  // and an href alone would navigate nowhere.
+  const follow = href
+    ? (e: MouseEvent) => {
+        if (e.defaultPrevented || e.button !== 0) return;
+        if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+        e.preventDefault();
+        window.location.hash = href;
+      }
+    : undefined;
+
+  const lp = useLongPress({
+    onTap: onTap ?? follow,
+    onLongPress: run,
+    // On a link, right-click belongs to the link: taking it would cost "Open in
+    // new tab" and "Copy link address" to buy a third route to an action a hold
+    // and Shift+F10 already reach. Elsewhere it stays the desktop equivalent of
+    // a hold, since there is no browser menu worth keeping on a plain row.
+    contextMenuAsLongPress: !href,
+  });
 
   return (
     <md-list-item
-      // Only a row with something to do is a button. Without `type`, md-list-item
-      // renders an inert <li tabindex="-1"> instead of a focusable <button> —
-      // which is what a 0-action, no-tap row should be, rather than a control
-      // that takes a tab stop and then does nothing.
-      type={onTap || run ? 'button' : undefined}
+      // Only a row with something to do is a button. Without `type`,
+      // md-list-item renders an inert <li tabindex="-1"> instead of a focusable
+      // <button> — which is what a 0-action, no-tap row should be, rather than a
+      // control that takes a tab stop and then does nothing.
+      type={href ? 'link' : onTap || follow || run ? 'button' : undefined}
+      href={href}
       // The ONLY announcement AT gets that a second surface exists: md-list-item
       // re-emits exactly aria-selected/checked/expanded/haspopup onto its inner
       // button and shifts every other aria-* to data-*, so aria-label and

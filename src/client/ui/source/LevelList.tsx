@@ -10,7 +10,9 @@
  *
  * A row's chevron is the honest signal for what a tap does: **chevron =
  * navigates** (a container, or a rich-text field with its own screen), no chevron
- * = opens a sheet.
+ * = opens a sheet. A navigating row is a real link, so any level of a document
+ * can be opened in a new tab or copied as a URL; a sheet is not a place, so a
+ * leaf row stays a plain tap.
  *
  * Beyond that a row does exactly one thing — delete — so it wears a trash icon
  * rather than a kebab, and a hold (or right-click, or Shift+F10) runs it. There
@@ -25,6 +27,7 @@ import { Button } from '@/components/ui/button';
 import { PeerDot } from '../common/PeerDot';
 import { peerDisplayName, peerIdentityKey } from '../common/presence';
 import { ListRow } from '../common/ListRow';
+import { sourceUrl } from '../common/doc-urls';
 import { usePeerTransports, type PeerTransport } from '../worker-api';
 import type { ValidationError } from '../../../shared/schemas';
 import {
@@ -63,6 +66,8 @@ export interface RowTarget {
 
 interface RowProps {
   target: RowTarget;
+  /** Lets a navigating row be a real link rather than a scripted hash write. */
+  docId?: string;
   editable: boolean;
   /** Marker count for a rich-text field, shown as a badge. */
   markerCount: number;
@@ -77,7 +82,7 @@ interface RowProps {
 }
 
 function NodeRow({
-  target, editable, markerCount, changed, revealed, error, hasDescendantError,
+  target, docId, editable, markerCount, changed, revealed, error, hasDescendantError,
   peer, transports, onPrimary, onDelete,
 }: RowProps) {
   const { key, kind, value } = target;
@@ -94,7 +99,12 @@ function NodeRow({
       // Greyed while a peer is in it, but never disabled — Automerge merges
       // concurrent edits, so the dot informs rather than locks.
       style={{ opacity: peer && pathsEqual(peer.path, target.path) ? 0.5 : undefined }}
-      onTap={() => onPrimary(target)}
+      // A row that navigates is a link, so a level deep in a document can be
+      // opened in a new tab or copied as a URL — `hashHistory.push` is just a
+      // `location.hash` write, so the href is the same navigation. A leaf row
+      // opens a sheet instead, which is not a place, so it stays a tap.
+      href={navigates && docId ? sourceUrl(docId, target.path) : undefined}
+      onTap={navigates && docId ? undefined : () => onPrimary(target)}
       // Empty on a read-only document, which is what leaves such a row with no
       // hold at all — the gesture used to fire regardless of `editable` and open
       // a sheet whose Delete then silently did nothing.
@@ -157,11 +167,12 @@ function NodeRow({
 }
 
 export function LevelList({
-  levelPath, value, editable, richPaths, markerCounts, selectedKey,
+  levelPath, value, docId, editable, richPaths, markerCounts, selectedKey,
   changedPaths, errors, peerFocusedPaths, onPrimary, onDelete,
 }: {
   levelPath: Path;
   value: any;
+  docId?: string;
   editable: boolean;
   /** Path keys of the string fields that carry rich-text markers. */
   richPaths: Set<string>;
@@ -227,6 +238,7 @@ export function LevelList({
           <NodeRow
             key={String(t.key)}
             target={t}
+            docId={docId}
             editable={editable}
             markerCount={markerCounts.get(t.path.join('/')) ?? 0}
             changed={changedPaths.has(t.path.join('/'))}
