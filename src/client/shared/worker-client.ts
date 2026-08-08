@@ -11,7 +11,7 @@
  * to `route()` / `fail()` and re-exports the client's operations verbatim, so the
  * on-the-wire protocol is unchanged.
  */
-import type { WorkerToMain, ValidationError } from '../../shared/worker-protocol';
+import type { WorkerToMain, ValidationError, MarkerField } from '../../shared/worker-protocol';
 import type { PresenceState, PeerState } from '@automerge/automerge-repo';
 
 /** Minimal surface of a Worker we depend on (so tests can supply a fake). */
@@ -25,6 +25,8 @@ type QueryResultCb = (
   // Registered cursor tokens → their current flat-text position (see
   // subscribeCursors). Rides the same message as `spans` on purpose.
   cursors?: Record<string, number | null>,
+  // Every marker-bearing string field of the doc (see the allRichText option).
+  richTextFields?: MarkerField[],
 ) => void;
 type QueryErrorCb = (error: string) => void;
 type PresenceCb = (peers: Record<string, PeerState<PresenceState>>) => void;
@@ -237,7 +239,7 @@ export class WorkerClient {
             if (cb.onError) cb.onError(msg.error);
             else console.warn('[worker-api] query-result error subId=%d:', msg.subId, msg.error);
           } else {
-            cb.onResult(msg.result, msg.heads, msg.lastModified, msg.spans, msg.cursors);
+            cb.onResult(msg.result, msg.heads, msg.lastModified, msg.spans, msg.cursors, msg.richTextFields);
           }
         }
         return true;
@@ -368,11 +370,14 @@ export class WorkerClient {
     filter: string,
     onResult: QueryResultCb,
     onError?: QueryErrorCb,
-    opts?: { peek?: boolean; meta?: boolean; spansPath?: (string | number)[] },
+    opts?: { peek?: boolean; meta?: boolean; spansPath?: (string | number)[]; allRichText?: boolean },
   ): () => void {
     const subId = ++this.nextSubId;
     this.queryCallbacks.set(subId, { onResult, onError });
-    this.fire('subscribe-query', { subId, docId, filter, peek: opts?.peek, meta: opts?.meta, spansPath: opts?.spansPath });
+    this.fire('subscribe-query', {
+      subId, docId, filter,
+      peek: opts?.peek, meta: opts?.meta, spansPath: opts?.spansPath, allRichText: opts?.allRichText,
+    });
     return () => {
       this.queryCallbacks.delete(subId);
       this.fire('unsubscribe-query', { subId });

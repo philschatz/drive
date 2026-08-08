@@ -16,7 +16,7 @@
  */
 import { deepAssign } from './deep-assign';
 import { syncToTarget } from './sync-to-target';
-import { validateDocument, DRIVE_SETTINGS_TYPE } from './schemas';
+import { validateDocument, markerFieldsFor, type MarkerField, DRIVE_SETTINGS_TYPE } from './schemas';
 import { KeyhiveOps, bytesToBase64, base64ToBytes, errMsg } from './keyhive-ops';
 import { LRU } from './lru-cache';
 import {
@@ -27,7 +27,7 @@ import { createKeyhiveRepo } from './keyhive-repo';
 import { RELAY_PEER_ID } from './relay-identity';
 import type { EngineHost } from './engine-host';
 import type { MainToWorker, WorkerToMain } from './worker-protocol';
-import { applyRichTextOps, richTextAwareStringSync, type RichTextOp } from './rich-text-ops';
+import { BLOCK_MARKER, applyRichTextOps, richTextAwareStringSync, type RichTextOp, type RichTextSpan } from './rich-text-ops';
 import { spansToMarkdown } from './rich-text-markdown';
 import { EngineSettings, type EngineSettingsSurface } from './engine-settings';
 import { EnginePresence, type EnginePresenceSurface } from './engine-presence';
@@ -61,6 +61,11 @@ interface SubInfo {
   spansPath?: (string | number)[];
   lastSpansJson?: string;
   lastCursorsJson?: string;
+  // Deliver every marker-bearing string field of the doc, found by asking
+  // Automerge about each string rather than by schema declaration — the source
+  // inspector's option, since only it cares about undeclared fields.
+  allRichText?: boolean;
+  lastRichTextJson?: string;
   /**
    * The projection this subscriber was last sent. The query cache is keyed by
    * (docId, filter), NOT by subId, so with two subscriptions sharing a filter the
@@ -637,13 +642,13 @@ export class EngineCore {
   }
 
   /** Subscribe to a jq query, routing results to the given poster. */
-  async subscribeQuery(docId: string, subId: number, filter: string, post: (m: any) => void, peek?: boolean, meta?: boolean, spansPath?: (string | number)[]): Promise<void> {
+  async subscribeQuery(docId: string, subId: number, filter: string, post: (m: any) => void, peek?: boolean, meta?: boolean, spansPath?: (string | number)[], allRichText?: boolean): Promise<void> {
     this.subIdToDocId.set(subId, docId);
-    const sub: SubInfo = { filter, post, peek, meta, spansPath };
+    const sub: SubInfo = { filter, post, peek, meta, spansPath, allRichText };
 
     // The query cache stores only the jq projection; a spans sub must wait for
     // a real push (a cached result without spans would look like an empty doc).
-    if (!this.debugEnabled && !spansPath) {
+    if (!this.debugEnabled && !spansPath && !allRichText) {
       const cacheKey = queryCacheKey(docId, filter);
       let cached = this.queryResultCache.get(cacheKey);
       if (!cached) {
@@ -717,6 +722,11 @@ export class EngineCore {
       if (ts) lastModified = ts;
     }
 
+    // Shared by every allRichText sub on this doc — the walk is the expensive
+    // part, and it depends only on the document, not on the subscription.
+    let allRichTextFields: MarkerField[] | undefined;
+    let allRichTextJson: string | undefined;
+
     const activeHashes = new Set<string>();
     for (const [subId, sub] of entry.subscriptions) {
       activeHashes.add(hashStr(sub.filter));
@@ -764,15 +774,28 @@ export class EngineCore {
           cursorsChanged = cursorsJson !== sub.lastCursorsJson;
           sub.lastCursorsJson = cursorsJson;
         }
+        // Markers are invisible to the jq projection just like spans, so an
+        // allRichText sub also has to post when only they changed — otherwise
+        // bolding a word would never reach the source inspector.
+        let richTextChanged = false;
+        if (sub.allRichText) {
+          if (allRichTextFields === undefined) {
+            allRichTextFields = this.allMarkerFields(activeDoc);
+            allRichTextJson = stableJson(allRichTextFields);
+          }
+          richTextChanged = allRichTextJson !== sub.lastRichTextJson;
+          sub.lastRichTextJson = allRichTextJson;
+        }
         // meta subs still get the post so their heads/lastModified stay fresh even
         // when the jq projection is byte-identical (Home's relative-time).
         // `cursorsChanged` is what makes a freshly-registered peer caret render
         // right away instead of waiting for somebody to type.
-        if (!changed && !spansChanged && !cursorsChanged && !sub.meta) continue;
+        if (!changed && !spansChanged && !cursorsChanged && !richTextChanged && !sub.meta) continue;
         sub.post({
           type: 'query-result', subId, result, heads, lastModified,
           ...(sub.spansPath ? { spans } : {}),
           ...(cursors ? { cursors } : {}),
+          ...(sub.allRichText ? { richTextFields: allRichTextFields } : {}),
         });
       } catch (err: any) {
         sub.post({ type: 'query-result', subId, result: null, heads, error: errMsg(err) });
@@ -791,8 +814,65 @@ export class EngineCore {
     if (hasValidation) void this.pushValidation(docId, activeDoc);
   }
 
+  /**
+   * Every string field of `doc` that actually carries markers, found by asking
+   * Automerge about each one — the superset of `declaredMarkerFields`, and the
+   * only way to see markers on a field no schema declares.
+   *
+   * Costs a walk of the whole document, so it runs only for a subscription that
+   * asked (`allRichText`). The node budget is a backstop against a pathological
+   * document, not a real limit: the source inspector is already materializing
+   * the whole projection alongside it.
+   */
+  private allMarkerFields(doc: any): MarkerField[] {
+    const fields: MarkerField[] = [];
+    let budget = 2000;
+    // Walks the document proxy itself (the `Object.keys` idiom sync-to-target.ts
+    // uses) rather than materializing a plain copy first: only the string leaves
+    // matter here, and a whole-document copy per push is precisely the cost this
+    // walk is already close to.
+    const walk = (value: any, path: (string | number)[]) => {
+      if (budget <= 0) return;
+      if (typeof value === 'string') {
+        budget--;
+        let spans: RichTextSpan[];
+        try { spans = this.Automerge.spans(doc, path); } catch { return; }
+        const rich = spans.some(s =>
+          s.type === 'block' || (s.type === 'text' && s.marks && Object.keys(s.marks).length > 0));
+        // A field holding a literal `￼` is reported too, even though it has no
+        // markers: that character is never legitimate content, so it means the
+        // field's rich text was flattened, and the inspector can only say so if
+        // the field reaches it. Without this the damage is invisible — the
+        // projection reads the same either way.
+        const flattened = !rich && value.includes(BLOCK_MARKER);
+        // Spans come back as WASM-backed objects; the plain clone is what
+        // survives structuredClone across the worker boundary.
+        if (rich || flattened) fields.push({ path, spans: JSON.parse(JSON.stringify(spans)) });
+        return;
+      }
+      if (!value || typeof value !== 'object') return;
+      budget--;
+      if (Array.isArray(value)) value.forEach((v, i) => walk(v, [...path, i]));
+      else for (const k of Object.keys(value)) walk(value[k], [...path, k]);
+    };
+    walk(doc, []);
+    return fields;
+  }
+
+  /**
+   * Spans for every path this doc's schema declares as rich text, so
+   * `validateDocument` can check the markers the JSON projection hides. Only the
+   * declared paths are read — an undeclared field carrying markers is the source
+   * inspector's business (see `allRichText`), not every change's.
+   */
+  private declaredMarkerFields(doc: any): MarkerField[] {
+    return markerFieldsFor(doc, (path) => {
+      try { return this.Automerge.spans(doc, path); } catch { return undefined; }
+    });
+  }
+
   private async pushValidation(docId: string, doc: any): Promise<void> {
-    const allErrors = validateDocument(doc);
+    const allErrors = validateDocument(doc, this.declaredMarkerFields(doc));
     const errors = allErrors.slice(0, 100);
 
     if (!this.debugEnabled) {
@@ -1222,7 +1302,7 @@ export class EngineCore {
 
     if (msg.type === 'subscribe-query') {
       try {
-        await this.subscribeQuery(msg.docId, msg.subId, msg.filter, (m) => emit(m), msg.peek, msg.meta, msg.spansPath);
+        await this.subscribeQuery(msg.docId, msg.subId, msg.filter, (m) => emit(m), msg.peek, msg.meta, msg.spansPath, msg.allRichText);
       } catch (err: any) {
         emit({ type: 'query-result', subId: msg.subId, result: null, heads: [], error: errMsg(err) });
       }

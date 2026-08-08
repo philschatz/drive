@@ -3,6 +3,7 @@
  */
 
 import { Temporal } from 'temporal-polyfill';
+import type { DocMarker } from '../rich-text-ops';
 
 // ---------------------------------------------------------------------------
 // JMAP building-block types (RFC 8984)
@@ -141,14 +142,37 @@ export interface ValidationError {
 // Schema DSL
 // ---------------------------------------------------------------------------
 
+/**
+ * What rich text a string field may carry: the mark names and block types it
+ * allows, each mapped to a schema for that marker's VALUE — because the values
+ * differ per marker (`strong` stores `true`, `link` stores a JSON string
+ * `{"href"}`, a `heading` block stores `attrs.level`).
+ *
+ * A valueless mark is `bool({ literal: true })` — Automerge always stores *a*
+ * value, and this app's is `true`. A block with no attrs is `obj({})`, whose
+ * walker already reports unexpected keys as warnings.
+ *
+ * The declaration is invisible to `validateNode`: the JSON projection it walks
+ * has no markers. It is consumed by `validateMarkers`, against markers the
+ * caller reads out of Automerge (see `richTextPathsFor`).
+ */
+export interface RichTextDecl {
+  /** Mark name → schema for that mark's value. */
+  marks?: Record<string, SchemaNode>;
+  /** Block type → schema for that block's `attrs` object. */
+  blocks?: Record<string, SchemaNode>;
+}
+
 export type SchemaNode =
-  | { type: 'string'; enum?: readonly string[]; pattern?: RegExp; optional?: boolean }
+  | { type: 'string'; enum?: readonly string[]; pattern?: RegExp; richText?: RichTextDecl; optional?: boolean }
   | { type: 'number'; min?: number; max?: number; integer?: boolean; optional?: boolean }
   | { type: 'boolean'; literal?: boolean; optional?: boolean }
   | { type: 'object'; properties?: Record<string, SchemaNode>; optional?: boolean }
   | { type: 'record'; valueSchema: SchemaNode; keyPattern?: RegExp; optional?: boolean }
   | { type: 'union'; schemas: SchemaNode[]; optional?: boolean }
-  | { type: 'array'; items: SchemaNode; optional?: boolean };
+  | { type: 'array'; items: SchemaNode; optional?: boolean }
+  /** A string whose content is JSON matching `inner` (e.g. a `link` mark's value). */
+  | { type: 'json'; inner: SchemaNode; optional?: boolean };
 
 /**
  * The worker-safe half of a document-type plugin: the `@type` it validates plus
@@ -164,7 +188,7 @@ export interface DocSchemaPlugin {
   checkDeps: (doc: any, errors: ValidationError[]) => void;
 }
 
-export function str(opts?: { enum?: readonly string[]; pattern?: RegExp; optional?: boolean }): SchemaNode {
+export function str(opts?: { enum?: readonly string[]; pattern?: RegExp; richText?: RichTextDecl; optional?: boolean }): SchemaNode {
   return { type: 'string', ...opts };
 }
 export function num(opts?: { min?: number; max?: number; integer?: boolean; optional?: boolean }): SchemaNode {
@@ -184,6 +208,9 @@ export function union(schemas: SchemaNode[], opts?: { optional?: boolean }): Sch
 }
 export function arr(items: SchemaNode, opts?: { optional?: boolean }): SchemaNode {
   return { type: 'array', items, ...opts };
+}
+export function json(inner: SchemaNode, opts?: { optional?: boolean }): SchemaNode {
+  return { type: 'json', inner, ...opts };
 }
 
 // ---------------------------------------------------------------------------
@@ -288,7 +315,155 @@ export function validateNode(value: unknown, schema: SchemaNode, path: (string |
       }
       break;
     }
+    case 'json': {
+      if (typeof value !== 'string') {
+        errors.push({ path, message: `Expected a JSON string, got ${typeof value}` });
+        return;
+      }
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(value);
+      } catch {
+        errors.push({ path, message: `Expected a JSON string, got "${value}"` });
+        return;
+      }
+      validateNode(parsed, schema.inner, path, errors);
+      break;
+    }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Rich text
+//
+// Markers (inline marks and block markers) live inside the Automerge text
+// object, invisible to the JSON projection the walker above sees. So the schema
+// declares the vocabulary (`richText` on a string node), the caller reads the
+// actual markers out of Automerge, and these two functions join them up.
+// ---------------------------------------------------------------------------
+
+/** The schema node governing `path`, or undefined if the schema doesn't cover it. */
+export function schemaAt(schema: SchemaNode, path: (string | number)[]): SchemaNode | undefined {
+  let node: SchemaNode | undefined = schema;
+  for (const seg of path) {
+    if (!node) return undefined;
+    if (node.type === 'union') {
+      // First branch that can resolve the rest of the path wins — the same
+      // best-effort rule validateNode uses when scoring union branches.
+      for (const sub of node.schemas) {
+        const found = schemaAt(sub, [seg]);
+        if (found) { node = found; break; }
+      }
+      if (node.type === 'union') return undefined;
+      continue;
+    }
+    if (node.type === 'object') node = node.properties?.[seg];
+    else if (node.type === 'record') node = node.valueSchema;
+    else if (node.type === 'array') node = typeof seg === 'number' ? node.items : undefined;
+    else return undefined;
+  }
+  return node;
+}
+
+/**
+ * Every path in `doc` whose schema node declares `richText` — the schema doing
+ * the discovery, so a caller holding the Automerge document knows exactly which
+ * fields to read `spans()` from. Record keys and array indices are expanded
+ * against the document, so this returns concrete paths, not schema shapes.
+ *
+ * A field the schema does NOT declare can still carry markers; finding those
+ * means asking Automerge about every string, which only the source inspector
+ * does (see `allRichText` on subscribeQuery).
+ */
+export function richTextPathsFor(schema: SchemaNode, doc: unknown): (string | number)[][] {
+  const out: (string | number)[][] = [];
+  const walk = (node: SchemaNode, value: unknown, path: (string | number)[]) => {
+    if (value === undefined || value === null) return;
+    switch (node.type) {
+      case 'string':
+        if (node.richText) out.push(path);
+        return;
+      case 'object':
+        if (!node.properties || typeof value !== 'object') return;
+        for (const [key, child] of Object.entries(node.properties)) {
+          walk(child, (value as any)[key], [...path, key]);
+        }
+        return;
+      case 'record':
+        if (typeof value !== 'object' || Array.isArray(value)) return;
+        for (const key of Object.keys(value as object)) {
+          walk(node.valueSchema, (value as any)[key], [...path, key]);
+        }
+        return;
+      case 'array':
+        if (!Array.isArray(value)) return;
+        value.forEach((item, i) => walk(node.items, item, [...path, i]));
+        return;
+      case 'union':
+        for (const sub of node.schemas) walk(sub, value, path);
+        return;
+      default:
+        return;
+    }
+  };
+  walk(schema, doc, []);
+  return out;
+}
+
+/**
+ * Check a field's markers against the `richText` vocabulary its schema node
+ * declares. An unknown mark name or block type is an error; a known one has its
+ * value (or the block's `attrs`) validated by the declared schema.
+ *
+ * Markers on a node that is missing, isn't a string, or declares no `richText`
+ * are a WARNING, not an error: the source inspector can put arbitrary rich text
+ * on any text field, and that should be visible without being treated as
+ * corruption.
+ */
+export function validateMarkers(
+  markers: DocMarker[],
+  node: SchemaNode | undefined,
+  path: (string | number)[],
+  errors: ValidationError[],
+): void {
+  if (markers.length === 0) return;
+  const decl = node && node.type === 'string' ? node.richText : undefined;
+  if (!decl) {
+    errors.push({
+      path,
+      message: `Field carries ${markers.length} rich-text marker${markers.length === 1 ? '' : 's'} but the schema does not declare richText`,
+      kind: 'warning',
+    });
+    return;
+  }
+  for (const m of markers) {
+    if (m.kind === 'mark') {
+      const valueSchema = decl.marks?.[m.name];
+      if (!valueSchema) {
+        errors.push({
+          path,
+          message: `Unknown mark "${m.name}" at [${m.start}, ${m.end})${declared(decl.marks)}`,
+        });
+        continue;
+      }
+      validateNode(m.value, valueSchema, [...path, m.name], errors);
+    } else {
+      const attrsSchema = decl.blocks?.[m.block.type];
+      if (!attrsSchema) {
+        errors.push({
+          path,
+          message: `Unknown block type "${m.block.type}" at ${m.index}${declared(decl.blocks)}`,
+        });
+        continue;
+      }
+      validateNode(m.block.attrs ?? {}, attrsSchema, [...path, m.block.type], errors);
+    }
+  }
+}
+
+function declared(vocab: Record<string, SchemaNode> | undefined): string {
+  const names = Object.keys(vocab ?? {});
+  return names.length > 0 ? `, expected one of: ${names.join(', ')}` : '';
 }
 
 // ---------------------------------------------------------------------------

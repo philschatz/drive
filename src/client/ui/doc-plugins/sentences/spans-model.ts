@@ -9,8 +9,11 @@
  * exactly like `Automerge.splice` on a text field with blocks.
  */
 import type { BlockValue, RichTextOp, RichTextSpan } from '../../../../shared/rich-text-ops';
+import { BLOCK_MARKER } from '../../../../shared/rich-text-ops';
 
-export const BLOCK_MARKER = '￼';
+// Both live in shared/rich-text-ops.ts so the schema validator and the source
+// inspector can reason about block markers without importing a doc plugin.
+export { BLOCK_MARKER, flatTextFromSpans } from '../../../../shared/rich-text-ops';
 
 /** One character of the text sequence: a block marker or a marked-up char. */
 interface Atom {
@@ -60,13 +63,6 @@ function spansFromAtoms(atoms: Atom[]): RichTextSpan[] {
   }
   flush();
   return spans;
-}
-
-/** The flat string as the JSON projection sees it (`￼` per block marker). */
-export function flatTextFromSpans(spans: RichTextSpan[]): string {
-  let out = '';
-  for (const s of spans) out += s.type === 'block' ? BLOCK_MARKER : s.value;
-  return out;
 }
 
 /**

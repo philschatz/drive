@@ -17,9 +17,11 @@ export type {
   Alert, OffsetTrigger, AbsoluteTrigger,
   TimeZone, TimeZoneRule,
 } from './core';
-export { validateNode } from './core';
+export type { RichTextDecl } from './core';
+export { validateNode, schemaAt, richTextPathsFor, validateMarkers } from './core';
 
-import { type ValidationError, type DocSchemaPlugin, validateNode } from './core';
+import { type ValidationError, type DocSchemaPlugin, validateNode, schemaAt, validateMarkers, richTextPathsFor } from './core';
+import { markersFromSpans, strayBlockMarkers, type RichTextSpan } from '../rich-text-ops';
 import { calendarSchemaPlugin } from './calendar';
 import { taskListSchemaPlugin } from './tasks';
 import { dataGridSchemaPlugin } from './datagrid';
@@ -43,12 +45,49 @@ export const SCHEMA_PLUGINS: DocSchemaPlugin[] = [
   driveSettingsSchemaPlugin,
 ];
 
+/** A field's Peritext spans, read from Automerge by the caller (see below). */
+export interface MarkerField {
+  path: (string | number)[];
+  spans: RichTextSpan[];
+}
+
+/**
+ * The marker data for every path this document's schema declares as rich text.
+ * The caller supplies `readSpans` (i.e. `Automerge.spans` bound to the doc)
+ * because this module must never import Automerge; it returns undefined for a
+ * path that isn't a text field.
+ *
+ * This is the schema doing the discovery — cost is bounded by the declaration,
+ * so a document type that declares no rich text pays nothing.
+ */
+export function markerFieldsFor(
+  doc: unknown,
+  readSpans: (path: (string | number)[]) => RichTextSpan[] | undefined,
+): MarkerField[] {
+  if (!doc || typeof doc !== 'object') return [];
+  const plugin = SCHEMA_PLUGINS.find(p => p.type === (doc as any)['@type']);
+  if (!plugin) return [];
+  const fields: MarkerField[] = [];
+  for (const path of richTextPathsFor(plugin.schema, doc)) {
+    const spans = readSpans(path);
+    if (spans) fields.push({ path, spans });
+  }
+  return fields;
+}
+
 /**
  * Validate an Automerge document against its schema and data-dependency rules.
  * Returns an empty array if the document is valid. Scans the array so schema
  * cores registered dynamically (pushed onto SCHEMA_PLUGINS later) are found too.
+ *
+ * `markerFields` is marker DATA, not a declaration, and must be supplied by the
+ * caller: this module is pure and projection-based — the CalDAV server and the
+ * CLI import it, and it must never touch Automerge — while markers only exist
+ * inside the WASM document. The schema says which paths to look at
+ * (`richTextPathsFor`); the caller does the looking. Omit it and marker
+ * validation is simply skipped.
  */
-export function validateDocument(doc: unknown): ValidationError[] {
+export function validateDocument(doc: unknown, markerFields?: MarkerField[]): ValidationError[] {
   if (!doc || typeof doc !== 'object') {
     return [{ path: [], message: 'Document is not an object' }];
   }
@@ -62,5 +101,18 @@ export function validateDocument(doc: unknown): ValidationError[] {
   const errors: ValidationError[] = [];
   validateNode(doc, plugin.schema, [], errors);
   plugin.checkDeps(doc, errors);
+  for (const field of markerFields ?? []) {
+    validateMarkers(markersFromSpans(field.spans), schemaAt(plugin.schema, field.path), field.path, errors);
+    // A literal `￼` means this field's rich text was flattened. Worth its own
+    // error because the projection cannot show it: the string reads identically
+    // whether its markers are real or were turned into characters.
+    const stray = strayBlockMarkers(field.spans);
+    if (stray.length > 0) {
+      errors.push({
+        path: field.path,
+        message: `Contains ${stray.length} literal U+FFFC character${stray.length === 1 ? '' : 's'} (at ${stray.join(', ')}) instead of block markers — this field's rich text was flattened`,
+      });
+    }
+  }
   return errors;
 }

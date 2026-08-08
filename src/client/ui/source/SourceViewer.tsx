@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'preact/hooks';
-import { openDoc, subscribeQuery, updateDoc, getDocHistory, debugGetVersionPatches, setDocVersion, restoreDocToVersion } from '../worker-api';
+import { openDoc, subscribeQuery, updateDoc, richText, getDocHistory, debugGetVersionPatches, setDocVersion, restoreDocToVersion, type MarkerField } from '../worker-api';
+import { flatTextEditOps, flatTextFromSpans, type RichTextOp, type RichTextSpan } from '../../../shared/rich-text-ops';
 import { peerColor, peerDisplayName, usePresence } from '../common/presence';
 import { DocumentTitleBar } from '../common/DocumentTitleBar';
 import { HistorySlider } from '../common/HistorySlider';
@@ -22,11 +23,68 @@ function formatPatchPath(path: (string | number)[]): string {
 function formatPatchValue(value: unknown): string {
   if (value === null) return 'null';
   if (value === undefined) return '';
-  if (typeof value === 'object') {
-    if (Array.isArray(value)) return '[]';
-    return '{}';
-  }
+  if (typeof value === 'object') return Array.isArray(value) ? '[]' : '{}';
   return JSON.stringify(value);
+}
+
+/**
+ * An `insert` into a text field whose value is a map IS a block marker —
+ * Automerge inserts an empty map at the marker's position and fills it in with
+ * later `put` patches. Only in that position, though: a `put` of a map is an
+ * ordinary object (a block's own `attrs`, say), and labelling those as markers
+ * too is worse than saying nothing.
+ */
+function formatInsertedValue(value: unknown): string {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? '¶ block marker'
+    : formatPatchValue(value);
+}
+
+/** `strong=true, link={"href":…}` — the mark set riding along with an insert. */
+function formatMarkSet(marks: Record<string, unknown> | undefined): string {
+  if (!marks) return '';
+  const entries = Object.entries(marks);
+  if (entries.length === 0) return '';
+  return entries.map(([name, v]) => `${name}=${formatPatchValue(v)}`).join(', ');
+}
+
+/**
+ * The Value column for one patch.
+ *
+ * Automerge reports a mark and an unmark as their own patch actions carrying a
+ * range, and inserted text can carry an inherited mark set — none of which the
+ * generic value formatter can show, so a formatting change used to appear as a
+ * bare row with an empty Value. Block markers need the same treatment: they
+ * arrive as an `insert` of a map, which read as `{}`.
+ */
+function formatPatchDetail(p: any): string {
+  switch (p.action) {
+    case 'put':
+      return formatPatchValue(p.value);
+    case 'del':
+      return p.length > 1 ? `×${p.length}` : '';
+    case 'insert': {
+      const values = (p.values ?? []).map((v: unknown) => formatInsertedValue(v)).join(', ');
+      const marks = formatMarkSet(p.marks);
+      return marks ? `${values} (${marks})` : values;
+    }
+    case 'splice': {
+      // Show the block-marker character rather than letting it render as tofu.
+      const text = JSON.stringify(String(p.value ?? '')).replace(/￼/g, '\\uFFFC');
+      const marks = formatMarkSet(p.marks);
+      return marks ? `${text} (${marks})` : text;
+    }
+    case 'mark':
+      return (p.marks ?? [])
+        .map((m: any) => `${m.name}=${formatPatchValue(m.value)} [${m.start}, ${m.end})`)
+        .join(', ');
+    case 'unmark':
+      return `${p.name} [${p.start}, ${p.end})`;
+    case 'inc':
+      return p.value > 0 ? `+${p.value}` : String(p.value);
+    default:
+      return '';
+  }
 }
 
 function PatchTable({ patches }: { patches: any[] }) {
@@ -56,13 +114,7 @@ function PatchTable({ patches }: { patches: any[] }) {
                 <tr key={i} className={`patch-${p.action}`}>
                   <td className="patch-action">{p.action}</td>
                   <td className="patch-path">{formatPatchPath(p.path)}</td>
-                  <td className="log-detail">
-                    {p.action === 'put' ? formatPatchValue(p.value)
-                      : p.action === 'del' ? ((p as any).length > 1 ? `×${(p as any).length}` : '')
-                      : p.action === 'insert' ? (p as any).values?.map((v: unknown) => formatPatchValue(v)).join(', ')
-                      : p.action === 'splice' ? JSON.stringify((p as any).value)
-                      : ''}
-                  </td>
+                  <td className="log-detail">{formatPatchDetail(p)}</td>
                 </tr>
               ))}
             </tbody>
@@ -79,6 +131,9 @@ export function SourceViewer({ docId, rest, readOnly }: { docId?: string; rest?:
   const [status, setStatus] = useState('Loading document...');
   const [loadProgress, setLoadProgress] = useState<number | null>(null);
   const [currentDoc, setCurrentDoc] = useState<any>(null);
+  // Every string field carrying markers — marks and block markers are invisible
+  // to the jq projection, so the tree gets them through this side channel.
+  const [markerFields, setMarkerFields] = useState<MarkerField[]>([]);
   const [historyMeta, setHistoryMeta] = useState<Array<{ version: number; time: number }>>([]);
   const [changeCount, setChangeCount] = useState(0);
   const [version, setVersion] = useState(0);
@@ -158,16 +213,17 @@ export function SourceViewer({ docId, rest, readOnly }: { docId?: string; rest?:
 
       // Subscribe to the full document via worker-api (routes through correct repo).
       // peek: inspecting/exporting source doesn't count as viewing the doc.
-      unsubQuery = subscribeQuery(docId, '.', (result) => {
+      unsubQuery = subscribeQuery(docId, '.', (result, _heads, _lastModified, _spans, _cursors, richTextFields) => {
         if (!mounted) return;
         setCurrentDoc(result);
+        setMarkerFields(richTextFields ?? []);
         if (result.name) {
           setDocName(result.name);
           document.title = result.name + ' - Source Editor';
         }
         setStatus('');
         loadHistory();
-      }, undefined, { peek: true });
+      }, undefined, { peek: true, allRichText: true });
 
       // Initial history load will happen via the subscription callback calling loadHistory()
     })().catch((err) => {
@@ -204,10 +260,19 @@ export function SourceViewer({ docId, rest, readOnly }: { docId?: string; rest?:
   // currentDoc is always the live or pinned doc from subscribeQuery
   const snapshot = currentDoc;
 
+  /** path key → that field's spans, for the tree's marker rendering. */
+  const markerSpans = useMemo(() => {
+    const map = new Map<string, RichTextSpan[]>();
+    for (const f of markerFields) map.set(f.path.join('/'), f.spans);
+    return map;
+  }, [markerFields]);
+
   const validationErrors = useMemo(() => {
     if (!snapshot) return [];
-    return validateDocument(snapshot);
-  }, [snapshot]);
+    // The engine already validated the paths the schema DECLARES as rich text;
+    // passing the discovered set adds the markers on fields it doesn't.
+    return validateDocument(snapshot, markerFields);
+  }, [snapshot, markerFields]);
 
   const [revealPath, setRevealPath] = useState<Path | null>(null);
   const hashConsumedRef = useRef(false);
@@ -234,8 +299,27 @@ export function SourceViewer({ docId, rest, readOnly }: { docId?: string; rest?:
     setDocVersion(docId!, null);
   };
 
+  /**
+   * Apply rich-text ops to one field. One call is one Automerge change, so a
+   * marker edit is a single history entry and a single undo step.
+   */
+  const handleRichTextOps = useCallback((path: Path, ops: RichTextOp[]) => {
+    if (!docId || !editable || ops.length === 0) return;
+    updateDoc(docId, (doc: any, richText: any, path: any, ops: any) => {
+      richText(doc, path, ops);
+    }, richText, path, ops);
+  }, [docId, editable]);
+
   const handleEdit = (path: Path, value: any) => {
     if (!docId || !editable) return;
+    // A field carrying markers must never be written by assignment: replacing
+    // the text object flattens every mark and turns its block markers into
+    // literal `￼` characters. Diff the flat text into ops instead.
+    const spans = markerSpans.get(path.join('/'));
+    if (spans) {
+      handleRichTextOps(path, flatTextEditOps(flatTextFromSpans(spans), String(value)));
+      return;
+    }
     updateDoc(docId, (doc: any, path: any, value: any) => {
       let current = doc;
       for (let i = 0; i < path.length - 1; i++) current = current[path[i]];
@@ -358,6 +442,8 @@ export function SourceViewer({ docId, rest, readOnly }: { docId?: string; rest?:
               <SourceTree
                 data={snapshot}
                 editable={editable}
+                markerSpans={markerSpans}
+                onRichTextOps={handleRichTextOps}
                 onEdit={handleEdit}
                 onDelete={handleDelete}
                 onAdd={handleAdd}

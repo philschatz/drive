@@ -141,6 +141,85 @@
   font-size: 0.8em;
 }
 
+/* ── Markers ────────────────────────────────────────────────────────────────
+   Marks and block markers are invisible to the JSON projection, so a rich-text
+   string is rendered twice: highlighted in place (this block) and listed
+   beneath its row (below). Both key off one footnote index per marker. */
+
+/* A run covered by one or more marks. The tint names the topmost mark; the
+   stacked underline bars (set inline as inset shadows) are what make an
+   overlap readable, since a tint can only show one colour. */
+.source-marked-run {
+  color: #ce9178;
+  padding-bottom: 3px;
+  border-radius: 2px;
+}
+
+.source-marker-footnote {
+  font-size: 0.65em;
+  font-weight: 700;
+  vertical-align: super;
+  line-height: 0;
+  user-select: none;
+}
+
+/* A block marker, which occupies one position and so has no range to tint. */
+.source-marker-chip {
+  display: inline-block;
+  border: 1px solid;
+  border-radius: 3px;
+  padding: 0 0.25rem;
+  margin: 0 0.1rem;
+  font-size: 0.8em;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.source-marker-list {
+  margin: 0.15rem 0 0.3rem 1.6rem;
+  border-left: 2px solid #3a3a3a;
+  padding-left: 0.5rem;
+}
+
+.source-marker-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85em;
+  color: #9a9a9a;
+  min-height: 1.4em;
+}
+
+.source-marker-row:hover {
+  background: #ffffff08;
+}
+
+.source-marker-row .source-btn {
+  opacity: 0;
+}
+
+.source-marker-row:hover .source-btn {
+  opacity: 1;
+}
+
+.source-marker-cell {
+  color: #d4d4d4;
+  border-bottom: 1px dotted transparent;
+}
+
+.source-marker-cell:hover {
+  border-bottom-color: #666;
+}
+
+.source-marker-range {
+  color: #666;
+  white-space: nowrap;
+}
+
+.source-marker-muted {
+  color: #666;
+}
+
 /* Action buttons */
 .source-actions {
   opacity: 0;
@@ -246,6 +325,9 @@ tr.patch-put .patch-action { color: #569cd6; }
 tr.patch-del .patch-action { color: #e06c75; }
 tr.patch-insert .patch-action { color: #98c379; }
 tr.patch-splice .patch-action { color: #e5c07b; }
+tr.patch-mark .patch-action { color: #c678dd; }
+tr.patch-unmark .patch-action { color: #c678dd; }
+tr.patch-inc .patch-action { color: #56b6c2; }
 
 .patch-path {
   font-family: 'SF Mono', 'Consolas', 'Menlo', monospace;

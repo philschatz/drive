@@ -63,7 +63,11 @@ export type MainToWorker =
   // `spansPath` = also deliver the rich-text spans (marks + block markers) of
   // the Peritext field at that path with every result — the jq projection only
   // carries the flat text, so rich-text editors need this side channel.
-  | { type: 'subscribe-query'; subId: number; docId: string; filter: string; peek?: boolean; meta?: boolean; spansPath?: (string | number)[] }
+  // `allRichText` = deliver the spans of EVERY string field that turns out to
+  // carry markers, discovered by asking Automerge rather than by declaration.
+  // Costs a walk of the whole document per push, so it is for the source
+  // inspector — which needs the fields no schema declares — and nothing else.
+  | { type: 'subscribe-query'; subId: number; docId: string; filter: string; peek?: boolean; meta?: boolean; spansPath?: (string | number)[]; allRichText?: boolean }
   | { type: 'unsubscribe-query'; subId: number }
   | { type: 'set-doc-version'; docId: string; version: number | null }
   // Force any throttled writes for this doc (or every open doc) out to storage
@@ -133,6 +137,9 @@ export type MainToWorker =
   | { type: 'webrtc-port'; port: MessagePort };
 
 export type ValidationError = { path: (string | number)[]; message: string; kind?: 'schema' | 'dependency' | 'warning' };
+/** Structurally identical to MarkerField in ./schemas — inlined here for the
+ * same reason ValidationError is: the wire protocol names its own shapes. */
+export type MarkerField = { path: (string | number)[]; spans: RichTextSpan[] };
 
 export type WorkerToMain =
   | { type: 'ready'; peerId: string }
@@ -154,7 +161,9 @@ export type WorkerToMain =
   // `cursors` = the resolved position of every token registered via
   // 'subscribe-cursors' for this sub's spansPath; null for a token that no
   // longer resolves (foreign, malformed, or absent from a pinned version).
-  | { type: 'query-result'; subId: number; result: any; heads: string[]; lastModified?: number; error?: string; spans?: RichTextSpan[]; cursors?: Record<string, number | null> }
+  // `richTextFields` = every marker-bearing string field of the doc (see
+  // `allRichText`), each with the spans that field's markers come from.
+  | { type: 'query-result'; subId: number; result: any; heads: string[]; lastModified?: number; error?: string; spans?: RichTextSpan[]; cursors?: Record<string, number | null>; richTextFields?: MarkerField[] }
   | { type: 'update-presence'; docId: string; peers: Record<string, any> }
   // Document loading progress
   | { type: 'open-doc-progress'; id: number; pct: number; message: string }

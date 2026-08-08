@@ -26,14 +26,20 @@
 import { compile } from '../../../shared/jq';
 import { deepAssign as realDeepAssign } from '../../../shared/deep-assign';
 import type { RichTextOp, RichTextSpan } from '../../../shared/rich-text-ops';
+import type { MarkerField } from '../../../shared/worker-protocol';
 import { applyOpsToSpans, flatTextFromSpans, shiftPositionThroughOps, spansFromFlatText } from '../doc-plugins/sentences/spans-model';
 
 type Doc = any;
 type QueryCb = (
   result: any, heads: string[], lastModified?: number,
   spans?: RichTextSpan[], cursors?: Record<string, number | null>,
+  richTextFields?: MarkerField[],
 ) => void;
-interface QuerySub { docId: string; filter: string; cb: QueryCb; spansPath?: (string | number)[]; }
+interface QuerySub {
+  docId: string; filter: string; cb: QueryCb;
+  spansPath?: (string | number)[];
+  allRichText?: boolean;
+}
 
 const docs = new Map<string, Doc>();
 const querySubs = new Set<QuerySub>();
@@ -192,7 +198,24 @@ function deliver(s: QuerySub): void {
     // mock silently lost the mid-edit re-render the real app has.
     s.spansPath ? getSpans(s.docId, s.spansPath).map(v => ({ ...v })) : undefined,
     s.spansPath ? resolveCursors(s.docId, s.spansPath) : undefined,
+    s.allRichText ? allRichTextFields(s.docId) : undefined,
   );
+}
+
+/**
+ * The mock's stand-in for the engine's whole-document walk: every seeded field
+ * that carries markers. The engine discovers these by asking Automerge about
+ * each string; here `spansStore` already IS the set of rich-text fields, so the
+ * filter is the same ("has a block or a non-empty marks") but the search isn't.
+ */
+function allRichTextFields(docId: string): MarkerField[] {
+  const out: MarkerField[] = [];
+  for (const [key, spans] of spansStore.get(docId) ?? []) {
+    const rich = spans.some(s =>
+      s.type === 'block' || (s.type === 'text' && s.marks && Object.keys(s.marks).length > 0));
+    if (rich) out.push({ path: JSON.parse(key), spans: spans.map(v => ({ ...v })) });
+  }
+  return out;
 }
 function __notify(docId: string): void {
   for (const s of querySubs) {
@@ -214,9 +237,9 @@ export function subscribeQuery(
   filter: string,
   cb: QueryCb,
   _onError?: (error: string) => void,
-  opts?: { peek?: boolean; meta?: boolean; spansPath?: (string | number)[] },
+  opts?: { peek?: boolean; meta?: boolean; spansPath?: (string | number)[]; allRichText?: boolean },
 ): () => void {
-  const sub: QuerySub = { docId, filter, cb, spansPath: opts?.spansPath };
+  const sub: QuerySub = { docId, filter, cb, spansPath: opts?.spansPath, allRichText: opts?.allRichText };
   querySubs.add(sub);
   deliver(sub); // deliver current state immediately
   return () => { querySubs.delete(sub); };

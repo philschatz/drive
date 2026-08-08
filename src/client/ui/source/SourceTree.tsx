@@ -1,6 +1,11 @@
-import { useState, useEffect, useCallback, useRef } from 'preact/hooks';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'preact/hooks';
 
 import type { ValidationError } from '../../../shared/schemas';
+import {
+  BLOCK_MARKER, markerEditOps, markersFromSpans,
+  type BlockValue, type DocMarker, type RichTextOp, type RichTextSpan,
+} from '../../../shared/rich-text-ops';
+import { MATERIAL_CATEGORICAL } from '../common/categorical-colors';
 import { peerDisplayName, peerIdentityKey } from '../common/presence';
 import { PeerDot } from '../common/PeerDot';
 import { usePeerTransports, type PeerTransport } from '../worker-api';
@@ -18,6 +23,9 @@ interface PeerFocus {
 interface SourceTreeProps {
   data: any;
   editable?: boolean;
+  /** path.join('/') → that field's Peritext spans, for fields carrying markers. */
+  markerSpans?: Map<string, RichTextSpan[]>;
+  onRichTextOps?: (path: Path, ops: RichTextOp[]) => void;
   onEdit?: (path: Path, value: any) => void;
   onDelete?: (path: Path) => void;
   onAdd?: (path: Path, key: string, value: any) => void;
@@ -33,6 +41,8 @@ interface NodeProps {
   path: Path;
   depth: number;
   editable: boolean;
+  markerSpans: Map<string, RichTextSpan[]>;
+  onRichTextOps: (path: Path, ops: RichTextOp[]) => void;
   onEdit: (path: Path, value: any) => void;
   onDelete: (path: Path) => void;
   onAdd: (path: Path, key: string, value: any) => void;
@@ -74,8 +84,17 @@ function EditInput({ initial, onSave, onCancel }: { initial: string; onSave: (v:
   );
 }
 
+/**
+ * A block marker is U+FFFC, which renders as nothing (or as tofu) — invisible in
+ * the value AND in the edit input, where it silently survives a round trip. So
+ * it escapes to `￼`, which is both visible and typeable: adding one to the
+ * string inserts a block marker, deleting one removes it.
+ */
 function escapeString(s: string): string {
-  return s.replace(/\\/g, '\\\\').replace(/\n/g, '\\n').replace(/\r/g, '\\r').replace(/\t/g, '\\t');
+  return s
+    .replace(/\\/g, '\\\\')
+    .replace(/\n/g, '\\n').replace(/\r/g, '\\r').replace(/\t/g, '\\t')
+    .replace(new RegExp(BLOCK_MARKER, 'g'), '\\uFFFC');
 }
 
 function unescapeString(s: string): string {
@@ -87,6 +106,7 @@ function unescapeString(s: string): string {
       if (next === 'r') { result += '\r'; i++; continue; }
       if (next === 't') { result += '\t'; i++; continue; }
       if (next === '\\') { result += '\\'; i++; continue; }
+      if (s.slice(i + 1, i + 6).toUpperCase() === 'UFFFC') { result += BLOCK_MARKER; i += 5; continue; }
     }
     result += s[i];
   }
@@ -100,6 +120,265 @@ function parseValue(raw: string): any {
   const num = Number(raw);
   if (!isNaN(num) && raw.trim() !== '') return num;
   return unescapeString(raw);
+}
+
+// ---------------------------------------------------------------------------
+// Markers
+//
+// Marks and block markers live inside the Automerge text object and are absent
+// from the JSON projection the rest of this tree renders. They arrive as spans
+// (see `allRichText`), become discrete markers, and are shown twice: as
+// footnoted highlights over the value, and as an editable list beneath it.
+// ---------------------------------------------------------------------------
+
+const markerColor = (i: number) => MATERIAL_CATEGORICAL[i % MATERIAL_CATEGORICAL.length];
+/** The 1-based reference tying a highlight to its row in the list below. The
+ * superscript is CSS, so every index is marked up identically. */
+const footnoteLabel = (i: number) => String(i + 1);
+
+const markerStart = (m: DocMarker) => (m.kind === 'block' ? m.index : m.start);
+const markerName = (m: DocMarker) => (m.kind === 'block' ? m.block.type : m.name);
+
+/**
+ * A mark value typed into the list, read back at the type it already had.
+ *
+ * The cell shows a string mark value RAW, so a link's `{"href":…}` is editable
+ * as the JSON text it is — which is exactly why the edit must not be re-parsed:
+ * that would store an object, and an Automerge mark value has to be a scalar.
+ * Non-string values (a `strong` of `true`) are shown JSON-encoded, so they are
+ * read back the same way, with the raw text as the fallback.
+ */
+function reparseMarkValue(previous: unknown, raw: string): unknown {
+  if (typeof previous === 'string') return raw;
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed !== null && typeof parsed === 'object' ? raw : parsed;
+  } catch {
+    return raw;
+  }
+}
+
+/**
+ * Compact block-type label for the inline chip: `¶h1`, `¶ul`, `¶p`.
+ *
+ * List nesting is not a separate field — a block's `parents` chain IS its
+ * depth, so a twice-indented item is `parents: ['unordered-list-item',
+ * 'unordered-list-item']`. The chip shows that as `·N` rather than dropping it,
+ * since two list items at different depths are otherwise identical here.
+ */
+function blockChipLabel(b: BlockValue): string {
+  const depth = b.parents?.length ?? 0;
+  const suffix = depth > 0 ? `·${depth}` : '';
+  const level = (b.attrs as any)?.level;
+  if (b.type === 'heading') return `h${level ?? '?'}${suffix}`;
+  if (b.type === 'unordered-list-item') return `ul${suffix}`;
+  if (b.type === 'ordered-list-item') return `ol${suffix}`;
+  if (b.type === 'paragraph') return `p${suffix}`;
+  return b.type + suffix;
+}
+
+/**
+ * The string value with its markers made visible: each mark's range tinted and
+ * underlined in its footnote colour, each block marker replaced by a chip
+ * naming its type.
+ *
+ * Overlapping marks are the reason for the stacked underline bars — a
+ * background tint alone can only show one of them. Inset shadows paint in
+ * declaration order, so the innermost (2px) bar covers the bottom of the next,
+ * giving one visible band per covering mark.
+ */
+function MarkedString({ text, markers }: { text: string; markers: DocMarker[] }) {
+  const blocks = new Map<number, { marker: DocMarker; i: number }>();
+  const footnotesAt = new Map<number, number[]>();
+  const cuts = new Set<number>([0, text.length]);
+  markers.forEach((m, i) => {
+    const start = markerStart(m);
+    footnotesAt.set(start, [...(footnotesAt.get(start) ?? []), i]);
+    if (m.kind === 'block') {
+      blocks.set(m.index, { marker: m, i });
+      cuts.add(m.index); cuts.add(m.index + 1);
+    } else {
+      cuts.add(m.start); cuts.add(m.end);
+    }
+  });
+  const boundaries = [...cuts].filter(c => c >= 0 && c <= text.length).sort((a, b) => a - b);
+
+  const parts: any[] = [];
+  const pushFootnotes = (at: number, skip?: number) => {
+    for (const i of footnotesAt.get(at) ?? []) {
+      if (i === skip) continue;
+      parts.push(
+        <sup key={`f${at}-${i}`} className="source-marker-footnote" style={{ color: markerColor(i) }}>
+          {footnoteLabel(i)}
+        </sup>,
+      );
+    }
+  };
+
+  for (let b = 0; b < boundaries.length - 1; b++) {
+    const from = boundaries[b];
+    const to = boundaries[b + 1];
+    if (to <= from) continue;
+    const block = blocks.get(from);
+    if (block && to === from + 1) {
+      pushFootnotes(from, block.i);
+      parts.push(
+        <span key={from} className="source-marker-chip" style={{ borderColor: markerColor(block.i), color: markerColor(block.i) }}
+          title={`block marker at ${from}: ${block.marker.kind === 'block' ? block.marker.block.type : ''}`}>
+          ¶{blockChipLabel((block.marker as Extract<DocMarker, { kind: 'block' }>).block)}
+          <sup className="source-marker-footnote">{footnoteLabel(block.i)}</sup>
+        </span>,
+      );
+      continue;
+    }
+    pushFootnotes(from);
+    const covering = markers
+      .map((m, i) => ({ m, i }))
+      .filter(({ m }) => m.kind === 'mark' && m.start <= from && m.end >= to);
+    parts.push(
+      <span key={from} className={covering.length > 0 ? 'source-marked-run' : undefined}
+        style={covering.length > 0 ? {
+          backgroundColor: markerColor(covering[0].i) + '2b',
+          boxShadow: covering.map(({ i }, k) => `inset 0 ${-2 * (k + 1)}px 0 ${markerColor(i)}`).join(', '),
+        } : undefined}
+        title={covering.length > 0 ? covering.map(({ m }) => markerName(m)).join(', ') : undefined}>
+        {escapeString(text.slice(from, to))}
+      </span>,
+    );
+  }
+  // A marker sitting at the very end of the text has no following segment.
+  pushFootnotes(text.length);
+
+  return <span className="source-string">"{parts}"</span>;
+}
+
+/** One click-to-edit cell of a marker row. */
+function MarkerCell(
+  { value, title, editable, onSave }:
+  { value: string; title: string; editable: boolean; onSave: (v: string) => void },
+) {
+  const [editing, setEditing] = useState(false);
+  if (editing) {
+    return (
+      <EditInput initial={value}
+        onSave={(v) => { setEditing(false); onSave(v); }}
+        onCancel={() => setEditing(false)} />
+    );
+  }
+  return (
+    <span className="source-marker-cell" title={title}
+      onClick={editable ? () => setEditing(true) : undefined}
+      style={editable ? { cursor: 'pointer' } : undefined}>
+      {value}
+    </span>
+  );
+}
+
+/**
+ * The markers of one field, listed under its row and editable a cell at a time.
+ *
+ * Every marker is listed as it is stored, with no notion of which the document
+ * type allows: this inspector renders what the document actually contains, and
+ * whether that is legal is the validator's answer, arriving as the same
+ * `errors` every other row here uses.
+ */
+function MarkerList(
+  { path, text, markers, editable, errors, onRichTextOps }: {
+    path: Path; text: string; markers: DocMarker[];
+    editable: boolean; errors: ValidationError[];
+    onRichTextOps: (path: Path, ops: RichTextOp[]) => void;
+  },
+) {
+  const apply = (prev: DocMarker, next: DocMarker | null) => {
+    try {
+      onRichTextOps(path, markerEditOps(prev, next));
+    } catch (err: any) {
+      console.warn('[source] marker edit rejected:', err?.message ?? err);
+    }
+  };
+  /** A position typed into a range cell: null if it isn't one, else in bounds. */
+  const position = (raw: string): number | null => {
+    const n = Number(raw.trim());
+    if (raw.trim() === '' || !Number.isInteger(n)) return null;
+    return Math.max(0, Math.min(text.length, n));
+  };
+
+  const errorFor = (m: DocMarker): ValidationError | undefined => {
+    const name = markerName(m);
+    return errors.find(e =>
+      (e.path.length === path.length + 1 && pathsEqual(e.path.slice(0, -1), path) && e.path[path.length] === name) ||
+      (pathsEqual(e.path, path) && e.message.includes(`"${name}"`)));
+  };
+
+  return (
+    <div className="source-marker-list">
+      {markers.map((m, i) => {
+        const err = errorFor(m);
+        return (
+          <div className="source-marker-row" key={`${markerName(m)}-${markerStart(m)}-${i}`}>
+            <span className="source-marker-footnote" style={{ color: markerColor(i) }}>{footnoteLabel(i)}</span>
+            <MarkerCell value={m.kind === 'block' ? `¶ ${m.block.type}` : m.name}
+              title={m.kind === 'block' ? 'Block type' : 'Mark name'} editable={editable}
+              onSave={(v) => {
+                const name = v.replace(/^¶\s*/, '').trim();
+                if (!name) return;
+                apply(m, m.kind === 'block'
+                  ? { ...m, block: { ...m.block, type: name } }
+                  : { ...m, name });
+              }} />
+            {m.kind === 'block' ? (
+              <MarkerCell value={String(m.index)} title="Position in the flat text" editable={editable}
+                onSave={(v) => {
+                  const n = position(v);
+                  if (n === null || n === m.index) return;
+                  apply(m, { ...m, index: n });
+                }} />
+            ) : (
+              <span className="source-marker-range">
+                [<MarkerCell value={String(m.start)} title="Range start" editable={editable}
+                  onSave={(v) => { const n = position(v); if (n !== null && n <= m.end) apply(m, { ...m, start: n }); }} />
+                , <MarkerCell value={String(m.end)} title="Range end" editable={editable}
+                  onSave={(v) => { const n = position(v); if (n !== null && n >= m.start) apply(m, { ...m, end: n }); }} />)
+              </span>
+            )}
+            {m.kind === 'block' ? (
+              <>
+                {/* A block's nesting depth IS its `parents` chain, so leaving it
+                    out would hide the entire encoding of a nested list. */}
+                <MarkerCell value={JSON.stringify(m.block.parents ?? [])}
+                  title="Block parents — the nesting chain (JSON array)" editable={editable}
+                  onSave={(v) => {
+                    let parents: any;
+                    try { parents = JSON.parse(v); } catch { return; }
+                    if (!Array.isArray(parents) || parents.some(p => typeof p !== 'string')) return;
+                    apply(m, { ...m, block: { ...m.block, parents } });
+                  }} />
+                <MarkerCell value={JSON.stringify(m.block.attrs ?? {})} title="Block attrs (JSON)" editable={editable}
+                  onSave={(v) => {
+                    let attrs: any;
+                    try { attrs = JSON.parse(v); } catch { return; }
+                    if (!attrs || typeof attrs !== 'object' || Array.isArray(attrs)) return;
+                    apply(m, { ...m, block: { ...m.block, attrs } });
+                  }} />
+              </>
+            ) : (
+              <MarkerCell value={typeof m.value === 'string' ? m.value : JSON.stringify(m.value)}
+                title="Mark value" editable={editable}
+                onSave={(v) => apply(m, { ...m, value: reparseMarkValue(m.value, v) })} />
+            )}
+            {err && (
+              <span className={'source-error-icon' + (err.kind === 'warning' ? '' : ' schema')} title={err.message}>
+                {err.kind === 'warning' ? '⚠️' : '❌'}
+              </span>
+            )}
+            {editable && (
+              <button className="source-btn delete" title="Delete marker" onClick={() => apply(m, null)}>×</button>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 /** Recursively diff two values and collect the path keys of all changed leaves + their ancestors. */
@@ -119,7 +398,7 @@ function collectChangedPaths(prev: any, curr: any, path: Path, out: Set<string>)
   }
 }
 
-function SourceNode({ name, value, path, depth, editable, onEdit, onDelete, onAdd, peerFocusedPaths, transports, onFocusPath, changedPaths, errors, revealPath }: NodeProps) {
+function SourceNode({ name, value, path, depth, editable, markerSpans, onRichTextOps, onEdit, onDelete, onAdd, peerFocusedPaths, transports, onFocusPath, changedPaths, errors, revealPath }: NodeProps) {
   const [collapsed, setCollapsed] = useState(depth >= 2);
   const [editing, setEditing] = useState(false);
   const [adding, setAdding] = useState(false);
@@ -290,12 +569,14 @@ function SourceNode({ name, value, path, depth, editable, onEdit, onDelete, onAd
             {isArray
               ? value.map((item: any, i: number) => (
                   <SourceNode key={i} name={i} value={item} path={[...path, i]} depth={depth + 1}
-                    editable={editable} onEdit={onEdit} onDelete={onDelete} onAdd={onAdd}
+                    editable={editable} markerSpans={markerSpans} onRichTextOps={onRichTextOps}
+                    onEdit={onEdit} onDelete={onDelete} onAdd={onAdd}
                     peerFocusedPaths={peerFocusedPaths} transports={transports} onFocusPath={onFocusPath} changedPaths={changedPaths} errors={errors} revealPath={revealPath} />
                 ))
               : Object.keys(value).map((key) => (
                   <SourceNode key={key} name={key} value={value[key]} path={[...path, key]} depth={depth + 1}
-                    editable={editable} onEdit={onEdit} onDelete={onDelete} onAdd={onAdd}
+                    editable={editable} markerSpans={markerSpans} onRichTextOps={onRichTextOps}
+                    onEdit={onEdit} onDelete={onDelete} onAdd={onAdd}
                     peerFocusedPaths={peerFocusedPaths} transports={transports} onFocusPath={onFocusPath} changedPaths={changedPaths} errors={errors} revealPath={revealPath} />
                 ))
             }
@@ -348,6 +629,11 @@ function SourceNode({ name, value, path, depth, editable, onEdit, onDelete, onAd
     : typeof value === 'string' ? `"${escapeString(value)}"`
     : String(value);
 
+  // Markers, if this field carries any. They are re-derived from spans rather
+  // than read off the projection, which cannot see them at all.
+  const spans = typeof value === 'string' ? markerSpans.get(pathKey) : undefined;
+  const markers = useMemo(() => (spans ? markersFromSpans(spans) : []), [spans]);
+
   return (
     <div className="source-node">
       <div ref={rowRef} className={'source-row' + (revealed ? ' source-revealed' : '')} style={rowStyle}>
@@ -360,6 +646,11 @@ function SourceNode({ name, value, path, depth, editable, onEdit, onDelete, onAd
             onSave={handleSave}
             onCancel={() => setEditing(false)}
           />
+        ) : markers.length > 0 ? (
+          <span onClick={editable ? () => setEditing(true) : undefined}
+            style={editable ? { cursor: 'pointer' } : undefined}>
+            <MarkedString text={value} markers={markers} />
+          </span>
         ) : (
           <span className={typeClass} onClick={editable ? () => setEditing(true) : undefined}
             style={editable ? { cursor: 'pointer' } : undefined}>
@@ -379,13 +670,18 @@ function SourceNode({ name, value, path, depth, editable, onEdit, onDelete, onAd
           </span>
         )}
       </div>
+      {markers.length > 0 && (
+        <MarkerList path={path} text={value} markers={markers}
+          editable={editable} errors={errors} onRichTextOps={onRichTextOps} />
+      )}
     </div>
   );
 }
 
 const EMPTY_SET: Set<string> = new Set();
+const EMPTY_SPANS: Map<string, RichTextSpan[]> = new Map();
 
-export function SourceTree({ data, editable = false, onEdit, onDelete, onAdd, peerFocusedPaths, onFocusPath, errors, revealPath }: SourceTreeProps) {
+export function SourceTree({ data, editable = false, markerSpans, onRichTextOps, onEdit, onDelete, onAdd, peerFocusedPaths, onFocusPath, errors, revealPath }: SourceTreeProps) {
   const transports = usePeerTransports();
   const noop = () => {};
   const prevDataRef = useRef(data);
@@ -413,6 +709,8 @@ export function SourceTree({ data, editable = false, onEdit, onDelete, onAdd, pe
         path={[]}
         depth={0}
         editable={editable}
+        markerSpans={markerSpans ?? EMPTY_SPANS}
+        onRichTextOps={onRichTextOps || noop}
         onEdit={onEdit || noop}
         onDelete={onDelete || noop}
         onAdd={onAdd || noop}

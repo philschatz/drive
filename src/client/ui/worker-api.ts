@@ -10,7 +10,7 @@
  */
 
 import { useState, useEffect, useRef } from 'preact/hooks';
-import type { WorkerToMain, ValidationError } from '../../shared/worker-protocol';
+import type { WorkerToMain, ValidationError, MarkerField } from '../../shared/worker-protocol';
 import type { PresenceState, PeerState } from '@automerge/automerge-repo';
 import { deepAssign } from '../../shared/deep-assign';
 import type { RendezvousStatus } from '../../shared/rendezvous-protocol';
@@ -31,6 +31,7 @@ import type { BackupTier, BackupPayload, BackupResult } from '../../shared/backu
 export { deepAssign };
 export type { ValidationError };
 export type { RichTextOp, RichTextSpan };
+export type { MarkerField };
 export type { BackupTier, BackupPayload, BackupResult };
 
 /**
@@ -735,6 +736,10 @@ export function subscribeCursors(
  * Pass `{ peek: true }` when the read is NOT the user viewing the document
  * (home-page summaries, source inspector/export, background tooling) — non-peek
  * subscriptions mark the doc's last-viewed heads, clearing its new-changes dot.
+ *
+ * `spansPath` delivers one known Peritext field's spans; `allRichText` delivers
+ * every string field that turns out to carry markers, which costs a walk of the
+ * document per push and exists for the source inspector.
  */
 export function subscribeQuery(
   docId: string,
@@ -743,9 +748,10 @@ export function subscribeQuery(
     result: any, heads: string[], lastModified?: number,
     spans?: RichTextSpan[],
     cursors?: Record<string, number | null>,
+    richTextFields?: MarkerField[],
   ) => void,
   onError?: (error: string) => void,
-  opts?: { peek?: boolean; meta?: boolean; spansPath?: (string | number)[] },
+  opts?: { peek?: boolean; meta?: boolean; spansPath?: (string | number)[]; allRichText?: boolean },
 ): () => void {
   return client.subscribeQuery(docId, filter, onResult, onError, opts);
 }
