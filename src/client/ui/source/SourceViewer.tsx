@@ -1,144 +1,107 @@
+/**
+ * The source inspector — the raw document, one level at a time.
+ *
+ * Two jobs: navigate the document, and see what a version's operations did. Both
+ * are built for a phone first.
+ *
+ * **The URL is the navigation state.** `#/source/<id>/<path>` already existed as a
+ * deep-link target (the validation warning in every editor's title bar points
+ * here), so the current level is simply whatever `rest` decodes to — there is no
+ * local path state, and browser Back walks back up the tree. That also means the
+ * three callers who deep-link here need no special handling: `resolveLevel` walks
+ * as far as the document allows and treats a leftover segment as a row to point
+ * at, which covers a validation error's leaf path, another editor's focused field,
+ * and an operation's raw patch path (whose last segment may be a text offset).
+ *
+ * Writes go through the same three handlers as before, and the one rule that
+ * matters is unchanged: a field carrying rich-text markers is NEVER written by
+ * assignment — that would replace the text object, flattening every mark and
+ * turning its block markers into literal `￼` characters.
+ */
 import { useState, useEffect, useRef, useCallback, useMemo } from 'preact/hooks';
-import { openDoc, subscribeQuery, updateDoc, richText, getDocHistory, debugGetVersionPatches, setDocVersion, restoreDocToVersion, type MarkerField } from '../worker-api';
-import { flatTextEditOps, flatTextFromSpans, type RichTextOp, type RichTextSpan } from '../../../shared/rich-text-ops';
-import { peerColor, peerDisplayName, usePresence } from '../common/presence';
+import {
+  openDoc, subscribeQuery, updateDoc, richText, getDocHistory, debugGetVersionPatches,
+  setDocVersion, restoreDocToVersion, type MarkerField,
+} from '../worker-api';
+import {
+  flatTextEditOps, flatTextFromSpans, markersFromSpans,
+  type RichTextOp, type RichTextSpan,
+} from '../../../shared/rich-text-ops';
+import { peerDisplayName, usePresence } from '../common/presence';
 import { DocumentTitleBar } from '../common/DocumentTitleBar';
-import { HistorySlider } from '../common/HistorySlider';
 import type { DocumentHistory } from '../common/useDocumentHistory';
-import { SourceTree } from './SourceTree';
 import { validateDocument } from '../../../shared/schemas';
-import { ValidationPanel } from '../common/ValidationPanel';
 import { useAccess } from '../common/useAccess';
+import { useConfirm } from '../common/ConfirmSheet';
 import { sourcePath } from '../common/doc-urls';
 import { hashHistory } from '../hash-history';
 import { Progress } from '@/components/ui/progress';
-import './source-viewer.css';
+import { Fab } from '@/components/ui/fab';
+import { LevelList, RowActionsSheet, type PeerFocus, type RowTarget } from './LevelList';
+import { FieldScreen } from './FieldScreen';
+import { ChangesSheet } from './ChangesSheet';
+import { ValidationList } from './ValidationList';
+import { AddPropertySheet, ValueSheet } from './ValueSheets';
+import {
+  collectChangedPaths, escapeString, isContainer, parseValue, pathFromRest,
+  resolveLevel, unescapeString, valueAt, type Path,
+} from './source-nodes';
+import './source.css';
 
-type Path = (string | number)[];
+const EMPTY_SET: Set<string> = new Set();
 
-function formatPatchPath(path: (string | number)[]): string {
-  return path.map(p => typeof p === 'number' ? `[${p}]` : p).join('.');
-}
-
-function formatPatchValue(value: unknown): string {
-  if (value === null) return 'null';
-  if (value === undefined) return '';
-  if (typeof value === 'object') return Array.isArray(value) ? '[]' : '{}';
-  return JSON.stringify(value);
-}
-
-/**
- * An `insert` into a text field whose value is a map IS a block marker —
- * Automerge inserts an empty map at the marker's position and fills it in with
- * later `put` patches. Only in that position, though: a `put` of a map is an
- * ordinary object (a block's own `attrs`, say), and labelling those as markers
- * too is worse than saying nothing.
- */
-function formatInsertedValue(value: unknown): string {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-    ? '¶ block marker'
-    : formatPatchValue(value);
-}
-
-/** `strong=true, link={"href":…}` — the mark set riding along with an insert. */
-function formatMarkSet(marks: Record<string, unknown> | undefined): string {
-  if (!marks) return '';
-  const entries = Object.entries(marks);
-  if (entries.length === 0) return '';
-  return entries.map(([name, v]) => `${name}=${formatPatchValue(v)}`).join(', ');
-}
-
-/**
- * The Value column for one patch.
- *
- * Automerge reports a mark and an unmark as their own patch actions carrying a
- * range, and inserted text can carry an inherited mark set — none of which the
- * generic value formatter can show, so a formatting change used to appear as a
- * bare row with an empty Value. Block markers need the same treatment: they
- * arrive as an `insert` of a map, which read as `{}`.
- */
-function formatPatchDetail(p: any): string {
-  switch (p.action) {
-    case 'put':
-      return formatPatchValue(p.value);
-    case 'del':
-      return p.length > 1 ? `×${p.length}` : '';
-    case 'insert': {
-      const values = (p.values ?? []).map((v: unknown) => formatInsertedValue(v)).join(', ');
-      const marks = formatMarkSet(p.marks);
-      return marks ? `${values} (${marks})` : values;
-    }
-    case 'splice': {
-      // Show the block-marker character rather than letting it render as tofu.
-      const text = JSON.stringify(String(p.value ?? '')).replace(/￼/g, '\\uFFFC');
-      const marks = formatMarkSet(p.marks);
-      return marks ? `${text} (${marks})` : text;
-    }
-    case 'mark':
-      return (p.marks ?? [])
-        .map((m: any) => `${m.name}=${formatPatchValue(m.value)} [${m.start}, ${m.end})`)
-        .join(', ');
-    case 'unmark':
-      return `${p.name} [${p.start}, ${p.end})`;
-    case 'inc':
-      return p.value > 0 ? `+${p.value}` : String(p.value);
-    default:
-      return '';
-  }
-}
-
-function PatchTable({ patches }: { patches: any[] }) {
-  const [collapsed, setCollapsed] = useState(false);
-
+/** The path chips above the level: where you are, and every way back up. */
+function Breadcrumb({ path, onNavigate }: { path: Path; onNavigate: (p: Path) => void }) {
   return (
-    <div className="presence-log">
-      <div className="presence-log-header">
-        <span className="presence-log-toggle" onClick={() => setCollapsed(!collapsed)}>
-          {collapsed ? '\u25b6' : '\u25bc'}
-        </span>
-        <strong>Operations</strong>
-        <span className="presence-log-count">{patches.length}</span>
-      </div>
-      {!collapsed && (
-        <div className="presence-log-body">
-          <table>
-            <thead>
-              <tr>
-                <th>Action</th>
-                <th>Path</th>
-                <th>Value</th>
-              </tr>
-            </thead>
-            <tbody>
-              {patches.map((p, i) => (
-                <tr key={i} className={`patch-${p.action}`}>
-                  <td className="patch-action">{p.action}</td>
-                  <td className="patch-path">{formatPatchPath(p.path)}</td>
-                  <td className="log-detail">{formatPatchDetail(p)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {patches.length === 0 && <div className="presence-log-empty">No operations for this version.</div>}
-        </div>
-      )}
-    </div>
+    <nav
+      aria-label="Document path"
+      data-testid="source-breadcrumb"
+      className="sticky top-14 z-10 bg-page flex items-center gap-0.5 overflow-x-auto whitespace-nowrap py-1.5 px-1 border-b border-outline-variant"
+    >
+      <button
+        aria-label="Document root"
+        data-testid="crumb-root"
+        className="inline-flex items-center justify-center h-9 w-9 rounded-full state-layer shrink-0"
+        onClick={() => onNavigate([])}
+      >
+        <span className="material-symbols-outlined" aria-hidden="true" style={{ fontSize: 20 }}>home</span>
+      </button>
+      {path.map((seg, i) => {
+        const last = i === path.length - 1;
+        return (
+          <span key={i} className="flex items-center shrink-0">
+            <span className="text-muted-foreground px-0.5" aria-hidden="true">/</span>
+            <button
+              data-testid="crumb"
+              // The last crumb is where you already are, so it doesn't navigate.
+              disabled={last}
+              className={
+                'src-mono md-body-medium rounded-full px-2 py-1.5 max-w-40 truncate ' +
+                (last ? 'font-semibold text-on-surface' : 'state-layer text-muted-foreground')
+              }
+              onClick={last ? undefined : () => onNavigate(path.slice(0, i + 1))}
+            >
+              {String(seg)}
+            </button>
+          </span>
+        );
+      })}
+    </nav>
   );
 }
 
-
 export function SourceViewer({ docId, rest, readOnly }: { docId?: string; rest?: string; readOnly?: boolean; path?: string }) {
-  const [status, setStatus] = useState('Loading document...');
+  const [status, setStatus] = useState('Loading document…');
   const [loadProgress, setLoadProgress] = useState<number | null>(null);
   const [currentDoc, setCurrentDoc] = useState<any>(null);
   // Every string field carrying markers — marks and block markers are invisible
-  // to the jq projection, so the tree gets them through this side channel.
+  // to the jq projection, so they arrive through this side channel.
   const [markerFields, setMarkerFields] = useState<MarkerField[]>([]);
   const [historyMeta, setHistoryMeta] = useState<Array<{ version: number; time: number }>>([]);
   const [changeCount, setChangeCount] = useState(0);
   const [version, setVersion] = useState(0);
-  // The version-history sheet starts closed (it covered the document you came
-  // here to read); open it from the title-bar History menu item.
+  // The changes sheet starts closed (it would cover the document you came here to
+  // read); open it from the title bar's History button.
   const [historyOpen, setHistoryOpen] = useState(false);
   const [versionPatches, setVersionPatches] = useState<any[]>([]);
   const [docName, setDocName] = useState('Document');
@@ -147,25 +110,25 @@ export function SourceViewer({ docId, rest, readOnly }: { docId?: string; rest?:
   const [docLoaded, setDocLoaded] = useState(false);
   const atLatest = useRef(true);
 
+  // Open sheets. Each holds its own target, so none of them needs the others.
+  const [editing, setEditing] = useState<RowTarget | null>(null);
+  const [rowActions, setRowActions] = useState<RowTarget | null>(null);
+  const [adding, setAdding] = useState(false);
+  const { confirm, confirmSheet } = useConfirm();
+
   const { peers, peerList, broadcast } = usePresence(docLoaded ? docId : undefined);
 
-  const handleFocusPath = useCallback((path: Path | null) => {
-    broadcast('focusedField', path);
-  }, [broadcast]);
-
-  const peerFocusedPaths = useMemo(() => {
-    const result: Array<{ path: Path; color: string; peerId: string; userGroupId?: string }> = [];
+  const peerFocusedPaths = useMemo<PeerFocus[]>(() => {
+    const result: PeerFocus[] = [];
     for (const peer of Object.values(peers)) {
       const pf = peer.value?.focusedField;
       if (pf && pf.length > 0) {
-        const userGroupId = peer.value?.userGroupId;
-        result.push({ path: pf, color: peerColor(peer.peerId, userGroupId), peerId: peer.peerId, userGroupId });
+        result.push({ path: pf, peerId: peer.peerId, userGroupId: peer.value?.userGroupId });
       }
     }
     return result;
   }, [peers]);
 
-  // Load history metadata from worker
   const loadHistory = useCallback(() => {
     if (!docId) return;
     getDocHistory(docId).then((h) => {
@@ -191,8 +154,7 @@ export function SourceViewer({ docId, rest, readOnly }: { docId?: string; rest?:
       setLoadProgress(0);
       // Keyhive doc announcement is eventually consistent: a doc shared moments
       // ago can reject the first find as unavailable. Retry while mounted so the
-      // inspector converges instead of dead-ending on the race (the /#/d route
-      // surfaces DocLoader's manual "Try again" for the same case).
+      // inspector converges instead of dead-ending on the race.
       for (;;) {
         try {
           await openDoc(docId, {
@@ -211,37 +173,34 @@ export function SourceViewer({ docId, rest, readOnly }: { docId?: string; rest?:
       setStatus('');
       setDocLoaded(true); // gate opens → usePresence subscribes
 
-      // Subscribe to the full document via worker-api (routes through correct repo).
-      // peek: inspecting/exporting source doesn't count as viewing the doc.
+      // peek: inspecting the source doesn't count as viewing the document.
+      // allRichText: also deliver the spans of every field that carries markers.
       unsubQuery = subscribeQuery(docId, '.', (result, _heads, _lastModified, _spans, _cursors, richTextFields) => {
         if (!mounted) return;
         setCurrentDoc(result);
         setMarkerFields(richTextFields ?? []);
-        if (result.name) {
+        if (result?.name) {
           setDocName(result.name);
-          document.title = result.name + ' - Source Editor';
+          document.title = result.name + ' - Source';
         }
         setStatus('');
         loadHistory();
       }, undefined, { peek: true, allRichText: true });
-
-      // Initial history load will happen via the subscription callback calling loadHistory()
     })().catch((err) => {
       if (!mounted) return;
-      const msg = err?.message || 'Failed to load document';
-      setStatus(msg);
+      setStatus(err?.message || 'Failed to load document');
       setLoadProgress(null);
     });
 
     return () => {
       mounted = false;
       unsubQuery?.();
-      // Unpin version when leaving
+      // Leaving must unpin, or the doc stays on an old snapshot all session.
       if (docId) setDocVersion(docId, null);
     };
   }, [docId]);
 
-  // Fetch patches for the selected version
+  // Operations for the selected version.
   useEffect(() => {
     if (!docId || changeCount === 0) return;
     let cancelled = false;
@@ -257,15 +216,22 @@ export function SourceViewer({ docId, rest, readOnly }: { docId?: string; rest?:
   const { canEdit: accessCanEdit } = useAccess(docId);
   const editable = isLatest && accessCanEdit && !readOnly;
 
-  // currentDoc is always the live or pinned doc from subscribeQuery
   const snapshot = currentDoc;
 
-  /** path key → that field's spans, for the tree's marker rendering. */
-  const markerSpans = useMemo(() => {
+  /** path key → that field's spans / marker count, for the rows and field screen. */
+  const spansByKey = useMemo(() => {
     const map = new Map<string, RichTextSpan[]>();
     for (const f of markerFields) map.set(f.path.join('/'), f.spans);
     return map;
   }, [markerFields]);
+
+  const richPaths = useMemo(() => new Set(spansByKey.keys()), [spansByKey]);
+
+  const markerCounts = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const [key, spans] of spansByKey) map.set(key, markersFromSpans(spans).length);
+    return map;
+  }, [spansByKey]);
 
   const validationErrors = useMemo(() => {
     if (!snapshot) return [];
@@ -274,30 +240,47 @@ export function SourceViewer({ docId, rest, readOnly }: { docId?: string; rest?:
     return validateDocument(snapshot, markerFields);
   }, [snapshot, markerFields]);
 
-  const [revealPath, setRevealPath] = useState<Path | null>(null);
-  const hashConsumedRef = useRef(false);
+  // ── Navigation ───────────────────────────────────────────────────────────
+  // `rest` IS the current path, so navigating is pushing a hash and letting the
+  // router deliver it back. No local copy to keep in sync.
+  const requestedPath = useMemo(() => pathFromRest(rest), [rest]);
+  const level = useMemo(
+    () => resolveLevel(snapshot, requestedPath, richPaths),
+    [snapshot, requestedPath, richPaths],
+  );
 
-  // On first render with data, consume the hash as a revealPath
+  const navigate = useCallback((path: Path) => {
+    if (docId) hashHistory.push(sourcePath(docId, path));
+  }, [docId]);
+
+  // ── Change flash ─────────────────────────────────────────────────────────
+  // Ancestors are included, so an edit deeper than the level on screen still
+  // shows up — as a flash on the container row that leads to it.
+  const prevDocRef = useRef(snapshot);
+  const [changedPaths, setChangedPaths] = useState<Set<string>>(EMPTY_SET);
   useEffect(() => {
-    if (hashConsumedRef.current || !snapshot) return;
-    const initial = rest
-      ? rest.split('/').filter(Boolean).map((s: string) => {
-          const decoded = decodeURIComponent(s);
-          const n = Number(decoded);
-          return !isNaN(n) && decoded.trim() !== '' ? n : decoded;
-        })
-      : null;
-    if (initial) {
-      hashConsumedRef.current = true;
-      setRevealPath(initial);
-    }
+    const prev = prevDocRef.current;
+    prevDocRef.current = snapshot;
+    if (prev === snapshot || prev == null || snapshot == null) return;
+    const paths = new Set<string>();
+    collectChangedPaths(prev, snapshot, [], paths);
+    paths.delete(''); // the root has no row to flash
+    if (paths.size === 0) return;
+    setChangedPaths(paths);
+    const id = setTimeout(() => setChangedPaths(EMPTY_SET), 600);
+    return () => clearTimeout(id);
   }, [snapshot]);
 
-  const jumpToLatest = () => {
-    atLatest.current = true;
-    setVersion(changeCount - 1);
-    setDocVersion(docId!, null);
-  };
+  // ── Presence ─────────────────────────────────────────────────────────────
+  // Broadcast the field being edited, and clear it when the sheet closes.
+  const editingKey = editing ? editing.path.join('/') : '';
+  useEffect(() => {
+    if (!editing) return;
+    broadcast('focusedField', editing.path);
+    return () => broadcast('focusedField', null);
+  }, [editingKey]);
+
+  // ── Writes ───────────────────────────────────────────────────────────────
 
   /**
    * Apply rich-text ops to one field. One call is one Automerge change, so a
@@ -310,12 +293,12 @@ export function SourceViewer({ docId, rest, readOnly }: { docId?: string; rest?:
     }, richText, path, ops);
   }, [docId, editable]);
 
-  const handleEdit = (path: Path, value: any) => {
+  const handleEdit = useCallback((path: Path, value: any) => {
     if (!docId || !editable) return;
-    // A field carrying markers must never be written by assignment: replacing
-    // the text object flattens every mark and turns its block markers into
-    // literal `￼` characters. Diff the flat text into ops instead.
-    const spans = markerSpans.get(path.join('/'));
+    // A field carrying markers must never be written by assignment: replacing the
+    // text object flattens every mark and turns its block markers into literal
+    // `￼` characters. Diff the flat text into ops instead.
+    const spans = spansByKey.get(path.join('/'));
     if (spans) {
       handleRichTextOps(path, flatTextEditOps(flatTextFromSpans(spans), String(value)));
       return;
@@ -325,32 +308,45 @@ export function SourceViewer({ docId, rest, readOnly }: { docId?: string; rest?:
       for (let i = 0; i < path.length - 1; i++) current = current[path[i]];
       current[path[path.length - 1]] = value;
     }, path, value);
-  };
+  }, [docId, editable, spansByKey, handleRichTextOps]);
 
-  const handleDelete = (path: Path) => {
-    if (!docId || !editable || path.length === 0) return;
-    if (!confirm(`Delete "${path[path.length - 1]}"?`)) return;
+  /** A rich-text field's whole text, replaced by the minimal set of ops. */
+  const handleSetText = useCallback((path: Path, raw: string) => {
+    const spans = spansByKey.get(path.join('/'));
+    if (!spans) return;
+    handleRichTextOps(path, flatTextEditOps(flatTextFromSpans(spans), unescapeString(raw)));
+  }, [spansByKey, handleRichTextOps]);
+
+  const handleDelete = useCallback(async (target: RowTarget) => {
+    if (!docId || !editable || target.path.length === 0) return;
+    if (!await confirm({
+      title: `Delete "${target.key}"?`,
+      body: isContainer(target.value)
+        ? 'Everything inside it is deleted too. You can undo this from version history.'
+        : 'You can undo this from version history.',
+      confirmLabel: 'Delete',
+      destructive: true,
+    })) return;
     updateDoc(docId, (doc: any, path: any) => {
       let current = doc;
       for (let i = 0; i < path.length - 1; i++) current = current[path[i]];
       delete current[path[path.length - 1]];
-    }, path);
-  };
+    }, target.path);
+  }, [docId, editable, confirm]);
 
-  const handleAdd = (path: Path, key: string, value: any) => {
+  const handleAdd = useCallback((key: string, raw: string) => {
     if (!docId || !editable) return;
-    const fullPath = [...path, key];
+    const fullPath = [...level.levelPath, key];
     updateDoc(docId, (doc: any, fullPath: any, value: any) => {
       let current = doc;
       for (let i = 0; i < fullPath.length - 1; i++) current = current[fullPath[i]];
       current[fullPath[fullPath.length - 1]] = value;
-    }, fullPath, value);
-  };
+    }, fullPath, parseValue(raw));
+  }, [docId, editable, level.levelPath]);
 
   const handleDownloadJson = useCallback(() => {
     if (!snapshot) return;
-    const json = JSON.stringify(snapshot, null, 2);
-    const blob = new Blob([json], { type: 'application/json' });
+    const blob = new Blob([JSON.stringify(snapshot, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -359,19 +355,26 @@ export function SourceViewer({ docId, rest, readOnly }: { docId?: string; rest?:
     URL.revokeObjectURL(url);
   }, [snapshot, docName]);
 
-  const versionTime = historyMeta[version]?.time ?? null;
+  // ── History adapter ──────────────────────────────────────────────────────
+  // Not `useDocumentHistory`: this view always tracks a version, whether or not
+  // the sheet is open, because the operations list needs one to show.
+  const jumpToLatest = useCallback(() => {
+    atLatest.current = true;
+    setVersion(changeCount - 1);
+    if (docId) setDocVersion(docId, null);
+  }, [changeCount, docId]);
 
-  const historyAdapter: DocumentHistory = {
+  const history: DocumentHistory = {
     active: historyOpen && changeCount > 0,
     editable,
     isLatest,
     version,
     changeCount,
     entries: historyMeta,
-    time: versionTime,
+    time: historyMeta[version]?.time ?? null,
     toggleHistory: () => {
-      // Closing also returns the view to the live latest version so the source
-      // tree never stays silently pinned to an old snapshot.
+      // Closing also returns the view to the live latest version, so the document
+      // never stays silently pinned to an old snapshot.
       if (historyOpen) jumpToLatest();
       setHistoryOpen(!historyOpen);
     },
@@ -379,16 +382,14 @@ export function SourceViewer({ docId, rest, readOnly }: { docId?: string; rest?:
       const latest = v === changeCount - 1;
       atLatest.current = latest;
       setVersion(v);
-      // Pin/unpin the worker subscription to this version
       if (docId) setDocVersion(docId, latest ? null : v);
-      // Refresh history metadata if stale
       if (!latest) loadHistory();
     },
     jumpToLatest,
     restoreToVersion: async (target: number) => {
       if (!docId) return;
       await restoreDocToVersion(docId, target);
-      // Worker clears pinnedVersion after restore; return to the live latest view.
+      // The worker clears pinnedVersion after a restore; return to the live view.
       atLatest.current = true;
       setDocVersion(docId, null);
       loadHistory();
@@ -396,8 +397,14 @@ export function SourceViewer({ docId, rest, readOnly }: { docId?: string; rest?:
     onNewHeads: () => {},
   };
 
+  // ── Render ───────────────────────────────────────────────────────────────
+
+  const levelValue = snapshot ? valueAt(snapshot, level.levelPath) : undefined;
+  const fieldSpans = level.fieldPath ? spansByKey.get(level.fieldPath.join('/')) : undefined;
+  const fieldText = level.fieldPath && snapshot ? valueAt(snapshot, level.fieldPath) : undefined;
+
   return (
-    <div className="viewer">
+    <>
       <DocumentTitleBar
         icon="code"
         title={docName}
@@ -407,61 +414,150 @@ export function SourceViewer({ docId, rest, readOnly }: { docId?: string; rest?:
           const name = value.trim() || 'Document';
           setDocName(name);
           updateDoc(docId, (d: any, name: string) => { d.name = name; }, name);
-          document.title = name + ' - Source Editor';
+          document.title = name + ' - Source';
         }}
         docId={docId}
         peers={peerList}
         peerTitle={(peer) => `${peerDisplayName(peer.peerId, peer.value?.userGroupId)}${peer.value?.focusedField ? ' (editing)' : ''}`}
         showSourceLink={false}
-        onToggleHistory={historyAdapter.toggleHistory}
-        historyActive={historyAdapter.active}
+        onToggleHistory={history.toggleHistory}
+        historyActive={history.active}
         // Inspecting changes is the point of this view, so History sits on the bar.
         historyPlacement="bar"
+        // This bar never hides: the breadcrumb sticks below it, and History and the
+        // kebab have to stay reachable while reading down a long level.
+        hidden={false}
         overflow={snapshot ? [{ icon: 'download', label: 'Download JSON', onSelect: handleDownloadJson }] : []}
       />
 
-      {loadProgress !== null && (
-        <Progress className="my-1 mx-4" value={loadProgress} />
-      )}
-      {status && <div className="viewer-status mx-4">{status}</div>}
+      {loadProgress !== null && <Progress className="my-1 mx-4" value={loadProgress} />}
 
-      <div className="viewer-body">
-        {(currentDoc || changeCount > 0) && (
-          <>
-            <HistorySlider history={historyAdapter} />
-            <ValidationPanel
-              errors={validationErrors}
-              variant="dark"
-              onClickError={(err) => {
-                hashHistory.replace(sourcePath(docId!, err.path));
-                setRevealPath(null);
-                requestAnimationFrame(() => setRevealPath(err.path));
-              }}
-            />
-            {snapshot ? (
-              <SourceTree
-                data={snapshot}
-                editable={editable}
-                markerSpans={markerSpans}
-                onRichTextOps={handleRichTextOps}
-                onEdit={handleEdit}
-                onDelete={handleDelete}
-                onAdd={handleAdd}
-                peerFocusedPaths={peerFocusedPaths}
-                onFocusPath={handleFocusPath}
-                errors={validationErrors}
-                revealPath={revealPath}
-              />
-            ) : (
-              <div className="viewer-status">Failed to load snapshot for this version.</div>
-            )}
-          </>
+      {snapshot && <Breadcrumb path={level.fieldPath ?? level.levelPath} onNavigate={navigate} />}
+
+      {/* pb-28 clears the FAB, per the convention every list screen follows. */}
+      <div className="max-w-screen-md mx-auto w-full px-2 sm:px-4 pb-28">
+        {status && <div className="text-sm text-muted-foreground py-2 px-2">{status}</div>}
+
+        {!isLatest && changeCount > 0 && (
+          <div
+            className="md-body-medium text-on-secondary-container bg-secondary-container rounded-lg px-3 py-2 mt-2"
+            data-testid="pinned-notice"
+          >
+            Showing version {version + 1} of {changeCount}. Editing is disabled while a past version is
+            previewed.
+          </div>
         )}
 
-        <div className="viewer-panels">
-          <PatchTable patches={versionPatches} />
-        </div>
+        {level.missing && (
+          <div
+            className="md-body-medium text-on-error-container bg-error-container rounded-lg px-3 py-2 mt-2"
+            data-testid="missing-notice"
+          >
+            {requestedPath.join(' / ')} is not in this document
+            {level.selectedKey !== null ? ' (any more)' : ''}.
+          </div>
+        )}
+
+        {/* Filtered to the subtree on screen, so navigating narrows it. */}
+        <ValidationList
+          errors={validationErrors}
+          path={level.fieldPath ?? level.levelPath}
+          onNavigate={navigate}
+        />
+
+        {snapshot == null ? null : level.fieldPath ? (
+          <FieldScreen
+            fieldPath={level.fieldPath}
+            text={typeof fieldText === 'string' ? fieldText : ''}
+            spans={fieldSpans ?? []}
+            editable={editable}
+            errors={validationErrors}
+            peerFocusedPaths={peerFocusedPaths}
+            onOps={handleRichTextOps}
+            onSetText={handleSetText}
+          />
+        ) : isContainer(levelValue) ? (
+          <LevelList
+            // Keyed to the level, so navigating away drops that level's filter and
+            // its "show all" — a new level starts fresh, showing everything in it.
+            key={level.levelPath.join('/')}
+            levelPath={level.levelPath}
+            value={levelValue}
+            editable={editable}
+            richPaths={richPaths}
+            markerCounts={markerCounts}
+            selectedKey={level.selectedKey}
+            changedPaths={changedPaths}
+            errors={validationErrors}
+            peerFocusedPaths={peerFocusedPaths}
+            onPrimary={(t) => {
+              if (isContainer(t.value) || t.kind === 'richtext') navigate(t.path);
+              else setEditing(t);
+            }}
+            onActions={setRowActions}
+          />
+        ) : (
+          <div className="text-sm text-muted-foreground py-4 px-2">
+            Failed to load a snapshot for this version.
+          </div>
+        )}
       </div>
-    </div>
+
+      {/* Adding is the level's own action, so it is the FAB — the same gesture that
+          adds a task or a counter. Only on a container: a rich-text field's screen
+          has nothing to add a property to. */}
+      {editable && !level.fieldPath && isContainer(levelValue) && (
+        <Fab
+          icon="add"
+          aria-label={Array.isArray(levelValue) ? 'Add item' : 'Add property'}
+          onClick={() => setAdding(true)}
+        />
+      )}
+
+      <RowActionsSheet
+        target={rowActions}
+        onEdit={setEditing}
+        onOpen={(t) => navigate(t.path)}
+        onDelete={handleDelete}
+        onClose={() => setRowActions(null)}
+      />
+
+      <ValueSheet
+        open={!!editing}
+        title={`${editable ? 'Edit' : ''} ${String(editing?.key ?? '')}`.trim()}
+        label={String(editing?.key ?? 'Value')}
+        value={editing
+          ? (typeof editing.value === 'string'
+              ? escapeString(editing.value)
+              : editing.value === null ? 'null' : String(editing.value))
+          : ''}
+        multiline={typeof editing?.value === 'string' && editing.value.length > 60}
+        readOnly={!editable}
+        supportingText={editable ? 'null, true, false and numbers are stored as themselves' : undefined}
+        onSave={(raw) => { if (editing) handleEdit(editing.path, parseValue(raw)); }}
+        onClose={() => setEditing(null)}
+      />
+
+      <AddPropertySheet
+        open={adding}
+        path={level.levelPath}
+        isArray={Array.isArray(levelValue)}
+        nextIndex={Array.isArray(levelValue) ? levelValue.length : 0}
+        onAdd={handleAdd}
+        onClose={() => setAdding(false)}
+      />
+
+      <ChangesSheet
+        open={history.active}
+        history={history}
+        patches={versionPatches}
+        // Write access, not `history.editable` — see ChangesSheet's `canRestore`.
+        canRestore={accessCanEdit && !readOnly}
+        onClose={history.toggleHistory}
+        onNavigate={(path) => { setHistoryOpen(false); navigate(path); }}
+      />
+
+      {confirmSheet}
+    </>
   );
 }

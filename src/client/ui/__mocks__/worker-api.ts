@@ -137,6 +137,9 @@ export function __reset(): void {
   docListSubs.clear();
   unseenFlags = {};
   unseenSubs.clear();
+  histories.clear();
+  patches.clear();
+  pinnedVersion = null;
 }
 /** Push a presence peer map ({ peerId: { peerId, value } }) to subscribers. */
 export function __setPresence(docId: string, peers: Record<string, any>): void {
@@ -287,11 +290,34 @@ export function archiveDoc(): Promise<{ status: string }> { return Promise.resol
 export function exportBackup(): Promise<any> { return Promise.resolve({ format: 'drive-backup', version: 1, kind: 'snapshot', exportedAt: new Date().toISOString(), docs: [], settings: {} }); }
 export function importBackup(): Promise<any> { return Promise.resolve({ imported: 0, skipped: [], reload: true }); }
 
-export function getDocHistory(): Promise<Array<{ version: number; time: number }>> { return Promise.resolve([]); }
-export function setDocVersion(): void {}
+// Version history + per-version operations. Seedable rather than hard-coded to
+// `[]`, so the surfaces built on them (the source inspector's changes sheet) are
+// testable at all; unseeded, they still answer "no history", which is what every
+// other consumer expects.
+const histories = new Map<string, Array<{ version: number; time: number }>>();
+const patches = new Map<string, any[]>();
+
+/** Seed a document's version list (as `Automerge.getHistory` reports it). */
+export function __setHistory(docId: string, entries: Array<{ version: number; time: number }>): void {
+  histories.set(docId, entries);
+}
+/** Seed the patches one version produced (`version - 1` → `version`). */
+export function __setPatches(docId: string, version: number, list: any[]): void {
+  patches.set(docId + '@' + version, list);
+}
+let pinnedVersion: number | null = null;
+/** The version the view has pinned, or null for the live latest (for assertions). */
+export function __getPinnedVersion(): number | null { return pinnedVersion; }
+
+export function getDocHistory(docId: string): Promise<Array<{ version: number; time: number }>> {
+  return Promise.resolve(histories.get(docId) ?? []);
+}
+export function setDocVersion(_docId: string, version: number | null): void { pinnedVersion = version; }
 export function restoreDocToVersion(): Promise<void> { return Promise.resolve(); }
 export function restoreDocToHeads(): Promise<void> { return Promise.resolve(); }
-export function debugGetVersionPatches(): Promise<any[]> { return Promise.resolve([]); }
+export function debugGetVersionPatches(docId: string, version: number): Promise<any[]> {
+  return Promise.resolve(patches.get(docId + '@' + version) ?? []);
+}
 
 export function subscribeValidation(_docId: string, cb: (e: any[]) => void): () => void {
   cb([]);

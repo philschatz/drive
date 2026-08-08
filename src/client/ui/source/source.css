@@ -1,0 +1,165 @@
+/**
+ * Source inspector styling.
+ *
+ * Everything that can be a Tailwind/MD3 token is one, in the markup. What lands
+ * here is only what utilities cannot express: the JSON value palette (which needs
+ * a light and a dark variant), the marker rendering (whose stacked underlines are
+ * inline inset shadows), and two flash animations.
+ *
+ * The predecessor hard-coded a VS Code dark palette — `color-scheme: dark`,
+ * `background: #1e1e1e`, twenty hex literals — on a page that sat inside an
+ * OS-themed app. These are custom properties instead, so the screen re-themes
+ * with everything else (see ui/common/theme.ts).
+ */
+
+:root {
+  --src-string: #a1400f;
+  --src-number: #1d5e20;
+  --src-boolean: #0b4fa8;
+  --src-null: #5f6368;
+  --src-key: #0b3d91;
+
+  /* Validation. Yellow rather than an MD3 role: no sys role reads as "warning"
+     (error is red, tertiary follows the seed), and a problem has to be
+     unmistakable against the data it is about. */
+  --src-warn-bg: #fff5d6;
+  --src-warn-edge: #e0a800;
+  --src-warn-fg: #6d4b00;
+  --src-warn-muted: #8a6400;
+}
+
+.dark {
+  --src-string: #ce9178;
+  --src-number: #b5cea8;
+  --src-boolean: #6cb6ff;
+  --src-null: #9aa0a6;
+  --src-key: #9cdcfe;
+
+  --src-warn-bg: #3b2f08;
+  --src-warn-edge: #b58900;
+  --src-warn-fg: #ffd980;
+  --src-warn-muted: #d9b45a;
+}
+
+/**
+ * The one surface every validation message uses: the scoped problem list, a
+ * field's own errors, and a marker's error banner. One visual language, so a
+ * problem is recognisable before it is read — and never mistakable for data.
+ *
+ * Severity stays in the icon (red `error` for a violation, amber `warning` for a
+ * warning), because the surface says "something is wrong here" and the icon says
+ * how much.
+ */
+.src-warn {
+  background: var(--src-warn-bg);
+  border: 1px solid var(--src-warn-edge);
+  color: var(--src-warn-fg);
+  border-radius: var(--md-sys-shape-corner-medium, 12px);
+}
+
+/* md-list-item paints its own container from the shadow root, which would cover
+   the yellow. `background: transparent` on the list only handles md-list itself. */
+.src-warn md-list,
+.src-warn md-list-item {
+  background: transparent;
+  --md-list-item-container-color: transparent;
+  --md-list-item-label-text-color: var(--src-warn-fg);
+  --md-list-item-supporting-text-color: var(--src-warn-muted);
+  --md-list-item-trailing-supporting-text-color: var(--src-warn-muted);
+}
+
+.src-warn md-divider {
+  --md-divider-color: var(--src-warn-edge);
+}
+
+/* Values are monospace so a uid, a timestamp and an escape sequence all read as
+   data rather than prose. Type colour is the secondary cue; the row's leading
+   glyph is the primary one. */
+.src-mono {
+  font-family: 'SF Mono', 'Consolas', 'Menlo', ui-monospace, monospace;
+  font-variant-ligatures: none;
+}
+
+.src-string { color: var(--src-string); }
+.src-number { color: var(--src-number); }
+.src-boolean { color: var(--src-boolean); }
+.src-null { color: var(--src-null); font-style: italic; }
+
+/* ── Markers ────────────────────────────────────────────────────────────────
+   Marks and block markers are invisible to the JSON projection, so a rich-text
+   field is rendered twice: highlighted in place (this block) and listed as rows
+   beneath it. Both key off one footnote index per marker. */
+
+/* The field's full text. Wraps and preserves whitespace — the old version was a
+   nowrap flex row, which is what made a page of prose scroll sideways. */
+.src-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.9;
+}
+
+/* A run covered by one or more marks. The tint names the topmost mark; the
+   stacked underline bars (set inline as inset shadows, so they paint in
+   declaration order) are what make an overlap readable, since a tint can only
+   show one colour. */
+.src-marked-run {
+  padding-bottom: 3px;
+  border-radius: 2px;
+}
+
+/* The reference tying a highlight in the text to its row in the list below.
+   A plain inline number on the baseline, not a raised superscript — at the sizes
+   this screen uses a superscript was unreadable, and it is a real number the
+   marker list repeats, not a typographic footnote.
+   The tinted chip is what keeps it from being read as content: bare, `note` +
+   `3` + `s` ran together as one word. */
+.src-footnote {
+  font-weight: 700;
+  padding: 0 0.25rem;
+  margin: 0 0.15rem;
+  border-radius: 4px;
+  background: color-mix(in srgb, currentColor 14%, transparent);
+  user-select: none;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Inside a chip the number is already fenced by the chip's own border. */
+.src-marker-chip .src-footnote {
+  background: none;
+  margin: 0 0 0 0.15rem;
+  padding: 0;
+}
+
+/* A block marker occupies one position, so it has no range to tint. */
+.src-marker-chip {
+  display: inline-block;
+  border: 1px solid;
+  border-radius: var(--md-sys-shape-corner-small, 8px);
+  padding: 0 0.35rem;
+  margin: 0 0.15rem;
+  font-size: 0.8em;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+/* ── Change and reveal flashes ──────────────────────────────────────────────
+   Both tint with a role token at low alpha rather than a literal, so they read
+   correctly on the light and the dark surface. */
+
+.src-flash {
+  animation: src-flash 0.6s ease-out;
+}
+
+@keyframes src-flash {
+  0% { background-color: color-mix(in srgb, var(--md-sys-color-primary) 22%, transparent); }
+  100% { background-color: transparent; }
+}
+
+.src-revealed {
+  animation: src-reveal 1.6s ease-out;
+}
+
+@keyframes src-reveal {
+  0%, 40% { background-color: color-mix(in srgb, var(--md-sys-color-tertiary, #7d5260) 24%, transparent); }
+  100% { background-color: transparent; }
+}
