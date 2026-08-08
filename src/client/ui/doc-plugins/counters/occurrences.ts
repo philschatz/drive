@@ -87,20 +87,33 @@ function anchorFor(ev: CounterEvent, anchor: string): string {
 }
 
 /**
- * The local date the counter was created — the base of its occurrence grid.
- * `created` is a UTC timestamp (JSCalendar); counters written before that field
- * existed fall back to `start`, which used to hold the creation anchor. A
- * recurring counter with neither has no known origin (see expandOccurrences).
+ * The local datetime the counter was created. `created` is a UTC timestamp
+ * (JSCalendar); counters written before that field existed fall back to `start`,
+ * which used to hold the creation anchor — and as a bare date it floors to
+ * midnight, so no legacy history is trimmed away. A recurring counter with
+ * neither has no known origin (see expandOccurrences).
+ *
+ * `smallestUnit` is pinned because these strings are compared against deadlines
+ * as strings: an imported instant carrying milliseconds must not render as
+ * "…T09:00:00.123".
  */
-export function createdDate(ev: CounterEvent): string | undefined {
+export function createdDateTime(ev: CounterEvent): string | undefined {
   if (ev.created) {
     try {
-      return Temporal.Instant.from(ev.created).toZonedDateTimeISO(Temporal.Now.timeZoneId()).toPlainDate().toString();
+      return Temporal.Instant.from(ev.created)
+        .toZonedDateTimeISO(Temporal.Now.timeZoneId())
+        .toPlainDateTime()
+        .toString({ smallestUnit: 'second' });
     } catch {
       // Not a real instant — fall through to the legacy anchor.
     }
   }
-  return ev.start ? dateOf(ev.start) : undefined;
+  return ev.start ? toDateTime(ev.start) : undefined;
+}
+
+/** The date part of {@link createdDateTime} — the base of the occurrence grid. */
+export function createdDate(ev: CounterEvent): string | undefined {
+  return createdDateTime(ev)?.substring(0, 10);
 }
 
 /**
@@ -155,14 +168,24 @@ function scheduleAnchors(ev: CounterEvent, base: string | undefined, rangeEnd: s
   return [...seen].sort();
 }
 
-/** End of an occurrence's pending window: window start + duration, or end of
- * its day when no duration is set. */
-export function windowEnd(ev: CounterEvent, occ: string): string {
-  const start = Temporal.PlainDateTime.from(toDateTime(occ));
+/**
+ * When an occurrence stops being doable. An explicit `duration` is the window the
+ * user set. Otherwise it runs until the habit comes due again — the same period
+ * {@link metInPeriod} credits a completion in, so a counter can never be overdue
+ * while a click would still count for it. End of day only as a last resort, where
+ * there is no next occurrence: a one-shot, or the far edge of the expansion.
+ *
+ * The end of the day is *not* a safe default on its own — for anything longer than
+ * a daily habit it makes the counter overdue the morning after it was created.
+ */
+export function windowEnd(ev: CounterEvent, occ: string, next?: string): string {
   if (ev.duration) {
     const d = parseDuration(ev.duration);
-    return start.add({ days: d.days, hours: d.hours, minutes: d.minutes }).toString();
+    return Temporal.PlainDateTime.from(toDateTime(occ))
+      .add({ days: d.days, hours: d.hours, minutes: d.minutes })
+      .toString();
   }
+  if (next) return toDateTime(next);
   return Temporal.PlainDate.from(dateOf(occ)).add({ days: 1 }).toString() + 'T00:00:00';
 }
 
@@ -186,8 +209,28 @@ export function expectedOccurrences(ev: CounterEvent, rangeStart: string, rangeE
   return cacheSet(ev, rangeStart, rangeEnd, expandOccurrences(ev, rangeStart, rangeEnd));
 }
 
+/**
+ * Occurrences whose window shut before the counter existed are not misses: a
+ * 06:00–07:00 habit written at 10:00 must not open Overdue for an hour that
+ * predates the document. Keyed on when the window *shuts*, so writing it at 06:30
+ * keeps today — it can still be done.
+ *
+ * Dates ascend and the window length is fixed, so what survives is a suffix: walk
+ * and slice, which in the overwhelmingly common case costs one `windowEnd` call
+ * and returns the very same array.
+ */
+function sinceCreation(ev: CounterEvent, dates: string[]): string[] {
+  const born = createdDateTime(ev);
+  if (!born) return dates; // no known origin: the grid is synthetic, leave it be
+  let i = 0;
+  while (i < dates.length && windowEnd(ev, dates[i], dates[i + 1]) <= born) i++;
+  return i === 0 ? dates : dates.slice(i);
+}
+
 function expandOccurrences(ev: CounterEvent, rangeStart: string, rangeEnd: string): string[] {
   if (!ev.recurrenceRule) {
+    // Not trimmed at creation: a one-shot's `start` is its *due date*, and may
+    // legitimately predate its own creation — logging something already owed.
     if (!ev.start) return [];
     const d = dateOf(ev.start);
     return d >= rangeStart && d <= rangeEnd ? [ev.start] : [];
@@ -196,10 +239,10 @@ function expandOccurrences(ev: CounterEvent, rangeStart: string, rangeEnd: strin
   const base = createdDate(ev);
 
   // No origin and no reset to apply: expand from the query range, as before.
-  if (anchorInvariant(rule)) return generateDates(anchorFor(ev, base ?? rangeStart), rule, rangeStart, rangeEnd);
+  if (anchorInvariant(rule)) return sinceCreation(ev, generateDates(anchorFor(ev, base ?? rangeStart), rule, rangeStart, rangeEnd));
 
   const anchors = scheduleAnchors(ev, base, rangeEnd);
-  if (anchors.length === 0) return generateDates(anchorFor(ev, rangeStart), rule, rangeStart, rangeEnd);
+  if (anchors.length === 0) return sinceCreation(ev, generateDates(anchorFor(ev, rangeStart), rule, rangeStart, rangeEnd));
 
   const out: string[] = [];
   for (let i = 0; i < anchors.length; i++) {
@@ -210,7 +253,7 @@ function expandOccurrences(ev: CounterEvent, rangeStart: string, rangeEnd: strin
     if (nextAnchor) dates.pop(); // credited by the completion that opens the next segment
     for (const d of dates) if (dateOf(d) >= rangeStart) out.push(d);
   }
-  return out;
+  return sinceCreation(ev, out);
 }
 
 // Every counter is expanded three times per render (status, streak, chart), and
@@ -292,7 +335,7 @@ export function currentStreak(ev: CounterEvent, now: string): number {
 function overdueSince(ev: CounterEvent, occs: string[], from: number, now: string, anchored: boolean): string | undefined {
   let since: string | undefined;
   for (let i = from; i >= 0; i--) {
-    const end = windowEnd(ev, occs[i]);
+    const end = windowEnd(ev, occs[i], occs[i + 1]);
     if (end > now) continue; // window still open — nothing owed for it yet
     if (metInPeriod(ev, occs[i], occs[i + 1])) break; // the run ends at the last one done
     since = end;
@@ -308,9 +351,13 @@ function overdueSince(ev: CounterEvent, occs: string[], from: number, now: strin
  *   'done'     — the current period has a recorded completion
  *   'pending'  — the current occurrence's window is still open and the previous
  *                occurrence (if any since the habit's start) was met
- *   'overdue'  — the current window has closed with no completion yet (and the
- *                next occurrence hasn't begun), or the current window is open
- *                but the previous occurrence went unmet
+ *   'overdue'  — the current window has closed with no completion yet, or the
+ *                current window is open but the previous occurrence went unmet
+ *
+ * Absent an explicit `duration`, a window closes when the habit comes due again
+ * (see {@link windowEnd}) — so a habit repeating every 4 months is not overdue the
+ * day after it was made, and "overdue" always means a completion would no longer
+ * have counted.
  */
 export function currentStatus(ev: CounterEvent, now: string): StatusResult {
   if (!ev.recurrenceRule && !ev.start) return { status: 'tally' };
@@ -328,22 +375,22 @@ export function currentStatus(ev: CounterEvent, now: string): StatusResult {
     if (toDateTime(occs[i]) <= now) ci = i;
     else break;
   }
-  if (ci < 0) return { status: 'upcoming', occurrence: occs[0], dueAt: windowEnd(ev, occs[0]) };
+  if (ci < 0) return { status: 'upcoming', occurrence: occs[0], dueAt: windowEnd(ev, occs[0], occs[1]) };
   const curr = occs[ci];
   const prev = occs[ci - 1];
   const next = occs[ci + 1];
 
-  if (metInPeriod(ev, curr, next)) return { status: 'done', occurrence: curr, dueAt: windowEnd(ev, curr) };
+  if (metInPeriod(ev, curr, next)) return { status: 'done', occurrence: curr, dueAt: windowEnd(ev, curr, next) };
 
   // Both the retroactive-miss rule and the walk need this, and it parses an
   // Instant, so resolve it once.
   const anchored = !!createdDate(ev);
 
-  if (now >= windowEnd(ev, curr)) {
+  if (now >= windowEnd(ev, curr, next)) {
     return {
       status: 'overdue',
       occurrence: curr,
-      dueAt: overdueSince(ev, occs, ci, now, anchored) ?? windowEnd(ev, curr),
+      dueAt: overdueSince(ev, occs, ci, now, anchored) ?? windowEnd(ev, curr, next),
     };
   }
   // Window still open — but a missed previous occurrence keeps it overdue.
@@ -359,7 +406,7 @@ export function currentStatus(ev: CounterEvent, now: string): StatusResult {
       dueAt: overdueSince(ev, occs, ci - 1, now, anchored) ?? toDateTime(curr),
     };
   }
-  return { status: 'pending', occurrence: curr, dueAt: windowEnd(ev, curr) };
+  return { status: 'pending', occurrence: curr, dueAt: windowEnd(ev, curr, next) };
 }
 
 /** Overdue first, then pending, upcoming, done, and finally schedule-less

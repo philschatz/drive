@@ -279,6 +279,32 @@ describe('Counters container', () => {
     expect(within(rowOf('Stretch')).getByText('daily')).toBeTruthy();
   });
 
+  it('a long-interval habit made two days ago is To do, not Overdue', async () => {
+    // The reported bug: a 4-monthly counter went red the morning after it was
+    // made, because a window with no explicit duration ended at midnight.
+    const created = Temporal.Now.zonedDateTimeISO().subtract({ days: 2 })
+      .toInstant().toString({ smallestUnit: 'second' });
+    mock.__setDoc(DOC, {
+      '@type': 'Calendar+Counters', name: 'C',
+      events: {
+        e1: {
+          '@type': 'Event', title: 'Descale the kettle', created,
+          recurrenceRule: { '@type': 'RecurrenceRule', frequency: 'monthly', interval: 4 },
+        },
+      },
+    });
+    render(<Counters docId={DOC} />);
+    await waitFor(() => expect(screen.getByText('Descale the kettle')).toBeTruthy());
+
+    expect(rowOf('Descale the kettle').getAttribute('data-status')).toBe('pending');
+    expect(screen.getByRole('heading', { name: 'To do' })).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: 'Overdue' })).toBeNull();
+    // …and the clock counts down to the next occurrence, months out.
+    const due = within(rowOf('Descale the kettle')).getByTestId('counter-due');
+    expect(due.textContent).toMatch(/ left$/);
+    expect(due.getAttribute('title')).toContain('due by');
+  });
+
   it('an overdue habit shows no streak flame — the chain is broken', async () => {
     const d = (n: number) => Temporal.Now.plainDateISO().subtract({ days: n }).toString();
     const done = (...days: number[]) =>

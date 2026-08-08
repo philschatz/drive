@@ -1,7 +1,7 @@
 import 'temporal-polyfill/global';
 import {
   expectedOccurrences, metInPeriod, windowEnd, currentStatus, currentStreak, sortedCounters, metMissedByWeek, isArchived,
-  createdDate, reanchorDate, parseReward, formatReward, windowEndTime, windowDuration,
+  createdDate, createdDateTime, reanchorDate, parseReward, formatReward, windowEndTime, windowDuration,
 } from './occurrences';
 import type { CounterEvent } from '../../../../shared/schemas/counters';
 
@@ -22,12 +22,28 @@ const createdOn = (date: string): string =>
     .toInstant()
     .toString({ smallestUnit: 'second' });
 
+/** The same, when the *time* of creation is what the test is about. */
+const createdAtLocal = (dateTime: string): string =>
+  Temporal.PlainDateTime.from(dateTime)
+    .toZonedDateTime(Temporal.Now.timeZoneId())
+    .toInstant()
+    .toString({ smallestUnit: 'second' });
+
 /** Every 3 days from `created`, i.e. a rule whose grid depends on its anchor. */
 const every3 = (extra: Partial<CounterEvent> = {}): CounterEvent => ({
   '@type': 'Event',
   title: 'water plants',
   created: createdOn('2026-07-01'),
   recurrenceRule: { '@type': 'RecurrenceRule', frequency: 'daily', interval: 3 },
+  ...extra,
+});
+
+/** Every 4 months from `created` — the interval that exposed the end-of-day deadline. */
+const every4Months = (extra: Partial<CounterEvent> = {}): CounterEvent => ({
+  '@type': 'Event',
+  title: 'descale the kettle',
+  created: createdOn('2026-07-19'),
+  recurrenceRule: { '@type': 'RecurrenceRule', frequency: 'monthly', interval: 4 },
   ...extra,
 });
 
@@ -69,13 +85,17 @@ describe('the schedule restarts at each completion', () => {
       // … and Jul 19 is *replaced* by the completion, not counted missed beside it
       '2026-07-20', '2026-07-23', '2026-07-26',
     ]);
-    // Next due is 3 days after it was done (the 23rd), not after the 22nd.
-    expect(currentStatus(ev, NOW)).toEqual({ status: 'done', occurrence: '2026-07-20', dueAt: '2026-07-21T00:00:00' });
+    // Next due is 3 days after it was done (the 23rd), not after the 22nd — and
+    // that is what the done row counts down to, since a 3-day habit's window runs
+    // until it comes due again.
+    expect(currentStatus(ev, NOW)).toEqual({ status: 'done', occurrence: '2026-07-20', dueAt: '2026-07-23T00:00:00' });
   });
 
   it('without a completion the grid still runs from `created`', () => {
     expect(expectedOccurrences(every3(), '2026-07-01', '2026-07-10')).toEqual(['2026-07-01', '2026-07-04', '2026-07-07', '2026-07-10']);
-    expect(currentStatus(every3(), NOW)).toEqual({ status: 'overdue', occurrence: '2026-07-19', dueAt: '2026-07-02T00:00:00' });
+    // Overdue since the 4th: that is when Jul 1 stopped being creditable, not the
+    // morning after it (a 3-day habit is not late one day in).
+    expect(currentStatus(every3(), NOW)).toEqual({ status: 'overdue', occurrence: '2026-07-19', dueAt: '2026-07-04T00:00:00' });
   });
 
   it('a streak counts through the re-anchors', () => {
@@ -116,6 +136,131 @@ describe('the schedule restarts at each completion', () => {
     expect(createdDate({ '@type': 'Event', start: '2026-07-04' })).toBe('2026-07-04');
     expect(createdDate({ '@type': 'Event', created: 'not-an-instant', start: '2026-07-05' })).toBe('2026-07-05');
     expect(createdDate({ '@type': 'Event' })).toBeUndefined();
+  });
+
+  it('createdDateTime keeps the time of day, and floors a legacy date to midnight', () => {
+    expect(createdDateTime({ '@type': 'Event', created: createdOn('2026-07-04') })).toBe('2026-07-04T09:00:00');
+    expect(createdDateTime({ '@type': 'Event', start: '2026-07-04' })).toBe('2026-07-04T00:00:00');
+    expect(createdDateTime({ '@type': 'Event', start: '2026-07-04T11:30:00' })).toBe('2026-07-04T11:30:00');
+    expect(createdDateTime({ '@type': 'Event', created: 'not-an-instant', start: '2026-07-05' })).toBe('2026-07-05T00:00:00');
+    expect(createdDateTime({ '@type': 'Event' })).toBeUndefined();
+    // Sub-second precision from an imported document must not leak into a string
+    // the engine compares against "YYYY-MM-DDTHH:mm:ss" deadlines.
+    expect(createdDateTime({ '@type': 'Event', created: '2026-07-04T00:00:00.123Z' })).toMatch(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d$/);
+  });
+});
+
+describe('a deadline runs until the habit comes due again', () => {
+  it('a long interval is not overdue the morning after it was created', () => {
+    // The report: created two days ago, never done, repeating every 4 months.
+    // The end of the creation day is not the deadline — the next occurrence is.
+    expect(currentStatus(every4Months(), NOW)).toEqual({
+      status: 'pending',
+      occurrence: '2026-07-19',
+      dueAt: '2026-11-19T00:00:00',
+    });
+  });
+
+  it('…and goes overdue when it does come due again', () => {
+    expect(currentStatus(every4Months(), '2026-11-20T12:00:00')).toEqual({
+      status: 'overdue',
+      occurrence: '2026-11-19',
+      dueAt: '2026-11-19T00:00:00',
+    });
+  });
+
+  it('a neglected one measures from the first blown deadline, not the day after an occurrence', () => {
+    const ev = every4Months({ created: createdOn('2025-01-01') });
+    expect(currentStatus(ev, NOW)).toEqual({
+      status: 'overdue',
+      occurrence: '2026-05-01',
+      // Jan 1 is when the Sep 1 occurrence stopped being creditable — the start
+      // of the run of misses inside the expansion window.
+      dueAt: '2026-01-01T00:00:00',
+    });
+  });
+
+  it('an explicit window still wins: it closes when the user said it does', () => {
+    const ev = every4Months({
+      startTime: '09:00:00',
+      duration: 'PT1H',
+      created: createdAtLocal('2026-07-19T08:00:00'),
+    });
+    expect(currentStatus(ev, NOW)).toEqual({
+      status: 'overdue',
+      occurrence: '2026-07-19T09:00:00',
+      dueAt: '2026-07-19T10:00:00',
+    });
+  });
+
+  it('daily is unchanged, because its next occurrence *is* the end of the day', () => {
+    expect(windowEnd(daily(), '2026-07-21', '2026-07-22')).toBe('2026-07-22T00:00:00');
+    // No next occurrence (a one-shot, or the far edge of the expansion): end of day.
+    expect(windowEnd(daily(), '2026-07-21')).toBe('2026-07-22T00:00:00');
+    expect(windowEnd(every4Months(), '2026-07-19', '2026-11-19')).toBe('2026-11-19T00:00:00');
+  });
+});
+
+describe('a window that shut before the counter existed', () => {
+  /** 06:00–07:00 daily, written at 10:00 — after today's hour had already gone. */
+  const writtenLate = (at: string) => daily({
+    startTime: '06:00:00',
+    duration: 'PT1H',
+    created: createdAtLocal(at),
+  });
+
+  it('is not a miss: a brand-new counter does not open Overdue', () => {
+    expect(currentStatus(writtenLate('2026-07-21T10:00:00'), NOW)).toEqual({
+      status: 'upcoming',
+      occurrence: '2026-07-22T06:00:00',
+      dueAt: '2026-07-22T07:00:00',
+    });
+  });
+
+  it('trims the grid rather than the status, so nothing downstream sees it', () => {
+    expect(expectedOccurrences(writtenLate('2026-07-21T10:00:00'), '2026-07-21', '2026-07-23'))
+      .toEqual(['2026-07-22T06:00:00', '2026-07-23T06:00:00']);
+  });
+
+  it('created mid-window keeps today: it can still be done', () => {
+    const ev = writtenLate('2026-07-21T06:30:00');
+    expect(currentStatus(ev, '2026-07-21T06:45:00')).toEqual({
+      status: 'pending',
+      occurrence: '2026-07-21T06:00:00',
+      dueAt: '2026-07-21T07:00:00',
+    });
+    // …and it is genuinely overdue once that window shuts unmet.
+    expect(currentStatus(ev, NOW)).toEqual({
+      status: 'overdue',
+      occurrence: '2026-07-21T06:00:00',
+      dueAt: '2026-07-21T07:00:00',
+    });
+  });
+
+  it('an all-day habit created at 23:00 still has the rest of the day', () => {
+    // The trim keys on when the window *shuts*, not when the occurrence starts.
+    expect(currentStatus(daily({ created: createdAtLocal('2026-07-21T23:00:00') }), '2026-07-21T23:30:00')).toEqual({
+      status: 'pending',
+      occurrence: '2026-07-21',
+      dueAt: '2026-07-22T00:00:00',
+    });
+  });
+
+  it('the chart does not book it as a miss either', () => {
+    // Only the 22nd — the hour that predates the counter is not charted.
+    expect(metMissedByWeek({ a: writtenLate('2026-07-21T10:00:00') }, '2026-07-22T12:00:00', 1))
+      .toEqual([{ weekStart: '2026-07-20', met: 0, missed: 1 }]);
+  });
+
+  it('leaves legacy counters and one-shots alone', () => {
+    // No `created`: `start` is the legacy origin and floors to midnight, so a
+    // whole day of history is never trimmed away.
+    expect(createdDateTime(daily({ start: '2026-07-14' }))).toBe('2026-07-14T00:00:00');
+    expect(currentStatus(daily({ start: '2026-07-14' }), NOW).status).toBe('overdue');
+    // A one-shot's `start` is its due date and may legitimately predate its own
+    // creation — logging something you already owe.
+    const oneShot: CounterEvent = { '@type': 'Event', start: '2026-07-20T09:00:00', created: createdAtLocal('2026-07-21T10:00:00') };
+    expect(currentStatus(oneShot, NOW).status).toBe('overdue');
   });
 });
 
@@ -231,9 +376,16 @@ describe('currentStatus', () => {
     expect(currentStatus(daily({ completions: { '2026-07-21T08:00:00': '' } }), NOW)).toEqual({ status: 'done', occurrence: '2026-07-21', dueAt: '2026-07-22T00:00:00' });
   });
 
-  it('weekly Monday, now Tuesday, missed → overdue until the next occurrence', () => {
-    const ev = daily({ recurrenceRule: { '@type': 'RecurrenceRule', frequency: 'weekly', byDay: [{ '@type': 'NDay', day: 'mo' }] } });
-    expect(currentStatus(ev, NOW)).toEqual({ status: 'overdue', occurrence: '2026-07-20', dueAt: '2026-07-21T00:00:00' });
+  it('weekly Monday, now Tuesday, missed → still pending: a Tuesday click counts', () => {
+    // A weekly habit has a week, not a day. It stays pending until next Monday —
+    // exactly when a completion would stop crediting this occurrence.
+    const ev = daily({
+      created: createdOn('2026-07-20'), // a Monday
+      recurrenceRule: { '@type': 'RecurrenceRule', frequency: 'weekly', byDay: [{ '@type': 'NDay', day: 'mo' }] },
+    });
+    expect(currentStatus(ev, NOW)).toEqual({ status: 'pending', occurrence: '2026-07-20', dueAt: '2026-07-27T00:00:00' });
+    // …and a week later it is overdue, dated from the Monday it blew.
+    expect(currentStatus(ev, '2026-07-28T12:00:00')).toEqual({ status: 'overdue', occurrence: '2026-07-27', dueAt: '2026-07-27T00:00:00' });
   });
 
   it('weekly Monday, now Tuesday, done Monday → done', () => {
@@ -306,6 +458,9 @@ describe('currentStatus → dueAt (what the row renders as a relative time)', ()
     ['no anchor, timed', daily({ startTime: '08:00:00', duration: 'PT1H' })],
     ['weekly Monday missed', daily({ recurrenceRule: { '@type': 'RecurrenceRule', frequency: 'weekly', byDay: [{ '@type': 'NDay', day: 'mo' }] } })],
     ['every 3 days, never done', every3()],
+    ['every 4 months, brand new', every4Months()],
+    ['every 4 months, long neglected', every4Months({ created: createdOn('2025-01-01') })],
+    ['timed, created after today\'s window shut', daily({ startTime: '06:00:00', duration: 'PT1H', created: createdAtLocal('2026-07-21T10:00:00') })],
     ['one-shot, day passed', { '@type': 'Event', start: '2026-07-20' } as CounterEvent],
     ['overlapping 30-day windows', daily({ start: '2026-07-14', duration: 'P30D' })],
     ['neglected for months', daily({ created: createdOn('2026-03-01') })],
