@@ -196,9 +196,20 @@ describe('source inspector navigation', () => {
     render(<SourceViewer docId={DOC} readOnly />);
     await waitFor(() => expect(rowNamed('name')).toBeTruthy());
 
-    // No kebab, no add button — nothing here can write.
-    expect(document.querySelector('[data-testid="row-kebab"]')).toBeNull();
+    // Nothing here can write: no delete icon, no add button, and — the part a
+    // missing-button check never caught — no hold either. The gesture used to
+    // fire regardless of `editable` and open a sheet whose Delete silently
+    // did nothing. `button: 2` is a genuine mouse right-click, which produces no
+    // follow-up click, so it can't eat the tap asserted below.
+    expect(document.querySelector('[data-testid="row-delete"]')).toBeNull();
     expect(document.querySelector('md-fab')).toBeNull();
+    // Observed as "did useLongPress claim the gesture", not "did a sheet open":
+    // handleDelete bails on a read-only doc anyway, so a missing sheet would
+    // pass either way. preventDefault is what actually distinguishes a row that
+    // has no hold from one that has a hold leading nowhere.
+    const menu = new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2 });
+    rowNamed('name').dispatchEvent(menu);
+    expect(menu.defaultPrevented).toBe(false);
 
     fireEvent.click(rowNamed('name'));
     const sheet = await waitFor(() => screen.getByTestId('value-sheet'));

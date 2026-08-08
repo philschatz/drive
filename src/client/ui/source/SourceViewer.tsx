@@ -37,7 +37,7 @@ import { sourcePath } from '../common/doc-urls';
 import { hashHistory } from '../hash-history';
 import { Progress } from '@/components/ui/progress';
 import { Fab } from '@/components/ui/fab';
-import { LevelList, RowActionsSheet, type PeerFocus, type RowTarget } from './LevelList';
+import { LevelList, type PeerFocus, type RowTarget } from './LevelList';
 import { FieldScreen } from './FieldScreen';
 import { ChangesSheet } from './ChangesSheet';
 import { ValidationList } from './ValidationList';
@@ -112,7 +112,6 @@ export function SourceViewer({ docId, rest, readOnly }: { docId?: string; rest?:
 
   // Open sheets. Each holds its own target, so none of them needs the others.
   const [editing, setEditing] = useState<RowTarget | null>(null);
-  const [rowActions, setRowActions] = useState<RowTarget | null>(null);
   const [adding, setAdding] = useState(false);
   const { confirm, confirmSheet } = useConfirm();
 
@@ -494,7 +493,7 @@ export function SourceViewer({ docId, rest, readOnly }: { docId?: string; rest?:
               if (isContainer(t.value) || t.kind === 'richtext') navigate(t.path);
               else setEditing(t);
             }}
-            onActions={setRowActions}
+            onDelete={handleDelete}
           />
         ) : (
           <div className="text-sm text-muted-foreground py-4 px-2">
@@ -513,14 +512,6 @@ export function SourceViewer({ docId, rest, readOnly }: { docId?: string; rest?:
           onClick={() => setAdding(true)}
         />
       )}
-
-      <RowActionsSheet
-        target={rowActions}
-        onEdit={setEditing}
-        onOpen={(t) => navigate(t.path)}
-        onDelete={handleDelete}
-        onClose={() => setRowActions(null)}
-      />
 
       <ValueSheet
         open={!!editing}

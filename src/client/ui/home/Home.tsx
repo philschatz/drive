@@ -9,12 +9,11 @@ import { Progress } from '@/components/ui/progress';
 import { Fab } from '@/components/ui/fab';
 import { AccessIcon } from '@/components/AccessIcon';
 import { OverflowMenu, type OverflowMenuItem } from '../common/OverflowMenu';
-import { useLongPress } from '../common/useLongPress';
+import { ListRow } from '../common/ListRow';
 import { CreateDocSheet, type ImportKind } from './CreateDocSheet';
-import { DocActionsSheet } from './DocActionsSheet';
 import { RenameSheet } from '../common/RenameSheet';
 import { iconForType, docTypeLabel, type DocTypePlugin } from '@/doc-plugins';
-import { docUrl, shareUrl } from '@/common/doc-urls';
+import { docUrl, shareUrl, sourceUrl } from '@/common/doc-urls';
 import { relativeTime } from '../../../shared/relative-time';
 import { settingSet, settingSetSync } from '../../shared/idb-storage';
 import type { ImportProgress } from './import-docs';
@@ -45,21 +44,27 @@ function applyQueryResult(prev: DocEntry[], docId: string, result: any, lastModi
 }
 
 /**
- * One document row: a Material two-line list item.
- * Tap opens the doc; long-press / right-click / Shift+F10 / the trailing kebab
- * opens the per-doc actions sheet (Share / Rename / Archive / View source).
+ * One document row: a Material two-line list item. Tap opens the doc; the four
+ * things you can do *to* it rather than *in* it live behind the kebab.
+ *
+ * Rename leads, because a hold runs the first action and holding a row means
+ * "edit this" everywhere else in the app — renaming is the nearest a document
+ * row has to that. Actions stay listed but disabled when access doesn't allow
+ * them (sharing is admin-only, renaming needs edit), and a disabled first action
+ * means no hold at all: which action a gesture runs shouldn't depend on
+ * permissions, and the kebab still reaches the rest.
  */
-function DocListItem({ entry, unseenFlag, onOpen, onActions }: {
+function DocListItem({ entry, unseenFlag, onOpen, onShare, onRename, onArchive }: {
   entry: DocEntry;
   unseenFlag: boolean;
   onOpen: (entry: DocEntry) => void;
-  onActions: (entry: DocEntry) => void;
+  onShare: (entry: DocEntry) => void;
+  onRename: (entry: DocEntry) => void;
+  onArchive: (entry: DocEntry) => void;
 }) {
   const noAccess = entry.access === null;
-  const lp = useLongPress({
-    onTap: () => onOpen(entry),
-    onLongPress: () => onActions(entry),
-  });
+  const canShare = entry.access === 'admin';
+  const canRename = entry.access === 'edit' || entry.access === 'admin';
   const supporting = entry.loading
     ? 'Loading…'
     : noAccess
@@ -67,7 +72,26 @@ function DocListItem({ entry, unseenFlag, onOpen, onActions }: {
       : `${relativeTime(entry.lastUpdated)} · (${(entry.count ?? 0).toLocaleString()})`;
 
   return (
-    <md-list-item type="button" data-testid="doc-row" {...lp}>
+    <ListRow
+      data-testid="doc-row"
+      onTap={() => onOpen(entry)}
+      actionsLabel={`More actions for ${entry.name || 'Untitled'}`}
+      actions={[
+        { icon: 'edit', label: 'Rename', onSelect: () => onRename(entry), disabled: !canRename },
+        { icon: 'share', label: 'Share', onSelect: () => onShare(entry), disabled: !canShare },
+        { icon: 'archive', label: 'Archive', onSelect: () => onArchive(entry) },
+        { icon: 'code', label: 'View source', href: sourceUrl(entry.documentId), dividerBefore: true },
+      ]}
+      end={
+        // Admin gets no glyph — it's the norm (you made the doc); only the levels
+        // that differ from it (read / edit / no access) are worth calling out.
+        entry.access !== 'admin' ? (
+          <span className="inline-flex items-center justify-center h-8 w-8 text-muted-foreground">
+            <AccessIcon access={entry.access ?? null} style={{ fontSize: 18 }} />
+          </span>
+        ) : null
+      }
+    >
       <md-icon slot="start">{iconForType(entry.type)}</md-icon>
       <div
         slot="headline"
@@ -84,24 +108,7 @@ function DocListItem({ entry, unseenFlag, onOpen, onActions }: {
         )}
       </div>
       <div slot="supporting-text" title={entry.lastUpdated || undefined}>{supporting}</div>
-      <span slot="end" className="flex items-center gap-0.5">
-        {/* Admin gets no glyph — it's the norm (you made the doc); only the levels that
-            differ from it (read / edit / no access) are worth calling out. */}
-        {entry.access !== 'admin' && (
-          <span className="inline-flex items-center justify-center h-8 w-8 text-muted-foreground">
-            <AccessIcon access={entry.access ?? null} style={{ fontSize: 18 }} />
-          </span>
-        )}
-        <button
-          aria-label={`More actions for ${entry.name || 'Untitled'}`}
-          title="More actions"
-          className="inline-flex items-center justify-center h-10 w-10 rounded-full state-layer text-muted-foreground"
-          onClick={(e: MouseEvent) => { e.stopPropagation(); onActions(entry); }}
-        >
-          <span className="material-symbols-outlined" style={{ fontSize: 20 }}>more_vert</span>
-        </button>
-      </span>
-    </md-list-item>
+    </ListRow>
   );
 }
 
@@ -111,11 +118,9 @@ export function Home({ path }: { path?: string }) {
   const [error, setError] = useState('');
   const [importStatus, setImportStatus] = useState<ImportProgress | null>(null);
   const [listLoading, setListLoading] = useState(true);
-  // Bottom sheets: FAB "Create" chooser, long-press per-doc actions, and the
-  // Share / Rename follow-ups they open.
+  // Bottom sheets: the FAB's "Create" chooser, and Rename — which a row's kebab
+  // or a hold opens, so it needs a slot of its own.
   const [createOpen, setCreateOpen] = useState(false);
-  const [actionsEntry, setActionsEntry] = useState<DocEntry | null>(null);
-  // Rename runs after the actions sheet closes itself, so it needs its own slot.
   const [renameEntry, setRenameEntry] = useState<{ documentId: string; name: string } | null>(null);
   const repoPeers = usePeerList();
 
@@ -400,7 +405,11 @@ export function Home({ path }: { path?: string }) {
             entry={entry}
             unseenFlag={!!unseen[entry.documentId]}
             onOpen={e => { window.location.hash = docUrl(e.documentId); }}
-            onActions={setActionsEntry}
+            onShare={e => { window.location.hash = shareUrl(e.documentId); }}
+            onRename={e => setRenameEntry(e)}
+            onArchive={e => {
+              if (confirm(`Archive "${e.name || 'Untitled'}" ${docLabel(e)}?`)) handleArchive(e);
+            }}
           />
         ))}
       </md-list>
@@ -439,19 +448,6 @@ export function Home({ path }: { path?: string }) {
         onImport={(kind: ImportKind) => {
           const ref = kind === 'ics' ? icsInputRef : kind === 'xlsx' ? xlsInputRef : jsonInputRef;
           ref.current?.click();
-        }}
-      />
-
-      {/* Long-press / kebab → per-doc actions, with Rename as a follow-up */}
-      <DocActionsSheet
-        entry={actionsEntry}
-        onOpenChange={open => { if (!open) setActionsEntry(null); }}
-        onShare={e => { window.location.hash = shareUrl(e.documentId); }}
-        onRename={e => setRenameEntry(e)}
-        onArchive={e => {
-          if (confirm(`Archive "${e.name || 'Untitled'}" ${docLabel(e as DocEntry)}?`)) {
-            handleArchive(e as DocEntry);
-          }
         }}
       />
 

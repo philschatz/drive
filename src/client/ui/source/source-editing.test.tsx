@@ -107,30 +107,34 @@ describe('source inspector editing', () => {
   it('asks before deleting, and only deletes if the answer is yes', async () => {
     await open('events/ev-1');
 
-    // The kebab is always visible; long-press reaches the same sheet.
-    fireEvent.click(within(rowNamed('duration')).getByTestId('row-kebab'));
-    fireEvent.click(await waitFor(() => screen.getByTestId('row-delete')));
+    // Delete is the row's one secondary action, so it wears a trash icon rather
+    // than a kebab — and the icon is always visible, so this is the direct route.
+    fireEvent.click(within(rowNamed('duration')).getByTestId('row-delete'));
 
     fireEvent.click(await waitFor(() => screen.getByTestId('confirm-cancel')));
     await waitFor(() => expect(document.querySelector('[data-testid="confirm-sheet"]')).toBeNull());
     expect(mock.__getDoc(DOC).events['ev-1'].duration).toBe(15);
 
-    fireEvent.click(within(rowNamed('duration')).getByTestId('row-kebab'));
-    fireEvent.click(await waitFor(() => screen.getByTestId('row-delete')));
+    fireEvent.click(within(rowNamed('duration')).getByTestId('row-delete'));
     fireEvent.click(await waitFor(() => screen.getByTestId('confirm-accept')));
 
     await waitFor(() => expect('duration' in mock.__getDoc(DOC).events['ev-1']).toBe(false));
     expect(mock.__getDoc(DOC).events['ev-1'].title).toBe('Standup');
   });
 
-  it('reaches the row actions by long-press as well as by the kebab', async () => {
+  it('reaches delete by holding the row, not only by its icon', async () => {
     await open('events/ev-1');
 
-    const row = rowNamed('title');
-    fireEvent.pointerDown(row, { clientX: 0, clientY: 0 });
-    // useLongPress fires its secondary action after ~450ms of hold.
-    await waitFor(() => expect(screen.getByTestId('row-actions')).toBeTruthy(), { timeout: 2000 });
-    expect(screen.getByTestId('row-edit')).toBeTruthy();
+    // The only test in the suite that runs the real 450ms timer rather than
+    // standing in for it with right-click.
+    fireEvent.pointerDown(rowNamed('title'), { clientX: 0, clientY: 0 });
+    await waitFor(() => expect(screen.getByTestId('confirm-sheet')).toBeTruthy(), { timeout: 2000 });
+
+    // A hold asks the same question the icon does — nothing is destroyed by one
+    // gesture.
+    fireEvent.click(screen.getByTestId('confirm-cancel'));
+    await waitFor(() => expect(document.querySelector('[data-testid="confirm-sheet"]')).toBeNull());
+    expect(mock.__getDoc(DOC).events['ev-1'].title).toBe('Standup');
   });
 
   it('adds a property with its key and value in one change', async () => {

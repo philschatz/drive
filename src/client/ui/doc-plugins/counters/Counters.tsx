@@ -8,8 +8,8 @@ import { useEditorUndoRedo } from '../../common/useUndoRedo';
 import { useCanEdit } from '../../common/useCanEdit';
 import { useFocusPathSync } from '../../common/useFocusPathSync';
 import { HistorySlider } from '../../common/HistorySlider';
-import { useLongPress } from '../../common/useLongPress';
-import { OverflowMenu } from '../../common/OverflowMenu';
+import { ListRow } from '../../common/ListRow';
+import { useConfirm } from '../../common/ConfirmSheet';
 import { useDocumentValidation } from '../../common/useDocumentValidation';
 import { DocLoader } from '../../common/useDocument';
 import { Badge } from '@/components/ui/badge';
@@ -89,10 +89,10 @@ function streakTitle(streak: number, frequency?: string): string {
 }
 
 /**
- * One counter row: tap anywhere records a completion — the thing you came to
- * do. Long-press / right-click / Shift+F10 / the trailing kebab open the editor
- * (which also holds Archive and Delete), the same secondary-surface gesture
- * Home and Tasks use.
+ * One counter row: tap anywhere records a completion — the thing you came to do.
+ * A counter has two secondary actions, an editor (which also holds Archive and
+ * Delete) and a completions log, so ListRow gives it a kebab rather than Tasks'
+ * single pencil; a hold (or right-click, or Shift+F10) runs the first, Edit.
  */
 function CounterListItem({ uid, ev, status, streak, reward, dueAt, canEdit, peerEditingEvents, onRecord, onEdit, onShowCompletions }: {
   uid: string;
@@ -123,25 +123,79 @@ function CounterListItem({ uid, ev, status, streak, reward, dueAt, canEdit, peer
     ? 'var(--md-sys-color-primary)'
     : status === 'overdue' ? 'var(--md-sys-color-error)' : undefined;
   const icon = status === 'done' ? 'check_circle' : status === 'overdue' ? 'error' : status === 'tally' ? 'exposure_plus_1' : 'radio_button_unchecked';
-  const lp = useLongPress({
-    onTap: () => { if (canEdit) onRecord(uid); },
-    onLongPress: () => { if (canEdit) onEdit(uid, ev); },
-  });
 
   return (
-    <md-list-item
-      type="button"
+    <ListRow
       data-status={status}
       data-testid="counter-row"
       style={{ opacity: peerEditingEvents[uid] ? 0.5 : status === 'done' ? 0.6 : 1 }}
-      {...lp}
+      onTap={canEdit ? () => onRecord(uid) : undefined}
+      // Edit first: it is what a hold runs, and holding a row means "edit this"
+      // everywhere else in the app.
+      actions={canEdit ? [
+        { icon: 'edit', label: 'Edit', title: `Edit ${title}`, onSelect: () => onEdit(uid, ev) },
+        {
+          icon: 'history',
+          label: `Completions (${clickCount})`,
+          title: `Completions for ${title}`,
+          onSelect: () => onShowCompletions(uid),
+        },
+      ] : []}
+      actionsLabel={`Actions for ${title}`}
+      end={
+        <>
+          {/* Overdue and To-do rows answer "when?", not "how often?" — the
+              recurrence moves into the tooltip and the clock takes its place. */}
+          {timing ? (
+            <Badge
+              variant="secondary"
+              data-testid="counter-due"
+              className={'whitespace-nowrap' + (timing.late ? ' bg-error-container text-on-error-container' : '')}
+              title={(schedule ? schedule + ' · ' : '')
+                + (timing.late ? 'overdue since ' : 'due by ')
+                + describeDeadline(dueAt!)}
+            >
+              {timing.text}
+            </Badge>
+          ) : schedule && <Badge variant="secondary">{schedule}</Badge>}
+          {/* The treasure: how many more in a row until the reward unlocks. */}
+          {reward && (
+            <Badge
+              variant={reward.unlocked ? 'default' : 'outline'}
+              data-testid="counter-reward"
+              title={reward.unlocked
+                ? `Unlocked${reward.text ? ': ' + reward.text : ''}`
+                : `${reward.remaining} more in a row${reward.text ? ' to unlock: ' + reward.text : ''}`}
+            >
+              <span className="material-symbols-outlined" style={{ fontSize: 14 }}>
+                {reward.unlocked ? 'emoji_events' : 'redeem'}
+              </span>
+              {!reward.unlocked && reward.remaining}
+            </Badge>
+          )}
+          {ev.recurrenceRule
+            ? streak > 1 && (
+                <Badge
+                  variant="default"
+                  title={streakTitle(streak, ev.recurrenceRule.frequency)}
+                  style={{ background: MATERIAL_ORANGE, color: '#000' }}
+                >
+                  <span className="material-symbols-outlined" style={{ fontSize: 14 }}>local_fire_department</span>
+                  {streak}
+                </Badge>
+              )
+            : clickCount > 0 && <Badge variant="outline" title={`${clickCount} recorded`}>{clickCount}×</Badge>}
+          <PresenceDot fieldId={uid} peerFocusedFields={peerEditingEvents} />
+        </>
+      }
     >
-      {/* Inert, like the checkbox on a task row: the row owns the gesture, so a
-          <button> here would make useLongPress skip the press (interactive
-          child) and kill long-press on the two biggest targets. The glyph is
-          hidden from AT — it would otherwise be read as the literal ligature
-          text ("check_circle") — and the status it encodes is carried instead
-          by the same wording as the visible section heading. */}
+      {/* Inert, like the checkbox on a task row, and now the only thing keeping
+          it that way: the row owns the gesture, so a <button> here would make
+          useLongPress skip the press as an interactive child and kill both tap
+          and hold on the row's two biggest targets. The glyph is hidden from AT
+          — it would otherwise be read as the literal ligature text
+          ("check_circle") — and the status it encodes is carried instead by the
+          same wording as the visible section heading. */}
       <span slot="start" className="flex items-center">
         <span aria-hidden="true" className="material-symbols-outlined text-lg" style={{ color: iconColor }}>
           {icon}
@@ -149,65 +203,7 @@ function CounterListItem({ uid, ev, status, streak, reward, dueAt, canEdit, peer
         <span className="sr-only">{SECTION_LABELS[status]}</span>
       </span>
       <div slot="headline">{title}</div>
-      <span slot="end" className="flex items-center gap-1.5">
-        {/* Overdue and To-do rows answer "when?", not "how often?" — the
-            recurrence moves into the tooltip and the clock takes its place. */}
-        {timing ? (
-          <Badge
-            variant="secondary"
-            data-testid="counter-due"
-            className={'whitespace-nowrap' + (timing.late ? ' bg-error-container text-on-error-container' : '')}
-            title={(schedule ? schedule + ' · ' : '')
-              + (timing.late ? 'overdue since ' : 'due by ')
-              + describeDeadline(dueAt!)}
-          >
-            {timing.text}
-          </Badge>
-        ) : schedule && <Badge variant="secondary">{schedule}</Badge>}
-        {/* The treasure: how many more in a row until the reward unlocks. */}
-        {reward && (
-          <Badge
-            variant={reward.unlocked ? 'default' : 'outline'}
-            data-testid="counter-reward"
-            title={reward.unlocked
-              ? `Unlocked${reward.text ? ': ' + reward.text : ''}`
-              : `${reward.remaining} more in a row${reward.text ? ' to unlock: ' + reward.text : ''}`}
-          >
-            <span className="material-symbols-outlined" style={{ fontSize: 14 }}>
-              {reward.unlocked ? 'emoji_events' : 'redeem'}
-            </span>
-            {!reward.unlocked && reward.remaining}
-          </Badge>
-        )}
-        {ev.recurrenceRule
-          ? streak > 1 && (
-              <Badge
-                variant="default"
-                title={streakTitle(streak, ev.recurrenceRule.frequency)}
-                style={{ background: MATERIAL_ORANGE, color: '#000' }}
-              >
-                <span className="material-symbols-outlined" style={{ fontSize: 14 }}>local_fire_department</span>
-                {streak}
-              </Badge>
-            )
-          : clickCount > 0 && <Badge variant="outline" title={`${clickCount} recorded`}>{clickCount}×</Badge>}
-        <PresenceDot fieldId={uid} peerFocusedFields={peerEditingEvents} />
-        {/* A real menu, not a shortcut to one action: a counter has both an
-            editor and a completions log. (Tasks only have an editor, so their
-            row shows a pencil instead.) */}
-        {canEdit && (
-          <span onClick={(e: MouseEvent) => e.stopPropagation()}>
-            <OverflowMenu
-              aria-label={`Actions for ${title}`}
-              items={[
-                { icon: 'edit', label: 'Edit', title: `Edit ${title}`, onSelect: () => onEdit(uid, ev) },
-                { icon: 'history', label: `Completions (${clickCount})`, title: `Completions for ${title}`, onSelect: () => onShowCompletions(uid) },
-              ]}
-            />
-          </span>
-        )}
-      </span>
-    </md-list-item>
+    </ListRow>
   );
 }
 
@@ -231,6 +227,7 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
   const { undo, redo, canUndo, canRedo, onHeads } = useEditorUndoRedo(docId!, history);
   const validationErrors = useDocumentValidation(docId);
   const { canEdit, canEditRef, noAccess } = useCanEdit(docId, readOnly, history);
+  const { confirm, confirmSheet } = useConfirm();
   const { peers, peerList, broadcast } = usePresence(docId);
   const editorStateRef = useRef(editorState);
   editorStateRef.current = editorState;
@@ -273,10 +270,20 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
     updateDoc(docId, (d, uid, ts) => { const r = d.events[uid]?.recurrenceRule; if (r) r.until = ts; }, uid, nowLocal());
   }, [docId]);
 
-  const unarchiveCounter = useCallback((uid: string) => {
+  // Asked here rather than at the row, because both routes to unarchiving — the
+  // archived row's own icon and the editor's Unarchive action — come through
+  // this one callback, and both deserve the same question. Not `destructive`:
+  // that tone is for irreversible loss, and this is neither.
+  const unarchiveCounter = useCallback(async (uid: string) => {
     if (!canEditRef.current || !docId) return;
+    if (!await confirm({
+      title: 'Unarchive this counter?',
+      body: 'It returns to your active counters and starts tracking again.',
+      confirmLabel: 'Unarchive',
+      confirmIcon: 'unarchive',
+    })) return;
     updateDoc(docId, (d, uid) => { const r = d.events[uid]?.recurrenceRule; if (r) delete r.until; }, uid);
-  }, [docId]);
+  }, [docId, confirm]);
 
   const recordClick = useCallback((uid: string) => {
     if (!canEditRef.current || !docId) return;
@@ -508,24 +515,23 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
           <>
             <h3 className="text-xs font-semibold uppercase text-muted-foreground mt-3 mb-1">Archived</h3>
             <md-list style={{ background: 'transparent' }}>
+              {/* No onTap: an archived counter has nothing to record, so the row
+                  has a secondary action and no primary one. One action, so
+                  ListRow gives it that action's own glyph and a hold that runs
+                  it — both landing on the same confirm. */}
               {archived.map(({ uid, ev, until }) => (
-                <md-list-item key={uid} data-testid="archived-row" style={{ opacity: 0.6 }}>
+                <ListRow
+                  key={uid}
+                  data-testid="archived-row"
+                  style={{ opacity: 0.6 }}
+                  actions={canEdit
+                    ? [{ icon: 'unarchive', label: 'Unarchive', onSelect: () => unarchiveCounter(uid) }]
+                    : []}
+                  end={<Badge variant="secondary">archived {until.substring(0, 10)}</Badge>}
+                >
                   <span slot="start" className="material-symbols-outlined text-lg">inventory_2</span>
                   <div slot="headline">{ev.title || 'Untitled'}</div>
-                  <span slot="end" className="flex items-center gap-1.5">
-                    <Badge variant="secondary">archived {until.substring(0, 10)}</Badge>
-                    {canEdit && (
-                      <button
-                        aria-label="Unarchive"
-                        title="Unarchive"
-                        className="inline-flex items-center justify-center h-10 w-10 rounded-full state-layer text-muted-foreground"
-                        onClick={() => unarchiveCounter(uid)}
-                      >
-                        <span className="material-symbols-outlined" style={{ fontSize: 20 }}>unarchive</span>
-                      </button>
-                    )}
-                  </span>
-                </md-list-item>
+                </ListRow>
               ))}
             </md-list>
           </>
@@ -578,6 +584,8 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
         onDeleteCompletion={deleteCompletion}
         onClose={() => setCompletionsUid(null)}
       />
+
+      {confirmSheet}
     </>
     </DocLoader>
   );

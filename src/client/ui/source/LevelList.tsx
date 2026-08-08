@@ -10,18 +10,21 @@
  *
  * A row's chevron is the honest signal for what a tap does: **chevron =
  * navigates** (a container, or a rich-text field with its own screen), no chevron
- * = opens a sheet. The secondary actions live in {@link RowActionsSheet}, reachable
- * by long-press, right-click, Shift+F10, or the always-visible trailing kebab —
- * the same four gestures every other list row in the app offers.
+ * = opens a sheet.
+ *
+ * Beyond that a row does exactly one thing — delete — so it wears a trash icon
+ * rather than a kebab, and a hold (or right-click, or Shift+F10) runs it. There
+ * used to be an actions sheet here offering Open/Edit value alongside Delete, but
+ * that first item was just what tapping the row already did. Both routes go
+ * through the caller's confirmation, so nothing is destroyed by one gesture, and
+ * a document you may only read gets neither the icon nor the hold.
  */
 import { useMemo, useState } from 'preact/hooks';
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
-import { SheetActionItem, SheetActions } from '../common/SheetActionItem';
 import { MdTextField } from '@/components/ui/md-text-field';
 import { Button } from '@/components/ui/button';
 import { PeerDot } from '../common/PeerDot';
 import { peerDisplayName, peerIdentityKey } from '../common/presence';
-import { useLongPress } from '../common/useLongPress';
+import { ListRow } from '../common/ListRow';
 import { usePeerTransports, type PeerTransport } from '../worker-api';
 import type { ValidationError } from '../../../shared/schemas';
 import {
@@ -70,26 +73,20 @@ interface RowProps {
   peer?: PeerFocus;
   transports: Record<string, PeerTransport>;
   onPrimary: (t: RowTarget) => void;
-  onActions: (t: RowTarget) => void;
+  onDelete: (t: RowTarget) => void;
 }
 
 function NodeRow({
   target, editable, markerCount, changed, revealed, error, hasDescendantError,
-  peer, transports, onPrimary, onActions,
+  peer, transports, onPrimary, onDelete,
 }: RowProps) {
   const { key, kind, value } = target;
   const navigates = isContainer(value) || kind === 'richtext';
 
-  const lp = useLongPress({
-    onTap: () => onPrimary(target),
-    onLongPress: () => onActions(target),
-  });
-
   const summary = isContainer(value) ? containerSummary(value) : valuePreview(value);
 
   return (
-    <md-list-item
-      type="button"
+    <ListRow
       data-testid="source-row"
       data-row-key={String(key)}
       data-kind={kind}
@@ -97,7 +94,56 @@ function NodeRow({
       // Greyed while a peer is in it, but never disabled — Automerge merges
       // concurrent edits, so the dot informs rather than locks.
       style={{ opacity: peer && pathsEqual(peer.path, target.path) ? 0.5 : undefined }}
-      {...lp}
+      onTap={() => onPrimary(target)}
+      // Empty on a read-only document, which is what leaves such a row with no
+      // hold at all — the gesture used to fire regardless of `editable` and open
+      // a sheet whose Delete then silently did nothing.
+      actions={editable
+        ? [{ icon: 'delete', label: 'Delete', title: `Delete ${key}`,
+             testId: 'row-delete', onSelect: () => onDelete(target) }]
+        : []}
+      end={
+        <>
+          {markerCount > 0 && (
+            <span
+              className="md-label-large text-on-secondary-container bg-secondary-container rounded-full px-2"
+              data-testid="marker-count"
+              title={`${markerCount} rich-text ${markerCount === 1 ? 'marker' : 'markers'}`}
+            >
+              {markerCount}
+            </span>
+          )}
+          {/* The message itself is in the problem list at the top of the page — this
+              is the pointer to it, not the only place it exists. Dimmed when the
+              problem is further down, so "wrong here" and "wrong inside" differ.
+              Warnings take the yellow, the same language the problem list wears. */}
+          {(error || hasDescendantError) && (
+            <span
+              className="material-symbols-outlined"
+              data-testid="row-error"
+              style={{
+                fontSize: 20,
+                opacity: error ? 1 : 0.45,
+                color: error && (!error.kind || error.kind === 'schema')
+                  ? 'var(--md-sys-color-error)'
+                  : 'var(--src-warn-edge)',
+              }}
+              aria-label={error?.message ?? 'Contains validation problems'}
+              title={error?.message ?? 'Contains validation problems'}
+            >
+              {error && (!error.kind || error.kind === 'schema') ? 'error' : 'warning'}
+            </span>
+          )}
+          {peer && (
+            <PeerDot
+              identityKey={peerIdentityKey(peer.peerId, peer.userGroupId)}
+              direct={transports[peer.peerId] === 'direct'}
+              label={`${peerDisplayName(peer.peerId, peer.userGroupId)} is editing`}
+            />
+          )}
+          {navigates && <md-icon aria-hidden="true">chevron_right</md-icon>}
+        </>
+      }
     >
       <md-icon slot="start" aria-label={KIND_LABEL[kind]} title={KIND_LABEL[kind]}>
         {KIND_ICON[kind]}
@@ -106,116 +152,13 @@ function NodeRow({
       <div slot="supporting-text" className={`src-mono truncate ${KIND_CLASS[kind] ?? ''}`}>
         {summary}
       </div>
-      <div slot="end" className="flex items-center gap-1.5">
-        {markerCount > 0 && (
-          <span
-            className="md-label-large text-on-secondary-container bg-secondary-container rounded-full px-2"
-            data-testid="marker-count"
-            title={`${markerCount} rich-text ${markerCount === 1 ? 'marker' : 'markers'}`}
-          >
-            {markerCount}
-          </span>
-        )}
-        {/* The message itself is in the problem list at the top of the page — this
-            is the pointer to it, not the only place it exists. Dimmed when the
-            problem is further down, so "wrong here" and "wrong inside" differ.
-            Warnings take the yellow, the same language the problem list wears. */}
-        {(error || hasDescendantError) && (
-          <span
-            className="material-symbols-outlined"
-            data-testid="row-error"
-            style={{
-              fontSize: 20,
-              opacity: error ? 1 : 0.45,
-              color: error && (!error.kind || error.kind === 'schema')
-                ? 'var(--md-sys-color-error)'
-                : 'var(--src-warn-edge)',
-            }}
-            aria-label={error?.message ?? 'Contains validation problems'}
-            title={error?.message ?? 'Contains validation problems'}
-          >
-            {error && (!error.kind || error.kind === 'schema') ? 'error' : 'warning'}
-          </span>
-        )}
-        {peer && (
-          <PeerDot
-            identityKey={peerIdentityKey(peer.peerId, peer.userGroupId)}
-            direct={transports[peer.peerId] === 'direct'}
-            label={`${peerDisplayName(peer.peerId, peer.userGroupId)} is editing`}
-          />
-        )}
-        {editable && (
-          <button
-            aria-label={`Actions for ${key}`}
-            title="Actions"
-            className="inline-flex items-center justify-center h-10 w-10 rounded-full state-layer text-muted-foreground"
-            data-testid="row-kebab"
-            onClick={(e: MouseEvent) => { e.stopPropagation(); onActions(target); }}
-          >
-            <span className="material-symbols-outlined" aria-hidden="true" style={{ fontSize: 20 }}>
-              more_vert
-            </span>
-          </button>
-        )}
-        {navigates && <md-icon aria-hidden="true">chevron_right</md-icon>}
-      </div>
-    </md-list-item>
-  );
-}
-
-/** Secondary actions for one row. Error-toned Delete, per the app convention. */
-export function RowActionsSheet({
-  target, onEdit, onOpen, onDelete, onClose,
-}: {
-  target: RowTarget | null;
-  onEdit: (t: RowTarget) => void;
-  onOpen: (t: RowTarget) => void;
-  onDelete: (t: RowTarget) => void;
-  onClose: () => void;
-}) {
-  if (!target) return null;
-  const navigates = isContainer(target.value) || target.kind === 'richtext';
-
-  // Close before acting, so a follow-up sheet (edit, confirm) isn't stacked under
-  // this one — the same rule DocActionsSheet follows.
-  const pick = (fn: (t: RowTarget) => void) => () => { onClose(); fn(target); };
-
-  return (
-    <Sheet open onOpenChange={(o: boolean) => { if (!o) onClose(); }}>
-      <SheetContent side="bottom" className="max-h-[70vh] p-4">
-        <div data-testid="row-actions">
-          <SheetHeader>
-            <SheetTitle className="truncate pr-8 src-mono">{String(target.key)}</SheetTitle>
-          </SheetHeader>
-          <p className="md-body-medium text-on-surface-variant mt-1">{KIND_LABEL[target.kind]}</p>
-          <md-list style={{ background: 'transparent' }} className="mt-2">
-            {navigates ? (
-              <md-list-item type="button" data-testid="row-open" onClick={pick(onOpen)}>
-                <md-icon slot="start">arrow_forward</md-icon>
-                <div slot="headline">Open</div>
-              </md-list-item>
-            ) : (
-              <md-list-item type="button" data-testid="row-edit" onClick={pick(onEdit)}>
-                <md-icon slot="start">edit</md-icon>
-                <div slot="headline">Edit value</div>
-              </md-list-item>
-            )}
-          </md-list>
-          <SheetActions>
-            <SheetActionItem
-              icon="delete" label="Delete" destructive data-testid="row-delete"
-              onClick={pick(onDelete)}
-            />
-          </SheetActions>
-        </div>
-      </SheetContent>
-    </Sheet>
+    </ListRow>
   );
 }
 
 export function LevelList({
   levelPath, value, editable, richPaths, markerCounts, selectedKey,
-  changedPaths, errors, peerFocusedPaths, onPrimary, onActions,
+  changedPaths, errors, peerFocusedPaths, onPrimary, onDelete,
 }: {
   levelPath: Path;
   value: any;
@@ -228,7 +171,7 @@ export function LevelList({
   errors: ValidationError[];
   peerFocusedPaths: PeerFocus[];
   onPrimary: (t: RowTarget) => void;
-  onActions: (t: RowTarget) => void;
+  onDelete: (t: RowTarget) => void;
 }) {
   const transports = usePeerTransports();
   const [filter, setFilter] = useState('');
@@ -293,7 +236,7 @@ export function LevelList({
             peer={peerFor(t.path)}
             transports={transports}
             onPrimary={onPrimary}
-            onActions={onActions}
+            onDelete={onDelete}
           />
         ))}
       </md-list>

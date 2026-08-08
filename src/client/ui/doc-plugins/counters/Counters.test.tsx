@@ -96,9 +96,35 @@ describe('Counters container', () => {
     // It's now in the Archived section — no longer a status row in the active list.
     expect(screen.getByText('Meditate').closest('[data-status]')).toBeNull();
 
-    // Unarchive (on the archived row) brings it back to the active list.
+    // Unarchive asks first — retiring a habit is deliberate, so resurrecting it
+    // shouldn't ride on one stray tap. Cancelling leaves it archived.
     fireEvent.click(screen.getByRole('button', { name: 'Unarchive' }));
-    expect(screen.queryByRole('heading', { name: 'Archived' })).toBeNull();
+    fireEvent.click(await screen.findByTestId('confirm-cancel'));
+    await waitFor(() => expect(screen.queryByTestId('confirm-sheet')).toBeNull());
+    expect(screen.getByRole('heading', { name: 'Archived' })).toBeTruthy();
+
+    // Accepting brings it back to the active list.
+    fireEvent.click(screen.getByRole('button', { name: 'Unarchive' }));
+    fireEvent.click(await screen.findByTestId('confirm-accept'));
+    await waitFor(() => expect(screen.queryByRole('heading', { name: 'Archived' })).toBeNull());
+    confirmSpy.mockRestore();
+  });
+
+  it('asks the same question when the archived row is held', async () => {
+    const confirmSpy = jest.spyOn(window, 'confirm').mockReturnValue(true);
+    mock.__setDoc(DOC, { '@type': 'Calendar+Counters', name: 'C', events: { e1: dailyHabit('Meditate') } });
+    render(<Counters docId={DOC} />);
+    await waitFor(() => expect(screen.getByText('Meditate')).toBeTruthy());
+
+    fireEvent.contextMenu(rowOf('Meditate'));
+    fireEvent.click(screen.getByTestId('ced-archive'));
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+
+    // Unarchive is the archived row's ONE secondary action, so holding the row
+    // runs it — reaching the same confirm the trailing icon does.
+    fireEvent.contextMenu(screen.getByTestId('archived-row'), { button: 2 });
+    fireEvent.click(await screen.findByTestId('confirm-accept'));
+    await waitFor(() => expect(screen.queryByRole('heading', { name: 'Archived' })).toBeNull());
     confirmSpy.mockRestore();
   });
 

@@ -10,7 +10,7 @@
  * The "All calendars" gate is here too: it's a count over `entries`, which no
  * amount of worker testing reaches.
  */
-import { render, screen, waitFor } from '@testing-library/preact';
+import { render, screen, waitFor, fireEvent } from '@testing-library/preact';
 
 jest.mock('../worker-api');
 
@@ -108,6 +108,43 @@ describe('the "All calendars" menu item', () => {
     render(<Home />);
     await rows(2);
     await waitFor(() => expect(menuText()).toContain('All calendars'));
+  });
+
+  /**
+   * A document row's gestures. Tap opens the doc; the four things you do *to* a
+   * document live behind the kebab, and a hold runs the first of them — so the
+   * order below is a contract, not presentation. Right-click stands in for the
+   * 450ms hold (useLongPress routes both to the same callback); `button: 2` is a
+   * genuine mouse right-click, which produces no follow-up click and so must not
+   * arm the post-hold click-swallow.
+   */
+  it('holds a row to rename it, and lists Rename first in the kebab', async () => {
+    seed([{ id: 'd1', type: 'Calendar', name: 'Work' }]);
+    (api as any).getMyAccess = jest.fn(() => Promise.resolve('admin'));
+    render(<Home />);
+    const [row] = await rows(1);
+
+    // Read the headline slot, not the item: md-icon never upgrades under jsdom,
+    // so its ligature text ("edit") would otherwise be part of textContent.
+    await waitFor(() => expect(row.querySelectorAll('md-menu-item').length).toBe(4));
+    expect([...row.querySelectorAll('md-menu-item [slot="headline"]')].map(i => i.textContent?.trim()))
+      .toEqual(['Rename', 'Share', 'Archive', 'View source']);
+
+    fireEvent.contextMenu(row, { button: 2 });
+    expect(await screen.findByTestId('rename-sheet')).toBeTruthy();
+  });
+
+  it('opens the doc on a plain tap, even after a hold', async () => {
+    seed([{ id: 'd1', type: 'Calendar', name: 'Work' }]);
+    (api as any).getMyAccess = jest.fn(() => Promise.resolve('admin'));
+    render(<Home />);
+    const [row] = await rows(1);
+
+    fireEvent.contextMenu(row, { button: 2 });
+    await screen.findByTestId('rename-sheet');
+    // The swallow that follows a hold must not outlive its own gesture.
+    fireEvent.click(row);
+    expect(window.location.hash).toContain('d1');
   });
 
   it('ignores a calendar whose access was revoked', async () => {

@@ -9,7 +9,7 @@ import { useEditorUndoRedo } from '../../common/useUndoRedo';
 import { useCanEdit } from '../../common/useCanEdit';
 import { useFocusPathSync } from '../../common/useFocusPathSync';
 import { HistorySlider } from '../../common/HistorySlider';
-import { useLongPress } from '../../common/useLongPress';
+import { ListRow } from '../../common/ListRow';
 import type { TaskDocument, Task } from '../../../../shared/schemas/tasks';
 import { TaskEditor } from './TaskEditor';
 import { useDocumentValidation } from '../../common/useDocumentValidation';
@@ -57,9 +57,10 @@ function sortedTasks(tasks: Record<string, Task>): { uid: string; task: Task }[]
 }
 
 /**
- * One task row: tap toggles completion, long-press / right-click / Shift+F10 /
- * the trailing edit button opens the editor. The row itself carries the checkbox
- * semantics (role/aria-checked); the leading md-checkbox is purely visual.
+ * One task row: tap toggles completion, and the editor is the row's one secondary
+ * action — so ListRow gives it a pencil rather than a kebab, and a hold (or
+ * right-click, or Shift+F10) opens it. Delete lives inside the editor, not on the
+ * row, which is why the count is one and not two.
  */
 function TaskListItem({ uid, task, canEdit, peerEditingTasks, onToggle, onEdit }: {
   uid: string;
@@ -71,21 +72,27 @@ function TaskListItem({ uid, task, canEdit, peerEditingTasks, onToggle, onEdit }
 }) {
   const isDone = task.progress === 'completed' || task.progress === 'cancelled';
   const peerEdit = peerEditingTasks[uid];
-  const lp = useLongPress({
-    onTap: () => { if (canEdit) onToggle(uid, task); },
-    onLongPress: () => { if (canEdit) onEdit(uid, task); },
-  });
+  const title = task.title || 'Untitled';
 
   return (
     // NOTE: @material/web components shim host `role`/`aria-*` attributes into
     // `data-*`, so row semantics can't be set here. The md-checkbox below is the
     // state carrier for AT; the row itself is a button (md-list-item internal).
-    <md-list-item
-      type="button"
+    <ListRow
       data-checked={isDone ? 'true' : 'false'}
       data-testid="task-row"
       style={{ opacity: peerEdit ? 0.5 : undefined }}
-      {...lp}
+      onTap={canEdit ? () => onToggle(uid, task) : undefined}
+      actions={canEdit
+        ? [{ icon: 'edit', label: 'Edit', title: `Edit ${title}`, onSelect: () => onEdit(uid, task) }]
+        : []}
+      end={
+        <>
+          {task.due && <Badge variant="secondary">{task.due.substring(0, 10)}</Badge>}
+          {task.priority ? <Badge variant="default">P{task.priority}</Badge> : null}
+          <PresenceDot fieldId={uid} peerFocusedFields={peerEditingTasks} />
+        </>
+      }
     >
       {/* checked must be a real boolean: Preact skips writing `checked` when the
           value is null/undefined, so `isDone || undefined` would never uncheck.
@@ -105,26 +112,9 @@ function TaskListItem({ uid, task, canEdit, peerEditingTasks, onToggle, onEdit }
           opacity: isDone ? 0.5 : 1,
         }}
       >
-        {task.title || 'Untitled'}
+        {title}
       </div>
-      <span slot="end" className="flex items-center gap-1.5">
-        {task.due && <Badge variant="secondary">{task.due.substring(0, 10)}</Badge>}
-        {task.priority ? <Badge variant="default">P{task.priority}</Badge> : null}
-        <PresenceDot fieldId={uid} peerFocusedFields={peerEditingTasks} />
-        {canEdit && (
-          <button
-            aria-label={`Edit ${task.title || 'Untitled'}`}
-            title="Edit"
-            className="inline-flex items-center justify-center h-10 w-10 rounded-full state-layer text-muted-foreground"
-            onClick={(e: MouseEvent) => { e.stopPropagation(); onEdit(uid, task); }}
-          >
-            {/* A pencil, not a kebab: opening the editor is the only thing this
-                button does, and a kebab promises a menu that isn't there. */}
-            <span className="material-symbols-outlined" style={{ fontSize: 20 }}>edit</span>
-          </button>
-        )}
-      </span>
-    </md-list-item>
+    </ListRow>
   );
 }
 
