@@ -4,7 +4,9 @@
  * The examples ship with tokens instead of literal dates so they read as current
  * whenever they are created, rather than being frozen to the day they were
  * authored. Expansion happens once, at document-creation time (see
- * `createDocsFromJson` in src/client/home/Home.tsx).
+ * `createDocsFromItems` in src/client/ui/home/import-docs.ts). The screencast
+ * harness authors its own fixtures the same way and expands them itself
+ * (docs/capture/assets.capture.ts), since those bypass the importer.
  *
  *   {{ <anchor> [±N<unit>] [@HH:mm[:ss]] [Z] }}
  *   {{ dayOfMonth: <anchor> [±N<unit>] }}   → a JSON number

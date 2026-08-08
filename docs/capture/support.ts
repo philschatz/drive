@@ -326,20 +326,33 @@ export async function still(
   console.log(`  ✓ docs/${name}${clip ? ` (trimmed to ${clip.height}px)` : ''}`);
 }
 
+/** The text input inside a `RenameSheet`. `md-outlined-text-field` is a real
+ * custom element here (unlike jsdom), so Playwright has to reach its inner
+ * `input` — the same locator tests-pw/ui/support.ts uses. */
+const renameInput = (page: Page) => page.locator('[data-testid="rename-input"] input');
+
 /**
  * Set the display name friends (and the presence dots) see.
  *
  * Stored as a user-group contact rather than per device, so this also mints the
  * peer's user group — which sharing needs anyway. Driven through Settings →
  * Profile because `setFriendName` is not part of the worker API bridge.
+ *
+ * Profile is a property row that opens a RenameSheet, not a bare text field —
+ * every rename in the app goes through that one sheet now.
  */
 export async function setDisplayName(page: Page, name: string): Promise<void> {
   await page.goto('/#/settings/profile');
-  const input = page.getByPlaceholder('Your name (optional)');
-  await expect(input).toBeVisible({ timeout: 30_000 });
-  await input.fill(name);
-  await input.press('Enter');
-  await expect(page.getByText('Name saved.')).toBeVisible({ timeout: 30_000 });
+  const row = page.getByTestId('profile-name');
+  await expect(row).toBeVisible({ timeout: 30_000 });
+  await row.click();
+  await expect(page.getByTestId('profile-name-sheet')).toBeVisible({ timeout: 30_000 });
+  await renameInput(page).fill(name);
+  await page.getByTestId('rename-save').click();
+  // `exact` because the snackbar also mounts an aria-live twin ("Notification
+  // Name saved."), and a substring match resolves to both — a strict-mode
+  // violation that only trips once the announcement has been added, i.e. racily.
+  await expect(page.getByText('Name saved.', { exact: true })).toBeVisible({ timeout: 30_000 });
 }
 
 /**
@@ -361,10 +374,18 @@ export async function setDisplayName(page: Page, name: string): Promise<void> {
 export async function setDeviceName(peer: CapturePeer, name: string): Promise<string> {
   const { agentId } = await peer.call('getIdentity');
   await peer.page.goto('/#/settings/devices');
-  const input = peer.page.getByTitle(agentId);
-  await expect(input).toBeVisible({ timeout: 30_000 });
-  await input.fill(name);
-  await input.press('Enter');
+  // The row carries its agentId as the headline's `title`, which is what tells
+  // two identically-named 💻 Chrome rows apart. Tap it → Rename → Save.
+  const row = peer.page
+    .getByTestId('device-row')
+    .filter({ has: peer.page.locator(`[title="${agentId}"]`) });
+  await expect(row).toBeVisible({ timeout: 30_000 });
+  await row.click();
+  await expect(peer.page.getByTestId('device-options-sheet')).toBeVisible({ timeout: 30_000 });
+  await peer.page.getByTestId('device-rename').click();
+  await expect(peer.page.getByTestId('device-rename-sheet')).toBeVisible({ timeout: 30_000 });
+  await renameInput(peer.page).fill(name);
+  await peer.page.getByTestId('rename-save').click();
   await waitFor(
     () => peer.call('getAllDeviceNames'),
     (names) => names[agentId] === name,

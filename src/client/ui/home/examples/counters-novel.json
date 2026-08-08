@@ -5,7 +5,9 @@
   "events": {
     "write-500-words": {
       "@type": "Event",
+      "created": "{{today-6d@00:00Z}}",
       "title": "500 words on the draft",
+      "start": "{{today}}",
       "startTime": "06:00",
       "duration": "PT1H",
       "recurrenceRule": {
@@ -24,7 +26,9 @@
     },
     "morning-pages": {
       "@type": "Event",
+      "created": "{{today-6d@00:00Z}}",
       "title": "Morning pages — write anything, badly",
+      "start": "{{today}}",
       "startTime": "05:40",
       "duration": "PT20M",
       "recurrenceRule": {
@@ -40,7 +44,9 @@
     },
     "write-somewhere-new": {
       "@type": "Event",
+      "created": "{{we-3w@00:00Z}}",
       "title": "Write somewhere new in town",
+      "start": "{{we}}",
       "startTime": "14:00",
       "duration": "PT2H",
       "recurrenceRule": {
@@ -62,7 +68,9 @@
     },
     "research-the-harbour": {
       "@type": "Event",
+      "created": "{{sa-4w@00:00Z}}",
       "title": "Research trip — harbour records, lighthouse, tide charts",
+      "start": "{{sa}}",
       "startTime": "10:00",
       "duration": "PT3H",
       "recurrenceRule": {
@@ -82,7 +90,9 @@
     },
     "walk-the-setting": {
       "@type": "Event",
+      "created": "{{tu@00:00Z}}",
       "title": "Walk the setting and take notes",
+      "start": "{{fr}}",
       "startTime": "17:30",
       "duration": "PT1H",
       "recurrenceRule": {
@@ -103,7 +113,9 @@
     },
     "read-in-genre": {
       "@type": "Event",
+      "created": "{{today-6d@00:00Z}}",
       "title": "Read in genre",
+      "start": "{{today}}",
       "startTime": "21:30",
       "duration": "PT40M",
       "recurrenceRule": {
@@ -119,7 +131,9 @@
     },
     "overheard-line": {
       "@type": "Event",
+      "created": "{{today-6d@00:00Z}}",
       "title": "Write down one overheard line",
+      "start": "{{today-1d}}",
       "startTime": "13:00",
       "recurrenceRule": {
         "frequency": "daily"
@@ -134,7 +148,9 @@
     },
     "revise-a-scene": {
       "@type": "Event",
+      "created": "{{su-2w@00:00Z}}",
       "title": "Revise one scene",
+      "start": "{{su}}",
       "startTime": "19:00",
       "duration": "PT90M",
       "recurrenceRule": {
@@ -153,7 +169,9 @@
     },
     "character-interview": {
       "@type": "Event",
+      "created": "{{th-2w@00:00Z}}",
       "title": "Interview a character on the page",
+      "start": "{{th}}",
       "startTime": "20:00",
       "duration": "PT45M",
       "recurrenceRule": {
@@ -173,7 +191,9 @@
     },
     "outline-check": {
       "@type": "Event",
+      "created": "{{today-20d@00:00Z}}",
       "title": "Reread the outline, move one card",
+      "start": "{{today-20d}}",
       "startTime": "08:30",
       "duration": "PT20M",
       "recurrenceRule": {
@@ -192,7 +212,9 @@
     },
     "writing-group": {
       "@type": "Event",
+      "created": "{{today-41d@00:00Z}}",
       "title": "Bring pages to the writing group",
+      "start": "{{today-11d}}",
       "startTime": "18:45",
       "duration": "PT2H",
       "recurrenceRule": {

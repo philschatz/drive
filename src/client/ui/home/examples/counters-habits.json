@@ -5,7 +5,9 @@
   "events": {
     "veg-at-lunch": {
       "@type": "Event",
+      "created": "{{today-6d@00:00Z}}",
       "title": "Vegetables at lunch",
+      "start": "{{today}}",
       "startTime": "12:30",
       "recurrenceRule": {
         "@type": "RecurrenceRule",
@@ -22,7 +24,9 @@
     },
     "water": {
       "@type": "Event",
+      "created": "{{today-6d@00:00Z}}",
       "title": "Two litres of water",
+      "start": "{{today-1d}}",
       "startTime": "08:00",
       "recurrenceRule": {
         "frequency": "daily"
@@ -37,7 +41,9 @@
     },
     "cook-from-scratch": {
       "@type": "Event",
+      "created": "{{mo@00:00Z}}",
       "title": "Cook dinner from scratch",
+      "start": "{{th}}",
       "startTime": "18:00",
       "duration": "PT1H",
       "recurrenceRule": {
@@ -65,7 +71,9 @@
     },
     "no-sugar-after-dinner": {
       "@type": "Event",
+      "created": "{{today-6d@00:00Z}}",
       "title": "No sugar after dinner",
+      "start": "{{today}}",
       "startTime": "20:00",
       "recurrenceRule": {
         "frequency": "daily"
@@ -79,7 +87,9 @@
     },
     "run": {
       "@type": "Event",
+      "created": "{{tu@00:00Z}}",
       "title": "Run",
+      "start": "{{su}}",
       "startTime": "06:45",
       "duration": "PT45M",
       "recurrenceRule": {
@@ -110,7 +120,9 @@
     },
     "yoga": {
       "@type": "Event",
+      "created": "{{mo@00:00Z}}",
       "title": "Yoga",
+      "start": "{{we}}",
       "startTime": "07:30",
       "duration": "PT30M",
       "recurrenceRule": {
@@ -131,7 +143,9 @@
     },
     "lift-weights": {
       "@type": "Event",
+      "created": "{{mo@00:00Z}}",
       "title": "Lift weights",
+      "start": "{{th}}",
       "startTime": "17:30",
       "duration": "PT50M",
       "recurrenceRule": {
@@ -153,7 +167,9 @@
     },
     "walk-8k-steps": {
       "@type": "Event",
+      "created": "{{today-6d@00:00Z}}",
       "title": "Walk 8,000 steps",
+      "start": "{{today}}",
       "startTime": "09:00",
       "recurrenceRule": {
         "frequency": "daily",
@@ -170,7 +186,9 @@
     },
     "stretch-before-bed": {
       "@type": "Event",
+      "created": "{{today-5d@00:00Z}}",
       "title": "Stretch before bed",
+      "start": "{{today-1d}}",
       "startTime": "22:00",
       "duration": "PT10M",
       "recurrenceRule": {
@@ -184,7 +202,9 @@
     },
     "read-a-chapter": {
       "@type": "Event",
+      "created": "{{today-6d@00:00Z}}",
       "title": "Read a chapter (paper book)",
+      "start": "{{today}}",
       "startTime": "21:15",
       "duration": "PT30M",
       "recurrenceRule": {
@@ -200,7 +220,9 @@
     },
     "games-one-session": {
       "@type": "Event",
+      "created": "{{fr@00:00Z}}",
       "title": "Games — one session, then stop",
+      "start": "{{sa}}",
       "startTime": "20:30",
       "duration": "PT1H30M",
       "recurrenceRule": {
@@ -221,7 +243,9 @@
     },
     "film-night": {
       "@type": "Event",
+      "created": "{{sa-2w@00:00Z}}",
       "title": "Film night",
+      "start": "{{sa}}",
       "startTime": "20:00",
       "duration": "PT2H",
       "recurrenceRule": {
@@ -240,7 +264,9 @@
     },
     "phone-in-a-drawer": {
       "@type": "Event",
+      "created": "{{today-5d@00:00Z}}",
       "title": "Phone in a drawer for an hour",
+      "start": "{{today-2d}}",
       "startTime": "19:00",
       "duration": "PT1H",
       "recurrenceRule": {
@@ -254,7 +280,9 @@
     },
     "call-a-friend": {
       "@type": "Event",
+      "created": "{{su-1w@00:00Z}}",
       "title": "Call a friend",
+      "start": "{{su}}",
       "startTime": "18:30",
       "duration": "PT30M",
       "recurrenceRule": {

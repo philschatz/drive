@@ -48,7 +48,7 @@ own keyhive device and user group — the two-peer assets are genuinely two iden
 talking over the relay, not a mock. Two of them (`linking-a-device.gif`,
 `device-permissions.gif`) then link those contexts into *one* user with two devices, which
 is a different claim and looks it. Content comes from the eleven bundled example
-documents in `src/client/home/examples/`, seeded via the empty home page's
+documents in `src/client/ui/home/examples/`, seeded via the empty home page's
 "Yes, create examples" offer.
 
 | Asset | Shows |

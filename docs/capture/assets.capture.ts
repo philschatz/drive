@@ -14,6 +14,9 @@ import {
   type Pt,
 } from './cursor';
 import { hstackGif, toGif } from './gif';
+// The app's own relative-date markup, so the hand-written fixtures below are
+// authored the same way the bundled examples are and never go stale.
+import { expandRelativeDates } from '../../src/shared/relative-dates';
 import {
   befriend,
   capturePeer,
@@ -327,42 +330,57 @@ const CATEGORIES_TO: [number, number] = [1, 19]; // B20, Fun
 /**
  * A Counters document for the permissions capture.
  *
- * Hand-written rather than taken from `counters-habits.json`, whose completion
- * keys are `{{today-6d@12:41}}` templates that only the importer expands — passed
- * straight to `createDoc` they would land as literal keys and the streak counts
- * would read as nonsense on camera.
+ * Hand-written rather than taken from `counters-habits.json` — that one is
+ * fifteen counters deep and this clip wants four rows and a tally at the bottom
+ * of them. It is authored in the same relative-date markup, though, and expanded
+ * here rather than by the importer: `createDoc` takes the document as-is, so
+ * literal `{{…}}` keys would land verbatim and the streaks would read as
+ * nonsense on camera. Tokens rather than fixed dates because a capture rerun
+ * months later must still film a habit tracker in use, not one abandoned in
+ * July — which is exactly what the frozen timestamps this replaced had become.
  */
-const SHARED_COUNTERS = {
+const SHARED_COUNTERS = expandRelativeDates({
   '@type': 'Calendar+Counters',
   name: 'Habit Tracker',
   events: {
     // `startTime` is a time of day, not a date-time; completion keys are the full
-    // local date-times. Getting either wrong shows up as a validation badge rather
-    // than a counter.
+    // local date-times. `created` anchors the occurrence grid at the habit's
+    // birth and `start` is where its schedule currently restarts — the date of
+    // the most recent completion, which the schema *enforces*
+    // (checkCounterDependencies). Getting any of them wrong shows up as a
+    // validation badge rather than a counter.
     water: {
       '@type': 'Event',
+      created: '{{today-2d@00:00Z}}',
       title: 'Two litres of water',
+      start: '{{today}}',
       startTime: '08:00',
       recurrenceRule: { '@type': 'RecurrenceRule', frequency: 'daily' },
       completions: {
-        '2026-07-24T08:12:00': '',
-        '2026-07-25T08:40:00': '',
-        '2026-07-26T09:05:00': '',
+        '{{today-2d@08:12}}': '',
+        '{{today-1d@08:40}}': '',
+        '{{today@09:05}}': '',
       },
     },
     veg: {
       '@type': 'Event',
+      created: '{{today-1d@00:00Z}}',
       title: 'Vegetables at lunch',
+      start: '{{today}}',
       startTime: '12:30',
       recurrenceRule: { '@type': 'RecurrenceRule', frequency: 'daily' },
-      completions: { '2026-07-25T12:35:00': '', '2026-07-26T12:41:00': '' },
+      completions: { '{{today-1d@12:35}}': '', '{{today@12:41}}': '' },
     },
+    // Left undone today on purpose: three rows all reading "done" is a screen
+    // with nothing at stake on it.
     walk: {
       '@type': 'Event',
+      created: '{{today-2d@00:00Z}}',
       title: 'Walk before dark',
+      start: '{{today-1d}}',
       startTime: '18:00',
       recurrenceRule: { '@type': 'RecurrenceRule', frequency: 'daily' },
-      completions: { '2026-07-25T18:20:00': '' },
+      completions: { '{{today-1d@18:20}}': '' },
     },
     // No recurrence, so this one is a free tally: schedule-less counters sort
     // last (STATUS_ORDER in occurrences.ts), which makes it *the* bottom row, and
@@ -373,13 +391,13 @@ const SHARED_COUNTERS = {
       '@type': 'Event',
       title: 'Push-ups, whenever',
       completions: {
-        '2026-07-24T07:10:00': '',
-        '2026-07-25T07:30:00': '',
-        '2026-07-26T07:05:00': '',
+        '{{today-2d@07:10}}': '',
+        '{{today-1d@07:30}}': '',
+        '{{today@07:05}}': '',
       },
     },
   },
-};
+});
 
 /**
  * The Vacation Trip Planner example — used for the source-editor pairing because
@@ -400,22 +418,25 @@ const FOOD_AND_FUN: [number, number] = [1, 6]; // r7:c2, =TRIANGULAR(38,115,62)
 const EMPTY_CELL: [number, number] = [1, 13]; // r14:c2 — no key in the document yet
 
 /**
- * A row of the source editor's JSON tree, addressed by its key.
+ * A row of the source editor's current level, addressed by its key.
  *
- * The tree carries no testids, so rows are found by the quoted key text in
- * `.source-key`. Keys are unique within a parent but not across the tree, so
- * every call is scoped to `.first()`.
+ * Rows carry their key as `data-row-key`, so this matches the attribute rather
+ * than rendered text. Keys are unique within a level, but a `.first()` keeps the
+ * locator strict-mode safe while a level is being replaced mid-navigation.
  */
 const sourceRow = (page: Page, key: string) =>
-  page
-    .locator('.source-row')
-    .filter({ has: page.locator('.source-key', { hasText: `"${key}"` }) })
-    .first();
+  page.locator(`[data-testid="source-row"][data-row-key="${key}"]`).first();
 
-/** Expand a collapsed container row (depth ≥ 2 starts closed). */
-async function expandRow(page: Page, key: string): Promise<void> {
-  const row = sourceRow(page, key);
-  await tap(page, row.locator('.source-toggle'));
+/**
+ * Walk *into* a container row.
+ *
+ * The source viewer shows one level at a time and the URL is that level, so
+ * there is nothing to expand any more: a container row is a link, and tapping it
+ * navigates. `key` is then the level you are standing in, and its children are
+ * the rows.
+ */
+async function openSourceRow(page: Page, key: string): Promise<void> {
+  await tap(page, sourceRow(page, key));
   await beat(page, 400);
 }
 
@@ -710,10 +731,13 @@ test('tour.gif', async ({ browser }) => {
       // docked, so there is no Edit tap to film here, just the edit itself.
       await expect(page.getByTestId('format-bar')).toBeVisible({ timeout: 30_000 });
       await beat(page, 1600);
-      const grip = await phraseGrips(page, 'the downstairs room');
-      await selectPhrase(page, grip.word, grip.end);
+      // Via selectAndRead/padLike rather than the raw grips: the shift-click can
+      // round to either side of the space after "room", and typing an unpadded
+      // replacement over a selection that caught it welds the next word on
+      // ("the loftwhen she arrives"). Same reason presence-peritext.gif uses it.
+      const sel = await selectAndRead(page, 'the downstairs room');
       await hideCursor(page);
-      await typeText(page, 'the loft', 80);
+      await typeText(page, padLike(sel, 'the loft'), 80);
       // Assert across both edges of the replacement, so a selection one word out is
       // a failure rather than a clip with a mangled sentence in it.
       await expect(page.getByTestId('rt-editor')).toContainText(
@@ -732,11 +756,15 @@ test('tour.gif', async ({ browser }) => {
       // the menu and the settings index are two more full screens on the deck's
       // longest clip, and the button being tapped is the part worth filming.
       await page.goto('/#/settings/devices');
-      await expect(page.getByRole('button', { name: 'Link Device' })).toBeVisible({
-        timeout: 30_000,
-      });
+      await expect(page.getByTestId('devices-link')).toBeVisible({ timeout: 30_000 });
       await beat(page, 700);
-      await tap(page, page.getByRole('button', { name: 'Link Device' }));
+      await tap(page, page.getByTestId('devices-link'));
+      // The sheet asks first whether the new device should share this one's
+      // settings document — a permanent choice, so it is a step rather than a
+      // default. Filmed rather than skipped: it is the first thing a viewer sees.
+      await expect(page.getByTestId('link-sync-choice')).toBeVisible({ timeout: 30_000 });
+      await beat(page, 900);
+      await tap(page, page.getByTestId('link-sync-yes'));
       const qr = page.locator('div[title="Click to copy link"] svg');
       await expect(qr).toBeVisible({ timeout: 60_000 });
       await glide(page, qr);
@@ -817,19 +845,25 @@ test('linking-a-device.gif', async ({ browser }) => {
 
       await l.goto('/#/settings/devices');
       await beat(l, 600);
-      await tap(l, l.getByRole('button', { name: 'Link Device' }));
+      await tap(l, l.getByTestId('devices-link'));
+      // Whether the new device shares this one's settings document. This asset is
+      // about a second device becoming *the same user*, so it takes the syncing
+      // branch.
+      await expect(l.getByTestId('link-sync-choice')).toBeVisible({ timeout: 30_000 });
+      await beat(l, 900);
+      await tap(l, l.getByTestId('link-sync-yes'));
       const qr = l.locator('div[title="Click to copy link"] svg');
       await expect(qr).toBeVisible({ timeout: 60_000 });
       // Rest on the QR, then flash the frame: the other device is scanning it.
       await scanFlash(l, qr);
 
-      const url = await l.locator('input[readonly]').inputValue();
+      const url = await l.getByTestId('rendezvous-url').inputValue();
       expect(url).toMatch(/#\/link-device\/r\./);
 
       // The new device opens the link; both sides then show the same five-step
       // rendezvous ladder, which is the part worth watching.
       await r.goto(url);
-      await expect(r.getByText('Link Device')).toBeVisible({ timeout: 30_000 });
+      await expect(r.getByRole('heading', { name: 'Link device' })).toBeVisible({ timeout: 30_000 });
       await expect(r.getByText('Linking complete')).toBeVisible({ timeout: 120_000 });
       await beat(r, 900);
 
@@ -855,10 +889,15 @@ test('linking-a-device.gif', async ({ browser }) => {
       // Back on the first device, dismiss the invite by hand rather than by
       // navigating away: the QR has done its job, and a pane still showing one
       // reads as "waiting" next to a device that has already finished. The new
-      // device is then listed as Online, under the name it announced.
+      // device is then listed as reachable, under the name it announced. The row
+      // names the transport rather than saying "Online" — "P2P" once the direct
+      // channel is up, "Via relay" until then — so either is the claim here, and
+      // only "Offline" would be a failure.
       await tap(l, l.getByRole('button', { name: 'Close' }).first());
-      await expect(l.getByText(/^Online/).first()).toBeVisible({ timeout: 60_000 });
-      await expect(l.getByTitle(iosAgentId)).toHaveValue(IOS, { timeout: 30_000 });
+      await expect(l.getByTestId('device-transport').first()).toHaveText(/P2P|Via relay/, { timeout: 60_000 });
+      // The name is the row's headline (a div carrying the agentId as `title`),
+      // not an input — device renames moved into the options sheet.
+      await expect(l.locator(`[title="${iosAgentId}"]`)).toHaveText(IOS, { timeout: 30_000 });
       await beat(l, 1000);
 
       // Then back to the documents, so the clip closes on the claim it is making —
@@ -1295,47 +1334,65 @@ test('validation.gif', async ({ browser }) => {
       // `t1` is the completed task. Its `progress` is an optional enum, so
       // deleting it raises no error — what it does is drop the task out of the
       // Done group on Alice's side, one document away.
-      await expandRow(r, 't1');
-      await tap(r, sourceRow(r, 'progress').locator('.source-btn.delete'));
+      //
+      // The viewer shows one level at a time, so this walks in rather than
+      // expanding: `tasks` → `t1`, delete, then a crumb back up for `t3`.
+      await openSourceRow(r, 't1');
+      await tap(r, sourceRow(r, 'progress').getByTestId('row-delete'));
+      // Removing a key is destructive and asks first — worth the beat, since the
+      // sheet naming the key is what makes the deletion legible on camera.
+      await expect(r.getByTestId('confirm-sheet')).toBeVisible({ timeout: 30_000 });
+      await beat(r, 900);
+      await tap(r, r.getByTestId('confirm-accept'));
       await expect(sourceRow(r, 'progress')).toHaveCount(0, { timeout: 30_000 });
       await beat(l, 2000);
 
+      // Back up to `tasks`. The last crumb is where you already are and is inert,
+      // so the one to press is the level above — `tasks`.
+      await tap(r, r.getByTestId('crumb').filter({ hasText: 'tasks' }).first());
+      await expect(sourceRow(r, 't3')).toBeVisible({ timeout: 30_000 });
+      await beat(r, 600);
+
       // Now something the schema does reject: `progress` is a five-value enum, so
       // typing a plausible-but-wrong word raises a schema error — listed in the
-      // source editor's panel, badged inline on the offending key, and flagged by
+      // viewer's problem list, badged inline on the offending row, and flagged by
       // the warning icon on the document's own title bar.
-      await expandRow(r, 't3');
-      const progress = sourceRow(r, 'progress').locator('.source-string');
-      await tap(r, progress);
+      await openSourceRow(r, 't3');
+      // A leaf row is not a place, so it opens a sheet instead of navigating.
+      await tap(r, sourceRow(r, 'progress'));
+      await expect(r.getByTestId('value-sheet')).toBeVisible({ timeout: 30_000 });
       await beat(r, 400);
+      const field = r.locator('[data-testid="value-field"] input');
+      await field.click();
       await r.keyboard.press('ControlOrMeta+a');
       await typeText(r, 'done', 110);
-      await r.keyboard.press('Enter');
+      await tap(r, r.getByTestId('value-save'));
 
-      await expect(r.locator('.validation-panel-dark')).toBeVisible({ timeout: 30_000 });
-      await expect(r.locator('.source-error-icon.schema').first()).toBeVisible({ timeout: 30_000 });
+      await expect(r.getByTestId('validation-list')).toBeVisible({ timeout: 30_000 });
+      await expect(sourceRow(r, 'progress').getByTestId('row-error')).toBeVisible({ timeout: 30_000 });
       await expect(l.locator('[aria-label="Validation errors"]')).toBeVisible({ timeout: 30_000 });
       await beat(l, 1200);
 
-      // Bring the error panel itself on screen — that is where the message reads.
-      // The tree's own auto-scroll leaves the panel above the frame, and neither
-      // `window.scrollTo` nor Playwright's `scrollIntoViewIfNeeded` shifts it (the
-      // viewer scrolls an inner container, and Playwright judges the panel already
-      // in view). The DOM's own scrollIntoView walks every scrollable ancestor.
+      // Bring the problem list itself on screen — that is where the message reads.
+      // Neither `window.scrollTo` nor Playwright's `scrollIntoViewIfNeeded` shifts
+      // it (the viewer scrolls an inner container, and Playwright judges the list
+      // already in view). The DOM's own scrollIntoView walks every scrollable
+      // ancestor.
       await r.evaluate(() =>
-        document.querySelector('.validation-panel-dark')
+        document.querySelector('[data-testid="validation-list"]')
           ?.scrollIntoView({ block: 'start', behavior: 'smooth' })
       );
       await beat(r, 2600);
     },
     {
-      // Left is the task list, right is the same document as JSON.
+      // Left is the task list, right is the same document as JSON — opened at the
+      // `tasks` level, since that is where this clip's story starts.
       leftUrl: `/#/d/${docId}`,
-      rightUrl: `/#/source/${docId}`,
+      rightUrl: `/#/source/${docId}/tasks`,
       settle: async (l, r) => {
         await expect(l.getByTestId('task-row').first()).toBeVisible({ timeout: 60_000 });
-        await expect(r.locator('.source-tree')).toBeVisible({ timeout: 60_000 });
-        await expect(sourceRow(r, 'tasks')).toBeVisible({ timeout: 60_000 });
+        await expect(r.getByTestId('source-level')).toBeVisible({ timeout: 60_000 });
+        await expect(sourceRow(r, 't1')).toBeVisible({ timeout: 60_000 });
       },
     }
   );
@@ -1394,11 +1451,11 @@ test('presence-source.gif', async ({ browser }) => {
     },
     {
       leftUrl: `/#/d/${docId}`,
-      // Deep-link the tree at a *cell*, not at `cells`: reveal expands a node's
-      // ancestors and leaves the node itself as it was, so aiming at the
-      // container opens everything above it and still shows `{ 83 keys }`.
-      // Aiming one level deeper is what unfolds the keys.
-      rightUrl: `/#/source/${docId}/sheets/plan/cells/${encodeURIComponent('r1:c1')}`,
+      // Deep-link at `cells` itself: the URL is the level you are standing in, so
+      // this is the level whose rows are the cell keys. Aiming one deeper (at a
+      // cell) would land *inside* that cell, showing its own `value` and nothing
+      // else — which is where this clip's dots would have nowhere to land.
+      rightUrl: `/#/source/${docId}/sheets/plan/cells`,
       settle: async (l, r) => {
         await expect(cellAt(l, LODGING)).toBeVisible({ timeout: 60_000 });
         await expect(sourceRow(r, 'r1:c1')).toBeVisible({ timeout: 60_000 });
@@ -1448,8 +1505,9 @@ test('device-permissions.gif', async ({ browser }) => {
   // Link the second device off camera — the handshake is its own asset
   // (linking-a-device.gif) and this clip is about what happens afterwards.
   await android.page.goto('/#/settings/devices');
-  await android.page.getByRole('button', { name: 'Link Device' }).click();
-  const link = android.page.locator('input[readonly]');
+  await android.page.getByTestId('devices-link').click();
+  await android.page.getByTestId('link-sync-yes').click();
+  const link = android.page.getByTestId('rendezvous-url');
   await expect(link).toBeVisible({ timeout: 60_000 });
   await ios.page.goto(await link.inputValue());
   await expect(ios.page.getByText('Linking complete')).toBeVisible({ timeout: 120_000 });
@@ -1457,8 +1515,15 @@ test('device-permissions.gif', async ({ browser }) => {
   // every document its user creates — so the doc arrives on its own.
   await warmDoc(ios, docId, 'Habit Tracker');
 
-  /** Write affordances on the second device; present only at `edit` or `admin`. */
-  const recordButtons = (page: Page) => page.locator('[aria-label^="Record completion"]');
+  /**
+   * Write affordances on the second device; present only at `edit` or `admin`.
+   *
+   * Recording moved onto the row itself (`onTap`), so there is no "Record
+   * completion" button any more. What a writable row still has that a read-only
+   * one does not is its actions kebab — ListRow renders no trailing control and
+   * no hold at all for an empty `actions`, which is exactly the read-only case.
+   */
+  const recordButtons = (page: Page) => page.locator('[aria-label^="Actions for"]');
   /** The share glyph is on the title bar for admins only; others get a kebab item. */
   const shareGlyph = (page: Page) => page.locator('[aria-label="Share"]');
   /** The bottom row is the schedule-less tally, whose badge is a `N×` count. */
@@ -1509,7 +1574,9 @@ test('device-permissions.gif', async ({ browser }) => {
     ios,
     async (l, r) => {
       // A linked device starts out as an admin of its own user-group.
-      await expect(iosRow(l).getByRole('combobox')).toHaveText('Admin');
+      // The role is a label now, not a select — picking one moved into its own
+      // sheet (`role-picker-sheet`), which `setDeviceRole` below drives.
+      await expect(iosRow(l).getByTestId('device-role')).toHaveText('Admin');
       await beat(l, 1600);
 
       // Admin: the second device has the share glyph, and its counters work.
@@ -1613,13 +1680,14 @@ test('add-and-share-with-friend.gif', async ({ browser }) => {
       // Rest on the QR, then flash the frame: Bob is scanning it.
       await scanFlash(l, qr);
 
-      const url = await l.locator('input[readonly]').inputValue();
+      const url = await l.getByTestId('rendezvous-url').inputValue();
       expect(url).toMatch(/#\/add-friend\/r\./);
 
       await r.goto(url);
-      // The receiver's success path is a prompt() then a bounce to home, so the
-      // contact landing on Bob's side is the observable end of the exchange.
-      await expect(r).toHaveURL(/#\/$/, { timeout: 120_000 });
+      // The receiver's success path bounces to the friends list — where the new
+      // friend now is — rather than to home, so that landing is the observable
+      // end of the exchange on Bob's side.
+      await expect(r).toHaveURL(/#\/friends$/, { timeout: 120_000 });
       await beat(r, 900);
 
       // Alice's QR sheet closes itself once the exchange is done, and the page
