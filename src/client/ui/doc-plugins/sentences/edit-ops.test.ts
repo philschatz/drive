@@ -97,6 +97,65 @@ describe('backspace', () => {
   });
 });
 
+/**
+ * Android IMEs do not send backspace as a collapsed-caret gesture. GBoard on
+ * Gecko expresses it as `deleteSurroundingText` — "replace this range with
+ * nothing" — over the FLAT text it sees, where a block boundary is one
+ * character. At a block start that range is `[markerIndex, textFrom)`: the
+ * marker alone, no text.
+ *
+ * Splicing a marker away merges the blocks (pinned against real Automerge in
+ * spans-model.test.ts), so every structural backspace silently degraded to a
+ * merge on Android — the empty indented list item vanished and the caret landed
+ * at the end of the previous item. Paragraphs hid it: merging is what they do
+ * anyway. Desktop hides it too, because there the boundary range arrives via
+ * `getTargetRanges()`, which `deleteRange` already discards.
+ */
+describe('backspace over a bare block boundary (Android IME)', () => {
+  it('outdents a nested list item instead of merging it', () => {
+    const spans = docOf('- a\n  - b');
+    // ￼a￼b — the marker of the nested item is index 2, its text starts at 3.
+    const { ops, caret } = opsForDeleteBackward(blocksOf(spans), 2, 3);
+    expect(mdOf(applyOpsToSpans(spans, ops))).toBe('- a\n- b');
+    expect(caret).toBe(3);
+  });
+
+  it('outdents an EMPTY nested list item — the reported case', () => {
+    const spans: RichTextSpan[] = [
+      blockSpan('unordered-list-item'), textSpan('a'),
+      { type: 'block', value: { type: 'unordered-list-item', parents: ['unordered-list-item'] } },
+    ];
+    const { ops, caret } = opsForDeleteBackward(blocksOf(spans), 2, 3);
+    const after = applyOpsToSpans(spans, ops);
+    // The item survives, one level shallower — it is not swallowed by "a".
+    expect(typesOf(after)).toEqual(['unordered-list-item', 'unordered-list-item']);
+    expect(blocksOf(after).map(b => b.block?.parents)).toEqual([[], []]);
+    expect(caret).toBe(3);
+  });
+
+  it('demotes a blockquote instead of merging it', () => {
+    const spans = docOf('a\n\n> b');
+    const { ops } = opsForDeleteBackward(blocksOf(spans), 2, 3);
+    expect(mdOf(applyOpsToSpans(spans, ops))).toBe('a\n\nb');
+  });
+
+  it('removes a preceding divider instead of merging into it', () => {
+    const spans = docOf('a\n\n---\n\nb');
+    // ￼a￼￼b — the divider's marker is 2, "b"'s marker is 3.
+    const { ops } = opsForDeleteBackward(blocksOf(spans), 3, 4);
+    expect(mdOf(applyOpsToSpans(spans, ops))).toBe('a\n\nb');
+  });
+
+  it('still merges a range that covers real text across the boundary', () => {
+    // The rule is deliberately narrow: one position, landing exactly on a
+    // marker. Dragging over actual characters means what it says.
+    const spans = docOf('- a\n  - b');
+    const { ops, caret } = opsForDeleteBackward(blocksOf(spans), 1, 3);
+    expect(mdOf(applyOpsToSpans(spans, ops))).toBe('- b');
+    expect(caret).toBe(1);
+  });
+});
+
 describe('delete forward', () => {
   it('deletes the next character', () => {
     const spans = docOf('abc');

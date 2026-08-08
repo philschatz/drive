@@ -530,6 +530,36 @@ describe('a block whose element type changes', () => {
     expect(caretBlock()).toBe(root.querySelector('[data-bi="1"]'));
     expect(window.getSelection()!.isCollapsed).toBe(true);
   });
+
+  /**
+   * The Android shape of the same gesture, and the reason the case above stayed
+   * green while the phone did not: GBoard on Gecko sends backspace as
+   * `deleteSurroundingText`, which Gecko performs by SELECTING the range and
+   * deleting it. So `beforeinput` arrives with a selection spanning the block
+   * boundary rather than a collapsed caret — one position, covering only the
+   * marker. Every jsdom/desktop path collapses it instead, which is why nothing
+   * here ever exercised it.
+   *
+   * Handled as a range, that is `splice(2, 1)` — deleting a marker merges the
+   * blocks, so the item vanished and the caret landed at the end of "a".
+   */
+  it('outdents when the IME selects the block boundary instead of collapsing', () => {
+    const spans: RichTextSpan[] = [
+      blockSpan('unordered-list-item'), textSpan('a'),
+      { type: 'block', value: { type: 'unordered-list-item', parents: ['unordered-list-item'] } },
+    ];
+    const { root, ops, settle } = setup(spans);
+    const empty = root.querySelector('[data-bi="1"]') as HTMLElement;
+    // From the end of "a" to the start of the empty item: zero visible
+    // characters, the bare boundary.
+    put(runNode(root, 'a'), 1, empty, 0);
+    key(root, 'deleteContentBackward');
+    expect(ops[0]).toEqual([{ op: 'updateBlock', index: 2, block: { type: 'unordered-list-item', parents: [] } }]);
+    settle();
+    expect(root.querySelectorAll('.rt-li')).toHaveLength(2);
+    expect(caretBlock()).toBe(root.querySelector('[data-bi="1"]'));
+    expect(window.getSelection()!.isCollapsed).toBe(true);
+  });
 });
 
 describe('selection direction', () => {

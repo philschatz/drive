@@ -39,6 +39,25 @@ export function opsForInsertText(
 }
 
 export function opsForDeleteBackward(blocks: BlockNode[], from: number, to: number): Edit {
+  // A range covering exactly one block marker and no text IS a caret at that
+  // block's start — not something to splice away.
+  //
+  // Android IMEs never send backspace as a collapsed-caret gesture: GBoard on
+  // Gecko expresses it as `deleteSurroundingText`, which Gecko performs by
+  // selecting the range and deleting it, over the FLAT text the IME sees — where
+  // a block boundary is one character. Splicing a marker away MERGES the blocks,
+  // so every structural backspace (outdent, blockquote demote, divider removal)
+  // silently degraded to a merge there. Paragraphs hid it, merging being what
+  // they do anyway, and desktop hid it because the boundary range arrives via
+  // `getTargetRanges()` instead, which the editor's `deleteRange` discards.
+  //
+  // Deliberately narrow — one position, landing exactly on a marker. A drag over
+  // real characters that happens to cross a boundary still means what it says.
+  if (to - from === 1) {
+    const b = blocks.find(x => x.markerIndex === from);
+    // Collapsed, so this cannot re-enter the branch.
+    if (b) return opsForDeleteBackward(blocks, b.textFrom, b.textFrom);
+  }
   if (to > from) return { ops: [{ op: 'splice', index: from, del: to - from }], caret: from };
   if (from === 0) return { ops: [], caret: from };
 
