@@ -19,7 +19,7 @@ import type { CounterEvent } from '../../../../shared/schemas/counters';
 import { describeRecurrence } from '../calendar/recurrence';
 import { relativeDuration } from '../../../../shared/relative-time';
 import { MATERIAL_ORANGE } from '../../common/categorical-colors';
-import { sortedCounters, metMissedByWeek, isArchived, lastCompletionAnchor, createdStampFor, type CounterEntry, type CounterStatus, type RewardProgress } from './occurrences';
+import { sortedCounters, metMissedByWeek, isArchived, lastCompletionAnchor, createdStampFor, counterKind, type CounterEntry, type CounterKind, type CounterStatus, type RewardProgress } from './occurrences';
 import { MetMissedChart } from './Chart';
 import { CounterEditor } from './CounterEditor';
 import { CompletionsSheet } from './CompletionsSheet';
@@ -32,18 +32,35 @@ interface EditorState {
 
 const COUNTERS_QUERY = '{ events: (.events // {}), name: (.name // "Counters") }';
 
-const SECTION_LABELS: Record<CounterStatus, string> = {
+/** What a row announces to assistive tech. More precise than its section: the
+ * tone that separates `due` from `todo` visually is invisible to a screen
+ * reader, so the row says which it is even though the heading above it doesn't. */
+const STATUS_LABELS: Record<CounterStatus, string> = {
   overdue: 'Overdue',
-  pending: 'To do',
-  upcoming: 'Upcoming',
+  due: 'Due',
+  todo: 'To do',
   done: 'Done',
-  tally: 'No schedule',
+  anytime: 'Anytime',
 };
+
+/**
+ * Section headings. `due` and `todo` share one bucket — they behave identically
+ * (both are owed, both can go overdue) and the list is ordered by deadline, so a
+ * boundary between them would only repeat what the ordering already says. Which
+ * of the two a row is still shows in its tone: full strength once its window is
+ * open, muted while it is still ahead.
+ *
+ * `done` is what you achieved in the current window and empties as windows roll
+ * over; `anytime` is where checklist items park between the times they are
+ * wanted, so it grows without bound.
+ */
+const SECTION_LABELS: Record<CounterStatus, string> = { ...STATUS_LABELS, due: 'To do' };
 
 /** Which editor inputs highlight when a peer focuses a given event property.
  * The recurrence-rule cluster (freq/interval/weekdays) shares one doc path. */
 const PATH_PROP_TO_FIELDS: Record<string, string[]> = {
   title: ['ced-title'],
+  start: ['ced-due'],
   startTime: ['ced-time'],
   duration: ['ced-end'],
   description: ['ced-reward'],
@@ -82,6 +99,48 @@ function describeDeadline(at: string): string {
   return at.substring(0, 16).replace('T', ' '); // seconds are noise on a deadline
 }
 
+type Tone = 'muted' | 'primary' | 'error';
+
+/**
+ * The row's leading glyph, in three independent channels — which is the whole
+ * point: let any two of them share one and cells start colliding.
+ *
+ *   shape — what kind of thing is this?   box = checklist, circle = recurring.
+ *           Never moves with the clock, so it always answers "what".
+ *   fill  — do I owe anything right now?  empty = yes, ticked = no.
+ *   tone  — how urgent?                   muted → primary → error.
+ *
+ * Every kind × status cell is therefore distinct, and the test asserts exactly
+ * that. `tone` names a role rather than a colour, so this stays free of styling
+ * and testable as a plain table.
+ */
+const KIND_SHAPE: Record<CounterKind, { owed: string; settled: string }> = {
+  checklist: { owed: 'check_box_outline_blank', settled: 'check_box' },
+  // `radio_button_unchecked` rather than `circle`: both exist in the local font,
+  // but only this one is known-outlined at FILL 0, and a solid disc here would
+  // collapse the fill channel.
+  recurring: { owed: 'radio_button_unchecked', settled: 'check_circle' },
+};
+
+const STATUS_LOOK: Record<CounterStatus, { tone: Tone; settled: boolean }> = {
+  overdue: { tone: 'error', settled: false },
+  due: { tone: 'primary', settled: false },
+  todo: { tone: 'muted', settled: false },
+  done: { tone: 'primary', settled: true },
+  anytime: { tone: 'muted', settled: true },
+};
+
+export function counterIcon(kind: CounterKind, status: CounterStatus): { icon: string; tone: Tone } {
+  const { tone, settled } = STATUS_LOOK[status];
+  return { icon: KIND_SHAPE[kind][settled ? 'settled' : 'owed'], tone };
+}
+
+const TONE_COLORS: Record<Tone, string> = {
+  muted: 'var(--md-sys-color-on-surface-variant)',
+  primary: 'var(--md-sys-color-primary)',
+  error: 'var(--md-sys-color-error)',
+};
+
 /** Streak tooltip, e.g. "5-day streak" (unit follows the recurrence frequency). */
 function streakTitle(streak: number, frequency?: string): string {
   const unit = { daily: 'day', weekly: 'week', monthly: 'month', yearly: 'year' }[frequency || ''];
@@ -94,7 +153,7 @@ function streakTitle(streak: number, frequency?: string): string {
  * Delete) and a completions log, so ListRow gives it a kebab rather than Tasks'
  * single pencil; a hold (or right-click, or Shift+F10) runs the first, Edit.
  */
-function CounterListItem({ uid, ev, status, streak, reward, dueAt, canEdit, peerEditingEvents, onRecord, onEdit, onShowCompletions }: {
+function CounterListItem({ uid, ev, status, streak, reward, dueAt, canEdit, peerEditingEvents, onRecord, onEdit, onShowCompletions, onArm, onDisarm }: {
   uid: string;
   ev: CounterEvent;
   status: CounterStatus;
@@ -108,21 +167,26 @@ function CounterListItem({ uid, ev, status, streak, reward, dueAt, canEdit, peer
   onRecord: (uid: string) => void;
   onEdit: (uid: string, ev: CounterEvent) => void;
   onShowCompletions: (uid: string) => void;
+  /** Put a schedule-less counter on the to-do list, or take it back off. */
+  onArm: (uid: string) => void;
+  onDisarm: (uid: string) => void;
 }) {
+  const kind = counterKind(ev);
+  // Only a checklist item has a to-do list to be on or off — a habit is always
+  // on its own schedule, and `start` there is an anchor rather than an arm.
+  const armable = kind === 'checklist';
   const clickCount = Object.keys(ev.completions || {}).length;
   const schedule = describeSchedule(ev);
   // Safe to word this off the status: `dueAt` is the moment the habit became
   // overdue (always past) for an overdue row, and the moment its window shuts
-  // (always future) for a pending one — see CounterEntry.dueAt.
+  // (always future) for a due one — see CounterEntry.dueAt.
   const late = status === 'overdue';
-  const timing = dueAt && (late || status === 'pending')
+  const timing = dueAt && (late || status === 'due')
     ? { late, text: relativeDuration(dueAt) + (late ? ' overdue' : ' left') }
     : null;
   const title = ev.title || 'Untitled';
-  const iconColor = status === 'done'
-    ? 'var(--md-sys-color-primary)'
-    : status === 'overdue' ? 'var(--md-sys-color-error)' : undefined;
-  const icon = status === 'done' ? 'check_circle' : status === 'overdue' ? 'error' : status === 'tally' ? 'exposure_plus_1' : 'radio_button_unchecked';
+  const { icon, tone } = counterIcon(kind, status);
+  const iconColor = TONE_COLORS[tone];
 
   return (
     <ListRow
@@ -134,6 +198,22 @@ function CounterListItem({ uid, ev, status, streak, reward, dueAt, canEdit, peer
       // everywhere else in the app.
       actions={canEdit ? [
         { icon: 'edit', label: 'Edit', title: `Edit ${title}`, onSelect: () => onEdit(uid, ev) },
+        // Arming is the row's own gesture rather than a trip through the editor,
+        // because wanting something is a passing thought.
+        ...(armable && !ev.start ? [{
+          icon: 'playlist_add',
+          label: 'Add to To do',
+          title: `Add ${title} to To do`,
+          testId: 'counter-arm',
+          onSelect: () => onArm(uid),
+        }] : []),
+        ...(armable && ev.start ? [{
+          icon: 'schedule',
+          label: 'Not now',
+          title: `Take ${title} off To do`,
+          testId: 'counter-disarm',
+          onSelect: () => onDisarm(uid),
+        }] : []),
         {
           icon: 'history',
           label: `Completions (${clickCount})`,
@@ -200,7 +280,7 @@ function CounterListItem({ uid, ev, status, streak, reward, dueAt, canEdit, peer
         <span aria-hidden="true" className="material-symbols-outlined text-lg" style={{ color: iconColor }}>
           {icon}
         </span>
-        <span className="sr-only">{SECTION_LABELS[status]}</span>
+        <span className="sr-only">{STATUS_LABELS[status]}</span>
       </span>
       <div slot="headline">{title}</div>
     </ListRow>
@@ -292,8 +372,8 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
     // Recording moves the schedule anchor to the day it was actually done, so
     // the recurrence restarts from there; `created` (stamped once) is what keeps
     // the history. Both are computed here because the change callback is
-    // serialized into the worker, where Temporal isn't available. A free tally
-    // gets no anchor — that would move it out of "No schedule" and start booking
+    // serialized into the worker, where Temporal isn't available. A checklist
+    // item gets no anchor — that would move it out of Anytime and start booking
     // misses against it.
     const ev = eventsRef.current[uid];
     const recurring = !!ev?.recurrenceRule;
@@ -309,10 +389,41 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
       ev.completions[key] = '';
       // Re-check against the document: a peer may have changed the schedule
       // since this tab's snapshot.
-      if (!anchor || !ev.recurrenceRule) return;
+      if (!ev.recurrenceRule) {
+        // Doing a one-off answers the want that armed it, so it retires itself:
+        // `start` goes and it settles into Anytime, ready to be armed again.
+        // The click log and the lifetime count stay, which is what lets the same
+        // event be reused instead of recreated.
+        if (ev.start) delete ev.start;
+        return;
+      }
+      if (!anchor) return;
       if (created && !ev.created) ev.created = created;
       if (ev.start !== anchor) ev.start = anchor;
     }, uid, key, anchor, created);
+  }, [docId]);
+
+  // Arming is what puts a schedule-less counter on the to-do list: `start` is
+  // the day it is wanted. Recording a completion clears it again (see
+  // recordClick), so the pair is the whole want → do → forget cycle.
+  const armCounter = useCallback((uid: string) => {
+    if (!canEditRef.current || !docId) return;
+    updateDoc(docId, (d, uid, today) => {
+      const ev = d.events[uid];
+      // A habit is always on its own schedule; `start` there is the anchor, and
+      // overwriting it with today would forge a completion.
+      if (!ev || ev.recurrenceRule) return;
+      ev.start = today;
+    }, uid, nowLocal().substring(0, 10));
+  }, [docId]);
+
+  const disarmCounter = useCallback((uid: string) => {
+    if (!canEditRef.current || !docId) return;
+    updateDoc(docId, (d, uid) => {
+      const ev = d.events[uid];
+      if (!ev || ev.recurrenceRule) return;
+      delete ev.start;
+    }, uid);
   }, [docId]);
 
   // Remove a single recorded completion (a mis-click). This is its own mutation:
@@ -441,13 +552,16 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
   const sorted = sortedCounters(active, now);
   const stats = useMemo(() => metMissedByWeek(active, now), [active, now]);
 
-  // Group the sorted entries into contiguous status sections so each section
-  // renders as a header + its own Material list.
-  const sections: { status: CounterStatus; entries: CounterEntry[] }[] = [];
+  // Group the sorted entries into contiguous sections so each renders as a
+  // header + its own Material list. Keyed on the section LABEL, not the status:
+  // `due` and `todo` share the To do bucket, and grouping by status would split
+  // it into two headers reading the same thing.
+  const sections: { label: string; entries: CounterEntry[] }[] = [];
   for (const entry of sorted) {
+    const label = SECTION_LABELS[entry.status];
     const last = sections[sections.length - 1];
-    if (last && last.status === entry.status) last.entries.push(entry);
-    else sections.push({ status: entry.status, entries: [entry] });
+    if (last && last.label === label) last.entries.push(entry);
+    else sections.push({ label, entries: [entry] });
   }
 
   return (
@@ -484,11 +598,13 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
       >
 
       <div data-testid="counter-list">
-        {sections.map(({ status, entries }) => (
-          <div key={status}>
-            <h3 className="text-xs font-semibold uppercase text-muted-foreground mt-3 mb-1">{SECTION_LABELS[status]}</h3>
+        {sections.map(({ label, entries }) => (
+          <div key={label}>
+            <h3 className="text-xs font-semibold uppercase text-muted-foreground mt-3 mb-1">{label}</h3>
             <md-list style={{ background: 'transparent' }}>
-              {entries.map(({ uid, ev, streak, reward, dueAt }) => (
+              {/* Per entry, not per section: To do holds both `due` and `todo`,
+                  which the row tells apart by tone. */}
+              {entries.map(({ uid, ev, status, streak, reward, dueAt }) => (
                 <CounterListItem
                   key={uid}
                   uid={uid}
@@ -502,6 +618,8 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
                   onRecord={recordClick}
                   onEdit={openEditor}
                   onShowCompletions={setCompletionsUid}
+                  onArm={armCounter}
+                  onDisarm={disarmCounter}
                 />
               ))}
             </md-list>

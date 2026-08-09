@@ -38,11 +38,17 @@ export function toDateStr(d: any): string {
   return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
 }
 
+/**
+ * Weeks fold into days: `DURATION_RE` accepts "P1W", so without the W branch it
+ * would match the bare "P" and yield a ZERO-length duration — which reads as a
+ * window that shuts the instant it opens, not as one week.
+ */
 export function parseDuration(dur: string): { days: number; hours: number; minutes: number } {
   if (!dur) return { days: 0, hours: 1, minutes: 0 };
-  const m = dur.match(/P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?)?/);
+  const m = dur.match(/P(?:(\d+)W)?(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?)?/);
   if (!m) return { days: 0, hours: 1, minutes: 0 };
-  return { days: parseInt(m[1] || '0'), hours: parseInt(m[2] || '0'), minutes: parseInt(m[3] || '0') };
+  const days = parseInt(m[1] || '0') * 7 + parseInt(m[2] || '0');
+  return { days, hours: parseInt(m[3] || '0'), minutes: parseInt(m[4] || '0') };
 }
 
 // Hard backstop against pathological rules (crafted CRDT JSON / malicious .ics).

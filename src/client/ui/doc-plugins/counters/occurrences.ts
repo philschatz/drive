@@ -8,7 +8,29 @@ export { reanchorDate, lastCompletionAnchor } from '../../../../shared/schemas/c
 /** All functions take `now` as a local datetime string ("YYYY-MM-DDTHH:mm:ss")
  * so the logic stays pure and testable. */
 
-export type CounterStatus = 'overdue' | 'pending' | 'upcoming' | 'done' | 'tally';
+export type CounterStatus = 'overdue' | 'due' | 'todo' | 'done' | 'anytime';
+
+/**
+ * What a counter IS, structurally — as opposed to where it is in its window,
+ * which is {@link currentStatus}. Kind is a property of the document alone;
+ * status is a property of the document *and* the clock.
+ *
+ *   'recurring' — a habit on a schedule. Its `start` is the anchor of that
+ *                 schedule (the last completion), never a due date.
+ *   'checklist' — a to-do you tick off. `start` is the day it is wanted, and its
+ *                 presence is what *arms* it; ticking clears it, so the item
+ *                 settles back to 'anytime' and can be armed again. A counter
+ *                 that is never armed is just a checklist item you only ever
+ *                 tally — there is no third kind.
+ */
+export type CounterKind = 'recurring' | 'checklist';
+
+export const counterKind = (ev: CounterEvent): CounterKind =>
+  ev.recurrenceRule ? 'recurring' : 'checklist';
+
+/** Nothing is owed: a checklist item with no due date. The `anytime` status and
+ * this condition are the same thing — see {@link currentStatus}. */
+const isSettled = (ev: CounterEvent): boolean => !ev.recurrenceRule && !ev.start;
 
 export interface CounterEntry {
   uid: string;
@@ -24,7 +46,7 @@ export interface CounterEntry {
    *             occurrence in the current unbroken run of misses, so the number
    *             keeps growing while the habit is left undone. Guaranteed <= now,
    *             so an overdue row can never read "in 12 hours".
-   * Absent for 'tally' and for a counter with no occurrences at all.
+   * Absent for 'anytime' and for a counter with no occurrences at all.
    */
   dueAt?: string;
   /** Consecutive met occurrences; 0 for non-recurring counters. */
@@ -229,11 +251,16 @@ function sinceCreation(ev: CounterEvent, dates: string[]): string[] {
 
 function expandOccurrences(ev: CounterEvent, rangeStart: string, rangeEnd: string): string[] {
   if (!ev.recurrenceRule) {
-    // Not trimmed at creation: a one-shot's `start` is its *due date*, and may
+    // Not trimmed at creation: a one-off's `start` is its *due date*, and may
     // legitimately predate its own creation — logging something already owed.
     if (!ev.start) return [];
-    const d = dateOf(ev.start);
-    return d >= rangeStart && d <= rangeEnd ? [ev.start] : [];
+    // Its one occurrence opens at the time of day the window opens, exactly as a
+    // recurring one does — so `startTime` + `duration` decide when it is overdue.
+    const occ = anchorFor(ev, ev.start);
+    // Only the future edge gates. There is a single occurrence and no cost to
+    // keeping it, and a to-do armed longer ago than the lookback window is still
+    // owed — dropping it here would report the stale item as 'todo'.
+    return dateOf(occ) <= rangeEnd ? [occ] : [];
   }
   const rule = ev.recurrenceRule;
   const base = createdDate(ev);
@@ -346,13 +373,17 @@ function overdueSince(ev: CounterEvent, occs: string[], from: number, now: strin
 
 /**
  * Status of a counter's current period, used for sectioning/sorting:
- *   'tally'    — no schedule at all: a free-running counter, always clickable
- *   'upcoming' — its first occurrence is still in the future
+ *   'anytime'  — nothing owed: an unarmed checklist item, always tappable. It is
+ *                exactly {@link isSettled}, so the row shows a *ticked* box.
+ *   'todo'     — its first occurrence is still in the future
  *   'done'     — the current period has a recorded completion
- *   'pending'  — the current occurrence's window is still open and the previous
+ *   'due'      — the current occurrence's window is still open and the previous
  *                occurrence (if any since the habit's start) was met
  *   'overdue'  — the current window has closed with no completion yet, or the
  *                current window is open but the previous occurrence went unmet
+ *
+ * 'anytime' and 'done' are the two in which nothing is owed; the other three are
+ * the escalation ladder. That split is what the row's ticked/empty box encodes.
  *
  * Absent an explicit `duration`, a window closes when the habit comes due again
  * (see {@link windowEnd}) — so a habit repeating every 4 months is not overdue the
@@ -360,13 +391,13 @@ function overdueSince(ev: CounterEvent, occs: string[], from: number, now: strin
  * have counted.
  */
 export function currentStatus(ev: CounterEvent, now: string): StatusResult {
-  if (!ev.recurrenceRule && !ev.start) return { status: 'tally' };
+  if (isSettled(ev)) return { status: 'anytime' };
 
   const today = dateOf(now);
   const from = Temporal.PlainDate.from(today).subtract({ days: LOOKBACK_DAYS }).toString();
   const to = Temporal.PlainDate.from(today).add({ days: LOOKBACK_DAYS }).toString();
   const occs = expectedOccurrences(ev, from, to);
-  if (occs.length === 0) return { status: 'upcoming' };
+  if (occs.length === 0) return { status: 'todo' };
 
   // Indexed so the overdue walk below can start at `curr` (or the one before it)
   // without re-deriving them. Equivalent to the prev/curr/next scan it replaces.
@@ -375,7 +406,7 @@ export function currentStatus(ev: CounterEvent, now: string): StatusResult {
     if (toDateTime(occs[i]) <= now) ci = i;
     else break;
   }
-  if (ci < 0) return { status: 'upcoming', occurrence: occs[0], dueAt: windowEnd(ev, occs[0], occs[1]) };
+  if (ci < 0) return { status: 'todo', occurrence: occs[0], dueAt: windowEnd(ev, occs[0], occs[1]) };
   const curr = occs[ci];
   const prev = occs[ci - 1];
   const next = occs[ci + 1];
@@ -406,12 +437,19 @@ export function currentStatus(ev: CounterEvent, now: string): StatusResult {
       dueAt: overdueSince(ev, occs, ci - 1, now, anchored) ?? toDateTime(curr),
     };
   }
-  return { status: 'pending', occurrence: curr, dueAt: windowEnd(ev, curr, next) };
+  return { status: 'due', occurrence: curr, dueAt: windowEnd(ev, curr, next) };
 }
 
-/** Overdue first, then pending, upcoming, done, and finally schedule-less
- * tallies — ties broken by an unclaimed reward, then occurrence time, then title. */
-const STATUS_ORDER: Record<CounterStatus, number> = { overdue: 0, pending: 1, upcoming: 2, done: 3, tally: 4 };
+/**
+ * Overdue first, then everything owed, then done, then the settled pile — ties
+ * broken by an unclaimed reward, then the deadline, then title.
+ *
+ * `due` and `todo` deliberately share a rank. They are one section, and ranking
+ * them apart would sort every open-window item above every future one no matter
+ * how far off its deadline — putting "due in 4 months" above "due tomorrow",
+ * which is the ordering the deadline comparison exists to fix.
+ */
+const STATUS_ORDER: Record<CounterStatus, number> = { overdue: 0, due: 1, todo: 1, done: 2, anytime: 3 };
 
 export function sortedCounters(events: Record<string, CounterEvent>, now: string): CounterEntry[] {
   const entries: CounterEntry[] = Object.entries(events).map(([uid, ev]) => {
@@ -431,6 +469,16 @@ export function sortedCounters(events: Record<string, CounterEvent>, now: string
     const br = b.reward && !b.reward.unlocked ? 0 : 1;
     if (ar !== br) return ar - br;
     if (ar === 0 && a.reward!.remaining !== b.reward!.remaining) return a.reward!.remaining - b.reward!.remaining;
+    // By the deadline the row actually RENDERS, not by when its window opened.
+    // Sorting on `occurrence` ordered the list by a number the user cannot see:
+    // two due habits of different intervals share a similar window start while
+    // their deadlines are months apart, so "4 months left" sat above "1 month
+    // left". Ascending covers every section — soonest first in Due/To do,
+    // longest-overdue first in Overdue, next-due-soonest first in Done.
+    // The sentinel sorts a row with no deadline last rather than first.
+    const ad = a.dueAt ?? '￿';
+    const bd = b.dueAt ?? '￿';
+    if (ad !== bd) return ad < bd ? -1 : 1;
     const ao = a.occurrence || '';
     const bo = b.occurrence || '';
     if (ao !== bo) return ao < bo ? -1 : 1;
@@ -530,7 +578,7 @@ export function metMissedByWeek(events: Record<string, CounterEvent>, now: strin
   }
 
   for (const ev of Object.values(events)) {
-    if (!ev.recurrenceRule && !ev.start) continue; // free tally
+    if (isSettled(ev)) continue; // nothing owed, nothing to miss
     const occs = expectedOccurrences(ev, firstWeekStart.toString(), dateOf(now));
     for (let i = 0; i < occs.length; i++) {
       const occ = occs[i];

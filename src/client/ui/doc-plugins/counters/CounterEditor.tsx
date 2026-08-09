@@ -19,6 +19,7 @@ const FIELD_TO_PROP: Record<string, string> = {
   'ced-freq': 'recurrenceRule',
   'ced-interval': 'recurrenceRule',
   'ced-bydays': 'recurrenceRule',
+  'ced-due': 'start',
   'ced-time': 'startTime',
   'ced-end': 'duration',
   'ced-reward': 'description',
@@ -97,11 +98,14 @@ export function CounterEditor({ uid, event, isNew, opened, canEdit = true, onSav
   }, [onFieldFocus]);
 
   const [title, setTitle] = useState(event.title || '');
+  // A non-recurring counter's `start` is its due date — the day it is wanted.
+  // (A recurring one's is the schedule anchor, which this pane never shows.)
+  const [startDate, setStartDate] = useState(event.recurrenceRule ? '' : (event.start || '').substring(0, 10));
   const [startTime, setStartTime] = useState(event.startTime ? event.startTime.substring(0, 5) : '');
   const [duration, setDuration] = useState(event.duration || '');
   const [description, setDescription] = useState(event.description || '');
   // A brand-new habit defaults to daily recurrence (so new users start with a
-  // repeating habit); an existing schedule-less tally keeps 'none'.
+  // repeating habit); an existing checklist item keeps 'none'.
   const [frequency, setFrequency] = useState(event.recurrenceRule?.frequency || (isNew ? 'daily' : 'none'));
   const [interval, setInterval] = useState<number | null>(event.recurrenceRule?.interval ?? null);
   const [byDay, setByDay] = useState<NDay['day'][]>((event.recurrenceRule?.byDay || []).map(d => d.day));
@@ -112,6 +116,7 @@ export function CounterEditor({ uid, event, isNew, opened, canEdit = true, onSav
     prevRef.current = event;
     if (prev === event) return;
     setTitle(event.title || '');
+    setStartDate(event.recurrenceRule ? '' : (event.start || '').substring(0, 10));
     setStartTime(event.startTime ? event.startTime.substring(0, 5) : '');
     setDuration(event.duration || '');
     setDescription(event.description || '');
@@ -121,6 +126,10 @@ export function CounterEditor({ uid, event, isNew, opened, canEdit = true, onSav
   }, [event]);
 
   const recurring = frequency !== 'none';
+  // A window needs something to hang itself on: a schedule, or a due date. Read
+  // off the DRAFT rather than the saved event, or the panes would not appear
+  // until after the change that should have revealed them.
+  const hasWindow = recurring || !!startDate;
   const completionCount = Object.keys(event.completions ?? {}).length;
   // The document stores a duration (calendar spec); the editor edits an end time.
   const endTime = windowEndTime(startTime, duration);
@@ -134,6 +143,7 @@ export function CounterEditor({ uid, event, isNew, opened, canEdit = true, onSav
    */
   const change = (overrides: Partial<{
     title: string;
+    startDate: string;
     startTime: string;
     duration: string;
     description: string;
@@ -144,10 +154,12 @@ export function CounterEditor({ uid, event, isNew, opened, canEdit = true, onSav
     const effTitle = ((overrides.title ?? title) || '').trim();
     if (isNew && !effTitle) return;
     const effFrequency = overrides.frequency ?? frequency;
-    // `interval` and `duration` are clearable, so an explicit override of either
-    // must win even when it is null/'' — `??` would fall through to the old value.
+    // `interval`, `startDate` and `duration` are clearable, so an explicit override
+    // of any must win even when it is null/'' — `??` would fall through to the old
+    // value, and clearing a due date would silently leave the item on the to-do list.
     const effInterval = 'interval' in overrides ? overrides.interval! : interval;
     const effByDay = overrides.byDay ?? byDay;
+    const effStartDate = 'startDate' in overrides ? overrides.startDate! : startDate;
     const effStartTime = overrides.startTime ?? startTime;
     const effDuration = 'duration' in overrides ? overrides.duration! : duration;
     const effDescription = overrides.description ?? description;
@@ -170,14 +182,19 @@ export function CounterEditor({ uid, event, isNew, opened, canEdit = true, onSav
       // habit's history survives `start` moving with each completion.
       created: event.created || createdStampFor(event),
       title: effTitle || 'Untitled',
-      // `start` is the *schedule* anchor now — the day of the most recent
-      // completion, which the schema checks. Deriving it rather than carrying it
-      // through covers the one case that would otherwise break the invariant: a
-      // free tally with clicks being given a schedule. A brand-new recurring
-      // counter has no anchor until it is first done; a tally has none at all.
-      start: isRecurring ? (lastCompletionAnchor(event) ?? event.start) : undefined,
-      startTime: isRecurring && effStartTime ? effStartTime + ':00' : undefined,
-      duration: isRecurring && effDuration ? effDuration : undefined,
+      // `start` carries the two meanings the kinds give it. Recurring: the
+      // *schedule* anchor — the day of the most recent completion, which the
+      // schema checks. Deriving it rather than carrying it through covers the one
+      // case that would otherwise break the invariant: a checklist item with
+      // clicks being given a schedule. A brand-new recurring counter has no anchor until
+      // it is first done. Non-recurring: the due date this pane edits, so a habit
+      // demoted to a one-off drops its anchor and starts from the date entered
+      // (blank, and it is simply not on the to-do list).
+      start: isRecurring ? (lastCompletionAnchor(event) ?? event.start) : (effStartDate || undefined),
+      // Not gated on recurrence any more: an armed one-off has a window too, and
+      // `startTime` + `duration` are what decide when it goes overdue.
+      startTime: effStartTime ? effStartTime + ':00' : undefined,
+      duration: effDuration ? effDuration : undefined,
       description: effDescription || undefined,
       recurrenceRule,
     });
@@ -334,10 +351,42 @@ export function CounterEditor({ uid, event, isNew, opened, canEdit = true, onSav
       ),
     },
     {
+      // A one-off's due date: setting it is what puts the counter on the to-do
+      // list, and recording a completion clears it again. Hidden for a habit,
+      // whose `start` is a schedule anchor the user must not hand-edit.
+      id: 'ced-due',
+      label: 'Due',
+      icon: 'event',
+      hidden: recurring,
+      summary: () => startDate,
+      transactional: true,
+      render: ({ back }) => (
+        <FieldEditor
+          data-testid="ced-due"
+          value={startDate}
+          onCancel={back}
+          onSave={v => { setStartDate(v); change({ startDate: v }); back(); }}
+        >
+          {({ value, onInput }) => (
+            <MdTextField
+              label="Due"
+              type="date"
+              data-testid="ced-due"
+              value={value}
+              supportingText="When you want this done. Leave blank to keep it off the to-do list."
+              onInput={onInput}
+              onFocus={() => focusField('ced-due')}
+              onBlur={blurField}
+            />
+          )}
+        </FieldEditor>
+      ),
+    },
+    {
       id: 'ced-time',
       label: 'Start time',
       icon: 'schedule',
-      hidden: !recurring,
+      hidden: !hasWindow,
       summary: () => startTime,
       transactional: true,
       render: ({ back }) => (
@@ -369,7 +418,7 @@ export function CounterEditor({ uid, event, isNew, opened, canEdit = true, onSav
       id: 'ced-end',
       label: 'End time',
       icon: 'timelapse',
-      hidden: !recurring,
+      hidden: !hasWindow,
       summary: () => endTime,
       transactional: true,
       render: ({ back }) => (

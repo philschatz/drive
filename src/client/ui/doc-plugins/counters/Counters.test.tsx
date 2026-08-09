@@ -8,7 +8,7 @@ import { render, screen, fireEvent, within, waitFor } from '@testing-library/pre
 // here, so rows are inert hosts driven by their own handlers.
 jest.mock('../../worker-api');
 import * as api from '../../worker-api';
-import { Counters } from './Counters';
+import { Counters, counterIcon } from './Counters';
 
 const mock = api as any;
 
@@ -52,7 +52,7 @@ describe('Counters container', () => {
 
     // New counters default to Daily → due today ("To do").
     expect(screen.getByRole('heading', { name: 'To do' })).toBeTruthy();
-    expect(rowOf('Stretch').getAttribute('data-status')).toBe('pending');
+    expect(rowOf('Stretch').getAttribute('data-status')).toBe('due');
 
     // Tapping the row records a completion → moves to "Done". A single-day
     // streak is not a streak yet: the flame badge only renders once the streak
@@ -296,7 +296,7 @@ describe('Counters container', () => {
     render(<Counters docId={DOC} />);
     await waitFor(() => expect(screen.getByText('Descale the kettle')).toBeTruthy());
 
-    expect(rowOf('Descale the kettle').getAttribute('data-status')).toBe('pending');
+    expect(rowOf('Descale the kettle').getAttribute('data-status')).toBe('due');
     expect(screen.getByRole('heading', { name: 'To do' })).toBeTruthy();
     expect(screen.queryByRole('heading', { name: 'Overdue' })).toBeNull();
     // …and the clock counts down to the next occurrence, months out.
@@ -336,5 +336,175 @@ describe('Counters container', () => {
     render(<Counters docId={DOC} />);
     await waitFor(() => expect(screen.getByText('Pushups')).toBeTruthy());
     expect(within(rowOf('Pushups')).getByText('2×')).toBeTruthy();
+  });
+});
+
+describe('counterIcon', () => {
+  // Shape = kind, fill = is anything owed, tone = urgency. Every cell of the
+  // matrix is pinned here rather than re-derived from whatever the DOM renders.
+  const MATRIX = [
+    // Recurring is a circle in every state, including overdue — the tone carries
+    // the alarm, and an error glyph would drop the affordance saying "tap me".
+    ['recurring', 'overdue', 'radio_button_unchecked', 'error'],
+    ['recurring', 'due', 'radio_button_unchecked', 'primary'],
+    ['recurring', 'todo', 'radio_button_unchecked', 'muted'],
+    ['recurring', 'done', 'check_circle', 'primary'],
+    // Checklist is a box in every state…
+    ['checklist', 'overdue', 'check_box_outline_blank', 'error'],
+    ['checklist', 'due', 'check_box_outline_blank', 'primary'],
+    ['checklist', 'todo', 'check_box_outline_blank', 'muted'],
+    // …empty while it owes you something, ticked once it doesn't. `anytime` is
+    // the resting state a completion settles into: still a box, never a tally.
+    ['checklist', 'done', 'check_box', 'primary'],
+    ['checklist', 'anytime', 'check_box', 'muted'],
+  ] as const;
+
+  it.each(MATRIX)('%s + %s → %s', (kind, status, icon, tone) => {
+    expect(counterIcon(kind, status)).toEqual({ icon, tone });
+  });
+
+  // The invariant that makes the design self-enforcing, and the one that would
+  // have caught the collisions this pass exists to fix: nine cells collapsed
+  // into six appearances because kind and time shared a channel. Any future
+  // state that reuses an appearance fails here.
+  it('gives every cell a distinct appearance', () => {
+    const looks = MATRIX.map(([kind, status]) => {
+      const { icon, tone } = counterIcon(kind, status);
+      return `${icon}/${tone}`;
+    });
+    expect(new Set(looks).size).toBe(MATRIX.length);
+  });
+
+  it('reads the three channels independently', () => {
+    // Shape depends only on the kind, holding owed-ness fixed…
+    for (const status of ['overdue', 'due', 'todo'] as const) {
+      expect(counterIcon('checklist', status).icon).toBe('check_box_outline_blank');
+      expect(counterIcon('recurring', status).icon).toBe('radio_button_unchecked');
+    }
+    // …fill only on whether anything is owed…
+    expect(counterIcon('checklist', 'done').icon).toBe('check_box');
+    expect(counterIcon('checklist', 'anytime').icon).toBe('check_box');
+    // …and tone only on the status, whatever the kind.
+    for (const kind of ['checklist', 'recurring'] as const) {
+      expect(counterIcon(kind, 'overdue').tone).toBe('error');
+      expect(counterIcon(kind, 'due').tone).toBe('primary');
+      expect(counterIcon(kind, 'todo').tone).toBe('muted');
+    }
+  });
+});
+
+describe('one-off to-dos', () => {
+  beforeEach(() => { mock.__reset(); });
+
+  const today = () => Temporal.Now.plainDateISO().toString();
+  const glyphOf = (title: string) => rowOf(title).querySelector('.material-symbols-outlined')!.textContent;
+
+  const seed = (ev: Record<string, unknown>) => mock.__setDoc(DOC, {
+    '@type': 'Calendar+Counters', name: 'C',
+    events: { e1: { '@type': 'Event', title: 'Buy chocolate', ...ev } },
+  });
+
+  it('arms from the row, is done by tapping it, and retires itself back to Anytime', async () => {
+    seed({ completions: { '2026-07-19T09:00:00': '' } });
+    render(<Counters docId={DOC} />);
+    await waitFor(() => expect(screen.getByText('Buy chocolate')).toBeTruthy());
+
+    // Settled: nothing owed, so it sits under Anytime wearing a TICKED box. It
+    // stays a checklist item rather than turning into a counter — that identity
+    // is what makes the same event reusable.
+    expect(rowOf('Buy chocolate').getAttribute('data-status')).toBe('anytime');
+    expect(screen.getByRole('heading', { name: 'Anytime' })).toBeTruthy();
+    expect(glyphOf('Buy chocolate')).toBe('check_box');
+
+    // Arming is a row action, because wanting something is a passing thought.
+    fireEvent.click(within(rowOf('Buy chocolate')).getByTitle('Add Buy chocolate to To do'));
+    expect(mock.__getDoc(DOC).events.e1.start).toBe(today());
+    expect(rowOf('Buy chocolate').getAttribute('data-status')).toBe('due');
+    expect(screen.getByRole('heading', { name: 'To do' })).toBeTruthy();
+    // The box empties: something is owed again.
+    expect(glyphOf('Buy chocolate')).toBe('check_box_outline_blank');
+
+    // Ticking it (a tap anywhere on the row, the box included) logs the completion
+    // AND clears the date, so the same event is reusable rather than stuck in Done.
+    fireEvent.click(rowOf('Buy chocolate'));
+    const ev = mock.__getDoc(DOC).events.e1;
+    expect(ev.start).toBeUndefined();
+    expect(Object.keys(ev.completions).length).toBe(2);
+    expect(rowOf('Buy chocolate').getAttribute('data-status')).toBe('anytime');
+    expect(glyphOf('Buy chocolate')).toBe('check_box');
+    // The lifetime count is what survives the cycle.
+    expect(within(rowOf('Buy chocolate')).getByText('2×')).toBeTruthy();
+  });
+
+  it('sits in the same To do section as a habit, ordered by deadline', async () => {
+    const d = (n: number) => Temporal.Now.plainDateISO().add({ days: n }).toString();
+    mock.__setDoc(DOC, {
+      '@type': 'Calendar+Counters', name: 'C',
+      events: {
+        // Armed a week out: owed, but its window has not opened yet.
+        far: { '@type': 'Event', title: 'Book flights', start: d(7) },
+        // Armed today with a two-day window, so its deadline is the day after
+        // the habit's — which is the only thing that decides their order.
+        near: { '@type': 'Event', title: 'Buy milk', start: d(0), duration: 'P2D' },
+        // Done yesterday, so today's window is open rather than already missed.
+        habit: { ...dailyHabit('Stretch', d(-1)), completions: { [`${d(-1)}T09:00:00`]: '' } },
+      },
+    });
+    render(<Counters docId={DOC} />);
+    await waitFor(() => expect(screen.getByText('Book flights')).toBeTruthy());
+
+    // One owed section, not two — a habit and both checklist items share it.
+    expect(screen.getAllByRole('heading', { name: 'To do' })).toHaveLength(1);
+    expect(rowOf('Stretch').getAttribute('data-status')).toBe('due');
+    expect(rowOf('Buy milk').getAttribute('data-status')).toBe('due');
+    // Still owed, but not yet actionable: same empty box, muted rather than full.
+    expect(rowOf('Book flights').getAttribute('data-status')).toBe('todo');
+    // Shape still separates the kinds inside the merged section.
+    expect(glyphOf('Buy milk')).toBe('check_box_outline_blank');
+    expect(glyphOf('Stretch')).toBe('radio_button_unchecked');
+    // Ordered purely by deadline, so the habit lands BETWEEN the two checklist
+    // items rather than status or kind clumping them.
+    // Direct children only: the kebab's own menu items also carry slot="headline".
+    const titles = Array.from(document.querySelectorAll('[data-testid="counter-row"] > [slot="headline"]'))
+      .map(n => n.textContent);
+    expect(titles).toEqual(['Stretch', 'Buy milk', 'Book flights']);
+  });
+
+  it('"Not now" takes it off the list without recording anything', async () => {
+    seed({ start: today() });
+    render(<Counters docId={DOC} />);
+    await waitFor(() => expect(screen.getByText('Buy chocolate')).toBeTruthy());
+    expect(rowOf('Buy chocolate').getAttribute('data-status')).toBe('due');
+
+    fireEvent.click(within(rowOf('Buy chocolate')).getByTitle('Take Buy chocolate off To do'));
+    const ev = mock.__getDoc(DOC).events.e1;
+    expect(ev.start).toBeUndefined();
+    expect(ev.completions).toBeUndefined(); // disarming is not doing
+    expect(rowOf('Buy chocolate').getAttribute('data-status')).toBe('anytime');
+  });
+
+  it('goes overdue once its day passes, keeping the checkbox and gaining the clock', async () => {
+    seed({ start: Temporal.Now.plainDateISO().subtract({ days: 3 }).toString() });
+    render(<Counters docId={DOC} />);
+    await waitFor(() => expect(screen.getByText('Buy chocolate')).toBeTruthy());
+
+    expect(rowOf('Buy chocolate').getAttribute('data-status')).toBe('overdue');
+    expect(glyphOf('Buy chocolate')).toBe('check_box_outline_blank');
+    expect(within(rowOf('Buy chocolate')).getByTestId('counter-due').textContent).toMatch(/overdue$/);
+  });
+
+  it('a recurring habit is untouched by the arm/disarm actions', async () => {
+    mock.__setDoc(DOC, {
+      '@type': 'Calendar+Counters', name: 'C',
+      events: { e1: dailyHabit('Stretch', Temporal.Now.plainDateISO().subtract({ days: 5 }).toString()) },
+    });
+    render(<Counters docId={DOC} />);
+    await waitFor(() => expect(screen.getByText('Stretch')).toBeTruthy());
+
+    // A habit is always on its own schedule — there is no list to add it to.
+    expect(within(rowOf('Stretch')).queryByTitle(/To do$/)).toBeNull();
+    // And its `start` is a schedule anchor, so a tap moves it rather than clearing it.
+    fireEvent.click(rowOf('Stretch'));
+    expect(mock.__getDoc(DOC).events.e1.start).toBe(today());
   });
 });

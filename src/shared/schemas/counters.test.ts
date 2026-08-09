@@ -33,6 +33,20 @@ describe('Calendar+Counters schema', () => {
     expect(validateDocument(doc)).toEqual([]);
   });
 
+  it('accepts an armed one-off: a due date plus the window that decides when it is overdue', () => {
+    const doc = validDoc();
+    // No recurrence, so `start` means "the day this is wanted" and carries the
+    // same startTime/duration window a habit does.
+    doc.events.b = {
+      '@type': 'Event', title: 'buy chocolate',
+      start: '2026-07-21', startTime: '18:00:00', duration: 'PT2H',
+      completions: { '2026-07-02T18:30:00': '' },
+    };
+    // In particular the anchor rule must stay recurring-only: a one-off's `start`
+    // is deliberately unrelated to its newest completion.
+    expect(validateDocument(doc)).toEqual([]);
+  });
+
   describe('a recurring counter\'s start is its most recent completion', () => {
     it('rejects a start that has drifted from the newest completion', () => {
       const doc = validDoc();

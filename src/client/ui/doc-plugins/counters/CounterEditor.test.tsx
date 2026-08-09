@@ -127,6 +127,86 @@ describe('CounterEditor', () => {
     });
   });
 
+  describe('the Due pane', () => {
+    const oneOff = (extra: Record<string, any> = {}) => ({ '@type': 'Event', title: 'Buy chocolate', ...extra });
+    const today = () => Temporal.Now.plainDateISO().toString();
+
+    it('sets a due date, which puts the counter on the to-do list', async () => {
+      mock.__setDoc(DOC, { '@type': 'Calendar+Counters', name: 'C', events: { e1: oneOff() } });
+      await openPane('ced-due', 'Buy chocolate');
+
+      fireEvent.input(screen.getByTestId('ced-due'), { target: { value: today() } });
+      fireEvent.click(screen.getByTestId('ced-due-save'));
+      expect(only().start).toBe(today());
+      // The open sheet shows the title too, so read the list with it dismissed.
+      fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+      expect(rowOf('Buy chocolate').getAttribute('data-status')).toBe('due');
+    });
+
+    it('keeps the due date when another pane is saved', async () => {
+      // The regression this pane exists for: `change()` used to write
+      // `start: isRecurring ? … : undefined`, so ANY save on a non-recurring
+      // counter silently wiped its date and dropped it off the list.
+      mock.__setDoc(DOC, { '@type': 'Calendar+Counters', name: 'C', events: { e1: oneOff({ start: today() }) } });
+      await openPane('ced-title', 'Buy chocolate');
+
+      fireEvent.input(screen.getByTestId('ced-title'), { target: { value: 'Buy dark chocolate' } });
+      fireEvent.click(screen.getByTestId('ced-title-save'));
+      expect(only()).toMatchObject({ title: 'Buy dark chocolate', start: today() });
+    });
+
+    it('clearing the date takes it back off the list', async () => {
+      mock.__setDoc(DOC, { '@type': 'Calendar+Counters', name: 'C', events: { e1: oneOff({ start: today() }) } });
+      await openPane('ced-due', 'Buy chocolate');
+
+      fireEvent.input(screen.getByTestId('ced-due'), { target: { value: '' } });
+      fireEvent.click(screen.getByTestId('ced-due-save'));
+      expect(only().start).toBeUndefined();
+      fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+      expect(rowOf('Buy chocolate').getAttribute('data-status')).toBe('anytime');
+    });
+
+    it('is hidden for a habit, whose `start` is a schedule anchor and not a due date', async () => {
+      mock.__setDoc(DOC, { '@type': 'Calendar+Counters', name: 'C', events: { e1: habit() } });
+      render(<Counters docId={DOC} />);
+      await waitFor(() => expect(screen.getByText('Stretch')).toBeTruthy());
+      fireEvent.contextMenu(rowOf('Stretch'));
+      expect(screen.queryByTestId('ced-due-row')).toBeNull();
+      expect(screen.getByTestId('ced-time-row')).toBeTruthy();
+    });
+
+    it('reveals the window panes once there is a date to hang them on', async () => {
+      mock.__setDoc(DOC, { '@type': 'Calendar+Counters', name: 'C', events: { e1: oneOff() } });
+      await openPane('ced-due', 'Buy chocolate');
+      // A free tally has no window, so neither pane applies to it…
+      fireEvent.click(screen.getByTestId('ced-due-cancel'));
+      expect(screen.queryByTestId('ced-time-row')).toBeNull();
+      expect(screen.queryByTestId('ced-end-row')).toBeNull();
+
+      // …and they appear off the DRAFT, not a round-trip through the document.
+      fireEvent.click(screen.getByTestId('ced-due-row'));
+      fireEvent.input(screen.getByTestId('ced-due'), { target: { value: today() } });
+      fireEvent.click(screen.getByTestId('ced-due-save'));
+      expect(screen.getByTestId('ced-time-row')).toBeTruthy();
+      expect(screen.getByTestId('ced-end-row')).toBeTruthy();
+    });
+
+    it('a to-do window is stored as startTime + duration, like a habit\'s', async () => {
+      mock.__setDoc(DOC, { '@type': 'Calendar+Counters', name: 'C', events: { e1: oneOff({ start: today() }) } });
+      await openPane('ced-time', 'Buy chocolate');
+      fireEvent.input(screen.getByTestId('ced-time'), { target: { value: '18:00' } });
+      fireEvent.click(screen.getByTestId('ced-time-save'));
+
+      fireEvent.click(screen.getByTestId('ced-end-row'));
+      fireEvent.input(screen.getByTestId('ced-end'), { target: { value: '20:00' } });
+      fireEvent.click(screen.getByTestId('ced-end-save'));
+
+      // These two are what decide when the to-do goes overdue — the same fields,
+      // and the same meaning, as on a recurring counter.
+      expect(only()).toMatchObject({ start: today(), startTime: '18:00:00', duration: 'PT2H' });
+    });
+  });
+
   describe('the reward', () => {
     it('stores goal and text in the description, and counts down on the row', async () => {
       const today = Temporal.Now.plainDateISO().toString();

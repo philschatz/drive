@@ -3,7 +3,7 @@
 // forever or throw out of the render path. These tests assert bounded termination
 // (independent of Jest's wall-clock timeout) plus no regression on normal rules.
 import 'temporal-polyfill/global';
-import { generateDates, rebuildExpanded } from './recurrence';
+import { generateDates, rebuildExpanded, parseDuration } from './recurrence';
 import type { CalendarEvent } from '../../../../shared/schemas/calendar';
 import { captureConsole } from '../../../../../tests/support/console';
 
@@ -113,5 +113,26 @@ describe('rebuildExpanded robustness', () => {
     const expanded = rebuildExpanded(events, '2026-01-01', '2026-01-31');
     const dates = expanded.filter(e => e.uid === 'weekly').map(e => e.recurrenceDate).sort();
     expect(dates).toEqual(['2026-01-05', '2026-01-12', '2026-01-19', '2026-01-26']);
+  });
+});
+
+describe('parseDuration', () => {
+  it('reads the units it is given', () => {
+    expect(parseDuration('PT1H')).toEqual({ days: 0, hours: 1, minutes: 0 });
+    expect(parseDuration('PT90M')).toEqual({ days: 0, hours: 0, minutes: 90 });
+    expect(parseDuration('P30D')).toEqual({ days: 30, hours: 0, minutes: 0 });
+    expect(parseDuration('P1DT2H30M')).toEqual({ days: 1, hours: 2, minutes: 30 });
+  });
+
+  it('folds weeks into days rather than reading them as nothing', () => {
+    // DURATION_RE accepts "P1W", so without the W branch the regex matched the
+    // bare "P" and yielded a ZERO-length duration — a window that shuts the
+    // instant it opens, which reads as "already overdue".
+    expect(parseDuration('P1W')).toEqual({ days: 7, hours: 0, minutes: 0 });
+    expect(parseDuration('P2W')).toEqual({ days: 14, hours: 0, minutes: 0 });
+  });
+
+  it('defaults a missing duration to an hour', () => {
+    expect(parseDuration('')).toEqual({ days: 0, hours: 1, minutes: 0 });
   });
 });

@@ -21,14 +21,23 @@ export interface CounterEvent {
   title?: string;
   recurrenceRule?: RecurrenceRule;
   /**
+   * Two meanings, picked by whether `recurrenceRule` is set — see `counterKind`
+   * in doc-plugins/counters/occurrences.ts.
+   *
    * Recurring: the *schedule anchor* — the day of the most recent completion, so
    * the recurrence restarts from when the habit was actually done. Absent until
    * the first completion (the grid then runs from `created`).
-   * Non-recurring: the one-shot's due date, as before.
+   *
+   * Non-recurring: the day this is **wanted** — a one-off to-do. Its presence is
+   * what puts the counter on the to-do list; recording a completion clears it,
+   * settling the item back into Anytime so the same event can be armed again
+   * the next time. Absent means nothing is owed.
    */
   start?: LocalDateTime;
-  /** Optional time-of-day the recurring window opens (no date). */
+  /** Optional time-of-day the window opens (no date), for either kind. */
   startTime?: string;
+  /** How long the window stays open. With `startTime`, this is what decides when
+   * an occurrence — or an armed one-off — goes overdue. */
   duration?: Duration;
   /**
    * Free text. A leading "<n>: " encodes a reward unlocked by a streak of n
