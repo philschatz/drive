@@ -148,12 +148,13 @@ function streakTitle(streak: number, frequency?: string): string {
 }
 
 /**
- * One counter row: tap anywhere records a completion — the thing you came to do.
- * A counter has two secondary actions, an editor (which also holds Archive and
- * Delete) and a completions log, so ListRow gives it a kebab rather than Tasks'
- * single pencil; a hold (or right-click, or Shift+F10) runs the first, Edit.
+ * One counter row. A tap anywhere is the leading checkbox: on a checklist item
+ * it ticks (records + settles) or unticks (arms), and on a habit it records.
+ * Everything else is in the kebab — the editor (which also holds Archive and
+ * Delete), the completions log, Record, and Not now; a hold (or right-click, or
+ * Shift+F10) runs the first, Edit.
  */
-function CounterListItem({ uid, ev, status, streak, reward, dueAt, canEdit, peerEditingEvents, onRecord, onEdit, onShowCompletions, onArm, onDisarm }: {
+function CounterListItem({ uid, ev, status, streak, reward, dueAt, canEdit, peerEditingEvents, onTick, onRecord, onEdit, onShowCompletions, onDisarm }: {
   uid: string;
   ev: CounterEvent;
   status: CounterStatus;
@@ -164,11 +165,13 @@ function CounterListItem({ uid, ev, status, streak, reward, dueAt, canEdit, peer
   dueAt?: string;
   canEdit: boolean;
   peerEditingEvents: Record<string, PeerFieldInfo>;
+  /** The tap: toggles a checklist item's box, records on a habit. */
+  onTick: (uid: string) => void;
+  /** Count one without touching whether anything is still wanted. */
   onRecord: (uid: string) => void;
   onEdit: (uid: string, ev: CounterEvent) => void;
   onShowCompletions: (uid: string) => void;
-  /** Put a schedule-less counter on the to-do list, or take it back off. */
-  onArm: (uid: string) => void;
+  /** Off the to-do list without claiming it was done. */
   onDisarm: (uid: string) => void;
 }) {
   const kind = counterKind(ev);
@@ -193,20 +196,27 @@ function CounterListItem({ uid, ev, status, streak, reward, dueAt, canEdit, peer
       data-status={status}
       data-testid="counter-row"
       style={{ opacity: peerEditingEvents[uid] ? 0.5 : status === 'done' ? 0.6 : 1 }}
-      onTap={canEdit ? () => onRecord(uid) : undefined}
+      onTap={canEdit ? () => onTick(uid) : undefined}
       // Edit first: it is what a hold runs, and holding a row means "edit this"
       // everywhere else in the app.
       actions={canEdit ? [
         { icon: 'edit', label: 'Edit', title: `Edit ${title}`, onSelect: () => onEdit(uid, ev) },
-        // Arming is the row's own gesture rather than a trip through the editor,
-        // because wanting something is a passing thought.
+        // Counting without arming, and ONLY when nothing is owed. The tap is a
+        // checkbox now, so on a settled row it means "I want this" rather than
+        // "+1" — this is the way to log something you just did. When something
+        // IS owed, ticking already means exactly this, and recording without
+        // clearing `start` would leave a completion inside an open window: the
+        // engine reads that as done, so the row would tick itself and stay that
+        // way for good. No equivalent for a habit — its tap already only records.
         ...(armable && !ev.start ? [{
-          icon: 'playlist_add',
-          label: 'Add to To do',
-          title: `Add ${title} to To do`,
-          testId: 'counter-arm',
-          onSelect: () => onArm(uid),
+          icon: 'exposure_plus_1',
+          label: 'Record',
+          title: `Record one ${title}`,
+          testId: 'counter-record',
+          onSelect: () => onRecord(uid),
         }] : []),
+        // The counterpart to ticking: off the list WITHOUT claiming you did it.
+        // (Arming needs no action — that is what tapping a ticked row does.)
         ...(armable && ev.start ? [{
           icon: 'schedule',
           label: 'Not now',
@@ -365,7 +375,12 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
     updateDoc(docId, (d, uid) => { const r = d.events[uid]?.recurrenceRule; if (r) delete r.until; }, uid);
   }, [docId, confirm]);
 
-  const recordClick = useCallback((uid: string) => {
+  /**
+   * Append a completion and nothing else — the row's "Record" action, and the
+   * shared half of the tap below. `settle` additionally clears a checklist
+   * item's `start`, which is what ticking its box means.
+   */
+  const recordCompletion = useCallback((uid: string, settle: boolean) => {
     if (!canEditRef.current || !docId) return;
     const key = clickKey();
     setNow(nowLocal());
@@ -382,7 +397,7 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
     // anchor, and the schema requires `start` to match the most recent one.
     const anchor = recurring ? lastCompletionAnchor({ ...ev!, completions: { ...ev!.completions, [key]: '' } }) ?? null : null;
     const created = recurring && !ev!.created ? createdStampFor(ev!) : null;
-    updateDoc(docId, (d, uid, key, anchor, created) => {
+    updateDoc(docId, (d, uid, key, anchor, created, settle) => {
       const ev = d.events[uid];
       if (!ev) return;
       if (!ev.completions) ev.completions = {};
@@ -390,32 +405,75 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
       // Re-check against the document: a peer may have changed the schedule
       // since this tab's snapshot.
       if (!ev.recurrenceRule) {
-        // Doing a one-off answers the want that armed it, so it retires itself:
-        // `start` goes and it settles into Anytime, ready to be armed again.
+        // Ticking a checklist item answers the want that armed it, so it settles
+        // itself: `start` goes and it drops to Anytime, ready to be armed again.
         // The click log and the lifetime count stay, which is what lets the same
-        // event be reused instead of recreated.
-        if (ev.start) delete ev.start;
+        // event be reused instead of recreated. "Record" passes settle=false to
+        // count one without claiming the want is answered.
+        if (settle && ev.start) delete ev.start;
         return;
       }
       if (!anchor) return;
       if (created && !ev.created) ev.created = created;
       if (ev.start !== anchor) ev.start = anchor;
-    }, uid, key, anchor, created);
+    }, uid, key, anchor, created, settle);
   }, [docId]);
 
-  // Arming is what puts a schedule-less counter on the to-do list: `start` is
-  // the day it is wanted. Recording a completion clears it again (see
-  // recordClick), so the pair is the whole want → do → forget cycle.
+  /**
+   * Arming: `start` is the day the thing is wanted, and its presence is the
+   * empty checkbox. Set here rather than by the editor because wanting something
+   * is a passing thought.
+   */
   const armCounter = useCallback((uid: string) => {
     if (!canEditRef.current || !docId) return;
-    updateDoc(docId, (d, uid, today) => {
+    setNow(nowLocal());
+    // The full local datetime, not just the date: a completion counts for a
+    // window from its start onwards, so arming at midnight would let something
+    // recorded EARLIER today satisfy the want immediately and the row would tick
+    // itself straight back. Arming means "I want this as of now".
+    //
+    // Completion keys carry milliseconds but `start` cannot (LOCAL_DATE_TIME_RE),
+    // so a completion logged in this same second still compares >= a
+    // second-truncated arm — two quick taps reach that. Step past the newest
+    // completion when one collides, and ONLY then: arming a second into the
+    // future would read as `todo` until the next minute tick.
+    const nowSec = nowLocal();
+    const keys = Object.keys(eventsRef.current[uid]?.completions ?? {}).sort();
+    const newest = keys[keys.length - 1];
+    const at = newest && newest >= nowSec
+      ? Temporal.PlainDateTime.from(newest.substring(0, 19)).add({ seconds: 1 }).toString({ smallestUnit: 'second' })
+      : nowSec;
+    updateDoc(docId, (d, uid, at) => {
       const ev = d.events[uid];
       // A habit is always on its own schedule; `start` there is the anchor, and
-      // overwriting it with today would forge a completion.
+      // overwriting it would forge a completion.
       if (!ev || ev.recurrenceRule) return;
-      ev.start = today;
-    }, uid, nowLocal().substring(0, 10));
+      ev.start = at;
+    }, uid, at);
   }, [docId]);
+
+  /**
+   * The row's tap, which for a checklist item is simply its checkbox: `start` is
+   * the box, so ticking and unticking toggle one field.
+   *
+   *   ticked (Anytime) → untick → armed, on the to-do list. Records NOTHING:
+   *     wanting a thing again is not a claim that you did it.
+   *   empty (owed)     → tick   → a completion, and `start` cleared.
+   *
+   * A habit has no box to toggle — its tick is derived from the completion log
+   * for the current window, not from `start` — so a tap there always records.
+   */
+  const recordClick = useCallback((uid: string) => {
+    const ev = eventsRef.current[uid];
+    if (ev && !ev.recurrenceRule && !ev.start) {
+      armCounter(uid);
+      return;
+    }
+    recordCompletion(uid, true);
+  }, [armCounter, recordCompletion]);
+
+  /** "Record": count one, and leave the box exactly as it was. */
+  const recordOnly = useCallback((uid: string) => recordCompletion(uid, false), [recordCompletion]);
 
   const disarmCounter = useCallback((uid: string) => {
     if (!canEditRef.current || !docId) return;
@@ -615,10 +673,10 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
                   dueAt={dueAt}
                   canEdit={canEdit}
                   peerEditingEvents={peerEditingEvents}
-                  onRecord={recordClick}
+                  onTick={recordClick}
+                  onRecord={recordOnly}
                   onEdit={openEditor}
                   onShowCompletions={setCompletionsUid}
-                  onArm={armCounter}
                   onDisarm={disarmCounter}
                 />
               ))}

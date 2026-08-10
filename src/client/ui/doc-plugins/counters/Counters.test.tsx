@@ -404,7 +404,7 @@ describe('one-off to-dos', () => {
     events: { e1: { '@type': 'Event', title: 'Buy chocolate', ...ev } },
   });
 
-  it('arms from the row, is done by tapping it, and retires itself back to Anytime', async () => {
+  it('taps as a checkbox: untick to want it, tick to have done it', async () => {
     seed({ completions: { '2026-07-19T09:00:00': '' } });
     render(<Counters docId={DOC} />);
     await waitFor(() => expect(screen.getByText('Buy chocolate')).toBeTruthy());
@@ -416,16 +416,20 @@ describe('one-off to-dos', () => {
     expect(screen.getByRole('heading', { name: 'Anytime' })).toBeTruthy();
     expect(glyphOf('Buy chocolate')).toBe('check_box');
 
-    // Arming is a row action, because wanting something is a passing thought.
-    fireEvent.click(within(rowOf('Buy chocolate')).getByTitle('Add Buy chocolate to To do'));
-    expect(mock.__getDoc(DOC).events.e1.start).toBe(today());
+    // Untick: `start` is the box, so a tap arms it and nothing else. In
+    // particular it records NOTHING — wanting a thing again is not a claim that
+    // you did it.
+    fireEvent.click(rowOf('Buy chocolate'));
+    // A datetime, not a bare date: arming means "as of now", so a completion from
+    // earlier today cannot satisfy it and tick the row straight back.
+    expect(mock.__getDoc(DOC).events.e1.start).toMatch(new RegExp(`^${today()}T`));
+    expect(Object.keys(mock.__getDoc(DOC).events.e1.completions).length).toBe(1);
     expect(rowOf('Buy chocolate').getAttribute('data-status')).toBe('due');
     expect(screen.getByRole('heading', { name: 'To do' })).toBeTruthy();
-    // The box empties: something is owed again.
     expect(glyphOf('Buy chocolate')).toBe('check_box_outline_blank');
 
-    // Ticking it (a tap anywhere on the row, the box included) logs the completion
-    // AND clears the date, so the same event is reusable rather than stuck in Done.
+    // Tick: logs the completion AND clears the date, so the same event is
+    // reusable rather than stuck in Done.
     fireEvent.click(rowOf('Buy chocolate'));
     const ev = mock.__getDoc(DOC).events.e1;
     expect(ev.start).toBeUndefined();
@@ -434,6 +438,63 @@ describe('one-off to-dos', () => {
     expect(glyphOf('Buy chocolate')).toBe('check_box');
     // The lifetime count is what survives the cycle.
     expect(within(rowOf('Buy chocolate')).getByText('2×')).toBeTruthy();
+  });
+
+  it('"Record" counts one without touching the box', async () => {
+    seed({ completions: { '2026-07-19T09:00:00': '' } });
+    render(<Counters docId={DOC} />);
+    await waitFor(() => expect(screen.getByText('Buy chocolate')).toBeTruthy());
+
+    // The tap is a checkbox now, so this is how you log something you just did
+    // without first pretending to want it.
+    fireEvent.click(within(rowOf('Buy chocolate')).getByTitle('Record one Buy chocolate'));
+    let ev = mock.__getDoc(DOC).events.e1;
+    expect(Object.keys(ev.completions).length).toBe(2);
+    expect(ev.start).toBeUndefined(); // still settled
+    expect(rowOf('Buy chocolate').getAttribute('data-status')).toBe('anytime');
+
+    // It disappears once something IS owed: ticking already means "counted it",
+    // and recording without clearing `start` would put a completion inside an
+    // open window — which reads as done and would stick that way for good.
+    fireEvent.click(rowOf('Buy chocolate')); // arm
+    // Owed, not done — which is the point. The exact status is `todo` rather
+    // than `due` only because arming in the same second as the completion above
+    // steps the arm one second past it; a second later it is `due`.
+    expect(glyphOf('Buy chocolate')).toBe('check_box_outline_blank');
+    expect(screen.getByRole('heading', { name: 'To do' })).toBeTruthy();
+    expect(within(rowOf('Buy chocolate')).queryByTitle('Record one Buy chocolate')).toBeNull();
+  });
+
+  it('arming is not satisfied by something already recorded today', async () => {
+    // The collision the arm timestamp exists for: a completion logged earlier
+    // wants no credit against a want expressed after it, or the row would tick
+    // itself straight back to Anytime.
+    seed({});
+    render(<Counters docId={DOC} />);
+    await waitFor(() => expect(screen.getByText('Buy chocolate')).toBeTruthy());
+
+    fireEvent.click(within(rowOf('Buy chocolate')).getByTitle('Record one Buy chocolate'));
+    fireEvent.click(rowOf('Buy chocolate')); // arm, same second as that completion
+    const ev = mock.__getDoc(DOC).events.e1;
+    expect(ev.start > Object.keys(ev.completions)[0]).toBe(true);
+    expect(rowOf('Buy chocolate').getAttribute('data-status')).not.toBe('anytime');
+    expect(glyphOf('Buy chocolate')).toBe('check_box_outline_blank');
+  });
+
+  it('a habit has no Record action — its tap already only records', async () => {
+    mock.__setDoc(DOC, {
+      '@type': 'Calendar+Counters', name: 'C',
+      events: { e1: dailyHabit('Stretch', Temporal.Now.plainDateISO().subtract({ days: 1 }).toString()) },
+    });
+    render(<Counters docId={DOC} />);
+    await waitFor(() => expect(screen.getByText('Stretch')).toBeTruthy());
+    expect(within(rowOf('Stretch')).queryByTitle('Record one Stretch')).toBeNull();
+
+    // And a habit's tap is never an arm: `start` moves to today rather than the
+    // row toggling off the list.
+    fireEvent.click(rowOf('Stretch'));
+    expect(mock.__getDoc(DOC).events.e1.start).toBe(today());
+    expect(rowOf('Stretch').getAttribute('data-status')).toBe('done');
   });
 
   it('sits in the same To do section as a habit, ordered by deadline', async () => {
