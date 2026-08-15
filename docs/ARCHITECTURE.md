@@ -146,7 +146,7 @@ validateNode(value, schema, path, errors): void   // depth-first, accumulates Va
 
 ### Bootstrap & routing
 - Entry `main.tsx`: imports `temporal-polyfill/global`, `globals.css`, renders `<App/>` into `#app`, imports `test-bridge` (exposes `window.__drive` — **always**, even in prod, for Playwright).
-- `App.tsx` (preact-router, **hash history** via `hash-history.ts`). Routes: `/`, `/settings`, `/friends`, `/link-device/:cardData`, `/add-friend/:cardData`, `/calendars/` (AllCalendars), `/calendars/:docId(/:rest*)`, `/tasks/:docId(/:rest*)`, `/datagrids/:docId/sheets/:sheetId/:rest*`, `/source/:docId/:rest*`, plus `/view/...` read-only variants of each editor.
+- `App.tsx` (preact-router, **hash history** via `hash-history.ts`). Routes: `/`, `/settings`, `/friends`, `/link-device/:token`, `/add-friend/:token`, `/calendars/` (AllCalendars), `/calendars/:docId(/:rest*)`, `/tasks/:docId(/:rest*)`, `/datagrids/:docId/sheets/:sheetId/:rest*`, `/source/:docId/:rest*`, plus `/view/...` read-only variants of each editor.
 - `rest*` wildcard encodes a **focus path** in the URL (e.g. `/calendars/{id}/events/{uid}/title` → `['events',uid,'title']`), synced bidirectionally with presence broadcast and `history.replaceState`.
 
 ### Worker API (`worker-api.ts`)

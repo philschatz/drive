@@ -421,8 +421,6 @@ export function clearAllCaches(): Promise<void> { return Promise.resolve(); }
 export function deleteAllData(): Promise<void> { return Promise.resolve(); }
 
 export function ensureUserGroup(): Promise<{ userGroupId: string | null }> { return Promise.resolve({ userGroupId: null }); }
-export function linkDevice(): Promise<any> { return Promise.resolve({ userGroupId: null, linked: false }); }
-export function getLinkPayload(): Promise<any> { return Promise.resolve({}); }
 export function listDevices(): Promise<any[]> { return Promise.resolve([]); }
 export function removeDevice(): Promise<void> { return Promise.resolve(); }
 export function changeDeviceRole(): Promise<void> { return Promise.resolve(); }

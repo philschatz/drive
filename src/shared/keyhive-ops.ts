@@ -20,8 +20,8 @@ export function base64ToBytes(b64: string): Uint8Array {
 
 // A self-describing envelope for a contact card. Carries the raw Individual
 // contact card plus (optionally) the sender's user-group ops, so the receiver
-// can resolve that group as a share target. Backward-compatible: a raw card
-// string (no envelope) is still accepted by receiveContactCard.
+// can resolve that group as a share target. The envelope is mandatory —
+// receiveContactCard rejects a bare card string.
 const CONTACT_BUNDLE_KIND = 'contact-bundle';
 interface ContactBundle {
   __kind: typeof CONTACT_BUNDLE_KIND;
@@ -400,7 +400,7 @@ export class KeyhiveOps {
         myGroupId = await this.ensureUserGroup({ waitForSync: true });
       }
     } else if (!myGroupId && !peerGroupId) {
-      // Neither side has a group (e.g. paste flow with a legacy peer) — create one.
+      // Neither side has a group (the peer sent no group id) — create one.
       myGroupId = await this.ensureUserGroup({ create: true });
     }
 

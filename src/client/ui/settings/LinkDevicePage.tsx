@@ -1,31 +1,33 @@
 /**
- * Link Device page — handles QR-code-based device linking.
+ * Link Device page — the receiving side of a QR device-link invite, opened on the
+ * *new* device.
  *
- * URL format: /#/link-device/{base64url-encoded-contact-card}
+ * URL form: `/#/link-device/r.<rendezvousId>.<key>`. Anything else is an unusable
+ * link. The exchange is a single bidirectional leg over the encrypted relay
+ * rendezvous — both devices' cards cross in one handshake, so unlike the old
+ * card-in-the-URL scheme there is no return QR to carry back.
  *
- * Device linking is a two-way handshake. This page handles both legs:
- * 1. Decode the contact card from the URL and receiveContactCard / linkDevice.
- * 2. If we are the original (admin) device, linkDevice adds the peer and the
- *    handshake is complete — show "Linking complete".
- * 3. Otherwise (the new device), show this device's own contact card as a return
- *    QR code for the original device to open and finish the handshake.
+ * **The link starts on a tap, never on navigation.** This is the more consequential
+ * of the two invite flows: joining runs `linkDevice`, which converges both devices
+ * onto one user group, and may adopt the other device's DriveSettings doc. Until
+ * `begin()` runs nothing has left this device.
  */
 
 import { useState, useCallback, useEffect } from 'preact/hooks';
 import { Button } from '@/components/ui/button';
-import { QRCodeDisplay } from '@/components/ui/qr-code';
-import { receiveContactCard, linkDevice, getLinkPayload, rendezvousJoinDeviceLink, onRendezvousEvent, getIdentity } from '../common/keyhive-api';
+import { rendezvousJoinDeviceLink, onRendezvousEvent, getIdentity } from '../common/keyhive-api';
 import { resolveDeviceName } from '../device-names';
 import type { RendezvousStatus } from '../worker-api';
-import { showToast } from '@/components/ui/toast';
 import { RendezvousProgress } from './RendezvousProgress';
+import { StartGate } from './StartGate';
 import { parseRendezvousToken } from '../../../shared/rendezvous-url';
-import { buildLinkDeviceUrl, decodeLinkData } from './rendezvous-urls';
 
 interface LinkDevicePageProps {
-  cardData?: string;
+  token?: string;
   path?: string;
 }
+
+const INVALID_LINK = "This isn't a valid device link — open Settings on your other device and show a fresh QR code or link.";
 
 /**
  * Every exit lands on the device *list*, not the settings index. That is the screen
@@ -36,17 +38,19 @@ interface LinkDevicePageProps {
 const DEVICES_HASH = '#/settings/devices';
 const goToDevices = () => { window.location.hash = '/settings/devices'; };
 
-export function LinkDevicePage({ cardData }: LinkDevicePageProps) {
-  const [status, setStatus] = useState('');
+export function LinkDevicePage({ token }: LinkDevicePageProps) {
   const [error, setError] = useState<string | null>(null);
+  const [started, setStarted] = useState(false);
   const [done, setDone] = useState(false);
   const [processing, setProcessing] = useState(false);
-  const [myCardUrl, setMyCardUrl] = useState('');
   const [phase, setPhase] = useState<RendezvousStatus | null>(null);
   const [transferDetail, setTransferDetail] = useState<string>();
 
-  // Rendezvous join path (preferred): the tiny QR carries only {id, key}.
-  const rdv = cardData ? parseRendezvousToken(cardData) : null;
+  const rdv = token ? parseRendezvousToken(token) : null;
+  const linkOk = !!rdv;
+
+  // An unusable link has no process to gate and nothing a retry could fix.
+  useEffect(() => { if (!linkOk) setError(INVALID_LINK); }, [linkOk]);
 
   // Mirror the sharer's step-by-step progress (and channel id) on this device.
   useEffect(() => {
@@ -61,65 +65,29 @@ export function LinkDevicePage({ cardData }: LinkDevicePageProps) {
   }, [rdv?.rendezvousId]);
 
   const doLink = useCallback(async () => {
-    if (!cardData) {
-      setError('Invalid link — missing friend data.');
+    if (!rdv) {
+      setError(INVALID_LINK);
       return;
     }
     setProcessing(true);
     setError(null);
 
     try {
-      if (rdv) {
-        // Preferred path: bidirectional handshake over the encrypted relay
-        // rendezvous (the original device's card is too large for a QR).
-        setStatus('Linking with your other device… (keep both open)');
-        // Share this device's name so the original device can label us.
-        const { agentId } = await getIdentity();
-        await rendezvousJoinDeviceLink(rdv.rendezvousId, rdv.key, resolveDeviceName(agentId));
-        setStatus('');
-        setDone(true);
-        return;
-      }
-
-      setStatus('Decoding friend details...');
-      const { cardJson, userGroupId: peerGroupId } = decodeLinkData(cardData);
-
-      setStatus('Linking this device...');
-      const result = await receiveContactCard(cardJson, { isDevice: true });
-      if (result.isOwnCard) {
-        setError("This is your own device's link. Open this link on a different device to link it.");
-        return;
-      }
-
-      // Join the same user-group (adopting the peer's group id if we don't have one yet).
-      setStatus('Joining your account...');
-      const { linked } = await linkDevice(result.agentId, peerGroupId);
-
-      if (linked) {
-        // Both devices are now members — the handshake is complete (this is the
-        // second leg, back on the original device). No return QR needed.
-        setStatus('');
-        setDone(true);
-      } else {
-        // First leg, on the new device — produce a return link for the original
-        // device to open and finish the handshake.
-        setStatus('Generating your link...');
-        const { card: myCard, userGroupId: myGroupId } = await getLinkPayload();
-        setMyCardUrl(buildLinkDeviceUrl(myCard, myGroupId));
-        setStatus('');
-        setDone(true);
-      }
+      // Share this device's name so the original device can label us.
+      const { agentId } = await getIdentity();
+      await rendezvousJoinDeviceLink(rdv.rendezvousId, rdv.key, resolveDeviceName(agentId));
+      setDone(true);
     } catch (err: any) {
       setError(err.message || 'Failed to link device');
     } finally {
       setProcessing(false);
     }
-    // `rdv` is derived from cardData; depending on it would rebuild this each render.
+    // `rdv` is derived from the token; depending on it would rebuild this each render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cardData]);
+  }, [token]);
 
-  // Auto-start once when the page mounts with card data.
-  useEffect(() => { doLink(); }, [doLink]);
+  /** The one place the link starts. */
+  const begin = () => { setStarted(true); doLink(); };
 
   return (
     <div className="max-w-screen-md mx-auto px-2 sm:px-4 pb-8">
@@ -157,78 +125,53 @@ export function LinkDevicePage({ cardData }: LinkDevicePageProps) {
               </div>
             </div>
             <div className="flex gap-2 mt-4">
-              <Button onClick={doLink} disabled={processing} data-testid="link-device-retry">
-                Retry
-              </Button>
+              {/* No Retry for an unusable link — re-running it can only fail again. */}
+              {rdv && (
+                <Button onClick={doLink} disabled={processing} data-testid="link-device-retry">
+                  Retry
+                </Button>
+              )}
               <Button variant="outline" onClick={goToDevices}>Devices</Button>
             </div>
           </>
-        ) : (
+        ) : !started ? (
+          <StartGate
+            question="Link this device to your account?"
+            confirmLabel="Link device"
+            onConfirm={begin}
+            onCancel={goToDevices}
+            channelId={rdv?.rendezvousId}
+            testId="link-device"
+          >
+            This device and the other one will act as the same account: both will be able to open
+            all of your documents. This device may also start using the other one's shared
+            settings — its friends and device names. Only continue if you opened this link
+            yourself.
+          </StartGate>
+        ) : done ? (
           <>
-            {rdv && !done ? (
-              <RendezvousProgress
-                phase={phase}
-                rendezvousId={rdv.rendezvousId}
-                waitingLabel="Connecting to your other device — keep both open…"
-                transferLabel="Exchanging keys…"
-                transferDetail={transferDetail}
-                doneLabel="Linked."
-              />
-            ) : (
-              <p className="md-body-medium text-on-surface-variant">{status}</p>
-            )}
-
-            {done && (
-              <div className="mt-4">
-                {myCardUrl ? (
-                  <>
-                    <p className="md-title-medium mb-1">Almost done — finish on your original device</p>
-                    <p className="md-body-medium text-on-surface-variant mb-3">
-                      Open this link (or scan this QR code) on your original device to complete the
-                      handshake:
-                    </p>
-                    {/* QRCodeDisplay centers itself on a Material surface card. */}
-                    <QRCodeDisplay url={myCardUrl} />
-                    {/* The link stays visible: it is the fallback when the payload
-                        overflows QR capacity, and users paste it between devices. */}
-                    <div className="flex items-center gap-1 mt-2">
-                      <input
-                        data-testid="link-device-url"
-                        className="w-full min-w-0 text-xs p-3 rounded-xl font-mono bg-surface-container-highest text-on-surface-variant border border-outline-variant"
-                        value={myCardUrl}
-                        readOnly
-                        onClick={(e: any) => e.currentTarget.select()}
-                      />
-                      <button
-                        aria-label="Copy link"
-                        title="Copy link"
-                        className="inline-flex items-center justify-center h-10 w-10 rounded-full state-layer shrink-0"
-                        onClick={() => navigator.clipboard.writeText(myCardUrl).then(
-                          () => showToast('Link copied to clipboard'),
-                          () => showToast('Failed to copy link'),
-                        )}
-                      >
-                        <span className="material-symbols-outlined" style={{ fontSize: 20 }}>content_copy</span>
-                      </button>
-                    </div>
-                  </>
-                ) : (
-                  // MD3 has no "success" role; a completed step is `primary`.
-                  <p className="md-title-medium" style={{ color: 'var(--md-sys-color-primary)' }}>
-                    <span className="material-symbols-outlined align-middle mr-1" style={{ fontSize: 18 }}>
-                      check_circle
-                    </span>
-                    Linking complete
-                  </p>
-                )}
-                <div className="flex gap-2 mt-4">
-                  <Button variant="outline" onClick={goToDevices} data-testid="link-device-done">
-                    Done
-                  </Button>
-                </div>
-              </div>
-            )}
+            {/* MD3 has no "success" role; a completed step is `primary`. */}
+            <p className="md-title-medium" style={{ color: 'var(--md-sys-color-primary)' }}>
+              <span className="material-symbols-outlined align-middle mr-1" style={{ fontSize: 18 }}>
+                check_circle
+              </span>
+              Linking complete
+            </p>
+            <div className="flex gap-2 mt-4">
+              <Button variant="outline" onClick={goToDevices} data-testid="link-device-done">
+                Done
+              </Button>
+            </div>
           </>
+        ) : (
+          <RendezvousProgress
+            phase={phase}
+            rendezvousId={rdv?.rendezvousId}
+            waitingLabel="Connecting to your other device — keep both open…"
+            transferLabel="Exchanging keys…"
+            transferDetail={transferDetail}
+            doneLabel="Linked."
+          />
         )}
       </div>
     </div>

@@ -138,7 +138,7 @@ Consequences worth knowing:
 - `#/d/:docId` → the editor for that document's `@type`
 - `#/d/:docId/share` → Sharing screen (members, roles, invites)
 - `#/source/:docId` → Raw JSON document inspector
-- `#/settings`, `#/friends`, `#/add-friend/:cardData`, `#/link-device/:cardData`
+- `#/settings`, `#/friends`, `#/add-friend/:token`, `#/link-device/:token` (a rendezvous `r.<id>.<key>` token — the contact bundle never rides the URL)
 
 Routes are ranked by segment specificity, not JSX order, so the static `/d/:docId/share` wins over `DocRoute`'s `/d/:docId/:rest*`. Build doc URLs with the helpers in `src/client/ui/common/doc-urls.ts` (`docUrl`, `shareUrl`, `sourceUrl`) rather than string concatenation.
 

@@ -1,15 +1,20 @@
 /**
  * Add Friend page — the receiving side of a QR friend invite.
  *
- * URL forms:
- *   /#/add-friend/r.<rendezvousId>.<key>   ← preferred: tiny QR; the real (large)
- *       contact bundle is fetched over an encrypted relay rendezvous (the only
- *       form that works for established accounts whose bundle exceeds QR capacity).
- *   /#/add-friend/<base64url-deflated-card> ← legacy: bundle embedded in the URL.
+ * URL form: `/#/add-friend/r.<rendezvousId>.<key>`. The QR carries only that tiny
+ * token; the real (large) contact bundle is fetched over an encrypted relay
+ * rendezvous, which is the only form that works for established accounts whose
+ * bundle exceeds QR capacity. Anything else is an unusable link.
  *
- * Flow: pull the contact card (via rendezvous or the URL), receiveContactCard to
- * add them as a known contact, then settle their name and go to Friends. Only the
+ * Flow: confirm, pull the contact card over the rendezvous, receiveContactCard to
+ * add them as a known friend, then settle their name and go to Friends. Only the
  * failure path stays on screen, so it can offer a retry.
+ *
+ * **The exchange starts on a tap, never on navigation.** A link is an invitation,
+ * and until `begin()` runs nothing has left this device — so cancelling costs the
+ * sharer nothing (they never see `peer-joined`, and no prekey is spent). The
+ * instant we subscribe, the sharer mints and pushes its bundle, and there is no
+ * receiver-side veto after that.
  *
  * **Navigation is a continuation, never a fallthrough.** The naming step used to be
  * a `prompt()`, and the code relied on it *blocking* before assigning
@@ -23,29 +28,31 @@
 
 import { useState, useCallback, useEffect, useRef } from 'preact/hooks';
 import { Button } from '@/components/ui/button';
-import { receiveContactCard, rendezvousReceive, getIdentity, onRendezvousEvent } from '../common/keyhive-api';
+import { rendezvousReceive, getIdentity, onRendezvousEvent } from '../common/keyhive-api';
 import type { RendezvousStatus } from '../worker-api';
 import { keyhiveReady, whenWsConnected } from '../common/automerge';
 import { setFriendName, getFriendName } from '../friend-names';
 import { RenameSheet } from '../common/RenameSheet';
 import { showToast } from '@/components/ui/toast';
 import { RendezvousProgress } from './RendezvousProgress';
+import { StartGate } from './StartGate';
 import { parseRendezvousToken } from '../../../shared/rendezvous-url';
-import { decodeFriendData } from './rendezvous-urls';
 
 interface AddFriendPageProps {
-  cardData?: string;
+  token?: string;
   path?: string;
 }
+
+const INVALID_LINK = "This isn't a valid invite link — ask your friend to show you a fresh QR code or link.";
 
 /** The friend is added; all that's left is deciding what to call them. */
 type Outcome =
   | { kind: 'named'; groupId: string; displayName: string }
   | { kind: 'needs-name'; groupId: string };
 
-export function AddFriendPage({ cardData }: AddFriendPageProps) {
-  const [status, setStatus] = useState('');
+export function AddFriendPage({ token }: AddFriendPageProps) {
   const [error, setError] = useState<string | null>(null);
+  const [started, setStarted] = useState(false);
   const [processing, setProcessing] = useState(false);
   const [phase, setPhase] = useState<RendezvousStatus | null>(null);
   const [transferDetail, setTransferDetail] = useState<string>();
@@ -56,8 +63,12 @@ export function AddFriendPage({ cardData }: AddFriendPageProps) {
 
   const leave = () => { window.location.hash = '/friends'; };
 
-  // Rendezvous receive path (preferred): the tiny QR carries only {id, key}.
-  const rdv = cardData ? parseRendezvousToken(cardData) : null;
+  const rdv = token ? parseRendezvousToken(token) : null;
+  const linkOk = !!rdv;
+
+  // An unusable link has no process to gate and nothing a retry could fix, so it
+  // reports itself immediately rather than offering to start something.
+  useEffect(() => { if (!linkOk) setError(INVALID_LINK); }, [linkOk]);
 
   // Subscribe to progress for this channel so the receiver shows the same
   // step-by-step indicator (and channel id) the sharer does.
@@ -73,70 +84,54 @@ export function AddFriendPage({ cardData }: AddFriendPageProps) {
   }, [rdv?.rendezvousId]);
 
   const doReceive = useCallback(async () => {
-    if (!cardData) {
-      setError('Invalid link — missing friend data.');
+    if (!rdv) {
+      setError(INVALID_LINK);
       return;
     }
     setProcessing(true);
     setError(null);
 
     try {
-      let cardResult: { isOwnCard: boolean; userGroupId: string | null; alreadyKnown: boolean };
-      let displayName: string | undefined;
+      // Fetch the bundle over the encrypted relay rendezvous. Pass our own name so
+      // the friend (who we add back automatically) can label us without a second
+      // exchange.
+      //
+      // Cold-open guard: this page is usually the first navigation of a cold browser,
+      // so a tap as it paints can still land before the worker is up — wait for
+      // keyhive AND the relay socket before subscribing, since an overlay frame (the
+      // rendezvous subscribe) sent before the WS is open is silently dropped, leaving
+      // us waiting forever for a peer that never arrives. The sharer gates its Start
+      // button the same way.
+      await keyhiveReady;
+      await whenWsConnected();
+      // Our own name is stored as a User Group contact (keyed by user-group id).
+      const me = await getIdentity();
+      const myName = (me.userGroupId && getFriendName(me.userGroupId)) || undefined;
+      const { isOwnCard, userGroupId, displayName } = await rendezvousReceive(rdv.rendezvousId, rdv.key, myName);
 
-      if (rdv) {
-        // Preferred path: fetch the bundle over the encrypted relay rendezvous.
-        // Pass our own name so the friend (who we add back automatically) can
-        // label us without a second exchange.
-        setStatus('Connecting to your friend\u2026 (keep this open until it completes)');
-        // Cold-open guard: this page auto-runs on mount, so wait for keyhive AND the
-        // relay socket before subscribing \u2014 an overlay frame (the rendezvous subscribe)
-        // sent before the WS is open is silently dropped, leaving us waiting forever
-        // for a peer that never arrives. The sharer gates its Start button the same way.
-        await keyhiveReady;
-        await whenWsConnected();
-        // Our own name is stored as a User Group contact (keyed by user-group id).
-        const me = await getIdentity();
-        const myName = (me.userGroupId && getFriendName(me.userGroupId)) || undefined;
-        const result = await rendezvousReceive(rdv.rendezvousId, rdv.key, myName);
-        cardResult = result;
-        displayName = result.displayName;
-      } else {
-        // Legacy path: the bundle is embedded in the URL.
-        setStatus('Decoding friend details...');
-        const decoded = decodeFriendData(cardData);
-        if (!decoded.userGroupId) {
-          throw new Error('This friend is not a group \u2014 ask them to open Settings and show a fresh friend QR/link.');
-        }
-        setStatus('Adding friend...');
-        const result = await receiveContactCard(decoded.cardJson, { userGroupId: decoded.userGroupId });
-        cardResult = { isOwnCard: result.isOwnCard, userGroupId: result.userGroupId ?? decoded.userGroupId, alreadyKnown: result.alreadyKnown };
-        displayName = decoded.displayName;
-      }
-
-      if (cardResult.isOwnCard) {
-        setError("This is your own invite. Share this link with a friend \u2014 don't open it yourself.");
+      if (isOwnCard) {
+        setError("This is your own invite. Share this link with a friend — don't open it yourself.");
         return;
       }
-      if (!cardResult.userGroupId) {
-        throw new Error('This friend is not a group \u2014 ask them to open Settings and show a fresh friend QR/link.');
+      if (!userGroupId) {
+        throw new Error('This friend is not a group — ask them to open Settings and show a fresh friend QR/link.');
       }
-      // Identify the contact by its user-group id, never the individual device id.
+      // Identify the friend by their user-group id, never the individual device id.
       // No navigation here — see the header: the outcome decides, not this function.
       setOutcome(displayName
-        ? { kind: 'named', groupId: cardResult.userGroupId, displayName }
-        : { kind: 'needs-name', groupId: cardResult.userGroupId });
+        ? { kind: 'named', groupId: userGroupId, displayName }
+        : { kind: 'needs-name', groupId: userGroupId });
     } catch (err: any) {
       setError(err.message || 'Failed to add friend');
     } finally {
       setProcessing(false);
     }
-    // `rdv` is derived from cardData; depending on it would rebuild this each render.
+    // `rdv` is derived from the token; depending on it would rebuild this each render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cardData]);
+  }, [token]);
 
-  // Auto-start once when the page mounts with card data.
-  useEffect(() => { doReceive(); }, [doReceive]);
+  /** The one place the exchange starts. */
+  const begin = () => { setStarted(true); doReceive(); };
 
   // They sent a name, so there is nothing to ask: confirm and go.
   useEffect(() => {
@@ -204,25 +199,38 @@ export function AddFriendPage({ cardData }: AddFriendPageProps) {
               </div>
             </div>
             <div className="flex gap-2 mt-4">
-              <Button onClick={doReceive} disabled={processing} data-testid="add-friend-retry">
-                Retry
-              </Button>
-              <Button variant="outline" onClick={() => { window.location.hash = '/friends'; }}>
+              {/* No Retry for an unusable link — re-running it can only fail again. */}
+              {rdv && (
+                <Button onClick={doReceive} disabled={processing} data-testid="add-friend-retry">
+                  Retry
+                </Button>
+              )}
+              <Button variant="outline" onClick={leave}>
                 Friends
               </Button>
             </div>
           </>
-        ) : rdv ? (
+        ) : !started ? (
+          <StartGate
+            question="Add this friend?"
+            confirmLabel="Add friend"
+            onConfirm={begin}
+            onCancel={leave}
+            channelId={rdv?.rendezvousId}
+            testId="add-friend"
+          >
+            You'll be able to share documents with each other. Your name and encryption keys are
+            exchanged with whoever created this link — only continue if you know where it came from.
+          </StartGate>
+        ) : (
           <RendezvousProgress
             phase={phase}
-            rendezvousId={rdv.rendezvousId}
+            rendezvousId={rdv?.rendezvousId}
             waitingLabel="Connecting to your friend — keep this open…"
             transferLabel="Exchanging details…"
             transferDetail={transferDetail}
             doneLabel="You're now friends."
           />
-        ) : (
-          <p className="md-body-medium text-on-surface-variant">{status || 'Processing…'}</p>
         )}
       </div>
 

@@ -1519,9 +1519,9 @@ export class EngineCore {
     }
 
     // Pure keyhive delegations: one entry per message type. Args match the khOps
-    // method except the resolveKhDocId wrappers; kh-link-device also re-runs the
-    // post-link home reconcile. kh-receive-contact-card / kh-get-known-friends
-    // and the kh-rdv-* rendezvous handlers live in the settings / rendezvous mixins.
+    // method except the resolveKhDocId wrappers. kh-receive-contact-card /
+    // kh-get-known-friends and the kh-rdv-* rendezvous handlers live in the
+    // settings / rendezvous mixins.
     const khDelegates: Record<string, (kh: KeyhiveOps, m: any) => Promise<unknown> | unknown> = {
       'kh-get-identity': (kh) => kh.getIdentity(),
       'kh-get-contact-card': (kh) => kh.getContactCard(),
@@ -1536,21 +1536,9 @@ export class EngineCore {
       // The client's ensureUserGroup unwraps `{ userGroupId }` (it caches the id
       // for the group's contact card), so this delegate — unlike the others —
       // wraps the raw keyhive result.
-      // The client's ensureUserGroup unwraps `{ userGroupId }` (it caches the id
-      // for the group's contact card), so this delegate — unlike the others —
-      // wraps the raw keyhive result.
       'kh-ensure-user-group': async (kh, m) => ({
         userGroupId: await kh.ensureUserGroup({ create: m.create, adoptGroupId: m.adoptGroupId, waitForSync: m.waitForSync }),
       }),
-      'kh-get-link-payload': async (kh) => {
-        const userGroupId = await kh.ensureUserGroup({ create: true });
-        return { card: await kh.getContactCard(), userGroupId };
-      },
-      'kh-link-device': async (kh, m) => {
-        const result = await kh.linkDevice(m.deviceAgentId, m.peerGroupId);
-        void this.reconcileHomeDocsAfterLink();
-        return result;
-      },
     };
     const khDelegate = khDelegates[msg.type];
     if (khDelegate) {

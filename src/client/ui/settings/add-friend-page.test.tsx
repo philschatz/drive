@@ -1,11 +1,15 @@
 /**
- * AddFriendPage's outcome machine.
+ * AddFriendPage's gate and outcome machine.
  *
- * This page used to rely on `alert`/`prompt` *blocking* before it assigned
- * `location.hash`. Sheets don't block, so navigation became a continuation driven by
- * `outcome` — and the trap that creates is RenameSheet's `onSave`, which fires
- * `onRename` and THEN `onClose`. Without the settledRef guard a single Save toasts
- * twice and navigates twice. That is the case this file exists for.
+ * Two things are pinned here. First, **the exchange starts on a tap**: opening the
+ * link must not be the decision, because the moment we subscribe the sharer mints a
+ * prekey and pushes its bundle, and there is no receiver-side veto after that.
+ *
+ * Second, the outcome machine. This page used to rely on `alert`/`prompt` *blocking*
+ * before it assigned `location.hash`. Sheets don't block, so navigation became a
+ * continuation driven by `outcome` — and the trap that creates is RenameSheet's
+ * `onSave`, which fires `onRename` and THEN `onClose`. Without the settledRef guard a
+ * single Save toasts twice and navigates twice.
  */
 import { render, screen, fireEvent, waitFor } from '@testing-library/preact';
 
@@ -15,7 +19,6 @@ let mockShowToast: jest.Mock;
 
 jest.mock('../common/keyhive-api', () => ({
   rendezvousReceive: (...args: any[]) => mockReceive(...args),
-  receiveContactCard: jest.fn(),
   getIdentity: () => Promise.resolve({ deviceId: 'd', userGroupId: 'my-group' }),
   onRendezvousEvent: () => () => {},
 }));
@@ -48,8 +51,8 @@ jest.mock('./RendezvousProgress', () => ({
 
 import { AddFriendPage } from './AddFriendPage';
 
-/** A valid rendezvous token, so the page takes the preferred receive path. */
-const CARD = 'r.abcdef123456.key123456';
+/** A valid rendezvous token — the only link form the app builds. */
+const TOKEN = 'r.abcdef123456.key123456';
 
 beforeEach(() => {
   mockSetFriendName = jest.fn(() => Promise.resolve());
@@ -57,6 +60,9 @@ beforeEach(() => {
   // jsdom supports same-document hash navigation, so this is observable.
   window.location.hash = '#/add-friend/start';
 });
+
+/** Answer the gate — nothing reaches the worker before this. */
+const startFlow = async () => fireEvent.click(await screen.findByTestId('add-friend-confirm'));
 
 /** The friend sent a name — nothing to ask. */
 const withName = () => {
@@ -72,9 +78,45 @@ const withoutName = () => {
   }));
 };
 
+it('does not touch the worker until the exchange is confirmed', async () => {
+  withName();
+  render(<AddFriendPage token={TOKEN} />);
+
+  // The gate is the whole page body — no progress, no exchange.
+  expect(await screen.findByTestId('add-friend-gate')).toBeDefined();
+  expect(mockReceive).not.toHaveBeenCalled();
+  expect(screen.queryByTestId('rendezvous-progress')).toBeNull();
+
+  await startFlow();
+  await waitFor(() => expect(mockReceive).toHaveBeenCalledTimes(1));
+});
+
+it('leaves without starting anything when the gate is cancelled', async () => {
+  withName();
+  render(<AddFriendPage token={TOKEN} />);
+
+  fireEvent.click(await screen.findByTestId('add-friend-cancel'));
+
+  await waitFor(() => expect(window.location.hash).toBe('#/friends'));
+  // The sharer never learns the link was opened.
+  expect(mockReceive).not.toHaveBeenCalled();
+});
+
+it('reports an unusable link instead of offering to start one', async () => {
+  withName();
+  render(<AddFriendPage token="not-a-rendezvous-token" />);
+
+  await waitFor(() => expect(screen.getByTestId('add-friend-error')).toBeDefined());
+  expect(screen.queryByTestId('add-friend-gate')).toBeNull();
+  // Retrying a link that can never parse would only fail again.
+  expect(screen.queryByTestId('add-friend-retry')).toBeNull();
+  expect(mockReceive).not.toHaveBeenCalled();
+});
+
 it('toasts and leaves immediately when the friend sent a name', async () => {
   withName();
-  render(<AddFriendPage cardData={CARD} />);
+  render(<AddFriendPage token={TOKEN} />);
+  await startFlow();
 
   await waitFor(() => expect(window.location.hash).toBe('#/friends'));
   expect(mockShowToast).toHaveBeenCalledWith('Alice was added.', expect.anything());
@@ -84,7 +126,8 @@ it('toasts and leaves immediately when the friend sent a name', async () => {
 
 it('asks for a name and does NOT navigate until answered', async () => {
   withoutName();
-  render(<AddFriendPage cardData={CARD} />);
+  render(<AddFriendPage token={TOKEN} />);
+  await startFlow();
 
   expect(await screen.findByTestId('rename-input')).toBeDefined();
   // The old code navigated on the same tick, unmounting the sheet mid-open.
@@ -93,7 +136,8 @@ it('asks for a name and does NOT navigate until answered', async () => {
 
 it('saves the name, then navigates exactly ONCE', async () => {
   withoutName();
-  render(<AddFriendPage cardData={CARD} />);
+  render(<AddFriendPage token={TOKEN} />);
+  await startFlow();
 
   fireEvent.input(await screen.findByTestId('rename-input'), { target: { value: 'Alice' } });
   fireEvent.click(screen.getByTestId('rename-save'));
@@ -107,7 +151,8 @@ it('saves the name, then navigates exactly ONCE', async () => {
 
 it('treats dismissing the name sheet as "do not name them"', async () => {
   withoutName();
-  render(<AddFriendPage cardData={CARD} />);
+  render(<AddFriendPage token={TOKEN} />);
+  await startFlow();
 
   fireEvent.click(await screen.findByTestId('rename-cancel'));
 
@@ -119,7 +164,8 @@ it('treats dismissing the name sheet as "do not name them"', async () => {
 it('keeps the user here when saving the name fails', async () => {
   withoutName();
   mockSetFriendName = jest.fn(() => Promise.reject(new Error('storage gone')));
-  render(<AddFriendPage cardData={CARD} />);
+  render(<AddFriendPage token={TOKEN} />);
+  await startFlow();
 
   fireEvent.input(await screen.findByTestId('rename-input'), { target: { value: 'Alice' } });
   fireEvent.click(screen.getByTestId('rename-save'));
@@ -131,9 +177,11 @@ it('keeps the user here when saving the name fails', async () => {
 
 it('stays put and offers a retry when the exchange itself fails', async () => {
   mockReceive = jest.fn(() => Promise.reject(new Error('relay unreachable')));
-  render(<AddFriendPage cardData={CARD} />);
+  render(<AddFriendPage token={TOKEN} />);
+  await startFlow();
 
   await waitFor(() => expect(screen.getByTestId('add-friend-error').textContent).toContain('relay unreachable'));
+  // A real channel that failed CAN succeed on a second try, unlike a malformed link.
   expect(screen.getByTestId('add-friend-retry')).toBeDefined();
   expect(window.location.hash).toBe('#/add-friend/start');
 });
@@ -141,7 +189,8 @@ it('stays put and offers a retry when the exchange itself fails', async () => {
 it('offers a way out even mid-handshake', async () => {
   // Never resolves: the handshake is still in flight.
   mockReceive = jest.fn(() => new Promise(() => {}));
-  render(<AddFriendPage cardData={CARD} />);
+  render(<AddFriendPage token={TOKEN} />);
+  await startFlow();
 
   // There used to be no exit at all until the flow finished.
   expect(screen.getByLabelText('Close').getAttribute('href')).toBe('#/friends');

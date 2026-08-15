@@ -9,8 +9,8 @@
 /**
  * Extract `{ rendezvousId, key }` from either a full link
  * (`…/#/link-device/r.<id>.<key>`) or a bare `r.<id>.<key>` token (what the app's
- * router hands the page). Returns null for anything else (e.g. the legacy
- * base64url-encoded contact-card form, which contains no `r.` token).
+ * router hands the page). Returns null for anything else — which, since this is
+ * the only link form the app builds, means the link is unusable.
  */
 export function parseRendezvousToken(input: string): { rendezvousId: string; key: string } | null {
   let token = input.trim();

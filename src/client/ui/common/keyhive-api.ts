@@ -3,7 +3,6 @@ export {
   onKeyhiveStateChanged,
   getIdentity,
   getContactCard,
-  receiveContactCard,
   getKnownFriends,
   getDocMembers,
   getMyAccess,
@@ -17,10 +16,8 @@ export {
   removeDevice,
   changeDeviceRole,
   ensureUserGroup,
-  linkDevice,
-  getLinkPayload,
   addMember,
   revokeMember,
   changeRole,
 } from '../worker-api';
-export type { DeviceInfo, IdentityInfo, MemberInfo, LinkPayload } from '../worker-api';
+export type { DeviceInfo, IdentityInfo, MemberInfo } from '../worker-api';

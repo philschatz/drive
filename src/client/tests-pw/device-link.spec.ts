@@ -96,8 +96,9 @@ test('linking a new device exchanges device names both ways', async ({ browser }
 });
 
 /**
- * Same convergence, but via the encrypted relay rendezvous (a single tiny QR, no
- * card embedded in the URL) — what the "Invite Another Device" UI now uses.
+ * Both devices converge onto one user-group over the encrypted relay rendezvous —
+ * a single tiny QR carrying nothing but {id, key}, which is the only link form the
+ * "Invite Another Device" UI builds.
  */
 test('linking a new device via rendezvous converges both onto one user-group', async ({ browser }) => {
   let deviceA: Peer | undefined;
@@ -106,8 +107,8 @@ test('linking a new device via rendezvous converges both onto one user-group', a
     [deviceA, deviceB] = await Promise.all([newPeer(browser, 'deviceA'), newPeer(browser, 'deviceB')]);
 
     // Device A (original) creates the rendezvous and gets a tiny id+key for the QR.
-    const a = await deviceA.call('getLinkPayload');
-    expect(a.userGroupId).toBeTruthy();
+    const { userGroupId: groupA } = await deviceA.call('ensureUserGroup', { create: true });
+    expect(groupA).toBeTruthy();
     const { rendezvousId, key } = await deviceA.call('rendezvousCreateDeviceLink');
     expect(rendezvousId.length).toBeLessThan(64);
     expect(key.length).toBeLessThan(64);
@@ -133,7 +134,7 @@ test('linking a new device via rendezvous converges both onto one user-group', a
     // Both devices converge onto A's user-group and see each other.
     await waitFor(
       () => deviceB!.call('getIdentity'),
-      (id) => id.userGroupId === a.userGroupId,
+      (id) => id.userGroupId === groupA,
       { label: 'deviceB adopts shared group' },
     );
     await waitFor(
@@ -261,8 +262,8 @@ test('a newly linked device loads documents when the host uses Shared settings',
       (m) => m.mode === 'shared',
       { label: 'deviceA is in Shared settings mode' },
     );
-    const a = await deviceA.call('getLinkPayload');
-    expect(a.userGroupId).toBeTruthy();
+    const { userGroupId: groupA } = await deviceA.call('ensureUserGroup', { create: true });
+    expect(groupA).toBeTruthy();
 
     // Link device B via the encrypted rendezvous (what the UI does).
     const { rendezvousId, key } = await deviceA.call('rendezvousCreateDeviceLink');
@@ -281,7 +282,7 @@ test('a newly linked device loads documents when the host uses Shared settings',
 
     await waitFor(
       () => deviceB!.call('getIdentity'),
-      (id) => id.userGroupId === a.userGroupId,
+      (id) => id.userGroupId === groupA,
       { label: 'deviceB adopts shared group' },
     );
 

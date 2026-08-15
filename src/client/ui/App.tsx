@@ -34,8 +34,8 @@ export function App() {
         <Settings path="/settings" />
         <SettingsSection path="/settings/:section" />
         <Friends path="/friends" />
-        <LinkDevicePage path="/link-device/:cardData" />
-        <AddFriendPage path="/add-friend/:cardData" />
+        <LinkDevicePage path="/link-device/:token" />
+        <AddFriendPage path="/add-friend/:token" />
         <AllCalendars path="/calendars/" />
         {/* Ranked above the DocRoute wildcard below: preact-router scores a
             static segment higher than `:rest*`, regardless of JSX order. */}

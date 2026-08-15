@@ -206,37 +206,6 @@ describe('KeyhiveOps', () => {
       expect(fxB.calls.persist.length).toBe(1);
     });
 
-    it('contact card survives deflate/inflate round-trip (URL encoding path)', async () => {
-      // This tests the exact path used by encodeCardForUrl / decodeCardFromUrl
-      // in AddFriendPage and LinkDevicePage
-      const pako = await import('pako');
-      const { ops: opsA } = await createOps();
-      const { ops: opsB } = await createOps();
-
-      const cardJson = await opsA.getContactCard();
-
-      // Simulate encodeCardForUrl: TextEncoder → deflate → base64url
-      const compressed = pako.deflate(new TextEncoder().encode(cardJson));
-      let b64 = '';
-      for (let i = 0; i < compressed.length; i++) b64 += String.fromCharCode(compressed[i]);
-      const b64url = btoa(b64).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-
-      // Simulate decodeCardFromUrl: base64url → inflate → TextDecoder
-      const b64standard = b64url.replace(/-/g, '+').replace(/_/g, '/');
-      const binary = atob(b64standard);
-      const bytes = new Uint8Array(binary.length);
-      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-      const decompressed = new TextDecoder().decode(pako.inflate(bytes));
-
-      // Must survive the round-trip exactly
-      expect(decompressed).toBe(cardJson);
-      expect(decompressed).not.toContain('[object Object]');
-
-      // Must still be receivable after the round-trip
-      const result = await opsB.receiveContactCard(decompressed);
-      expect(result.agentId).toBeDefined();
-    });
-
     it('rejects a bundle whose groupEvents count exceeds the bound', async () => {
       const { ops: opsA } = await createOps();
       const { ops: opsB } = await createOps();

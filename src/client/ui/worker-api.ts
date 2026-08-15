@@ -865,12 +865,6 @@ export interface IdentityInfo {
 import type { MemberInfo, DeviceRole } from '../../shared/keyhive-types';
 export type { MemberRole, DeviceRole, IndividualMemberInfo, GroupMemberInfo, MemberInfo } from '../../shared/keyhive-types';
 
-/** A contact card plus the sender's user-group id, for QR/URL linking & sharing. */
-export interface LinkPayload {
-  card: string;
-  userGroupId: string | null;
-}
-
 // ── Keyhive API ─────────────────────────────────────────────────────────────
 
 /** Get this device's identity and linked devices. */
@@ -901,16 +895,6 @@ export async function ensureUserGroup(opts?: { create?: boolean; adoptGroupId?: 
   const res = await khRequest<{ userGroupId: string | null }>('kh-ensure-user-group', { create: opts?.create, adoptGroupId: opts?.adoptGroupId, waitForSync: opts?.waitForSync });
   if (res.userGroupId) _workerUserGroupId = res.userGroupId;
   return res;
-}
-
-/** Link another device into this user's group (converges groups, adds the peer if admin). */
-export function linkDevice(deviceAgentId: string, peerGroupId?: string | null): Promise<{ userGroupId: string | null; linked: boolean }> {
-  return khRequest('kh-link-device', { deviceAgentId, peerGroupId });
-}
-
-/** Get this device's contact card plus user-group id, for building a link/share QR. */
-export function getLinkPayload(): Promise<LinkPayload> {
-  return khRequest('kh-get-link-payload');
 }
 
 /**

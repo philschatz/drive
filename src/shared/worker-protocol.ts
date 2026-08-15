@@ -109,8 +109,6 @@ export type MainToWorker =
   | { type: 'kh-remove-device'; id: number; agentId: string }
   | { type: 'kh-change-device-role'; id: number; agentId: string; newRole: string }
   | { type: 'kh-ensure-user-group'; id: number; create?: boolean; adoptGroupId?: string; waitForSync?: boolean }
-  | { type: 'kh-link-device'; id: number; deviceAgentId: string; peerGroupId?: string | null }
-  | { type: 'kh-get-link-payload'; id: number }
   | { type: 'kh-get-known-friends'; id: number; excludeDocId?: string }
   // Encrypted relay rendezvous (large-payload contact exchange via QR id+key)
   | { type: 'kh-rdv-create-share'; id: number; displayName?: string }

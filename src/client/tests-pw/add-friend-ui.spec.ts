@@ -7,10 +7,11 @@ import { mdField } from './ui/support';
  *   - the sharer opens the invite sheet from the Friends page FAB, which
  *     auto-starts the rendezvous — no "Start the process" button — and the QR
  *     link appears in a readonly input we read out of the DOM;
- *   - a SECOND, genuinely-cold browser opens that link directly — AddFriendPage's
- *     doReceive() runs on mount, so the receiver's worker/keyhive may still be
- *     booting. That cold-start race is the reason this test exists at the UI level
- *     rather than against the worker API, where both peers are already booted.
+ *   - a SECOND, genuinely-cold browser opens that link directly and answers the
+ *     confirmation gate. The tap lands as the page paints, so the receiver's
+ *     worker/keyhive may still be booting — that cold-start race is the reason this
+ *     test exists at the UI level rather than against the worker API, where both
+ *     peers are already booted.
  *
  * Both browsers must end up mutual friends, and — since two fresh browsers have
  * no name set — each side must be offered a name field for the (nameless) other,
@@ -32,10 +33,11 @@ async function nameTheFriend(peer: Pick<Peer, 'page'>, name: string) {
 
 /**
  * Open `url` in a brand-new, un-warmed context, exactly as a friend clicking the
- * link would: the add-friend route is the FIRST navigation, so the page mounts
- * (and auto-runs doReceive) while the worker + keyhive are still initializing.
- * Unlike newPeer we do NOT await keyhiveReady before returning — that would mask
- * the cold-start race; `call`/`waitFor` below tolerate the not-yet-ready worker.
+ * link would: the add-friend route is the FIRST navigation, so the page mounts while
+ * the worker + keyhive are still initializing. Unlike newPeer we do NOT await
+ * keyhiveReady before returning — that would mask the cold-start race the confirm
+ * tap then lands in the middle of; `call`/`waitFor` below tolerate the not-yet-ready
+ * worker.
  */
 async function coldOpenLink(browser: Browser, name: string, url: string): Promise<Peer> {
   const context = await browser.newContext();
@@ -89,8 +91,10 @@ test('two fresh browsers become mutual friends via the add-friend link', async (
     // (The size of the payload behind it is bounded in tests/rendezvous-bounds.)
     expect(new URL(url).hash.length).toBeLessThan(200);
 
-    // A different, cold browser opens the link — the receiver flow runs itself.
+    // A different, cold browser opens the link and answers the gate. Nothing has
+    // reached Alice until this tap — that is the point of the gate.
     bob = await coldOpenLink(browser, 'bob', url);
+    await bob.page.getByTestId('add-friend-confirm').click();
 
     // Both ends land on the name field. Naming is what closes each side's flow, so
     // it has to happen before the assertions. Receiver side (Bob) is
