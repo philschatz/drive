@@ -5,6 +5,9 @@ import type { ExpandedEvent } from './recurrence';
 import { rebuildExpanded, isAllDay } from './recurrence';
 import { isDark } from '../../common/theme';
 import type { CalendarDocument } from '../../../../shared/schemas/calendar';
+import { createLogger } from '../../../../shared/logger';
+
+const log = createLogger('calendar');
 
 export interface EventLookupMap {
   [id: string]: ExpandedEvent;
@@ -55,7 +58,7 @@ export function mapToSXEvents(expanded: ExpandedEvent[], calTZ: string, calColor
         calendarId: isPast ? 'cal-past' : 'cal',
       });
     } catch (err) {
-      console.warn(`Skipping malformed calendar event "${item.uid}":`, err);
+      log.warn(`Skipping malformed calendar event "${item.uid}":`, err);
     }
   }
   return { sxEvents, eventLookup };
@@ -175,7 +178,7 @@ export function mapMultiCalToSXEvents(
         eventLookup[id] = { ...item, calDocId: src.docId };
         sxEvents.push(sx);
       } catch (err) {
-        console.warn(`Skipping malformed calendar event "${item.uid}":`, err);
+        log.warn(`Skipping malformed calendar event "${item.uid}":`, err);
       }
     }
   }

@@ -26,6 +26,9 @@ import { MAX_MESSAGE_BYTES } from '../shared/webrtc-chunk';
 import { WRTC_SIGNAL, type WebRTCSignalFrame } from '../../shared/webrtc-signal';
 import type { BridgeToWorkerMsg, WorkerToBridgeMsg } from '../../shared/worker-protocol';
 import type { Message, NetworkAdapterInterface, PeerId, PeerMetadata } from '@automerge/automerge-repo';
+import { createLogger } from '../../shared/logger';
+
+const log = createLogger('webrtc');
 
 export interface WebRTCRelayAdapterOptions {
   /** Write a WebRTC signaling frame to the relay socket (unicast by targetId). */
@@ -151,13 +154,13 @@ export function makeWebRTCRelayAdapter(
         // Defense in depth: the bridge's reassembler already caps message size,
         // but never hand the CBOR decoder more than the transport bound allows.
         if (bytes.byteLength > MAX_MESSAGE_BYTES) {
-          console.warn('[webrtc] dropping oversized data-channel message:', bytes.byteLength, 'bytes');
+          log.warn('dropping oversized data-channel message:', bytes.byteLength, 'bytes');
           break;
         }
         try {
           adapter.emit('message', decode(bytes) as Message);
         } catch (err) {
-          console.warn('[webrtc] failed to decode data-channel message:', err);
+          log.warn('failed to decode data-channel message:', err);
         }
         break;
       }

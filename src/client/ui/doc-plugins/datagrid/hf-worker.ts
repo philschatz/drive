@@ -14,6 +14,9 @@ import { runMonteCarlo, type MCResults } from './monte-carlo';
 import { sampleDistribution, computeStats, type DistributionInfo, type DistributionStats } from './distributions';
 import { sheetStructureChanged, changedCellKeys, planMonteCarloBudget } from './hf-diff';
 import { parseInternal, extractCellRefs, type FormulaAST, type CellRef } from './formula-parser';
+import { createLogger } from '../../../../shared/logger';
+
+const log = createLogger('hf-worker');
 
 registerCustomFunctions();
 
@@ -407,7 +410,7 @@ function rebuildAndEvaluate() {
 /** Gate/budget Monte Carlo auto-run so hostile distribution content can't pin the worker (H9). */
 function maybeRunMonteCarlo(merged: Map<string, SheetInfo>, registry: Map<string, DistributionInfo>) {
   if (registry.size > MC_MAX_DIST_CELLS) {
-    console.warn(`[hf-worker] Monte Carlo skipped: ${registry.size} distribution cells exceeds cap ${MC_MAX_DIST_CELLS}`);
+    log.warn(`Monte Carlo skipped: ${registry.size} distribution cells exceeds cap ${MC_MAX_DIST_CELLS}`);
     return;
   }
   runMCInWorker(sheetOrder, merged, registry);
@@ -486,7 +489,7 @@ function evaluateCondFormats(activeInfo: SheetInfo) {
   }
 
   if (truncated) {
-    console.warn(`[hf-worker] Conditional formatting: customFormula evaluation truncated at ${COND_FORMAT_MAX_CELLS} cells`);
+    log.warn(`Conditional formatting: customFormula evaluation truncated at ${COND_FORMAT_MAX_CELLS} cells`);
   }
 
   // Clear the temp row
@@ -532,12 +535,12 @@ function runMCInWorker(sheetOrder: string[], mergedData: Map<string, SheetInfo>,
     const sourceCells = allCellKeys.filter(k => sourceKeySet.has(k));
     const others = allCellKeys.filter(k => !sourceKeySet.has(k))
       .slice(0, Math.max(0, budget.sampledCells - sourceCells.length));
-    console.warn(`[hf-worker] Monte Carlo: sampling ${sourceCells.length + others.length} of ${totalCells} cells (capped at ${MC_MAX_SAMPLED_CELLS})`);
+    log.warn(`Monte Carlo: sampling ${sourceCells.length + others.length} of ${totalCells} cells (capped at ${MC_MAX_SAMPLED_CELLS})`);
     allCellKeys = [...sourceCells, ...others];
   }
   const iterations = budget.iterations;
   if (budget.iterationsReduced) {
-    console.warn(`[hf-worker] Monte Carlo: reduced to ${iterations} iterations (cell×iteration budget ${MC_MAX_TOTAL_SAMPLES})`);
+    log.warn(`Monte Carlo: reduced to ${iterations} iterations (cell×iteration budget ${MC_MAX_TOTAL_SAMPLES})`);
   }
 
   const allSamples = new Map<string, number[]>();

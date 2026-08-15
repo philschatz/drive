@@ -26,6 +26,12 @@ import { makeWorkerTransport, type TabRole } from './tab-transport';
 export type { TabRole };
 import type { RichTextOp, RichTextSpan } from '../../shared/rich-text-ops';
 import type { BackupTier, BackupPayload, BackupResult } from '../../shared/backup';
+import { createLogger } from '../../shared/logger';
+
+// Shares the `main` namespace with worker-client.ts: from a reader's point of
+// view the two halves are one main-thread client. `tab` is the cross-tab layer.
+const log = createLogger('main');
+const tabLog = createLogger('tab');
 
 // Re-export for convenience
 export { deepAssign };
@@ -154,22 +160,18 @@ const WORKER_FNS = new Map<unknown, string>([[deepAssign, 'deepAssign'], [richTe
 // every send on `workerReady`.
 const transport = makeWorkerTransport();
 
-function logSend(msg: { type: string } & Record<string, any>): void {
-  console.log('[main] → send', msg.type, msg);
-}
-
 // Another tab is running deleteAllData. Release this tab's 'app-storage' connection —
 // it would otherwise block deleteDatabase — and hold still until the delete completes,
 // because reloading early would reopen the database mid-delete.
 transport.onWipe((phase) => {
-  if (phase === 'begin') { console.log('[tab] another tab is deleting local data'); closeDb(); }
+  if (phase === 'begin') { tabLog.info('another tab is deleting local data'); closeDb(); }
   else window.location.reload();
 });
 
 // The resilient request/response + subscription core. Owns pending requests, the
 // ready gates, the fatal-error fan-out, and query/presence/validation subs. The
 // on-the-wire protocol is unchanged — worker-api just wires the real Worker to it.
-const client = new WorkerClient(transport, { log: logSend });
+const client = new WorkerClient(transport);
 
 // Wire up the contact-names dispatch hook (avoids a circular import with contact-names)
 setFriendNamesDispatch((type, agentId, name) =>
@@ -186,7 +188,7 @@ setDeviceNamesDispatch((type, agentId, name) =>
 const initMsg = {
   type: 'init' as const,
 };
-console.log('[main] → send', initMsg.type, initMsg);
+log.debug('→ send', initMsg.type, initMsg);
 // Buffered until leadership resolves; the router drops it from follower tabs so the
 // engine is only ever initialized once.
 transport.postMessage(initMsg);
@@ -255,7 +257,7 @@ keyhiveReady
     // placeholder. Fire-and-forget — must not block or fail identity hydration.
     if (typeof navigator !== 'undefined') {
       request('ensure-device-name', { agentId: id.agentId, name: generateDefaultDeviceName() })
-        .catch((err) => console.warn('[worker-api] ensure-device-name failed:', err));
+        .catch((err) => log.warn('ensure-device-name failed:', err));
     }
   })
   .catch(() => { /* never became ready — leave null */ });
@@ -354,12 +356,10 @@ export function onRendezvousEvent(fn: RendezvousEventListener): () => void {
 // ── Worker message router ───────────────────────────────────────────────────
 
 transport.onMessage((msg: WorkerToMain) => {
-  // Skip routine traffic; keep diagnostically useful events.
-  const quiet = msg.type === 'result'
-    || msg.type === 'query-result'
-    || msg.type === 'update-presence'
-    || msg.type === 'open-doc-progress';
-  if (!quiet) console.log('[main] ← recv', msg.type, msg);
+  // Every inbound message, with no type allowlist: `debug` is already off unless
+  // someone asked for it, and a second filter that hides `result`/`query-result`
+  // from a firehose they deliberately turned on is a trap, not a kindness.
+  log.debug('← recv', msg.type, msg);
 
   // Lifecycle gates, request results, and query/presence/validation deliveries
   // are owned by the WorkerClient core; everything else is app-level routing.
@@ -423,7 +423,7 @@ transport.onMessage((msg: WorkerToMain) => {
 // In a follower tab the crash happened in the leader's Worker; the transport relays
 // it over the bus so every tab surfaces the same banner.
 transport.onFatal((message) => {
-  console.error('Automerge worker crashed:', message);
+  log.error('Automerge worker crashed:', message);
   client.fail(message);
 });
 

@@ -223,13 +223,20 @@ describe('CalDAV event operations', () => {
   });
 
   it('PUT should return 400 for invalid ICS', async () => {
-    const spy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    // The 400 path logs at error level, which LOG_LEVEL=error deliberately does
+    // NOT gate — claim it here so an unexpected error still stands out. A local
+    // spy rather than tests/support/console.ts: this file is inside tsconfig.json's
+    // rootDir (src/), so importing from tests/ would break `tsc --noEmit`.
+    const seen: string[] = [];
+    const spy = jest.spyOn(console, 'error')
+      .mockImplementation((...args: unknown[]) => { seen.push(args.map(String).join(' ')); });
     const res = await request(app)
       .put(`/dav/cal/${calId}/bad.ics`)
       .set('Content-Type', 'text/calendar')
       .send('not valid ics data');
-    expect(res.status).toBe(400);
     spy.mockRestore();
+    expect(res.status).toBe(400);
+    expect(seen.join('\n')).toMatch(/PUT error:/);
   });
 
   it('PUT should handle recurring events', async () => {

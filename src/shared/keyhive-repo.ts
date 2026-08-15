@@ -14,6 +14,9 @@
  */
 import { KeyhiveOps } from './keyhive-ops';
 import { RELAY_PEER_ID } from './relay-identity';
+import { createLogger } from './logger';
+
+const log = createLogger('keyhive');
 
 export interface CreateKeyhiveRepoOptions {
   /** automerge-repo StorageAdapter (IndexedDB in the browser, NodeFS in Node). */
@@ -135,11 +138,11 @@ function makeSerializeKeyhive(
         const method = String(prop);
         return (...args: any[]) =>
           runOnKeyhiveQueue(() => {
-            console.log('[keyhive] →', method);
+            log.debug('→', method);
             onCall(method);
             return Promise.resolve(val.apply(target, args)).then(
               (result: unknown) => { onCall(null); return result; },
-              (err: unknown) => { console.warn('[keyhive] ✗', method, err); throw err; },
+              (err: unknown) => { log.warn('✗', method, err); throw err; },
             );
           });
       },
@@ -290,7 +293,7 @@ export async function createKeyhiveRepo(opts: CreateKeyhiveRepoOptions): Promise
       if (saving) { dirty = true; return; }
       saving = true;
       try { await doSave(); }
-      catch (err) { console.warn('[keyhive-repo] archive persist after keyhive event failed:', err); }
+      catch (err) { log.warn('archive persist after keyhive event failed:', err); }
       finally {
         saving = false;
         if (dirty) { dirty = false; void persistArchive(); }

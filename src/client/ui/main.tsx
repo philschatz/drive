@@ -1,5 +1,9 @@
 import 'temporal-polyfill/global';
 
+// MUST stay the first relative import: it raises the log level from the
+// debug-enable setting, and worker-api.ts logs at module scope. See log-config.ts.
+import './log-config';
+
 import '../assets/globals.css';
 // Register the @material/web (MD3) custom elements after globals.css so the
 // `--md-sys-color-*` tokens they read are already defined.

@@ -13,6 +13,9 @@
  */
 import * as fs from 'fs';
 import * as path from 'path';
+import { createLogger } from '../shared/logger';
+
+const log = createLogger('keyhive-shim');
 
 const STUBS =
   '\nexport function symmetricEncrypt(){throw new Error("symmetricEncrypt unavailable in this keyhive build (Rust blob-interceptor path unused)");}' +
@@ -54,11 +57,11 @@ export function ensureKeyhiveNodeShim(): void {
   applied = true;
   const file = resolveSlimIndex();
   if (!file) {
-    console.warn('[keyhive-shim] @keyhive/keyhive/pkg-slim/index.js not found; skipping symmetric* stubs');
+    log.warn('@keyhive/keyhive/pkg-slim/index.js not found; skipping symmetric* stubs');
     return;
   }
   const code = fs.readFileSync(file, 'utf8');
   if (/export\s+(?:function|const)\s+symmetricEncrypt/.test(code)) return; // already present
   fs.appendFileSync(file, STUBS);
-  console.log('[keyhive-shim] added symmetricEncrypt/symmetricDecrypt stubs to keyhive slim build');
+  log.info('added symmetricEncrypt/symmetricDecrypt stubs to keyhive slim build');
 }

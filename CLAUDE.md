@@ -170,9 +170,31 @@ The backend implements CalDAV (RFC 4791) at `/dav/`. `src/bitrot-caldav/parser.t
 - The Vite config has a custom `radixPreactPatchPlugin` to fix a Radix UI compat issue with Preact's ref handling
 - When an error or bug occurs, create a test that reproduces the error first. Then focus on fixing it.
 
+## Logging
+
+App code logs through **`src/shared/logger.ts`**, never bare `console.*`:
+
+```ts
+const log = createLogger('engine');   // the logger owns the `[engine]` tag
+log.warn('import-backup: skipping', label, errMsg(err));
+```
+
+Levels: `silent < error < warn < info < debug`, default `info`, set by `LOG_LEVEL` (and `LOG_NS` per namespace). **Per-message firehoses are `debug`** (`→ send`, `← recv`, the relay's routed-message log), lifecycle lines are `info`. Guard expensive or fallible message-building with `log.enabled('debug')` — the relay's `describe-message.ts` decodes CBOR and hashes payloads, so it must not run when the line would be discarded.
+
+`console.*` in `src/**` is for **temporary local debugging only**, and `tests/no-raw-console.test.ts` enforces that (there is no ESLint in this repo). The two allowed exceptions both *intercept* console and so can't route through the logger: `logger.ts`'s own sink, and `automerge-worker.ts`'s filter for the third-party keyhive bridge's firehose.
+
+`setLogLevel('debug')` is wired from the **Settings → debug** toggle in two places, because each thread is its own module graph: `DriveEngine.init()` (worker, CLI, CalDAV — reads it via `host.kv`, so `src/shared` never imports the browser's storage) and `ui/log-config.ts` (main thread, which must stay the *first* relative import in `main.tsx`).
+
+**In tests** `jest.config.js` pins `LOG_LEVEL=error`, so the suite shows assertions and failures rather than app chatter. `error` deliberately still prints, so an *unexpected* failure is visible; a test that provokes an expected one claims it with `captureConsole(['error'])` from `tests/support/console.ts` **plus an assertion on the message** — a silent swallow also passes when the error stops happening. Un-gateable third-party output (automerge-repo, subduction, jsdom's missing navigation) is filtered by the narrow allowlist in `tests/support/benign-logs.ts`. Escape hatches: `LOG_LEVEL=debug npx jest …` restores everything, `LOG_NS=engine:debug` narrows it, `TEST_LOG=1` disables the third-party filter.
+
+Note that **Jest only prints console output in `--verbose` mode**, and it turns verbose on automatically when exactly one test file runs — so a single-file run is where logging noise shows up, and where to check that it's gone.
+
 ## Environment Variables
 
 - `PORT` — Server port (default 3000)
 - `AUTOMERGE_DATA_DIR` — Persistent storage directory (default `.data`)
-- `NODE_ENV=production` — Disables request logging, serves built frontend
+- `NODE_ENV=production` — Serves the built frontend
+- `LOG_LEVEL` — `silent|error|warn|info|debug` (default `info`). See Logging.
+- `LOG_NS` — per-namespace levels, e.g. `LOG_NS=engine:debug,relay:silent`
+- `TEST_LOG=1` — (tests) disable the third-party log filter and the opt-in test diagnostics
 - `VITE_ICE_SERVERS` — (frontend, build-time) JSON array of `RTCIceServer` for WebRTC. Defaults to public Google STUN; set this to add a TURN server.

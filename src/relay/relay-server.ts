@@ -1,5 +1,8 @@
 import http from 'http';
 import { WebSocketRelay, createRelayWebSocketServer } from './relay';
+import { createLogger } from '../shared/logger';
+
+const log = createLogger('relay');
 
 const PORT = Number.parseInt(process.env.PORT || '3000');
 
@@ -7,10 +10,10 @@ const PORT = Number.parseInt(process.env.PORT || '3000');
 // single bad frame or transport error must never take the process down for
 // every connected peer. Log and keep serving.
 process.on('uncaughtException', (err) => {
-  console.error('[relay] uncaughtException:', err);
+  log.error('uncaughtException:', err);
 });
 process.on('unhandledRejection', (reason) => {
-  console.error('[relay] unhandledRejection:', reason);
+  log.error('unhandledRejection:', reason);
 });
 
 // Plain HTTP server: answers non-WebSocket requests with a liveness response so
@@ -32,14 +35,14 @@ server.on('upgrade', (req, socket, head) => {
 });
 
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`[relay] WebSocket relay listening on http://0.0.0.0:${PORT}`);
+  log.info(`WebSocket relay listening on http://0.0.0.0:${PORT}`);
 });
 
 // A listen failure (e.g. EADDRINUSE) is fatal and must exit so the process
 // manager can react — the uncaughtException backstop above would otherwise
 // swallow it and leave the process idling without a listener.
 server.on('error', (err) => {
-  console.error('[relay] server error:', err);
+  log.error('server error:', err);
   process.exit(1);
 });
 

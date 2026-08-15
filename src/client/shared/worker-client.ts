@@ -11,8 +11,11 @@
  * to `route()` / `fail()` and re-exports the client's operations verbatim, so the
  * on-the-wire protocol is unchanged.
  */
+import { createLogger } from '../../shared/logger';
 import type { WorkerToMain, ValidationError, MarkerField } from '../../shared/worker-protocol';
 import type { PresenceState, PeerState } from '@automerge/automerge-repo';
+
+const log = createLogger('main');
 
 /** Minimal surface of a Worker we depend on (so tests can supply a fake). */
 export interface WorkerLike {
@@ -58,14 +61,11 @@ export interface WorkerClientOptions {
    * large document can legitimately take a long time to load/decrypt.
    */
   requestTimeoutMs?: number;
-  /** Logger for outbound messages (defaults to the `[main] → send` console log). */
-  log?: (msg: { type: string } & Record<string, any>) => void;
 }
 
 export class WorkerClient {
   private worker: WorkerLike;
   private requestTimeoutMs: number;
-  private logSend: (msg: { type: string } & Record<string, any>) => void;
 
   private nextId = 0;
   private nextSubId = 0;
@@ -104,10 +104,14 @@ export class WorkerClient {
   // the crash/data-warning banner so the trapping call is named even in production.
   private lastKeyhiveCall: string | null = null;
 
+  /** Trace an outbound message. debug-level: this is a per-message firehose. */
+  private logSend(msg: { type: string } & Record<string, any>): void {
+    log.debug('→ send', msg.type, msg);
+  }
+
   constructor(worker: WorkerLike, opts: WorkerClientOptions = {}) {
     this.worker = worker;
     this.requestTimeoutMs = opts.requestTimeoutMs ?? 30_000;
-    this.logSend = opts.log ?? ((msg) => console.log('[main] → send', msg.type, msg));
 
     this.workerReady = new Promise<void>((resolve, reject) => {
       this.resolveRepoReady = resolve;
@@ -192,13 +196,13 @@ export class WorkerClient {
         this.resolveKeyhiveReady();
         return true;
       case 'kh-error':
-        console.error('Keyhive init failed:', msg.message);
+        log.error('Keyhive init failed:', msg.message);
         this.rejectKeyhiveReady(new Error(msg.message));
         return true;
       case 'error':
         // Fatal worker-init error (e.g. a dangling user-group). Settle the gates
         // so request()-gated UI stops hanging and surface a banner.
-        console.error('Automerge worker error:', msg.message);
+        log.error('Automerge worker error:', msg.message);
         this.fatalError = msg.message;
         this.rejectRepoReady(new Error(msg.message));
         this.rejectKeyhiveReady(new Error(msg.message));
@@ -207,7 +211,7 @@ export class WorkerClient {
       case 'data-warning': {
         // Non-fatal: the worker is up but local data has a problem. Banner only.
         const m = this.withKeyhiveContext(msg.message);
-        console.warn('Worker data warning:', m);
+        log.warn('Worker data warning:', m);
         this.fatalError = m;
         this.notifyError(m);
         return true;
@@ -224,7 +228,7 @@ export class WorkerClient {
           this.pending.delete(msg.id);
           if (p.timer) clearTimeout(p.timer);
           const elapsed = performance.now() - p.sent;
-          if (elapsed > 100) console.log(`[main] ⏱ ${p.type} took ${Math.round(elapsed).toLocaleString()}ms`);
+          if (elapsed > 100) log.debug(`⏱ ${p.type} took ${Math.round(elapsed).toLocaleString()}ms`);
           if (msg.error) p.reject(new Error(msg.error));
           else p.resolve(msg.result);
         }
@@ -237,7 +241,7 @@ export class WorkerClient {
             // Deliver the error so the UI can render an error/retry state instead
             // of looking like it is loading forever.
             if (cb.onError) cb.onError(msg.error);
-            else console.warn('[worker-api] query-result error subId=%d:', msg.subId, msg.error);
+            else log.warn(`query-result error subId=${msg.subId}:`, msg.error);
           } else {
             cb.onResult(msg.result, msg.heads, msg.lastModified, msg.spans, msg.cursors, msg.richTextFields);
           }
@@ -305,7 +309,7 @@ export class WorkerClient {
       try {
         this.worker.postMessage(msg);
       } catch (err) {
-        console.error('[worker-api] fire postMessage failed:', err);
+        log.error('fire postMessage failed:', err);
       }
     }).catch(() => { }); // worker never became ready — nothing to send
   }

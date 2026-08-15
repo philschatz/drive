@@ -15,6 +15,9 @@ import { base64ToBytes, errMsg } from './keyhive-ops';
 import { KEYS, LEGACY_IDB_KEYS } from './storage-keys';
 import type { EngineCore } from './drive-engine';
 import type { MainToWorker } from './worker-protocol';
+import { createLogger } from './logger';
+
+const log = createLogger('engine');
 
 export type EngineCtor = new (...args: any[]) => EngineCore;
 
@@ -163,7 +166,7 @@ export function EngineSettings<C extends EngineCtor>(Base: C):
       if (this.driveSettingsDeferredHandle) return null;
       if (this.ensureSettingsInFlight) return this.ensureSettingsInFlight;
       this.ensureSettingsInFlight = this.resolveDriveSettingsDoc(opts)
-        .catch(err => { console.warn('[engine] ensureDriveSettingsDoc failed:', errMsg(err)); return null; })
+        .catch(err => { log.warn('ensureDriveSettingsDoc failed:', errMsg(err)); return null; })
         .finally(() => { this.ensureSettingsInFlight = null; });
       return this.ensureSettingsInFlight;
     }
@@ -177,7 +180,7 @@ export function EngineSettings<C extends EngineCtor>(Base: C):
       if (this.driveSettingsHandle?.__local) return this.driveSettingsHandle;
       if (this.ensureLocalInFlight) return this.ensureLocalInFlight;
       this.ensureLocalInFlight = this.resolveLocalSettings()
-        .catch(err => { console.warn('[engine] ensureLocalSettings failed:', errMsg(err)); return this.driveSettingsHandle; })
+        .catch(err => { log.warn('ensureLocalSettings failed:', errMsg(err)); return this.driveSettingsHandle; })
         .finally(() => { this.ensureLocalInFlight = null; });
       return this.ensureLocalInFlight;
     }
@@ -290,7 +293,7 @@ export function EngineSettings<C extends EngineCtor>(Base: C):
           return handle;
         }
         if (doc && doc['@type'] !== DRIVE_SETTINGS_TYPE) {
-          console.warn(`[engine] doc ${docId} is not DriveSettings (@type=${doc['@type']}); not adopting`);
+          log.warn(`doc ${docId} is not DriveSettings (@type=${doc['@type']}); not adopting`);
           return null;
         }
         // Not synced yet. Subscribe ONCE and adopt when it arrives — do NOT let the
@@ -298,7 +301,7 @@ export function EngineSettings<C extends EngineCtor>(Base: C):
         this.deferDriveSettingsHandle(docId, handle);
         return null;
       } catch (err) {
-        console.warn(`[engine] loadDriveSettingsHandle(${docId}) failed:`, errMsg(err));
+        log.warn(`loadDriveSettingsHandle(${docId}) failed:`, errMsg(err));
         return null;
       }
     }
@@ -324,7 +327,7 @@ export function EngineSettings<C extends EngineCtor>(Base: C):
     private deferDriveSettingsHandle(docId: string, handle: any): void {
       if (this.driveSettingsDeferredHandle === handle) return;
       this.driveSettingsDeferredHandle = handle;
-      console.warn('[engine] DriveSettings pointer set but doc not synced yet; waiting for it (no re-poll)');
+      log.warn('DriveSettings pointer set but doc not synced yet; waiting for it (no re-poll)');
       const onArrive = () => {
         if (this.driveSettingsDeferredHandle !== handle) { handle.off?.('change', onArrive); handle.off?.('doc', onArrive); return; }
         let d: any = null;
@@ -361,7 +364,7 @@ export function EngineSettings<C extends EngineCtor>(Base: C):
             for (const [k, v] of Object.entries(deviceNames ?? {})) if (!(k in d.deviceNames)) d.deviceNames[k] = v;
             for (const [k, v] of Object.entries(archivedDocIds ?? {})) if (!(k in d.archivedDocIds)) d.archivedDocIds[k] = { grantSigs: [...((v as any)?.grantSigs ?? [])] };
           });
-          console.log('[engine] migrated legacy IDB settings into the DriveSettings doc');
+          log.info('migrated legacy IDB settings into the DriveSettings doc');
         }
         await Promise.all([
           this.host.kv.del(LEGACY_IDB_KEYS.friendNames),
@@ -371,7 +374,7 @@ export function EngineSettings<C extends EngineCtor>(Base: C):
         ]);
         this.refreshFromSettingsDoc();
       } catch (err) {
-        console.warn('[engine] mergeLegacyIntoSettings failed:', errMsg(err));
+        log.warn('mergeLegacyIntoSettings failed:', errMsg(err));
       }
     }
 
@@ -387,7 +390,7 @@ export function EngineSettings<C extends EngineCtor>(Base: C):
       this.driveSettingsDocId = handle.documentId;
       this.driveSettingsHandle = handle;
       this.subscribeDriveSettings(handle);
-      console.log(`[engine] created DriveSettings doc ${handle.documentId}`);
+      log.info(`created DriveSettings doc ${handle.documentId}`);
       return handle;
     }
 
@@ -467,7 +470,7 @@ export function EngineSettings<C extends EngineCtor>(Base: C):
           if (doc && doc['@type'] === DRIVE_SETTINGS_TYPE) found.push(amId);
         }
       } catch (err) {
-        console.warn('[engine] findReachableDriveSettingsDocs failed:', errMsg(err));
+        log.warn('findReachableDriveSettingsDocs failed:', errMsg(err));
       }
       return found.sort();
     }
@@ -479,9 +482,9 @@ export function EngineSettings<C extends EngineCtor>(Base: C):
           const handle = await this.getOrLoadHandle(id);
           const doc = handle?.doc?.();
           if (doc) this.fillMissingSettings(doc);
-          console.warn(`[engine] DriveSettings: merged redundant doc ${id} into canonical (now orphaned)`);
+          log.warn(`DriveSettings: merged redundant doc ${id} into canonical (now orphaned)`);
         } catch (err) {
-          console.warn(`[engine] DriveSettings: failed to merge redundant doc ${id}:`, errMsg(err));
+          log.warn(`DriveSettings: failed to merge redundant doc ${id}:`, errMsg(err));
         }
       }
     }
@@ -639,22 +642,22 @@ export function EngineSettings<C extends EngineCtor>(Base: C):
       }
 
       if (msg.type === 'set-friend-name') {
-        await this.respond(msg.id, () => this.putFriendName(msg.agentId, msg.name), '[engine] set-friend-name failed:');
+        await this.respond(msg.id, () => this.putFriendName(msg.agentId, msg.name), 'set-friend-name failed:');
         return;
       }
 
       if (msg.type === 'remove-friend-name') {
-        await this.respond(msg.id, () => this.deleteFriendName(msg.agentId), '[engine] remove-friend-name failed:');
+        await this.respond(msg.id, () => this.deleteFriendName(msg.agentId), 'remove-friend-name failed:');
         return;
       }
 
       if (msg.type === 'set-device-name') {
-        await this.respond(msg.id, () => this.putDeviceName(msg.agentId, msg.name), '[engine] set-device-name failed:');
+        await this.respond(msg.id, () => this.putDeviceName(msg.agentId, msg.name), 'set-device-name failed:');
         return;
       }
 
       if (msg.type === 'remove-device-name') {
-        await this.respond(msg.id, () => this.deleteSettingsName('deviceNames', msg.agentId), '[engine] remove-device-name failed:');
+        await this.respond(msg.id, () => this.deleteSettingsName('deviceNames', msg.agentId), 'remove-device-name failed:');
         return;
       }
 

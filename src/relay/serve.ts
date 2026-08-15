@@ -2,6 +2,9 @@ import express from 'express';
 import path from 'path';
 import fs from 'fs';
 import { WebSocketRelay, createRelayWebSocketServer } from './relay';
+import { createLogger } from '../shared/logger';
+
+const log = createLogger('serve');
 
 const PORT = Number.parseInt(process.env.PORT || '3000');
 
@@ -9,15 +12,15 @@ const PORT = Number.parseInt(process.env.PORT || '3000');
 // single bad frame or transport error must never take the process down for
 // every connected peer. Log and keep serving.
 process.on('uncaughtException', (err) => {
-  console.error('[serve] uncaughtException:', err);
+  log.error('uncaughtException:', err);
 });
 process.on('unhandledRejection', (reason) => {
-  console.error('[serve] unhandledRejection:', reason);
+  log.error('unhandledRejection:', reason);
 });
 const distDir = path.resolve(__dirname, '../../dist');
 
 if (!fs.existsSync(distDir)) {
-  console.error(`Build directory not found: ${distDir}\nRun "npm run build" first.`);
+  log.error(`Build directory not found: ${distDir}\nRun "npm run build" first.`);
   process.exit(1);
 }
 
@@ -33,14 +36,14 @@ const relay = new WebSocketRelay();
 wss.on('connection', (ws, req) => relay.handleConnection(ws, req));
 
 const server = app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Automerge Documents (production): http://0.0.0.0:${PORT}`);
+  log.info(`Automerge Documents (production): http://0.0.0.0:${PORT}`);
 });
 
 // A listen failure (e.g. EADDRINUSE) is fatal and must exit so the process
 // manager can react — the uncaughtException backstop above would otherwise
 // swallow it and leave the process idling without a listener.
 server.on('error', (err) => {
-  console.error('[serve] server error:', err);
+  log.error('server error:', err);
   process.exit(1);
 });
 

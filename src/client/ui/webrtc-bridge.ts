@@ -22,6 +22,9 @@
 import type { WebRTCSignal } from '../../shared/webrtc-signal';
 import { frameMessage, FrameReassembler, FrameOverflowError } from '../shared/webrtc-chunk';
 import type { WorkerToBridgeMsg, BridgeToWorkerMsg } from '../../shared/worker-protocol';
+import { createLogger } from '../../shared/logger';
+
+const log = createLogger('webrtc');
 
 /** Reliable, ordered channel label (TCP-like) for automerge sync messages. */
 const DATA_CHANNEL_LABEL = 'drive-sync';
@@ -51,7 +54,7 @@ function resolveIceServers(): RTCIceServer[] {
       if (Array.isArray(parsed) && parsed.length) return parsed;
     }
   } catch (err) {
-    console.warn('[webrtc] invalid VITE_ICE_SERVERS, using defaults:', err);
+    log.warn('invalid VITE_ICE_SERVERS, using defaults:', err);
   }
   return DEFAULT_ICE_SERVERS;
 }
@@ -141,8 +144,8 @@ export function startWebRTCBridge(port: MessagePort): () => void {
       try {
         full = entry.reasm.push(frame);
       } catch (err) {
-        if (err instanceof FrameOverflowError) console.warn('[webrtc] closing channel to', peerId, '—', err.message);
-        else console.warn('[webrtc] closing channel to', peerId, 'after reassembly failure:', err);
+        if (err instanceof FrameOverflowError) log.warn('closing channel to', peerId, '—', err.message);
+        else log.warn('closing channel to', peerId, 'after reassembly failure:', err);
         teardownPeer(peerId);
         return;
       }
@@ -155,7 +158,7 @@ export function startWebRTCBridge(port: MessagePort): () => void {
     if (entry) return entry;
     if (peers.size >= MAX_PEER_CONNECTIONS) {
       // Refuse to allocate beyond the cap — this peer stays on the relay.
-      console.warn(`[webrtc] peer-connection cap (${MAX_PEER_CONNECTIONS}) reached — not negotiating with`, peerId);
+      log.warn(`peer-connection cap (${MAX_PEER_CONNECTIONS}) reached — not negotiating with`, peerId);
       return null;
     }
 
@@ -183,7 +186,7 @@ export function startWebRTCBridge(port: MessagePort): () => void {
           await pc.setLocalDescription(offer);
           post({ kind: 'signal-out', peerId, signal: { kind: 'offer', sdp: offer.sdp } });
         } catch (err) {
-          console.warn('[webrtc] offer failed for', peerId, err);
+          log.warn('offer failed for', peerId, err);
           retryNegotiation(peerId);
         }
       })();
@@ -199,7 +202,7 @@ export function startWebRTCBridge(port: MessagePort): () => void {
     const pending = entry.pendingCandidates;
     entry.pendingCandidates = [];
     for (const c of pending) {
-      try { await entry.pc.addIceCandidate(c); } catch (err) { console.warn('[webrtc] addIceCandidate (flush) failed:', err); }
+      try { await entry.pc.addIceCandidate(c); } catch (err) { log.warn('addIceCandidate (flush) failed:', err); }
     }
   }
 
@@ -219,7 +222,7 @@ export function startWebRTCBridge(port: MessagePort): () => void {
         await entry.pc.setLocalDescription(answer);
         post({ kind: 'signal-out', peerId, signal: { kind: 'answer', sdp: answer.sdp } });
       } catch (err) {
-        console.warn('[webrtc] handleSignal(offer) failed for', peerId, err);
+        log.warn('handleSignal(offer) failed for', peerId, err);
       }
       return;
     }
@@ -238,7 +241,7 @@ export function startWebRTCBridge(port: MessagePort): () => void {
         else entry.pendingCandidates.push(init);
       }
     } catch (err) {
-      console.warn('[webrtc] handleSignal(' + signal.kind + ') failed for', peerId, err);
+      log.warn('handleSignal(' + signal.kind + ') failed for', peerId, err);
     }
   }
 
@@ -262,7 +265,7 @@ export function startWebRTCBridge(port: MessagePort): () => void {
           // large sync message would otherwise be rejected outright.
           try {
             for (const frame of frameMessage(msg.bytes)) entry.dc.send(frame as unknown as ArrayBuffer);
-          } catch (err) { console.warn('[webrtc] dc.send failed:', err); }
+          } catch (err) { log.warn('dc.send failed:', err); }
         }
         break;
       }

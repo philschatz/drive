@@ -23,6 +23,9 @@ import {
   hashStr, SETTINGS_PREFIX, SETTINGS_DEFAULTS,
 } from '../../shared/storage-keys';
 import type { SettingsSchema, SettingName } from '../../shared/storage-keys';
+import { createLogger } from '../../shared/logger';
+
+const log = createLogger('idb');
 
 export { KEYS, CACHE_PREFIX, queryCacheKey, validationCacheKey, docCachePrefix, hashStr };
 export type { QueryCacheEntry } from '../../shared/storage-keys';
@@ -84,7 +87,7 @@ function getDb(): Promise<IDBDatabase> {
         migrateV1ToV2(req.transaction!.objectStore(STORE_NAME));
       }
     };
-    req.onblocked = () => console.warn('[idb] upgrade blocked by an open connection at an older version');
+    req.onblocked = () => log.warn('upgrade blocked by an open connection at an older version');
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
   });

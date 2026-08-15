@@ -21,6 +21,9 @@ import type { ValidationError } from '../../../shared/schemas';
 import { markerEditOps, type DocMarker, type RichTextOp } from '../../../shared/rich-text-ops';
 import { blockChipLabel, escapeString, reparseMarkValue, type Path } from './source-nodes';
 import './source.css';
+import { createLogger } from '../../../shared/logger';
+
+const log = createLogger('source');
 
 export const markerColor = (i: number) => MATERIAL_CATEGORICAL[i % MATERIAL_CATEGORICAL.length];
 /** The 1-based reference tying a highlight to its row in the list below. */
@@ -176,7 +179,7 @@ export function MarkerSheet({
       try {
         onOps(markerEditOps(marker, next));
       } catch (err: any) {
-        console.warn('[source] marker edit rejected:', err?.message ?? err);
+        log.warn('marker edit rejected:', err?.message ?? err);
       }
       back();
       onClose();
@@ -330,7 +333,7 @@ export function MarkerSheet({
               try {
                 onOps(markerEditOps(marker, null));
               } catch (err: any) {
-                console.warn('[source] marker delete rejected:', err?.message ?? err);
+                log.warn('marker delete rejected:', err?.message ?? err);
               }
               onClose();
             }}

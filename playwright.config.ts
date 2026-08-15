@@ -111,9 +111,11 @@ export default defineConfig({
     url: baseURL,
     reuseExistingServer: !process.env.CI,
     timeout: 300_000,
-    // Silence the relay's per-message firehose + expected-hardening logs during
-    // tests; genuine internal-failure logs (raw console.error) still print. See
-    // RELAY_QUIET in src/relay/relay-log.ts.
-    env: { RELAY_QUIET: '1' },
+    // Silence the server side's per-message firehose (debug), lifecycle lines
+    // (info) and expected-hardening warnings, while genuine internal failures
+    // (error) still print. See src/shared/logger.ts — this replaced the old
+    // relay-specific RELAY_QUIET flag. Browser-side logging is unaffected: the
+    // page can't read this env var, and defaults to `info`.
+    env: { LOG_LEVEL: 'error' },
   },
 });

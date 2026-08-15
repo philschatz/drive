@@ -17,6 +17,9 @@ import { base64ToBytes, errMsg } from './keyhive-ops';
 import type { EngineCore } from './drive-engine';
 import type { EngineSettingsSurface } from './engine-settings';
 import type { EnginePresenceSurface } from './engine-presence';
+import { createLogger } from './logger';
+
+const log = createLogger('engine');
 
 /** Base this mixin extends: the core plus the settings/presence surfaces, so
  *  the watcher can call `pinnedDocs` (settings) and `isActive` (presence)
@@ -177,7 +180,7 @@ export function EngineWatch<C extends EngineWatchCtor>(Base: C):
         const handle = await this.getOrLoadHandle(docId);
         this.getOrCreateEntry(docId, handle);
       } catch (err) {
-        console.warn(`[engine] watch keep-open failed ${docId}:`, errMsg(err));
+        log.warn(`watch keep-open failed ${docId}:`, errMsg(err));
       }
     }
 
@@ -222,7 +225,7 @@ export function EngineWatch<C extends EngineWatchCtor>(Base: C):
           const keepSet = new Set(keep);
 
           for (const id of keep) await this.watchKeepOpen(id);
-          console.log(`[engine] watch: keeping ${keep.length} doc(s) open (min ${opts.keepOpen}, ${withinWindow} within ${opts.recentDays}d)`);
+          log.info(`watch: keeping ${keep.length} doc(s) open (min ${opts.keepOpen}, ${withinWindow} within ${opts.recentDays}d)`);
 
           // Release any previously-watched doc that dropped out of the kept set (and
           // isn't pinned) so only the kept set stays resident between rotations.
@@ -234,14 +237,14 @@ export function EngineWatch<C extends EngineWatchCtor>(Base: C):
           const rest = ranked.slice(keepCount).map(r => r.id).filter(id => !this.pinnedDocs.has(id));
           for (const id of rest) {
             if (!this.watching) return;
-            console.log(`[engine] watch: syncing ${id} for ${Math.round(syncMs / 1000)}s`);
+            log.info(`watch: syncing ${id} for ${Math.round(syncMs / 1000)}s`);
             await this.watchKeepOpen(id);
             this.emitWatchUpdate(id);
             await this.sleep(syncMs);
             if (!keepSet.has(id)) this.watchClose(id);
           }
         } catch (err) {
-          console.warn('[engine] watch loop error:', errMsg(err));
+          log.warn('watch loop error:', errMsg(err));
         }
         await this.sleep(reenumerateEveryMs);
       }

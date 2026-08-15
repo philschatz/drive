@@ -72,6 +72,8 @@ export default defineConfig({
     url: baseURL,
     reuseExistingServer: !process.env.CI,
     timeout: 300_000,
-    env: { RELAY_QUIET: '1' },
+    // Server-side app logging down to genuine failures only (see
+    // src/shared/logger.ts); replaced the old relay-specific RELAY_QUIET flag.
+    env: { LOG_LEVEL: 'error' },
   },
 });

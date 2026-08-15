@@ -1,5 +1,8 @@
 import { Keyhive } from "@keyhive/keyhive/slim";
 import type { MemberRole, MemberInfo, ArchiveDocResult, DeviceEntry } from './keyhive-types';
+import { createLogger } from './logger';
+
+const log = createLogger('kh');
 
 // Re-export these so the worker can use them without duplicating
 export function bytesToBase64(bytes: Uint8Array): string {
@@ -232,7 +235,7 @@ export class KeyhiveOps {
       // Dangling user-group (id persisted but group missing from keyhive). This is
       // detected at startup (findDanglingUserGroup → data-warning banner); bail rather
       // than leaving the doc owned only by this device.
-      console.warn(`[kh] assignGroupAsAdmin: user-group ${groupId.slice(0, 8)} not loadable`);
+      log.warn(`assignGroupAsAdmin: user-group ${groupId.slice(0, 8)} not loadable`);
       return;
     }
     await this.addGroupAsAdmin(doc, group);
@@ -929,7 +932,7 @@ export class KeyhiveOps {
       }
       return sigs;
     } catch (err) {
-      console.warn('[kh] getUserGroupGrantSigs failed:', err);
+      log.warn('getUserGroupGrantSigs failed:', err);
       return [];
     }
   }
@@ -959,7 +962,7 @@ export class KeyhiveOps {
         await this.kh.revokeMember(groupAgent, true, doc.toMembered());
         status = 'revoked';
       } catch (err) {
-        console.warn('[kh] revokeMyAccess: self-revoke failed:', err);
+        log.warn('revokeMyAccess: self-revoke failed:', err);
       }
     }
     await this.fx.persist();

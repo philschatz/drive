@@ -322,9 +322,13 @@ describe('KeyhiveOps', () => {
       await seedDocs(opsMany, 10);
       const many = await opsMany.getContactCard();
 
-      // Surfaced so a regression shows *which* op family regrew.
-      console.log('1 doc:', one.length, 'bytes', breakdown(one));
-      console.log('10 docs:', many.length, 'bytes', breakdown(many));
+      // Surfaced so a regression shows *which* op family regrew. Behind TEST_LOG
+      // (the runner's show-everything flag) so a green run stays quiet — the
+      // assertion below is what fails; these numbers are for the post-mortem.
+      if (process.env.TEST_LOG === '1') {
+        console.log('1 doc:', one.length, 'bytes', breakdown(one));
+        console.log('10 docs:', many.length, 'bytes', breakdown(many));
+      }
 
       // 10× the documents must not mean a materially larger card. The card
       // conveys who the sender is, not what they have.

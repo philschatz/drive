@@ -74,9 +74,12 @@ beforeEach(() => {
   mockShowError = jest.fn();
   capturedInputs = [];
   // Not stubbing window.location: neither it nor `reload` is redefinable in this
-  // jsdom build. The success paths call reload(), which jsdom reports as
-  // "Not implemented: navigation" on the virtual console rather than throwing — so
-  // it is noise in the output, not a failure.
+  // jsdom build (`reload` is writable:false/configurable:false and `location`
+  // itself is configurable:false, so jest.spyOn throws). The success paths call
+  // reload(), which jsdom reports as "Not implemented: navigation" on the virtual
+  // console rather than throwing — not a failure. That line is swallowed by the
+  // benign-log filter (tests/support/benign-logs.ts); it needs duck-typing rather
+  // than `instanceof Error`, because jsdom builds the error in its own realm.
 });
 
 describe('StorageSettings', () => {

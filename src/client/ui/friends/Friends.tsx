@@ -18,6 +18,9 @@ import { PeerDot } from '../common/PeerDot';
 import { BarIconButton } from '../common/DocumentTitleBar';
 import { useDeviceStatuses, mostConnectedStatus } from '../common/use-devices';
 import { FriendOptionsSheet } from './FriendOptionsSheet';
+import { createLogger } from '../../../shared/logger';
+
+const log = createLogger('friends');
 
 interface FriendDocInfo {
   docId: string;
@@ -140,7 +143,7 @@ export function Friends({ path }: { path?: string }) {
     setOptionsFor(null);
     if (!confirm(`Remove friend "${displayNameFor(friend.agentId)}"?`)) return;
     removeFriendName(friend.agentId).catch(err => {
-      console.error('[Friends] Failed to remove friend:', err);
+      log.error('Failed to remove friend:', err);
       setError(`Failed to remove friend: ${err?.message ?? 'storage error'}`);
       refresh();
     });

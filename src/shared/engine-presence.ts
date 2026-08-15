@@ -13,6 +13,9 @@
 import type { EngineCore } from './drive-engine';
 import type { MainToWorker } from './worker-protocol';
 import { errMsg } from './keyhive-ops';
+import { createLogger } from './logger';
+
+const log = createLogger('engine');
 
 export type EngineCtor = new (...args: any[]) => EngineCore;
 
@@ -108,7 +111,7 @@ export function EnginePresence<C extends EngineCtor>(Base: C):
       catch (err) {
         // Swallowing this silently hid a wedged CGKA ("SecretKey not found" after
         // a reload lost an in-memory leaf secret) for a long time — keep it loud.
-        console.warn('[engine] presence encrypt failed:', errMsg(err));
+        log.warn('presence encrypt failed:', errMsg(err));
         return null;
       }
     }
@@ -236,7 +239,7 @@ export function EnginePresence<C extends EngineCtor>(Base: C):
             try { value[ch] = await this.decryptPresenceValue(doc, enc as Uint8Array); }
             catch (err) {
               allOk = false;
-              console.warn(`[engine] presence decrypt failed (peer ${peerId}, channel ${ch}):`, errMsg(err));
+              log.warn(`presence decrypt failed (peer ${peerId}, channel ${ch}):`, errMsg(err));
             }
           }
           // A fresh peer with no readable state — nothing received yet, or
@@ -312,7 +315,7 @@ export function EnginePresence<C extends EngineCtor>(Base: C):
         const attempt = async () => {
           let ok = false;
           try { ok = await this.trySetupPresence(msg.docId); }
-          catch (err: any) { console.warn('[engine] presence-subscribe not ready, retrying:', errMsg(err)); }
+          catch (err: any) { log.warn('presence-subscribe not ready, retrying:', errMsg(err)); }
           if (!this.presencePending.has(msg.docId)) {
             // Unsubscribed while this attempt ran — undo a setup that won the race.
             if (ok) this.teardown(msg.docId);

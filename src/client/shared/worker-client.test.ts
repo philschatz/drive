@@ -12,6 +12,7 @@
  *    tell the worker to stop); a query-result error reaches the subscriber.
  */
 import { WorkerClient, type WorkerLike } from './worker-client';
+import { captureConsole } from '../../../tests/support/console';
 import type { WorkerToMain } from '../../shared/worker-protocol';
 
 class FakeWorker implements WorkerLike {
@@ -47,7 +48,10 @@ describe('WorkerClient lifecycle', () => {
     const client = new WorkerClient(worker);
     const seen: string[] = [];
     client.onWorkerError(m => seen.push(m));
+    const con = captureConsole();
     client.route({ type: 'error', message: 'init blew up' } as WorkerToMain);
+    con.restore();
+    expect(con.messages().join('\n')).toMatch(/Automerge worker error: init blew up/);
     await expect(client.workerReady).rejects.toThrow('init blew up');
     await expect(client.keyhiveReady).rejects.toThrow('init blew up');
     expect(seen).toEqual(['init blew up']);
@@ -69,7 +73,10 @@ describe('WorkerClient lifecycle', () => {
   it('replays the latest error to a late onWorkerError subscriber', () => {
     const worker = new FakeWorker();
     const client = new WorkerClient(worker);
+    const con = captureConsole();
     client.route({ type: 'error', message: 'boom' } as WorkerToMain);
+    con.restore();
+    expect(con.messages().join('\n')).toMatch(/Automerge worker error: boom/);
     const seen: string[] = [];
     client.onWorkerError(m => seen.push(m));
     expect(seen).toEqual(['boom']);

@@ -1,13 +1,22 @@
-// Some third-party libraries log benign teardown-race warnings via a *raw*
-// console.warn that we can't gate at the source without editing node_modules:
-//   [automerge-repo:repo] flush() during shutdown failed
-//   [SubductionSource] storeBuiltBatch failed for …
+// Some third-party libraries log benign lines via a *raw* console call that we
+// can't gate at the source without editing node_modules:
+//   [automerge-repo:repo] flush() during shutdown failed   (console.warn)
+//   [SubductionSource] storeBuiltBatch failed for …        (console.warn)
+//   Error: Not implemented: navigation (except hash changes)  (jsdom, console.error)
 //
-// This swaps console.warn at test startup to swallow ONLY those specific lines
-// (see benign-logs.ts); every other warning passes straight through to the real
-// console. Tests that deliberately drive one of OUR error paths use
-// captureConsole() in the test body instead (tests/support/console.ts) — this
-// filter is strictly for the un-gateable library noise.
+// This swaps console.warn and console.error at test startup to swallow ONLY
+// those specific lines (see benign-logs.ts); everything else passes straight
+// through to the real console.
+//
+// This file is NOT redundant now that src/shared/logger.ts exists — please don't
+// delete it on that reasoning. The logger can only gate OUR code. `LOG_LEVEL` in
+// jest.config.js silences our debug/info/warn; the lines above come from library
+// code that never touches our logger, so interception is the only lever.
+//
+// Our own expected errors are a different problem with a different answer:
+// `error` deliberately still prints (so an UNEXPECTED failure is visible), and a
+// test that provokes one claims it locally with captureConsole(['error']) plus an
+// assertion — see tests/support/console.ts.
 //
 // NOTE: the SubductionSource line is a raw console.warn today. A future version
 // of the keyhive/subduction stack may route it through a logger instead
@@ -16,15 +25,17 @@
 // benign-logs.ts.
 //
 // Installed once per test file (setupFilesAfterEnv), before any test runs, and
-// deliberately NOT restored — so warnings emitted during setup/teardown (repo
-// shutdown, worker exit), outside any test body, are filtered too. Set
-// TEST_LOG=1 to disable the filter and see everything.
+// deliberately NOT restored — so output emitted during setup/teardown (repo
+// shutdown, worker exit), outside any test body, is filtered too. Set TEST_LOG=1
+// to disable the filter and see everything.
 import { isBenignLogLine } from './benign-logs';
 
 if (process.env.TEST_LOG !== '1') {
-  const realWarn = console.warn.bind(console);
-  console.warn = (...args: unknown[]): void => {
-    if (isBenignLogLine(args)) return;
-    realWarn(...args);
-  };
+  for (const method of ['warn', 'error'] as const) {
+    const real = console[method].bind(console);
+    console[method] = (...args: unknown[]): void => {
+      if (isBenignLogLine(args)) return;
+      real(...args);
+    };
+  }
 }

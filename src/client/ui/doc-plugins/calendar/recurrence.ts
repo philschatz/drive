@@ -1,4 +1,7 @@
 import type { CalendarEvent } from '../../../../shared/schemas/calendar';
+import { createLogger } from '../../../../shared/logger';
+
+const log = createLogger('calendar');
 
 const DAY_MAP: Record<string, number> = { su: 7, mo: 1, tu: 2, we: 3, th: 4, fr: 5, sa: 6 };
 
@@ -202,7 +205,7 @@ export function rebuildExpanded(events: Record<string, CalendarEvent>, rangeStar
         expanded.push({ uid, recurrenceDate: dateStr, ev: effective, isRecurring: true });
       });
     } catch (err) {
-      console.warn(`Skipping recurrence expansion for event "${uid}":`, err);
+      log.warn(`Skipping recurrence expansion for event "${uid}":`, err);
     }
   }
 

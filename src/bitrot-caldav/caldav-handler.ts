@@ -4,6 +4,9 @@ import { icsToEvent } from './parser';
 import { eventToICS, calendarToIcs, generateEtag } from './serializer';
 import { getHandle, listByType, getHeadsHash } from './doc-store';
 import { deepAssign } from '../shared/deep-assign';
+import { createLogger } from '../shared/logger';
+
+const log = createLogger('caldav');
 
 /**
  * CalDAV Protocol Handler
@@ -92,7 +95,7 @@ export class CalDAVHandler {
       res.send(eventIcs);
 
     } catch (error) {
-      console.error('PUT error:', error);
+      log.error('PUT error:', error);
       res.status(400).send('Invalid ICS data');
     }
   }
@@ -229,7 +232,7 @@ export class CalDAVHandler {
 
       res.status(204).send();
     } catch (error) {
-      console.error('PUT calendar error:', error);
+      log.error('PUT calendar error:', error);
       res.status(400).send('Invalid ICS data');
     }
   }

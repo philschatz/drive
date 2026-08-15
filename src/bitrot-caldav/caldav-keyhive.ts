@@ -16,6 +16,9 @@ import { NodeFSStorageAdapter } from '@automerge/automerge-repo-storage-nodefs';
 import { KeyhiveOps } from '../shared/keyhive-ops';
 import { createKeyhiveRepo } from '../shared/keyhive-repo';
 import { ensureKeyhiveNodeShim, initSubductionNode } from '../cli/keyhive-node-shim';
+import { createLogger } from '../shared/logger';
+
+const log = createLogger('caldav-keyhive');
 
 export interface CaldavKeyhive {
   repo: any;
@@ -48,7 +51,7 @@ export async function initCaldavKeyhive(
     setUserGroupId: async (groupId: string) => { serverUserGroupId = groupId; },
   });
 
-  console.log('[caldav-keyhive] initialized, peerId:', integration.peerId);
+  log.info('initialized, peerId:', integration.peerId);
 
   return { repo, khOps, integration };
 }

@@ -18,6 +18,9 @@ import { relativeTime } from '../../../shared/relative-time';
 import { settingSet, settingSetSync } from '../../shared/idb-storage';
 import type { ImportProgress } from './import-docs';
 import { useInstallNudge } from './install-nudge';
+import { createLogger } from '../../../shared/logger';
+
+const log = createLogger('home');
 
 declare const __APP_VERSION__: string;
 declare const __BUILD_TIME__: string;
@@ -138,7 +141,7 @@ export function Home({ path }: { path?: string }) {
   // Pull the doc list from the worker (the source of truth). Results flow into `entries`
   // via the onDocListUpdated subscription below.
   useEffect(() => {
-    fetchDocList().catch((err) => console.warn('[Home] fetchDocList failed:', err)).finally(() => setListLoading(false));
+    fetchDocList().catch((err) => log.warn('fetchDocList failed:', err)).finally(() => setListLoading(false));
   }, []);
 
   // Per-doc "new changes since last viewed" flags, computed and pushed by the

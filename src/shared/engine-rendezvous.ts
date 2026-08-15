@@ -23,6 +23,9 @@ import { errMsg } from './keyhive-ops';
 import type { EngineCore } from './drive-engine';
 import type { EngineSettingsSurface } from './engine-settings';
 import type { MainToWorker } from './worker-protocol';
+import { createLogger } from './logger';
+
+const log = createLogger('engine');
 
 /** Base this mixin extends: the core plus the settings mixin's surface, so the
  *  rendezvous code can call the settings members (`driveSettingsDoc`, the name
@@ -123,7 +126,7 @@ export function EngineRendezvous<C extends EngineRendezvousCtor>(Base: C):
         this.lastRelayWatch = serialized;
         this.host.network.sendOverlayFrame(frame);
       } catch (err) {
-        console.warn('[engine] relay watch refresh failed:', errMsg(err));
+        log.warn('relay watch refresh failed:', errMsg(err));
       }
     }
 
@@ -175,7 +178,7 @@ export function EngineRendezvous<C extends EngineRendezvousCtor>(Base: C):
       } else if (msg.type === RDV_MSG && session.onData) {
         const data: Uint8Array = msg.data instanceof Uint8Array ? msg.data : new Uint8Array(msg.data);
         if (data.byteLength > RDV_MAX_DATA_BYTES) {
-          console.warn(`[engine] dropping oversized rendezvous payload (${data.byteLength} bytes, max ${RDV_MAX_DATA_BYTES})`);
+          log.warn(`dropping oversized rendezvous payload (${data.byteLength} bytes, max ${RDV_MAX_DATA_BYTES})`);
           // Say what happened rather than leaving the user to wait out
           // RDV_RECEIVE_TIMEOUT_MS and be told to check the other device's QR. The
           // session deliberately stays open: anyone who learns a topic id can push
@@ -186,7 +189,7 @@ export function EngineRendezvous<C extends EngineRendezvousCtor>(Base: C):
         }
         decryptString(session.key, data)
           .then(pt => session.onData!(pt))
-          .catch(err => console.error('[engine] failed to decrypt inbound rendezvous payload:', errMsg(err)));
+          .catch(err => log.error('failed to decrypt inbound rendezvous payload:', errMsg(err)));
       }
     }
 

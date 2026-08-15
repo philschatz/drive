@@ -10,6 +10,10 @@ import { CalDAVHandler } from './caldav-handler';
 import { createDavRoutes } from './routes/dav';
 import { createAdminRoutes } from './routes/admin';
 import { initCaldavKeyhive, type CaldavKeyhive } from './caldav-keyhive';
+import { createLogger } from '../shared/logger';
+
+const log = createLogger('caldav');
+const khLog = createLogger('caldav-keyhive');
 
 const app = express();
 const PORT = Number.parseInt(process.env.CALDAV_PORT || process.env.PORT || '3001');
@@ -37,17 +41,17 @@ if (process.env.JEST_WORKER_ID) {
 } else {
   relay = new WebSocketRelay();
   wss.on('connection', (ws, req) => relay!.handleConnection(ws, req));
-  console.log('[relay] WebSocket relay started');
+  log.info('WebSocket relay started');
 
   // Last line of defense: the relay serves untrusted internet clients, and a
   // single bad frame or transport error must never take the process down for
   // every connected peer. Log and keep serving. (Not registered under Jest so
   // test failures still surface normally.)
   process.on('uncaughtException', (err) => {
-    console.error('[caldav] uncaughtException:', err);
+    log.error('uncaughtException:', err);
   });
   process.on('unhandledRejection', (reason) => {
-    console.error('[caldav] unhandledRejection:', reason);
+    log.error('unhandledRejection:', reason);
   });
 }
 
@@ -82,7 +86,7 @@ export const ready = (async () => {
 
   // Error handling
   app.use((err: Error, req: Request, res: Response, next: any) => {
-    console.error('Unhandled error:', err);
+    log.error('Unhandled error:', err);
     res.status(500).json({ error: 'Internal server error', message: err.message });
   });
 
@@ -95,8 +99,8 @@ export const ready = (async () => {
 if (!process.env.JEST_WORKER_ID) {
   (async () => {
     const server = app.listen(PORT, '0.0.0.0', async () => {
-      console.log(`CalDAV server: http://localhost:${PORT}`);
-      console.log(`Admin: http://localhost:${PORT}/admin/caldav`);
+      log.info(`CalDAV server: http://localhost:${PORT}`);
+      log.info(`Admin: http://localhost:${PORT}/admin/caldav`);
 
       // Now the relay is listening — initialize the keyhive repo.
       try {
@@ -104,9 +108,9 @@ if (!process.env.JEST_WORKER_ID) {
         fs.mkdirSync(khDataDir, { recursive: true });
         caldavKeyhive = await initCaldavKeyhive(khDataDir, `ws://localhost:${PORT}`);
         resolveRepo!(caldavKeyhive.repo);
-        console.log('[caldav-keyhive] repo ready');
+        khLog.info('repo ready');
       } catch (err) {
-        console.error('[caldav-keyhive] failed to initialize:', err);
+        khLog.error('failed to initialize:', err);
         const storageAdapter = new NodeFSStorageAdapter(dataDir);
         resolveRepo!(new Repo({
           network: [],
@@ -121,7 +125,7 @@ if (!process.env.JEST_WORKER_ID) {
     // manager can react — the uncaughtException backstop would otherwise swallow
     // it and leave the process idling without a listener.
     server.on('error', (err) => {
-      console.error('[caldav] server error:', err);
+      log.error('server error:', err);
       process.exit(1);
     });
 

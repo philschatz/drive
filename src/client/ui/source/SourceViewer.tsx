@@ -47,6 +47,9 @@ import {
   resolveLevel, unescapeString, valueAt, type Path,
 } from './source-nodes';
 import './source.css';
+import { createLogger } from '../../../shared/logger';
+
+const log = createLogger('source');
 
 const EMPTY_SET: Set<string> = new Set();
 
@@ -136,7 +139,7 @@ export function SourceViewer({ docId, rest, readOnly }: { docId?: string; rest?:
       if (atLatest.current && h.length > 0) {
         setVersion(h.length - 1);
       }
-    }).catch(e => console.error('getDocHistory failed:', e));
+    }).catch(e => log.error('getDocHistory failed:', e));
   }, [docId]);
 
   useEffect(() => {

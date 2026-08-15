@@ -1,9 +1,15 @@
 process.env.AUTOMERGE_DATA_DIR = '.data-jest';
-// Silence the relay's per-message firehose + info logs under the test runner
-// (mirrors playwright.config.ts). See src/relay/relay-log.ts — this also gates
-// the expected-hardening relayWarn/relayError lines, leaving genuine internal
-// failures (raw console.error) still visible. Workers inherit this env.
-process.env.RELAY_QUIET = '1';
+// App logging goes through src/shared/logger.ts. `error` silences the warn/info
+// lines and the per-message firehoses that otherwise bury the output of
+// `jest --verbose` (and of a single-file run, where Jest turns verbose on for
+// you), while still letting an UNEXPECTED error through — a test that expects
+// one claims it with captureConsole(['error']) (tests/support/console.ts).
+//
+// `??=`, not `=`, so `LOG_LEVEL=debug npx jest …` from the shell wins: that is
+// the escape hatch when a failure needs the engine's own account of what
+// happened. LOG_NS=engine:debug narrows it to one namespace. Workers inherit
+// this env, and it covers both the `server` and `ui` projects.
+process.env.LOG_LEVEL ??= 'error';
 
 /** @type {import('jest').Config} */
 module.exports = {

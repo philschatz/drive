@@ -20,6 +20,9 @@ import { idbKvStore } from './idb-kvstore';
 import { DriveEngine, type DriveEngineInstance } from '../../shared/drive-engine';
 import type { EngineHost, EngineNetwork } from '../../shared/engine-host';
 import type { MainToWorker, WorkerToMain, ValidationError } from '../../shared/worker-protocol';
+import { createLogger } from '../../shared/logger';
+
+const log = createLogger('worker');
 
 // Re-export the message protocol so existing importers (worker-api.ts) are unaffected.
 export type { MainToWorker, WorkerToMain, ValidationError };
@@ -28,13 +31,13 @@ export type { MainToWorker, WorkerToMain, ValidationError };
 // `[worker] ← recv X`. Wrapping self.postMessage covers all send sites at once.
 const origPostMessage = self.postMessage.bind(self);
 (self as any).postMessage = (msg: any, ...rest: any[]) => {
-  try { console.log('[worker] → send', msg?.type, msg); } catch { /* never let logging break a send */ }
+  try { log.debug('→ send', msg?.type, msg); } catch { /* never let logging break a send */ }
   return (origPostMessage as any)(msg, ...rest);
 };
 
 function reportWorkerError(prefix: string, detail: unknown) {
   const message = (detail as any)?.message || String(detail ?? 'Unknown worker error');
-  console.error(`[worker] ${prefix}:`, detail);
+  log.error(`${prefix}:`, detail);
   try {
     // Debug mode: name the most-recent keyhive (Rust/WASM) call so the main thread
     // can attach it to the crash banner. A WASM `unreachable` trap gives no hint of
@@ -81,7 +84,7 @@ let socketOpenHandler: (() => void) | null = null;
 let rdvSocket: WebSocket | undefined;
 
 try {
-  console.log('[worker] importing modules...');
+  log.info('importing modules...');
   const repoModule: any = await import('@automerge/automerge-repo');
   const NetworkAdapterBase = repoModule.NetworkAdapter;
   const { IndexedDBStorageAdapter } = await import('@automerge/automerge-repo-storage-indexeddb');
@@ -167,16 +170,16 @@ try {
     ? Number(rawSyncInterval)
     : undefined;
   engine = new DriveEngine(host, { syncRequestInterval });
-  console.log('[worker] host + engine ready');
+  log.info('host + engine ready');
 } catch (err: any) {
-  console.error('[worker] Failed to initialize:', err);
+  log.error('Failed to initialize:', err);
   (self as any).postMessage({ type: 'error', message: `Module load failed: ${errMsg(err)}` });
   throw err;
 }
 
 async function handleMessage(e: MessageEvent<MainToWorker>) {
   const msg = e.data;
-  console.log('[worker] ← recv', msg.type, msg);
+  log.debug('← recv', msg.type, msg);
   if (!engine) return;
 
   // Browser-only transport ports stay in the shell.
@@ -190,7 +193,7 @@ async function handleMessage(e: MessageEvent<MainToWorker>) {
 }
 
 // Replace queue handler with the real handler and drain.
-console.log('[worker] module loaded, queued messages:', pendingMessages.length);
+log.info('module loaded, queued messages:', pendingMessages.length);
 self.onmessage = handleMessage;
 for (const msg of pendingMessages) void handleMessage(msg);
 pendingMessages.length = 0;

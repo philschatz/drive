@@ -16,6 +16,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import { stripComments } from './support/strip-comments';
 
 const REPO = path.resolve(__dirname, '..');
 
@@ -61,6 +62,27 @@ describe('directory layering', () => {
           offenders.push(`${path.relative(REPO, file)} -> ${spec}`);
         }
       }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it('src/shared never uses import.meta (ts-jest cannot transform it)', () => {
+    // ts-jest emits CommonJS, where `import.meta` is a syntax error — one use in
+    // src/shared would break every node test that transitively imports it (this is
+    // why doc-plugins/datagrid/hf-bridge.ts cannot mount under jsdom today). The
+    // live temptation is logger.ts: reading a level from `import.meta.env.VITE_*`
+    // looks natural and would take the whole suite down. It uses a guarded
+    // `globalThis.process` instead.
+    const offenders: string[] = [];
+    for (const file of walk(path.join(REPO, 'src/shared'))) {
+      // Comments stripped, or this would flag logger.ts's own header explaining
+      // the rule, and relative-dates.ts's JSDoc mentioning import.meta.glob.
+      const src = stripComments(fs.readFileSync(file, 'utf8'));
+      src.split('\n').forEach((line, i) => {
+        if (/\bimport\s*\.\s*meta\b/.test(line)) {
+          offenders.push(`${path.relative(REPO, file)}:${i + 1}`);
+        }
+      });
     }
     expect(offenders).toEqual([]);
   });

@@ -1,5 +1,8 @@
 import type { Plugin } from 'vite';
 import { WebSocketRelay, createRelayWebSocketServer } from './relay';
+import { createLogger } from '../shared/logger';
+
+const log = createLogger('relay');
 
 /**
  * Vite plugin that attaches the automerge-repo WebSocket relay
@@ -21,7 +24,7 @@ export function relayPlugin(): Plugin {
         });
       });
 
-      console.log('[relay] WebSocket relay started');
+      log.info('WebSocket relay started');
     },
   };
 }

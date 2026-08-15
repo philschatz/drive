@@ -35,6 +35,9 @@ import {
   type TabEnvelope,
 } from '../shared/tab-channel';
 import type { WorkerToMain } from '../../shared/worker-protocol';
+import { createLogger } from '../../shared/logger';
+
+const log = createLogger('tab');
 
 /** Whether this tab owns the engine, routes through another tab, or hasn't settled yet. */
 export type TabRole = 'unknown' | 'leader' | 'follower';
@@ -96,7 +99,7 @@ export function makeWorkerTransport(): WorkerTransport {
     sink = next;
     while (outbox.length) {
       const q = outbox.shift()!;
-      try { next(q.msg, q.transfer); } catch (err) { console.error('[tab] flush failed:', err); }
+      try { next(q.msg, q.transfer); } catch (err) { log.error('flush failed:', err); }
     }
   }
 
@@ -107,7 +110,7 @@ export function makeWorkerTransport(): WorkerTransport {
   function reloadForLeaderChange(why: string): void {
     if (reloading) return;
     reloading = true;
-    console.log(`[tab] leader changed (${why}) — reloading to rebind`);
+    log.info(`leader changed (${why}) — reloading to rebind`);
     try { channel?.close(); } catch { /* already closed */ }
     window.location.reload();
   }

@@ -43,6 +43,12 @@ import { ensureKeyhiveNodeShim, initSubductionNode } from './keyhive-node-shim';
 import { KEYS } from '../shared/storage-keys';
 import type { EngineHost, EngineNetwork } from '../shared/engine-host';
 import type { WorkerToMain } from '../shared/worker-protocol';
+import { createLogger } from '../shared/logger';
+
+// The CLI's transcript, not diagnostics: `info` so the default level shows it,
+// `error` for the failures. Real command output goes through out() → the stdout
+// captured before main() redirects the stream to stderr, so it is never gated.
+const log = createLogger('cli');
 
 function intArg(value: string): number {
   const n = Number.parseInt(value, 10);
@@ -180,7 +186,7 @@ async function startEngine(
   let network: EngineNetwork;
   if (mode.network) {
     const relayUrl = opts.relay ?? process.env.DRIVE_RELAY_URL ?? PRODUCTION_RELAY_URL;
-    console.error(`[cli] relay=${relayUrl} data-dir=${dataDir}`);
+    log.info(`relay=${relayUrl} data-dir=${dataDir}`);
     wsAdapter = new WebSocketClientAdapter(relayUrl);
     const rdvEncoder = new Encoder({ tagUint8Array: false, useRecords: false });
     let rdvHandler: ((frame: any) => void) | null = null;
@@ -222,7 +228,7 @@ async function startEngine(
   } else {
     // Local-only: no relay socket, no rendezvous overlay. The OfflineNetworkAdapter
     // keeps the keyhive bridge + repo happy while guaranteeing zero network I/O.
-    console.error(`[cli] local-only data-dir=${dataDir}`);
+    log.info(`local-only data-dir=${dataDir}`);
     network = {
       networkAdapter: new OfflineNetworkAdapter(),
       sendOverlayFrame: () => { /* no relay in local-only mode */ },
@@ -234,17 +240,17 @@ async function startEngine(
     // Log every emitted engine event to stderr. A few get a friendlier one-line
     // summary; the rest fall through to a generic dump so nothing is dropped.
     switch (event.type) {
-      case 'ready': console.error(`[cli] ready, peerId=${event.peerId}`); return;
-      case 'kh-ready': console.error('[cli] keyhive ready'); return;
-      case 'kh-error': console.error('[cli] keyhive error:', event.message); return;
-      case 'error': console.error('[cli] error:', event.message); return;
-      case 'data-warning': console.error('[cli] warning:', event.message); return;
+      case 'ready': log.info(`ready, peerId=${event.peerId}`); return;
+      case 'kh-ready': log.info('keyhive ready'); return;
+      case 'kh-error': log.error('keyhive error:', event.message); return;
+      case 'error': log.error('error:', event.message); return;
+      case 'data-warning': log.warn('warning:', event.message); return;
       case 'peer-connected':
-      case 'peer-disconnected': console.error(`[cli] peers: ${event.peerCount}`); return;
-      case 'doc-list-updated': console.error(`[cli] doc list: ${event.list.length} doc(s)`); return;
+      case 'peer-disconnected': log.info(`peers: ${event.peerCount}`); return;
+      case 'doc-list-updated': log.info(`doc list: ${event.list.length} doc(s)`); return;
       case 'kh-rdv-event':
-        console.error(`[cli] link ${event.status}${event.message ? `: ${event.message}` : ''}`); return;
-      default: console.error(`[cli] event ${event.type}`, event); return;
+        log.info(`link ${event.status}${event.message ? `: ${event.message}` : ''}`); return;
+      default: log.info(`event ${event.type}`, event); return;
     }
   };
 
@@ -257,8 +263,8 @@ async function startEngine(
 /** Exit with a hint unless this device already has a linked identity. */
 async function requireLinked(kv: NodeKVStore): Promise<void> {
   if (await kv.get<string>(KEYS.userGroupId)) return;
-  console.error('[cli] no stored identity — link this device first:');
-  console.error('[cli]   npm run cli -- accept-invite "https://…/#/link-device/r.<id>.<key>"');
+  log.error('no stored identity — link this device first:');
+  log.error('  npm run cli -- accept-invite "https://…/#/link-device/r.<id>.<key>"');
   process.exit(1);
 }
 
@@ -269,7 +275,7 @@ function withTimeout<T>(p: Promise<T>, ms: number, message: string): Promise<T> 
 
 /** Poll (up to ~20s) for the keyhive group graph to sync so accessible docs surface. */
 async function waitForDocs(engine: DriveEngineInstance): Promise<string[]> {
-  console.error('[cli] waiting for documents to sync…');
+  log.info('waiting for documents to sync…');
   let ids: string[] = [];
   for (let i = 0; i < 20; i++) {
     ids = await engine.enumerateAccessibleDocIds();
@@ -299,15 +305,15 @@ async function main(): Promise<void> {
     .action(async (url: string, opts: CliOpts) => {
       const parsed = parseRendezvousToken(url);
       if (!parsed) {
-        console.error('[cli] could not parse an invite from the given URL/token (expected …/link-device/r.<id>.<key>).');
+        log.error('could not parse an invite from the given URL/token (expected …/link-device/r.<id>.<key>).');
         process.exit(1);
       }
       const { engine, wsAdapter } = await startEngine(opts, { network: true });
       // Rendezvous frames ride the raw relay socket — it must be OPEN before we
       // subscribe, or the RDV_SUB is dropped and the other device waits forever.
-      console.error('[cli] connecting to relay…');
+      log.info('connecting to relay…');
       await waitForRelayConnection(wsAdapter, 20_000);
-      console.error('[cli] linking device via rendezvous…');
+      log.info('linking device via rendezvous…');
       await engine.rendezvousLinkJoin(parsed.rendezvousId, parsed.key);
       // Flush the return handshake frame before we do anything else, or the other
       // device hangs (stuck "Exchanging keys…") waiting for a frame we never flushed.
@@ -316,10 +322,10 @@ async function main(): Promise<void> {
       // surfaces. Sync completion isn't observable in this stack (there's no
       // "caught up" signal), so we can't guarantee every doc's content has landed —
       // hence the run-`sync` hint below.
-      console.error('[cli] device linked; pulling documents…');
+      log.info('device linked; pulling documents…');
       const ids = await waitForDocs(engine);
-      console.error(`[cli] device linked; ${ids.length} document(s) visible so far.`);
-      console.error("[cli] sync is not instantaneous — run 'npm run cli -- sync --forever' (or --duration <seconds>) to pull everything.");
+      log.info(`device linked; ${ids.length} document(s) visible so far.`);
+      log.info("sync is not instantaneous — run 'npm run cli -- sync --forever' (or --duration <seconds>) to pull everything.");
       process.exit(0);
     });
 
@@ -332,7 +338,7 @@ async function main(): Promise<void> {
       // Local-only: enumerate whatever keyhive access this device already knows
       // about. There's no relay, so there is nothing to wait for.
       const ids = await engine.enumerateAccessibleDocIds();
-      console.error(`[cli] ${ids.length} accessible document(s) (local).`);
+      log.info(`${ids.length} accessible document(s) (local).`);
       const metas = await Promise.all(ids.map(async (id) => {
         // A doc can be accessible per keyhive yet not present in this device's local
         // store (never synced here). Don't let one such doc reject the whole list.
@@ -361,17 +367,17 @@ async function main(): Promise<void> {
     .action(async (docId: string, version: number | undefined, opts: CliOpts) => {
       const { engine, kv } = await startEngine(opts, { network: false });
       await requireLinked(kv);
-      console.error(`[cli] loading document${version === undefined ? '' : ` @ v${version}`}…`);
+      log.info(`loading document${version === undefined ? '' : ` @ v${version}`}…`);
       let doc: any;
       try {
         doc = await withTimeout(engine.getDocJson(docId, version), 30_000,
           'timed out loading the document from the local store');
       } catch (err) {
-        console.error('[cli]', err instanceof Error ? err.message : String(err));
+        log.error(err instanceof Error ? err.message : String(err));
         process.exit(1);
       }
       if (doc == null) {
-        console.error('[cli] document not found in the local store (run `sync` to pull it first).');
+        log.error('document not found in the local store (run `sync` to pull it first).');
         process.exit(1);
       }
       out(JSON.stringify(doc, null, 2));
@@ -387,16 +393,16 @@ async function main(): Promise<void> {
     .action(async (docId: string, from: number | undefined, to: number | undefined, opts: CliOpts) => {
       const { engine, kv } = await startEngine(opts, { network: false });
       await requireLinked(kv);
-      console.error('[cli] loading document…');
+      log.info('loading document…');
       let result: { from: number; to: number; patches: any[] };
       try {
         result = await withTimeout(engine.diffVersions(docId, from, to), 30_000,
           'timed out loading the document from the local store');
       } catch (err) {
-        console.error('[cli]', err instanceof Error ? err.message : String(err));
+        log.error(err instanceof Error ? err.message : String(err));
         process.exit(1);
       }
-      console.error(`[cli] diff v${result.from} → v${result.to} (${result.patches.length} op(s))`);
+      log.info(`diff v${result.from} → v${result.to} (${result.patches.length} op(s))`);
       for (const op of result.patches) out(fmtPatch(op));
       process.exit(0);
     });
@@ -421,13 +427,13 @@ async function main(): Promise<void> {
       const duration = opts.duration ??
         (process.env.DRIVE_SYNC_DURATION ? intArg(process.env.DRIVE_SYNC_DURATION) : undefined);
       if (forever && duration !== undefined) {
-        console.error('[cli] choose --forever or --duration, not both.');
+        log.error('choose --forever or --duration, not both.');
         process.exit(1);
       }
       if (!forever && duration === undefined) {
-        console.error('[cli] sync requires a run mode:');
-        console.error('[cli]   --forever            run until Ctrl-C / SIGTERM');
-        console.error('[cli]   --duration <seconds> sync for a fixed time, then disconnect and exit');
+        log.error('sync requires a run mode:');
+        log.error('  --forever            run until Ctrl-C / SIGTERM');
+        log.error('  --duration <seconds> sync for a fixed time, then disconnect and exit');
         process.exit(1);
       }
 
@@ -439,11 +445,11 @@ async function main(): Promise<void> {
 
       const { engine } = await startEngine(opts, { network: true });
       const ids = await waitForDocs(engine);
-      console.error(`[cli] ${ids.length} accessible document(s).`);
+      log.info(`${ids.length} accessible document(s).`);
 
       const onUpdate = (u: WatchUpdate): void => {
         const at = u.lastModified ? new Date(u.lastModified * 1000).toISOString() : 'unknown';
-        console.error(`[cli] update ${u.docId} type=${u.docType ?? '?'} name=${JSON.stringify(u.name ?? '')} versions=${u.versions ?? 0} at=${at}`);
+        log.info(`update ${u.docId} type=${u.docType ?? '?'} name=${JSON.stringify(u.name ?? '')} versions=${u.versions ?? 0} at=${at}`);
       };
       await engine.startWatching({ keepOpen, recentDays, syncMs: syncSeconds * 1000 }, onUpdate);
 
@@ -451,7 +457,7 @@ async function main(): Promise<void> {
       const shutdown = (reason: string, code = 0): void => {
         if (shuttingDown) return;
         shuttingDown = true;
-        console.error(`[cli] ${reason}`);
+        log.info(`${reason}`);
         engine.stopWatching();
         process.exit(code);
       };
@@ -460,10 +466,10 @@ async function main(): Promise<void> {
 
       const knobs = `keep-open=${keepOpen}, recent-days=${recentDays}, sync=${syncSeconds}s`;
       if (duration !== undefined) {
-        console.error(`[cli] syncing for ${duration}s (${knobs}).`);
+        log.info(`syncing for ${duration}s (${knobs}).`);
         setTimeout(() => shutdown('duration elapsed — disconnecting.'), duration * 1000);
       } else {
-        console.error(`[cli] syncing forever (${knobs}). Ctrl-C to stop.`);
+        log.info(`syncing forever (${knobs}). Ctrl-C to stop.`);
       }
     });
 
@@ -477,6 +483,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  console.error('[cli] fatal:', err);
+  log.error('fatal:', err);
   process.exit(1);
 });

@@ -46,6 +46,9 @@ import {
 } from './edit-ops';
 import { applyOpsToSpans, shiftPositionThroughOps } from './spans-model';
 import { reconcileDomToOps } from './dom-reconcile';
+import { createLogger } from '../../../../shared/logger';
+
+const log = createLogger('sentences');
 
 /** How long a composition may go silent before we assume the IME dropped its
  * `compositionend` (Android does, on an app or keyboard switch). */
@@ -858,7 +861,7 @@ export function RichTextEditor({
       resyncPendingRef.current = true;
       requestResync();
     } else {
-      console.warn('[sentences] editor DOM still diverges from the model after a rebuild');
+      log.warn('editor DOM still diverges from the model after a rebuild');
     }
     const target = pendingCaretRef.current ??
       (root.contains(document.activeElement) ? lastSelectionRef.current : null);

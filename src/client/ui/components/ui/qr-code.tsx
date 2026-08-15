@@ -1,6 +1,9 @@
 import { useState, useEffect } from 'preact/hooks';
 import QRCode from 'qrcode';
 import { showToast } from './toast';
+import { createLogger } from '../../../../shared/logger';
+
+const log = createLogger('qr-code');
 
 interface QRCodeProps {
   url: string;
@@ -20,7 +23,7 @@ export function QRCodeDisplay({ url, size = 200, className }: QRCodeProps) {
     QRCode.toString(url, { type: 'svg', margin: 1, width: size, errorCorrectionLevel: 'L' })
       .then(svg => { setSvg(svg); setError(''); })
       .catch(err => {
-        console.error('[QRCodeDisplay] failed to render QR (url length %d):', url.length, err);
+        log.error(`failed to render QR (url length ${url.length}):`, err);
         setSvg('');
         setError(err?.message ?? 'Could not render QR code');
       });

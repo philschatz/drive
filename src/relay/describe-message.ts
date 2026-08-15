@@ -1,24 +1,27 @@
 import { decode } from 'cbor-x';
+import { createLogger } from '../shared/logger';
 
-// Relay logging is a per-message firehose. Tests set RELAY_QUIET=1 to silence
-// the informational output (peer join/leave + every routed message) while
-// keeping console.error for genuine failures. Default (unset) preserves the
-// full dev/prod logging.
-const RELAY_QUIET = process.env.RELAY_QUIET === '1';
-
-/** Informational relay log — suppressed when RELAY_QUIET=1 (e.g. under tests). */
-export function relayInfo(...args: unknown[]): void {
-  if (!RELAY_QUIET) console.log(...args);
-}
-
-export function relayError(...args: unknown[]): void {
-  if (!RELAY_QUIET) console.error(...args);
-}
+// Formatting for the relay's message log: `logMessage` renders one routed
+// message, and everything below it exists to describe an opaque encrypted
+// payload without loading the keyhive WASM module (which the relay deliberately
+// avoids).
+//
+// There is no relay-specific logging switch. This used to be relay-log.ts, with
+// its own RELAY_QUIET env var gating relayInfo/relayError; both are gone. The
+// firehose is `debug` and the rest is levelled like anywhere else, so LOG_LEVEL
+// (=error under Jest and Playwright) covers what RELAY_QUIET used to.
+const log = createLogger('relay');
 
 /** Truncate the base64 key but keep any `-suffix` intact — the suffix is the
  * per-service part of a peerId ('drive', 'caldav-server'), so it's what tells
- * two services of the same device apart in collision/routing logs. */
+ * two services of the same device apart in collision/routing logs.
+ *
+ * Tolerates a non-string: ids come off the wire, so a malformed frame can carry
+ * an object here (see relay.test.ts "does not throw on non-string targetId").
+ * Formatting a log line must never be what takes the relay's message handler
+ * into its error backstop. */
 export function shortId(id: string): string {
+  if (typeof id !== 'string') return String(id);
   const dash = id.indexOf('-');
   if (dash === -1) return id.length > 8 ? id.slice(0, 6) + '…' : id;
   const key = id.slice(0, dash);
@@ -203,10 +206,18 @@ function describeMessageData(type: string, data: unknown): string {
   return `${body} +(${notes.join(', ')})`;
 }
 
+/**
+ * One line per routed message: a firehose, hence debug.
+ *
+ * The level check comes FIRST and guards everything below it. Describing a
+ * message decodes CBOR, peels a keyhive `Signed` envelope and hashes the
+ * payload — far too much to do per message on the off chance someone is
+ * watching. (This replaced an `if (RELAY_QUIET) return` that had the same job.)
+ */
 export function logMessage(dir: '←' | '→', peerId: string, message: any) {
-  if (RELAY_QUIET) return;
+  if (!log.enabled('debug')) return;
   const type = message.type ?? message;
-  const parts = [`[relay] ${dir} ${shortId(peerId)} ${type}`];
+  const parts = [`${dir} ${shortId(peerId)} ${type}`];
 
   if (message.senderId) parts.push(`from=${shortId(message.senderId)}`);
   if (message.targetId) parts.push(`to=${shortId(message.targetId)}`);
@@ -226,12 +237,13 @@ export function logMessage(dir: '←' | '→', peerId: string, message: any) {
     if (metaParts.length > 0) parts.push(`meta={${metaParts.join(', ')}}`);
   }
 
-  if (message.supportedProtocolVersions) {
+  // Array-check, not truthy-check: this comes off the wire (see shortId).
+  if (Array.isArray(message.supportedProtocolVersions)) {
     parts.push(`versions=[${message.supportedProtocolVersions.join(',')}]`);
   }
   if (message.selectedProtocolVersion) {
     parts.push(`version=${message.selectedProtocolVersion}`);
   }
 
-  console.log(parts.join(' '));
+  log.debug(parts.join(' '));
 }

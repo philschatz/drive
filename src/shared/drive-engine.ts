@@ -36,6 +36,9 @@ import { EngineWatch, type EngineWatchSurface } from './engine-watch';
 import type {
   BackupPayload, BackupTier, BackupResult, BackupDocEntry, BackupSettings,
 } from './backup';
+import { createLogger, setLogLevel } from './logger';
+
+const log = createLogger('engine');
 
 /** JSON with recursively sorted object keys — for value comparisons where the
  * producer's key order is nondeterministic (e.g. Automerge span block values). */
@@ -185,14 +188,16 @@ export class EngineCore {
 
   /**
    * Run a request handler and emit the single `{result}`/`{error}` envelope the
-   * main thread awaits. `log` (if given) prefixes the error-level log for the
-   * handlers that want one; `error` is always emitted so callers see the failure.
+   * main thread awaits. `errLabel` (if given) is the message the error-level log
+   * leads with for the handlers that want one — a plain string, NOT a logger, and
+   * without an `[engine]` prefix, which the logger adds. `error` is always
+   * emitted so callers see the failure.
    */
-  protected async respond(id: number, fn: () => Promise<unknown> | unknown, log?: string): Promise<void> {
+  protected async respond(id: number, fn: () => Promise<unknown> | unknown, errLabel?: string): Promise<void> {
     try {
       this.host.emit({ type: 'result', id, result: await fn() });
     } catch (err: any) {
-      if (log) console.error(log, errMsg(err));
+      if (errLabel) log.error(errLabel, errMsg(err));
       this.host.emit({ type: 'result', id, error: errMsg(err) });
     }
   }
@@ -244,7 +249,7 @@ export class EngineCore {
       const khDocId = this.bridge.docIdFromAutomergeUrl(`automerge:${automergeDocId}` as any);
       return await this.khOps.kh.getDocument(khDocId);
     } catch (err) {
-      console.warn('[engine] getKhDoc failed:', errMsg(err));
+      log.warn('getKhDoc failed:', errMsg(err));
       return null;
     }
   }
@@ -318,7 +323,7 @@ export class EngineCore {
         await storage.saveDoc(handle.documentId, doc);
         saved++;
       } catch (err) {
-        console.warn(`[engine] flush-storage failed for ${handle.documentId}:`, errMsg(err));
+        log.warn(`flush-storage failed for ${handle.documentId}:`, errMsg(err));
       }
     }
     return saved;
@@ -373,7 +378,7 @@ export class EngineCore {
           }
           docs.push(item);
         } catch (err) {
-          console.warn(`[engine] export-backup: skipping unreadable doc ${entry.id}:`, errMsg(err));
+          log.warn(`export-backup: skipping unreadable doc ${entry.id}:`, errMsg(err));
         }
       }
       payload.docs = docs;
@@ -426,7 +431,7 @@ export class EngineCore {
             const errors = validateDocument(loaded);
             if (errors.length) {
               skipped.push(label);
-              console.warn(`[engine] import-backup: skipping invalid doc ${label}:`, errors.slice(0, 3).map(e => e.message).join('; '));
+              log.warn(`import-backup: skipping invalid doc ${label}:`, errors.slice(0, 3).map(e => e.message).join('; '));
               continue;
             }
             handle = await this.createKeyhiveDocHandleFromBinary(bin);
@@ -436,7 +441,7 @@ export class EngineCore {
             const errors = validateDocument(doc);
             if (errors.length) {
               skipped.push(label);
-              console.warn(`[engine] import-backup: skipping invalid doc ${label}:`, errors.slice(0, 3).map(e => e.message).join('; '));
+              log.warn(`import-backup: skipping invalid doc ${label}:`, errors.slice(0, 3).map(e => e.message).join('; '));
               continue;
             }
             handle = await this.createKeyhiveDocHandle(doc);
@@ -450,7 +455,7 @@ export class EngineCore {
           imported++;
         } catch (err) {
           skipped.push(label);
-          console.warn(`[engine] import-backup: doc creation failed for ${label}:`, errMsg(err));
+          log.warn(`import-backup: doc creation failed for ${label}:`, errMsg(err));
         }
       }
       if (imported) {
@@ -485,7 +490,7 @@ export class EngineCore {
   private mergeImportedSettings(settings: BackupSettings): void {
     const setOrSkip = (what: string, mutate: (d: any) => void) => {
       try { this.settingsSurface.changeDriveSettings(mutate); }
-      catch (err) { console.warn(`[engine] import-backup: skipped invalid ${what}:`, errMsg(err)); }
+      catch (err) { log.warn(`import-backup: skipped invalid ${what}:`, errMsg(err)); }
     };
 
     for (const [id, name] of Object.entries(settings.friends ?? {})) {
@@ -676,7 +681,7 @@ export class EngineCore {
       if (OPEN_DOCS_IN_BACKGROUND) {
         this.getOrLoadHandle(docId)
           .then(handle => this.getOrCreateEntry(docId, handle))
-          .catch(err => console.warn(`[engine] subscribe-query open failed ${docId}:`, errMsg(err)));
+          .catch(err => log.warn(`subscribe-query open failed ${docId}:`, errMsg(err)));
       }
     }
   }
@@ -807,7 +812,7 @@ export class EngineCore {
     const prefix = docCachePrefix(docId);
     for (const key of this.queryResultCache.keys()) {
       if (key.startsWith(prefix) && !activeHashes.has(key.slice(prefix.length))) {
-        console.log(`[engine] might want to (but will not) delete possibly stale key ${key}`);
+        log.debug(`might want to (but will not) delete possibly stale key ${key}`);
       }
     }
 
@@ -936,11 +941,11 @@ export class EngineCore {
           const sigs = await this.khOps.getUserGroupGrantSigs(this.resolveKhDocId(amDocId));
           const reshared = tomb.grantSigs.length > 0 && sigs.some(s => !tomb.grantSigs.includes(s));
           if (!reshared) continue;
-          console.log(`[engine] reconcileHomeDocs: re-shared archived doc ${amDocId}, un-archiving`);
+          log.debug(`reconcileHomeDocs: re-shared archived doc ${amDocId}, un-archiving`);
           delete tombstones[amDocId];
           removedTombstones.push(amDocId);
         }
-        console.log(`[engine] reconcileHomeDocs: adding accessible doc ${amDocId}`);
+        log.debug(`reconcileHomeDocs: adding accessible doc ${amDocId}`);
         list.unshift({ id: amDocId });
         knownIds.add(amDocId);
         newDocHandles.push(amDocId);
@@ -962,7 +967,7 @@ export class EngineCore {
         }
         if (tombstones[e.id]) {
           // Archived, but still listed — a reconcile raced the archive handler.
-          console.log(`[engine] reconcileHomeDocs: removing archived doc ${e.id}`);
+          log.debug(`reconcileHomeDocs: removing archived doc ${e.id}`);
           list.splice(i, 1);
           knownIds.delete(e.id);
           changed = true;
@@ -972,7 +977,7 @@ export class EngineCore {
         if (accessibleAmIds.has(e.id)) continue;
         const khDocId = this.resolveKhDocId(e.id);
         if (reachableSet.has(khDocId)) {
-          console.log(`[engine] reconcileHomeDocs: removing revoked doc ${e.id}`);
+          log.debug(`reconcileHomeDocs: removing revoked doc ${e.id}`);
           list.splice(i, 1);
           knownIds.delete(e.id);
           changed = true;
@@ -999,12 +1004,12 @@ export class EngineCore {
             const handle = await this.getOrLoadHandle(docId);
             this.getOrCreateEntry(docId, handle);
           } catch (err) {
-            console.warn(`[engine] reconcileHomeDocs: failed to pre-load ${docId}:`, errMsg(err));
+            log.warn(`reconcileHomeDocs: failed to pre-load ${docId}:`, errMsg(err));
           }
         }
       }
     } catch (err) {
-      console.warn('[engine] reconcileHomeDocs failed:', errMsg(err));
+      log.warn('reconcileHomeDocs failed:', errMsg(err));
     }
   }
 
@@ -1017,12 +1022,17 @@ export class EngineCore {
   // ── Init ─────────────────────────────────────────────────────────────────
   async init(): Promise<void> {
     // Hydrate the debug-enable flag from its persisted setting. When on it also
-    // disables the caches (bypass checks below) and traces keyhive calls.
+    // disables the caches (bypass checks below), traces keyhive calls, and turns
+    // the logger up to debug — which is what re-enables the per-message
+    // firehoses. Reading it via host.kv is what lets src/shared do this without
+    // importing the browser's idb-storage (tests/layering.test.ts); the browser
+    // main thread has its own copy of this in ui/log-config.ts.
     try {
       this.debugEnabled = (await this.host.kv.settingGet('debug-enable')) === true;
     } catch (err) {
-      console.warn('[engine] failed to read debug-enable setting:', errMsg(err));
+      log.warn('failed to read debug-enable setting:', errMsg(err));
     }
+    if (this.debugEnabled) setLogLevel('debug');
 
     // Resolve the settings storage mode from the single KEYS.driveSettings value:
     // a string is a settings-doc id ⇒ SHARED; an object (or absent) ⇒ LOCAL (default).
@@ -1031,7 +1041,7 @@ export class EngineCore {
       const v = await this.host.kv.get<unknown>(KEYS.driveSettings);
       this.settingsSurface.settingsMode = typeof v === 'string' ? 'shared' : 'local';
     } catch (err) {
-      console.warn('[engine] failed to read settings-storage mode:', errMsg(err));
+      log.warn('failed to read settings-storage mode:', errMsg(err));
       this.settingsSurface.settingsMode = 'local';
     }
 
@@ -1040,7 +1050,7 @@ export class EngineCore {
     try {
       this.lastViewedHeads = (await this.host.kv.get<Record<string, string[]>>(KEYS.lastViewedHeads)) ?? {};
     } catch (err) {
-      console.warn('[engine] failed to read last-viewed heads:', errMsg(err));
+      log.warn('failed to read last-viewed heads:', errMsg(err));
       this.lastViewedHeads = {};
     }
 
@@ -1115,7 +1125,7 @@ export class EngineCore {
       ns.on('peer', () => this.postStatus());
       ns.on('peer-disconnected', () => this.postStatus());
 
-      console.log('[engine] secure repo created, peerId:', this.repo.peerId);
+      log.info('secure repo created, peerId:', this.repo.peerId);
 
       // Pre-register docs with keyhive and push doc list + contact names BEFORE
       // kh-ready so code awaiting keyhiveReady can read them immediately.
@@ -1125,7 +1135,7 @@ export class EngineCore {
         try {
           await this.khOps.registerSharingGroup(khDocId);
         } catch (err) {
-          console.warn(`[engine] Failed to pre-register doc ${entry.id}:`, errMsg(err));
+          log.warn(`Failed to pre-register doc ${entry.id}:`, errMsg(err));
         }
       }
       this.emit({ type: 'doc-list-updated', list: earlyList });
@@ -1144,7 +1154,7 @@ export class EngineCore {
       void this.rendezvousSurface.refreshRelayWatch();
       this.emit({ type: 'kh-ready' });
     } catch (khErr: any) {
-      console.error('[engine] keyhive init failed:', khErr);
+      log.error('keyhive init failed:', khErr);
       this.emit({ type: 'kh-error', message: errMsg(khErr) });
     }
 
@@ -1158,7 +1168,7 @@ export class EngineCore {
     // Detect a dangling user-group (id persisted but its group missing from keyhive).
     const danglingGroup = this.khOps ? await this.khOps.findDanglingUserGroup() : null;
     if (danglingGroup) {
-      console.error(`[engine] user-group ${danglingGroup} is dangling — skipping reconcile to preserve the home list`);
+      log.error(`user-group ${danglingGroup} is dangling — skipping reconcile to preserve the home list`);
       this.emit({
         type: 'data-warning',
         message: `Your user-group is missing from local keyhive storage (likely from a data migration). Documents are preserved, but sharing is broken — reset via Settings → Delete All Data.`,
@@ -1167,7 +1177,7 @@ export class EngineCore {
       void this.reconcileHomeDocs();
     }
 
-    console.log('[engine] init complete');
+    log.info('init complete');
     this.emit({ type: 'ready', peerId: this.repo!.peerId });
   }
 
@@ -1183,7 +1193,7 @@ export class EngineCore {
     if (msg.type === 'init') {
       try { await this.init(); }
       catch (err: any) {
-        console.error('[engine] init failed:', err);
+        log.error('init failed:', err);
         emit({ type: 'error', message: errMsg(err) });
       }
       return;
@@ -1227,7 +1237,7 @@ export class EngineCore {
     }
 
     if (msg.type === 'import-backup') {
-      await this.respond(msg.id, () => this.importBackup(msg.payload), '[engine] import-backup failed:');
+      await this.respond(msg.id, () => this.importBackup(msg.payload), 'import-backup failed:');
       return;
     }
 
@@ -1250,9 +1260,9 @@ export class EngineCore {
         const doc = handle.doc();
         if (this.repo.storageSubsystem && doc) {
           this.repo.storageSubsystem.saveDoc(docId, doc).then(() => {
-            console.log(`[engine] create-doc: saveDoc OK for ${docId}`);
+            log.debug(`create-doc: saveDoc OK for ${docId}`);
           }).catch((err: any) => {
-            console.error(`[engine] create-doc: saveDoc FAILED for ${docId}:`, err);
+            log.error(`create-doc: saveDoc FAILED for ${docId}:`, err);
           });
         }
         return { docId };
@@ -1274,7 +1284,7 @@ export class EngineCore {
               this.khOps.khDocuments.set(khDocIdB64, doc);
             }
           } catch (err) {
-            console.warn('[engine] Failed to check keyhive for doc:', errMsg(err));
+            log.warn('Failed to check keyhive for doc:', errMsg(err));
           }
         }
         progress(10, 'Finding document…');
@@ -1347,7 +1357,7 @@ export class EngineCore {
         entry.pinnedVersion = msg.version;
         await this.pushToSubscriptions(msg.docId);
       } catch (err: any) {
-        console.warn('[engine] set-doc-version failed:', errMsg(err));
+        log.warn('set-doc-version failed:', errMsg(err));
       }
       return;
     }
@@ -1493,14 +1503,14 @@ export class EngineCore {
               this.settingsSurface.setArchivedTombstone(msg.docId, { grantSigs: res.grantSigs });
             }
           } catch (err: any) {
-            console.warn('[engine] revokeMyAccess failed on archive:', errMsg(err));
+            log.warn('revokeMyAccess failed on archive:', errMsg(err));
             status = 'no-authority';
           }
           this.khOps.khDocuments.delete(removedKhDocId);
         }
         // Drop the doc's local automerge data (local-only: peers keep theirs).
         try { this.repo?.delete(msg.docId as any); } catch (err: any) {
-          console.warn('[engine] repo.delete failed on archive:', errMsg(err));
+          log.warn('repo.delete failed on archive:', errMsg(err));
         }
         this.emit({ type: 'doc-list-updated', list: filtered });
         return { status };
@@ -1577,9 +1587,9 @@ export class EngineCore {
         // failures (e.g. a bad jq filter) warrant an error-level log.
         const m = errMsg(err);
         if (/unavailable|not ready/i.test(m)) {
-          console.debug('[engine] query deferred (doc not ready) for', msg.docId);
+          log.debug('query deferred (doc not ready) for', msg.docId);
         } else {
-          console.error('[engine] query failed for', msg.docId, err);
+          log.error('query failed for', msg.docId, err);
         }
         emit({ type: 'result', id: msg.id, error: m });
       }
