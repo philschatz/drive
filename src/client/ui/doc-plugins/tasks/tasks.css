@@ -1,1 +1,29 @@
 @import '../calendar/calendar.css';
+
+/* "In process" rows sweep a low-alpha highlight across the row — the same
+   gradient/200%-background technique as datagrid's cell-shimmer, on MD3 tokens
+   so it reads in light and dark. Painted on the md-list-item host: the item's
+   shadow DOM paints no container background of its own, so nothing covers it.
+   Only task rows carry data-progress, which scopes the bare tag selector. */
+@keyframes task-row-sweep {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+md-list-item[data-progress='in-process'] {
+  background: linear-gradient(
+    90deg,
+    transparent 30%,
+    color-mix(in srgb, var(--md-sys-color-secondary-container) 40%, transparent) 50%,
+    transparent 70%
+  );
+  background-size: 200% 100%;
+  animation: task-row-sweep 2.5s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  md-list-item[data-progress='in-process'] {
+    animation: none;
+    background: color-mix(in srgb, var(--md-sys-color-secondary-container) 30%, transparent);
+  }
+}

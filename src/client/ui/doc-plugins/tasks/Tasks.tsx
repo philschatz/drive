@@ -51,8 +51,17 @@ function sortedTasks(tasks: Record<string, Task>): { uid: string; task: Task }[]
     return a.uid < b.uid ? -1 : 1;
   };
 
-  incomplete.sort(byDueThenUid);
-  done.sort(byDueThenUid);
+  // A bigger number is MORE important: 9 sorts first, 0/absent last. Deliberately
+  // inverted from RFC 8984 (1 = highest) — nothing syncs task priority (CalDAV
+  // maps only VEVENT priority), so the stored number is free to match the UI.
+  const byPriorityThenDue = (a: { uid: string; task: Task }, b: { uid: string; task: Task }) => {
+    const ap = a.task.priority || 0;
+    const bp = b.task.priority || 0;
+    return ap !== bp ? bp - ap : byDueThenUid(a, b);
+  };
+
+  incomplete.sort(byPriorityThenDue);
+  done.sort(byPriorityThenDue);
   return [...incomplete, ...done];
 }
 
@@ -80,6 +89,8 @@ function TaskListItem({ uid, task, canEdit, peerEditingTasks, onToggle, onEdit }
     // state carrier for AT; the row itself is a button (md-list-item internal).
     <ListRow
       data-checked={isDone ? 'true' : 'false'}
+      // Styling + test hook: tasks.css animates [data-progress='in-process'].
+      data-progress={task.progress || 'needs-action'}
       data-testid="task-row"
       style={{ opacity: peerEdit ? 0.5 : undefined }}
       onTap={canEdit ? () => onToggle(uid, task) : undefined}

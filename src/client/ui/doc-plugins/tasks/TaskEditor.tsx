@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'preact/hooks';
 import { MdTextField } from '@/components/ui/md-text-field';
 import { MdSelect } from '@/components/ui/md-select';
+import { MdSlider } from '@/components/ui/md-slider';
+import { Button } from '@/components/ui/button';
 import type { Task } from '../../../../shared/schemas/tasks';
 import { PropertySheet, SheetActions, SheetActionItem } from '../../common/PropertySheet';
 import type { PropertyDef } from '../../common/PropertySheet';
@@ -191,7 +193,10 @@ export function TaskEditor({ uid, task, isNew, opened, onSave, onDelete, onClose
       render: ({ back }) => (
         <FieldEditor
           data-testid="ted-priority"
-          value={String(priority)}
+          // An unset priority seeds the handle at 5 (the midpoint): a 0 draft
+          // on a min-1 slider would render the handle at 1 while Save meant
+          // "none" — the control would lie about what Save writes.
+          value={String(priority || 5)}
           onCancel={back}
           onSave={v => {
             const next = parseInt(v) || 0;
@@ -200,20 +205,37 @@ export function TaskEditor({ uid, task, isNew, opened, onSave, onDelete, onClose
             back();
           }}
         >
-          {({ value, onInput, save }) => (
-            <MdTextField
-              label="Priority"
-              type="number"
-              min={0}
-              max={9}
-              data-testid="ted-priority"
-              value={value}
-              supportingText="0 = none"
-              onInput={onInput}
-              onFocus={() => focusField('ted-priority')}
-              onBlur={blurField}
-              onEnter={save}
-            />
+          {({ value, onInput }) => (
+            <>
+              <MdSlider
+                label="Priority"
+                data-testid="ted-priority"
+                // PropertySheet's autofocus fallback selector doesn't know
+                // md-slider, and the next focusable here is the button below.
+                data-autofocus=""
+                min={1}
+                max={9}
+                step={1}
+                ticks
+                labeled
+                value={parseInt(value) || 5}
+                supportingText="9 is highest, 1 is lowest"
+                onInput={v => onInput(String(v))}
+                onFocus={() => focusField('ted-priority')}
+                onBlur={blurField}
+              />
+              <div className="mt-3">
+                {/* Clearing bypasses the draft: an immediate commit like the
+                    Progress pick (commit maps 0 → field removed). */}
+                <Button
+                  variant="outline"
+                  data-testid="ted-priority-none"
+                  onClick={() => { setPriority(0); commit({ priority: 0 }); back(); }}
+                >
+                  No priority
+                </Button>
+              </div>
+            </>
           )}
         </FieldEditor>
       ),

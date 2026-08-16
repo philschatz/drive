@@ -143,4 +143,57 @@ describe('Tasks container CRUD', () => {
     render(<Tasks docId={DOC} />);
     await waitFor(() => expect(screen.getByText('No tasks yet.')).toBeTruthy());
   });
+
+  it('orders rows by priority (highest number first), then due date, completed last', async () => {
+    mock.__setDoc(DOC, { '@type': 'TaskList', name: 'Test Tasks', tasks: {
+      a: { '@type': 'Task', title: 'No priority earliest due', progress: 'needs-action', due: '2026-01-01T00:00:00' },
+      b: { '@type': 'Task', title: 'P3', progress: 'needs-action', priority: 3 },
+      c: { '@type': 'Task', title: 'P9 late', progress: 'needs-action', priority: 9, due: '2026-06-01T00:00:00' },
+      d: { '@type': 'Task', title: 'P9 early', progress: 'needs-action', priority: 9, due: '2026-03-01T00:00:00' },
+      e: { '@type': 'Task', title: 'P9 done', progress: 'completed', priority: 9 },
+    } });
+    render(<Tasks docId={DOC} />);
+    await waitFor(() => expect(screen.getAllByTestId('task-row')).toHaveLength(5));
+    // [slot="headline"], not row textContent — rows also carry P/due badges.
+    const titles = screen.getAllByTestId('task-row')
+      .map((r) => r.querySelector('[slot="headline"]')!.textContent);
+    expect(titles).toEqual(['P9 early', 'P9 late', 'P3', 'No priority earliest due', 'P9 done']);
+  });
+
+  it('sets, saves, and clears priority via the slider pane', async () => {
+    mock.__setDoc(DOC, {
+      '@type': 'TaskList', name: 'Test Tasks',
+      tasks: { t1: { '@type': 'Task', title: 'Buy milk', progress: 'needs-action' } },
+    });
+    render(<Tasks docId={DOC} />);
+    await waitFor(() => expect(screen.getByText('Buy milk')).toBeTruthy());
+    fireEvent.contextMenu(rowOf('Buy milk'), { button: 2 });
+    fireEvent.click(screen.getByTestId('ted-priority-row'));
+
+    const slider = screen.getByTestId('ted-priority') as HTMLInputElement;
+    expect(slider.type).toBe('range');
+    expect(slider.value).toBe('5'); // unset opens at the midpoint
+    fireEvent.input(slider, { target: { value: '2' } });
+    fireEvent.click(screen.getByTestId('ted-priority-save'));
+    expect(mock.__getDoc(DOC).tasks.t1.priority).toBe(2);
+
+    // Reopen: the slider reflects the saved value; "No priority" clears in one
+    // gesture (an immediate commit, like the Progress pick).
+    fireEvent.click(screen.getByTestId('ted-priority-row'));
+    expect((screen.getByTestId('ted-priority') as HTMLInputElement).value).toBe('2');
+    fireEvent.click(screen.getByTestId('ted-priority-none'));
+    expect(mock.__getDoc(DOC).tasks.t1.priority).toBeUndefined();
+    closeSheet();
+  });
+
+  it('marks in-process rows for the progress animation', async () => {
+    mock.__setDoc(DOC, { '@type': 'TaskList', name: 'Test Tasks', tasks: {
+      t1: { '@type': 'Task', title: 'Working', progress: 'in-process' },
+      t2: { '@type': 'Task', title: 'Waiting', progress: 'needs-action' },
+    } });
+    render(<Tasks docId={DOC} />);
+    await waitFor(() => expect(screen.getByText('Working')).toBeTruthy());
+    expect(rowOf('Working').getAttribute('data-progress')).toBe('in-process');
+    expect(rowOf('Waiting').getAttribute('data-progress')).toBe('needs-action');
+  });
 });

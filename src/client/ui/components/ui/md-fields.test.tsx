@@ -7,6 +7,7 @@
 import { render, screen, fireEvent } from '@testing-library/preact';
 import { MdTextField } from './md-text-field';
 import { MdSelect } from './md-select';
+import { MdSlider } from './md-slider';
 
 /** preact/compat aliases onBlur → focusout, which fireEvent.blur does not reach. */
 const focusout = (el: Element) =>
@@ -87,5 +88,27 @@ describe('MdSelect (jsdom fallback)', () => {
     expect(el.value).toBe('daily');
     fireEvent.input(el, { target: { value: 'weekly' } });
     expect(onValueChange).toHaveBeenCalledWith('weekly');
+  });
+});
+
+describe('MdSlider (jsdom fallback)', () => {
+  it('renders a real range input carrying min/max/value and the testid', () => {
+    render(<MdSlider label="Priority" value={5} min={1} max={9} id="f-prio" data-testid="f-prio" supportingText="1 is highest" />);
+    const el = screen.getByTestId('f-prio') as HTMLInputElement;
+    expect(el.tagName).toBe('INPUT');
+    expect(el.type).toBe('range');
+    expect(el.id).toBe('f-prio');
+    expect(el.min).toBe('1');
+    expect(el.max).toBe('9');
+    expect(el.value).toBe('5');
+    expect(screen.getByText('Priority')).toBeTruthy();
+    expect(screen.getByText('1 is highest')).toBeTruthy();
+  });
+
+  it('round-trips fireEvent.input through onInput as a number', () => {
+    const onInput = jest.fn();
+    render(<MdSlider label="Priority" value={5} min={1} max={9} data-testid="f" onInput={onInput} />);
+    fireEvent.input(screen.getByTestId('f'), { target: { value: '3' } });
+    expect(onInput).toHaveBeenCalledWith(3, expect.anything());
   });
 });

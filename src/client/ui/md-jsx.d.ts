@@ -24,6 +24,7 @@ declare module 'preact' {
       'md-icon-button': MdProps;
       'md-icon': MdProps;
       'md-checkbox': MdProps;
+      'md-slider': MdProps;
       'md-switch': MdProps;
       'md-divider': MdProps;
       'md-outlined-text-field': MdProps;

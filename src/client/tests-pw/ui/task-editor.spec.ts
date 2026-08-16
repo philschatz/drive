@@ -63,7 +63,7 @@ test.describe('Task editor', () => {
     // guard: without the updateComplete retry, activeElement stays on <body>
     // and every keystroke goes to the document — which is how a capture ends up
     // select-all'ing the page on Ctrl+A instead of clearing the field.
-    for (const row of ['ted-title', 'ted-due', 'ted-priority', 'ted-desc']) {
+    for (const row of ['ted-title', 'ted-due', 'ted-desc']) {
       await openProperty(page, row);
       await expect
         .poll(() => activeDesc(app), { timeout: 5_000, message: `${row} pane focuses its field` })
@@ -71,16 +71,22 @@ test.describe('Task editor', () => {
       await cancelProperty(page, row);
     }
 
-    // And with the field focused, bare keyboard input reaches it.
+    // Priority is a slider: delegatesFocus retargets activeElement to the
+    // md-slider host, and arrow keys drive the shadow range input directly —
+    // which is also the proof that bare keyboard input reaches the pane's field.
     await openProperty(page, 'ted-priority');
-    await expect.poll(() => activeDesc(app), { timeout: 5_000 }).toBe('md-outlined-text-field[ted-priority]');
-    await page.keyboard.press('ControlOrMeta+a');
-    await page.keyboard.type('3');
-    await expect(mdFieldTid(app.page, 'ted-priority')).toHaveValue('3');
-    // Nothing outside the field got selected.
-    expect(await page.evaluate(() => String(window.getSelection() ?? ''))).toBe('');
+    await expect
+      .poll(() => activeDesc(app), { timeout: 5_000, message: 'priority pane focuses its slider' })
+      .toBe('md-slider[ted-priority]');
+    await page.keyboard.press('ArrowLeft'); // unset opens at 5 → 4
+    await page.keyboard.press('ArrowLeft'); // 4 → 3
     await saveProperty(page, 'ted-priority');
     await expect(page.getByTestId('ted-priority-row')).toContainText('3');
+
+    // Clearing is an immediate commit, like the Progress pick.
+    await openProperty(page, 'ted-priority');
+    await page.getByTestId('ted-priority-none').click();
+    await expect(page.getByTestId('ted-priority-row')).toContainText('Add priority');
 
     // Blurring the real shadow input must NOT commit — that is the whole point of a
     // transactional pane, and the md element's focus/blur events are composed and
