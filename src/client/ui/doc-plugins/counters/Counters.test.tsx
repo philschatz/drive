@@ -287,12 +287,17 @@ describe('Counters container', () => {
 
     expect(within(rowOf('Stretch')).getByTestId('counter-due').textContent).toMatch(/ left$/);
 
-    // Recording it flips the row to Done, where the recurrence badge returns.
+    // Recording it flips the row to Done, which answers "how recently?" — the
+    // recurrence stays in the tooltip there too, never back in the badge.
     fireEvent.click(rowOf('Stretch'));
     expandDone();
     expect(rowOf('Stretch').getAttribute('data-status')).toBe('done');
     expect(within(rowOf('Stretch')).queryByTestId('counter-due')).toBeNull();
-    expect(within(rowOf('Stretch')).getByText('daily')).toBeTruthy();
+    const done = within(rowOf('Stretch')).getByTestId('counter-completed');
+    expect(done.textContent).toMatch(/ago$/);
+    expect(within(rowOf('Stretch')).queryByText('daily')).toBeNull();
+    expect(done.getAttribute('title')).toContain('daily');
+    expect(done.getAttribute('title')).toContain('completed');
   });
 
   it('a long-interval habit made two days ago is To do, not Overdue', async () => {
@@ -405,11 +410,18 @@ describe('Counters container', () => {
       '@type': 'Calendar+Counters', name: 'C',
       events: {
         e1: { '@type': 'Event', title: 'Pushups', completions: { '2026-07-19T09:00:00': '', '2026-07-20T09:00:00': '' } },
+        e2: { '@type': 'Event', title: 'Never done' },
       },
     });
     render(<Counters docId={DOC} />);
     await waitFor(() => expect(screen.getByText('Pushups')).toBeTruthy());
     expect(within(rowOf('Pushups')).getByText('2×')).toBeTruthy();
+    // A settled row answers "how recently?" off its newest completion, exactly
+    // like a Done one — and with none ever recorded, it stays quiet.
+    const badge = within(rowOf('Pushups')).getByTestId('counter-completed');
+    expect(badge.textContent).toMatch(/ago$/);
+    expect(badge.getAttribute('title')).toBe('completed 2026-07-20 09:00');
+    expect(within(rowOf('Never done')).queryByTestId('counter-completed')).toBeNull();
   });
 });
 

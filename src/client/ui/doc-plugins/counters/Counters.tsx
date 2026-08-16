@@ -202,6 +202,12 @@ function CounterListItem({ uid, ev, status, streak, reward, dueAt, canEdit, peer
           : 'due ' + describeDueMoment(dueAt),
       }
     : null;
+  // A settled row answers "how recently?" off its newest completion (the keys
+  // are the click timestamps). Done rows always have one; an anytime item that
+  // was never recorded has nothing to say.
+  const lastDone = status === 'done' || status === 'anytime'
+    ? Object.keys(ev.completions || {}).sort().pop()
+    : undefined;
   const title = ev.title || 'Untitled';
   const { icon, tone } = counterIcon(kind, status);
   const iconColor = TONE_COLORS[tone];
@@ -249,8 +255,10 @@ function CounterListItem({ uid, ev, status, streak, reward, dueAt, canEdit, peer
       actionsLabel={`Actions for ${title}`}
       end={
         <>
-          {/* Rows in the owed sections answer "when?", not "how often?" — the
-              recurrence moves into the tooltip and the clock takes its place. */}
+          {/* The badge answers "when?" on owed rows and "how recently?" on
+              settled ones — never "how often?": the recurrence is tooltip
+              detail in both. The bare schedule only surfaces on a row with
+              neither a deadline nor a completion to talk about. */}
           {timing ? (
             <Badge
               variant="secondary"
@@ -259,6 +267,15 @@ function CounterListItem({ uid, ev, status, streak, reward, dueAt, canEdit, peer
               title={(schedule ? schedule + ' · ' : '') + timing.detail}
             >
               {timing.text}
+            </Badge>
+          ) : lastDone ? (
+            <Badge
+              variant="secondary"
+              data-testid="counter-completed"
+              className="whitespace-nowrap"
+              title={(schedule ? schedule + ' · ' : '') + 'completed ' + lastDone.substring(0, 16).replace('T', ' ')}
+            >
+              {relativeDuration(lastDone) + ' ago'}
             </Badge>
           ) : schedule && <Badge variant="secondary">{schedule}</Badge>}
           {/* The treasure: how many more in a row until the reward unlocks. */}
