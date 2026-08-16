@@ -41,11 +41,15 @@ export interface CounterEntry {
   /**
    * The deadline this row's status is about, as a local datetime — what the row
    * renders as a relative time.
-   *   pending / upcoming / done — when the window shuts (in the future)
-   *   overdue — when the habit *became* overdue: the close of the earliest
-   *             occurrence in the current unbroken run of misses, so the number
-   *             keeps growing while the habit is left undone. Guaranteed <= now,
-   *             so an overdue row can never read "in 12 hours".
+   *   due — its deadline (in the future): the explicit window's end, else the
+   *         end of the occurrence's day (see dueBy)
+   *   done — when the habit comes due again (in the future)
+   *   todo — when the item comes due (in the future): its first occurrence, or —
+   *          recurring, past halfway through a met period — the next one
+   *   overdue — when the habit *became* overdue: the earliest blown deadline in
+   *             the current unbroken run of misses, so the number keeps growing
+   *             while the habit is left undone. Guaranteed <= now, so an
+   *             overdue row can never read "in 12 hours".
    * Absent for 'anytime' and for a counter with no occurrences at all.
    */
   dueAt?: string;
@@ -93,6 +97,11 @@ function toDateTime(s: string): string {
 
 function dateOf(s: string): string {
   return s.substring(0, 10);
+}
+
+/** Local midnight after the day of the given date or datetime. */
+function endOfDay(s: string): string {
+  return Temporal.PlainDate.from(dateOf(s)).add({ days: 1 }).toString() + 'T00:00:00';
 }
 
 function normTime(t: string): string {
@@ -191,14 +200,17 @@ function scheduleAnchors(ev: CounterEvent, base: string | undefined, rangeEnd: s
 }
 
 /**
- * When an occurrence stops being doable. An explicit `duration` is the window the
- * user set. Otherwise it runs until the habit comes due again — the same period
- * {@link metInPeriod} credits a completion in, so a counter can never be overdue
- * while a click would still count for it. End of day only as a last resort, where
- * there is no next occurrence: a one-shot, or the far edge of the expansion.
+ * When an occurrence stops being *creditable*. An explicit `duration` is the
+ * window the user set. Otherwise it runs until the habit comes due again — the
+ * same period {@link metInPeriod} credits a completion in. End of day only as a
+ * last resort, where there is no next occurrence: a one-shot, or the far edge
+ * of the expansion.
  *
- * The end of the day is *not* a safe default on its own — for anything longer than
- * a daily habit it makes the counter overdue the morning after it was created.
+ * This is the credit window, not the deadline — those parted ways when due rows
+ * stopped claiming an interval of slack ("6 days left" on a weekly item due
+ * today). Status and badge deadlines come from {@link dueBy}; this remains what
+ * a done row counts down to (when it comes due again) and what the
+ * {@link sinceCreation} trim keys on (could it still have been done at birth).
  */
 export function windowEnd(ev: CounterEvent, occ: string, next?: string): string {
   if (ev.duration) {
@@ -208,7 +220,50 @@ export function windowEnd(ev: CounterEvent, occ: string, next?: string): string 
       .toString();
   }
   if (next) return toDateTime(next);
-  return Temporal.PlainDate.from(dateOf(occ)).add({ days: 1 }).toString() + 'T00:00:00';
+  return endOfDay(occ);
+}
+
+/**
+ * The midpoint between `from` and the next occurrence, floored at the end of
+ * `from`'s day — the boundary both halves of the status ladder escalate at:
+ *
+ *   met:   'done' → upcoming 'todo' at halfwayTo(crediting completion, next).
+ *          Measured from the completion rather than the occurrence so that
+ *          ticking an upcoming row visibly returns it to done even under an
+ *          anchor-invariant rule, where the tick cannot move the grid.
+ *   unmet, never-started habit: 'due' → 'overdue' at halfwayTo(occ, next) —
+ *          see {@link dueBy}.
+ *
+ * The floor keeps anything daily-grained on its own day: a completed daily
+ * habit stays done until midnight rather than resurfacing the same afternoon.
+ */
+function halfwayTo(from: string, next: string): string {
+  const f = Temporal.PlainDateTime.from(from);
+  const gap = f.until(Temporal.PlainDateTime.from(toDateTime(next)), { largestUnit: 'hours' });
+  const mid = f.add({ seconds: Math.round(gap.total('seconds') / 2) }).toString({ smallestUnit: 'second' });
+  const eod = endOfDay(from);
+  return mid > eod ? mid : eod;
+}
+
+/**
+ * The deadline an unmet occurrence is judged by — what a due row counts down to
+ * and the moment it turns overdue. Deliberately NOT the credit window
+ * ({@link metInPeriod}, which runs until the next occurrence): a completion
+ * after this deadline still credits the occurrence and un-reds the row.
+ *
+ *   - an explicit `duration` is the window the user set
+ *   - a started habit (any completion ever) is due by the end of the
+ *     occurrence's day: weekly-on-Monday means Monday, not "some time before
+ *     next Monday" — a due row must never claim an interval of slack
+ *   - a never-started habit escalates at the midpoint to the next occurrence
+ *     instead, so a brand-new 4-monthly one is not red the morning after it
+ *     was created
+ */
+function dueBy(ev: CounterEvent, occ: string, next?: string): string {
+  if (ev.duration) return windowEnd(ev, occ);
+  const started = Object.keys(ev.completions ?? {}).length > 0;
+  if (!started && next) return halfwayTo(toDateTime(occ), next);
+  return endOfDay(occ);
 }
 
 /**
@@ -300,19 +355,25 @@ function cacheSet(ev: CounterEvent, rangeStart: string, rangeEnd: string, dates:
   return dates;
 }
 
-/** True when a click was recorded within an occurrence's credit period — from
- * the occurrence's window start until the next occurrence begins (a late
+/** The latest click recorded within an occurrence's credit period — from the
+ * occurrence's window start until the next occurrence begins (a late
  * completion still counts, up until the habit comes due again). */
-export function metInPeriod(ev: CounterEvent, occStart: string, nextStart?: string): boolean {
+function latestInPeriod(ev: CounterEvent, occStart: string, nextStart?: string): string | undefined {
   const completions = ev.completions;
-  if (!completions) return false;
+  if (!completions) return undefined;
   const lo = toDateTime(occStart);
   const hi = nextStart ? toDateTime(nextStart) : null;
+  let latest: string | undefined;
   for (const ts of Object.keys(completions)) {
     const t = toDateTime(ts);
-    if (t >= lo && (hi === null || t < hi)) return true;
+    if (t >= lo && (hi === null || t < hi) && (latest === undefined || t > latest)) latest = t;
   }
-  return false;
+  return latest;
+}
+
+/** True when a click was recorded within an occurrence's credit period. */
+export function metInPeriod(ev: CounterEvent, occStart: string, nextStart?: string): boolean {
+  return latestInPeriod(ev, occStart, nextStart) !== undefined;
 }
 
 /**
@@ -351,8 +412,8 @@ export function currentStreak(ev: CounterEvent, now: string): number {
  * habit last done nine days ago is nine days overdue, not twelve hours overdue
  * every night as each fresh window shuts.
  *
- * Always <= `now`: occurrences whose window is still open are skipped, so the
- * result can never render as a future time on an overdue row.
+ * Always <= `now`: occurrences whose deadline is still ahead are skipped, so
+ * the result can never render as a future time on an overdue row.
  *
  * `anchored` must be false when the counter has no `created`/`start`, because
  * then the grid is synthetic — anchored at the query range 400 days back (see
@@ -362,8 +423,8 @@ export function currentStreak(ev: CounterEvent, now: string): number {
 function overdueSince(ev: CounterEvent, occs: string[], from: number, now: string, anchored: boolean): string | undefined {
   let since: string | undefined;
   for (let i = from; i >= 0; i--) {
-    const end = windowEnd(ev, occs[i], occs[i + 1]);
-    if (end > now) continue; // window still open — nothing owed for it yet
+    const end = dueBy(ev, occs[i], occs[i + 1]);
+    if (end > now) continue; // deadline still ahead — nothing owed for it yet
     if (metInPeriod(ev, occs[i], occs[i + 1])) break; // the run ends at the last one done
     since = end;
     if (!anchored) break; // synthetic grid: trust only the most recent deadline
@@ -375,20 +436,27 @@ function overdueSince(ev: CounterEvent, occs: string[], from: number, now: strin
  * Status of a counter's current period, used for sectioning/sorting:
  *   'anytime'  — nothing owed: an unarmed checklist item, always tappable. It is
  *                exactly {@link isSettled}, so the row shows a *ticked* box.
- *   'todo'     — its first occurrence is still in the future
- *   'done'     — the current period has a recorded completion
- *   'due'      — the current occurrence's window is still open and the previous
- *                occurrence (if any since the habit's start) was met
- *   'overdue'  — the current window has closed with no completion yet, or the
- *                current window is open but the previous occurrence went unmet
+ *   'todo'     — not owed yet, but coming: its first occurrence is still in the
+ *                future, or the current period is met and past halfway to the
+ *                next occurrence (see {@link halfwayTo})
+ *   'done'     — the current period has a recorded completion, and its next
+ *                occurrence is still more than half the gap away
+ *   'due'      — the current occurrence has begun and its deadline
+ *                ({@link dueBy}) is still ahead, with the previous occurrence
+ *                (if any since the habit's start) met
+ *   'overdue'  — the deadline passed with no completion yet, or the previous
+ *                occurrence went unmet
  *
  * 'anytime' and 'done' are the two in which nothing is owed; the other three are
  * the escalation ladder. That split is what the row's ticked/empty box encodes.
+ * The halfway rule is what keeps Done a shelf of recent wins — a 4-monthly habit
+ * spends 2 months there and then resurfaces in To do ahead of its deadline,
+ * instead of parking in Done for a third of a year and teleporting into To do
+ * the instant it comes due.
  *
- * Absent an explicit `duration`, a window closes when the habit comes due again
- * (see {@link windowEnd}) — so a habit repeating every 4 months is not overdue the
- * day after it was made, and "overdue" always means a completion would no longer
- * have counted.
+ * The deadline is not the credit window: a completion recorded any time before
+ * the next occurrence still credits the current one ({@link metInPeriod}), so a
+ * late click un-reds an overdue row rather than counting toward the next period.
  */
 export function currentStatus(ev: CounterEvent, now: string): StatusResult {
   if (isSettled(ev)) return { status: 'anytime' };
@@ -406,38 +474,47 @@ export function currentStatus(ev: CounterEvent, now: string): StatusResult {
     if (toDateTime(occs[i]) <= now) ci = i;
     else break;
   }
-  if (ci < 0) return { status: 'todo', occurrence: occs[0], dueAt: windowEnd(ev, occs[0], occs[1]) };
+  if (ci < 0) return { status: 'todo', occurrence: occs[0], dueAt: toDateTime(occs[0]) };
   const curr = occs[ci];
   const prev = occs[ci - 1];
   const next = occs[ci + 1];
 
-  if (metInPeriod(ev, curr, next)) return { status: 'done', occurrence: curr, dueAt: windowEnd(ev, curr, next) };
+  const met = latestInPeriod(ev, curr, next);
+  if (met) {
+    // Done only until halfway to the next occurrence, then back on the list as
+    // an upcoming 'todo'. With no next occurrence there is nothing to come up
+    // again for, so a met one-shot (or an exhausted rule) stays done.
+    if (next && now >= halfwayTo(met, next)) {
+      return { status: 'todo', occurrence: next, dueAt: toDateTime(next) };
+    }
+    return { status: 'done', occurrence: curr, dueAt: windowEnd(ev, curr, next) };
+  }
 
   // Both the retroactive-miss rule and the walk need this, and it parses an
   // Instant, so resolve it once.
   const anchored = !!createdDate(ev);
 
-  if (now >= windowEnd(ev, curr, next)) {
+  if (now >= dueBy(ev, curr, next)) {
     return {
       status: 'overdue',
       occurrence: curr,
-      dueAt: overdueSince(ev, occs, ci, now, anchored) ?? windowEnd(ev, curr, next),
+      dueAt: overdueSince(ev, occs, ci, now, anchored) ?? dueBy(ev, curr, next),
     };
   }
-  // Window still open — but a missed previous occurrence keeps it overdue.
+  // Deadline still ahead — but a missed previous occurrence keeps it overdue.
   // Without a creation anchor the expansion is synthetic (anchored at the query
   // range), so "previous" doesn't imply the habit existed then; skip the check.
   if (anchored && prev && !metInPeriod(ev, prev, curr)) {
     return {
       status: 'overdue',
       occurrence: curr,
-      // Never windowEnd(curr): that window is still open, i.e. in the future,
+      // Never dueBy(curr): that deadline is still ahead, i.e. in the future,
       // and would render as "in 12 hours" on a row filed under Overdue. Walk
       // back from `prev`; `curr` itself (<= now by construction) is the floor.
       dueAt: overdueSince(ev, occs, ci - 1, now, anchored) ?? toDateTime(curr),
     };
   }
-  return { status: 'due', occurrence: curr, dueAt: windowEnd(ev, curr, next) };
+  return { status: 'due', occurrence: curr, dueAt: dueBy(ev, curr, next) };
 }
 
 /**

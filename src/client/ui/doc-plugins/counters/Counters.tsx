@@ -50,9 +50,10 @@ const STATUS_LABELS: Record<CounterStatus, string> = {
  * of the two a row is still shows in its tone: full strength once its window is
  * open, muted while it is still ahead.
  *
- * `done` is what you achieved in the current window and empties as windows roll
- * over; `anytime` is where checklist items park between the times they are
- * wanted, so it grows without bound.
+ * `done` is what you achieved recently — a row leaves it halfway to its next
+ * occurrence (see `doneUntil`) — and it renders collapsed to a count by default;
+ * `anytime` is where checklist items park between the times they are wanted, so
+ * it grows without bound.
  */
 const SECTION_LABELS: Record<CounterStatus, string> = { ...STATUS_LABELS, due: 'To do' };
 
@@ -97,6 +98,12 @@ function describeDeadline(at: string): string {
     return 'end of ' + Temporal.PlainDate.from(at.substring(0, 10)).subtract({ days: 1 }).toString();
   }
   return at.substring(0, 16).replace('T', ' '); // seconds are noise on a deadline
+}
+
+/** A `todo` row's dueAt is the moment the item comes DUE (a window start), not a
+ * window end — so midnight means that day, not "end of" the day before. */
+function describeDueMoment(at: string): string {
+  return at.endsWith('T00:00:00') ? at.substring(0, 10) : at.substring(0, 16).replace('T', ' ');
 }
 
 type Tone = 'muted' | 'primary' | 'error';
@@ -181,11 +188,19 @@ function CounterListItem({ uid, ev, status, streak, reward, dueAt, canEdit, peer
   const clickCount = Object.keys(ev.completions || {}).length;
   const schedule = describeSchedule(ev);
   // Safe to word this off the status: `dueAt` is the moment the habit became
-  // overdue (always past) for an overdue row, and the moment its window shuts
-  // (always future) for a due one — see CounterEntry.dueAt.
+  // overdue (always past) for an overdue row, the moment its window shuts
+  // (always future) for a due one, and the moment it comes due (always future)
+  // for a todo one — see CounterEntry.dueAt.
   const late = status === 'overdue';
-  const timing = dueAt && (late || status === 'due')
-    ? { late, text: relativeDuration(dueAt) + (late ? ' overdue' : ' left') }
+  const timing = dueAt && (late || status === 'due' || status === 'todo')
+    ? {
+        late,
+        text: status === 'todo' ? 'in ' + relativeDuration(dueAt)
+          : relativeDuration(dueAt) + (late ? ' overdue' : ' left'),
+        detail: late ? 'overdue since ' + describeDeadline(dueAt)
+          : status === 'due' ? 'due by ' + describeDeadline(dueAt)
+          : 'due ' + describeDueMoment(dueAt),
+      }
     : null;
   const title = ev.title || 'Untitled';
   const { icon, tone } = counterIcon(kind, status);
@@ -234,16 +249,14 @@ function CounterListItem({ uid, ev, status, streak, reward, dueAt, canEdit, peer
       actionsLabel={`Actions for ${title}`}
       end={
         <>
-          {/* Overdue and To-do rows answer "when?", not "how often?" — the
+          {/* Rows in the owed sections answer "when?", not "how often?" — the
               recurrence moves into the tooltip and the clock takes its place. */}
           {timing ? (
             <Badge
               variant="secondary"
               data-testid="counter-due"
               className={'whitespace-nowrap' + (timing.late ? ' bg-error-container text-on-error-container' : '')}
-              title={(schedule ? schedule + ' · ' : '')
-                + (timing.late ? 'overdue since ' : 'due by ')
-                + describeDeadline(dueAt!)}
+              title={(schedule ? schedule + ' · ' : '') + timing.detail}
             >
               {timing.text}
             </Badge>
@@ -303,6 +316,8 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
   const [events, setEvents] = useState<Record<string, CounterEvent>>({});
   const [editorState, setEditorState] = useState<EditorState | null>(null);
   const [chartOpen, setChartOpen] = useState(false);
+  /** The Done section rests collapsed to a count; this is its disclosure. */
+  const [doneOpen, setDoneOpen] = useState(false);
   /** Counter whose completions log is open, in its own sheet. */
   const [completionsUid, setCompletionsUid] = useState<string | null>(null);
   // Re-derive "today" when the clock is read; a minute tick keeps statuses fresh
@@ -658,7 +673,27 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
       <div data-testid="counter-list">
         {sections.map(({ label, entries }) => (
           <div key={label}>
-            <h3 className="text-xs font-semibold uppercase text-muted-foreground mt-3 mb-1">{label}</h3>
+            {/* Done is a shelf of recent wins, not the working list, so it rests
+                collapsed to a count; the heading is the disclosure. Still a real
+                heading, with a button inside, so the outline reads the same. */}
+            {label === SECTION_LABELS.done ? (
+              <h3 className="mt-3 mb-1">
+                <button
+                  type="button"
+                  aria-expanded={doneOpen}
+                  onClick={() => setDoneOpen(v => !v)}
+                  className="flex w-full items-center gap-1 text-left text-xs font-semibold uppercase text-muted-foreground"
+                >
+                  {label} ({entries.length})
+                  <span aria-hidden="true" className="material-symbols-outlined text-base">
+                    {doneOpen ? 'expand_less' : 'expand_more'}
+                  </span>
+                </button>
+              </h3>
+            ) : (
+              <h3 className="text-xs font-semibold uppercase text-muted-foreground mt-3 mb-1">{label}</h3>
+            )}
+            {label === SECTION_LABELS.done && !doneOpen ? null : (
             <md-list style={{ background: 'transparent' }}>
               {/* Per entry, not per section: To do holds both `due` and `todo`,
                   which the row tells apart by tone. */}
@@ -681,6 +716,7 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
                 />
               ))}
             </md-list>
+            )}
           </div>
         ))}
         {sorted.length === 0 && archived.length === 0 && (

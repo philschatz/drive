@@ -27,8 +27,10 @@ const habit = (extra: Record<string, any> = {}) => ({
  * surface, reached by holding it (right-click is the same gesture, and the one
  * jsdom can dispatch synchronously).
  */
-async function openPane(paneId: string, title = 'Stretch') {
+async function openPane(paneId: string, title = 'Stretch', inDone = false) {
   render(<Counters docId={DOC} />);
+  // A done habit rests in the collapsed Done section; disclose it to reach the row.
+  if (inDone) fireEvent.click(await screen.findByRole('button', { name: /^Done \(\d+\)$/ }));
   await waitFor(() => expect(screen.getByText(title)).toBeTruthy());
   fireEvent.contextMenu(rowOf(title));
   fireEvent.click(screen.getByTestId(`${paneId}-row`));
@@ -215,7 +217,7 @@ describe('CounterEditor', () => {
         '@type': 'Calendar+Counters', name: 'C',
         events: { e1: habit({ completions: { [`${yesterday}T09:00:00`]: '', [`${today}T09:00:00`]: '' } }) },
       });
-      await openPane('ced-reward');
+      await openPane('ced-reward', 'Stretch', true);
 
       fireEvent.input(screen.getByTestId('ced-reward-goal'), { target: { value: '5' } });
       fireEvent.input(screen.getByTestId('ced-reward-text'), { target: { value: 'Ice cream' } });

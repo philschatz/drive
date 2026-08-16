@@ -103,9 +103,9 @@ describe('the schedule restarts at each completion', () => {
 
   it('without a completion the grid still runs from `created`', () => {
     expect(expectedOccurrences(every3(), '2026-07-01', '2026-07-10')).toEqual(['2026-07-01', '2026-07-04', '2026-07-07', '2026-07-10']);
-    // Overdue since the 4th: that is when Jul 1 stopped being creditable, not the
-    // morning after it (a 3-day habit is not late one day in).
-    expect(currentStatus(every3(), NOW)).toEqual({ status: 'overdue', occurrence: '2026-07-19', dueAt: '2026-07-04T00:00:00' });
+    // Overdue since Jul 2 noon: the midpoint of its first, never-started gap
+    // (a 3-day habit is not late one day in — see dueBy).
+    expect(currentStatus(every3(), NOW)).toEqual({ status: 'overdue', occurrence: '2026-07-19', dueAt: '2026-07-02T12:00:00' });
   });
 
   it('a streak counts through the re-anchors', () => {
@@ -160,22 +160,59 @@ describe('the schedule restarts at each completion', () => {
   });
 });
 
-describe('a deadline runs until the habit comes due again', () => {
+describe('the deadline: end of the occurrence\'s day once started, midpoint grace before', () => {
   it('a long interval is not overdue the morning after it was created', () => {
-    // The report: created two days ago, never done, repeating every 4 months.
-    // The end of the creation day is not the deadline — the next occurrence is.
+    // The 2026-08-08 report: created two days ago, never done, repeating every
+    // 4 months. Never STARTED, so it escalates at the midpoint of its first gap
+    // — not at the end of the creation day (red overnight), and no longer at
+    // the next occurrence (a due row claiming "4 months left").
     expect(currentStatus(every4Months(), NOW)).toEqual({
       status: 'due',
       occurrence: '2026-07-19',
-      dueAt: '2026-11-19T00:00:00',
+      dueAt: '2026-09-18T12:00:00',
     });
   });
 
-  it('…and goes overdue when it does come due again', () => {
+  it('…and goes overdue at that midpoint, never having been started', () => {
+    expect(currentStatus(every4Months(), '2026-09-19T10:00:00')).toEqual({
+      status: 'overdue',
+      occurrence: '2026-07-19',
+      dueAt: '2026-09-18T12:00:00',
+    });
+    // Months later it is still measured from that first blown deadline.
     expect(currentStatus(every4Months(), '2026-11-20T12:00:00')).toEqual({
       status: 'overdue',
       occurrence: '2026-11-19',
-      dueAt: '2026-11-19T00:00:00',
+      dueAt: '2026-09-18T12:00:00',
+    });
+  });
+
+  it('a started weekly item is due on its day — hours left, not "6 days left"', () => {
+    // The 2026-08-15 report: last completed 7 days ago, came due today, and the
+    // badge read "6 days left" — the credit window, not a deadline. Once a
+    // habit has been done at all, its due day IS its deadline.
+    const ev = daily({
+      created: createdOn('2026-07-06'), // a Monday
+      recurrenceRule: { '@type': 'RecurrenceRule', frequency: 'weekly', byDay: [{ '@type': 'NDay', day: 'mo' }] },
+      completions: { '2026-07-13T10:00:00': '' },
+    });
+    expect(currentStatus(ev, '2026-07-20T15:00:00')).toEqual({
+      status: 'due', occurrence: '2026-07-20', dueAt: '2026-07-21T00:00:00',
+    });
+    // …and red the next morning, not next Monday.
+    expect(currentStatus(ev, NOW)).toEqual({
+      status: 'overdue', occurrence: '2026-07-20', dueAt: '2026-07-21T00:00:00',
+    });
+    // The deadline is not the credit window: a late Tuesday click still credits
+    // the blown Monday and un-reds the row.
+    const late = { ...ev, completions: { ...ev.completions, '2026-07-21T13:00:00': '' } };
+    expect(currentStatus(late, '2026-07-21T13:30:00').status).toBe('done');
+  });
+
+  it('a started long-interval habit missed on its day is red the next morning', () => {
+    const ev = every4Months({ start: '2026-07-19', completions: { '2026-07-19T09:00:00': '' } });
+    expect(currentStatus(ev, '2026-11-20T09:00:00')).toEqual({
+      status: 'overdue', occurrence: '2026-11-19', dueAt: '2026-11-20T00:00:00',
     });
   });
 
@@ -184,9 +221,9 @@ describe('a deadline runs until the habit comes due again', () => {
     expect(currentStatus(ev, NOW)).toEqual({
       status: 'overdue',
       occurrence: '2026-05-01',
-      // Jan 1 is when the Sep 1 occurrence stopped being creditable — the start
-      // of the run of misses inside the expansion window.
-      dueAt: '2026-01-01T00:00:00',
+      // The midpoint after the Sep 1 occurrence — the start of the run of
+      // misses inside the expansion window, under never-started grace.
+      dueAt: '2025-11-01T00:00:00',
     });
   });
 
@@ -211,6 +248,87 @@ describe('a deadline runs until the habit comes due again', () => {
   });
 });
 
+describe('done only until halfway to the next occurrence', () => {
+  it('a long-interval habit is done for the first half of the gap, then upcoming', () => {
+    const ev = every4Months({ start: '2026-07-19', completions: { '2026-07-19T09:00:00': '' } });
+    // Done for weeks — not parked in Done for the whole 4 months.
+    expect(currentStatus(ev, NOW)).toEqual({ status: 'done', occurrence: '2026-07-19', dueAt: '2026-11-19T00:00:00' });
+    expect(currentStatus(ev, '2026-09-18T16:29:59').status).toBe('done');
+    // Past halfway it re-enters the list as an upcoming 'todo', counting down to
+    // the moment it comes DUE — not to when a click would stop crediting it.
+    expect(currentStatus(ev, '2026-09-18T16:30:00')).toEqual({
+      status: 'todo', occurrence: '2026-11-19', dueAt: '2026-11-19T00:00:00',
+    });
+    // …and turns due the moment that occurrence opens, exactly as before.
+    expect(currentStatus(ev, '2026-11-19T08:00:00').status).toBe('due');
+  });
+
+  it('a weekly habit done Monday resurfaces midweek, and a tick puts it back', () => {
+    const weekly = (completions: Record<string, ''>) => daily({
+      created: createdOn('2026-07-06'), // a Monday
+      recurrenceRule: { '@type': 'RecurrenceRule', frequency: 'weekly', byDay: [{ '@type': 'NDay', day: 'mo' }] },
+      completions,
+    });
+    const ev = weekly({ '2026-07-20T10:00:00': '' });
+    expect(currentStatus(ev, NOW).status).toBe('done'); // Tuesday
+    expect(currentStatus(ev, '2026-07-23T16:59:59').status).toBe('done');
+    expect(currentStatus(ev, '2026-07-23T17:00:00')).toEqual({
+      status: 'todo', occurrence: '2026-07-27', dueAt: '2026-07-27T00:00:00',
+    });
+    // The rule is anchor-invariant — Monday stays Monday, a tick cannot move the
+    // grid — but a Friday tick still visibly returns the row to done, because
+    // the re-entry point is measured from the LATEST completion in the period.
+    const ticked = weekly({ '2026-07-20T10:00:00': '', '2026-07-24T09:00:00': '' });
+    expect(currentStatus(ticked, '2026-07-24T09:30:00').status).toBe('done');
+    expect(expectedOccurrences(ticked, '2026-07-20', '2026-07-27')).toEqual(['2026-07-20', '2026-07-27']);
+  });
+
+  it('a daily habit never resurfaces the same day: done means done until midnight', () => {
+    // The end-of-day floor. The midpoint of an all-day daily gap is mid-afternoon,
+    // and "do it again" reappearing before the day ends would be nonsense.
+    const ev = daily({ completions: { '2026-07-21T08:00:00': '' } });
+    expect(currentStatus(ev, '2026-07-21T23:59:59')).toEqual({
+      status: 'done', occurrence: '2026-07-21', dueAt: '2026-07-22T00:00:00',
+    });
+  });
+
+  it('a timed daily habit is upcoming between midnight and its window', () => {
+    // Deliberate: done inside yesterday's 14:00 window holds through midnight
+    // (the floor), then reads as coming up rather than still-done.
+    const ev = daily({ created: createdOn('2026-07-14'), start: '2026-07-20', startTime: '14:00:00', completions: { '2026-07-20T15:00:00': '' } });
+    expect(currentStatus(ev, '2026-07-20T23:00:00').status).toBe('done');
+    expect(currentStatus(ev, NOW)).toEqual({
+      status: 'todo', occurrence: '2026-07-21T14:00:00', dueAt: '2026-07-21T14:00:00',
+    });
+    expect(currentStatus(ev, '2026-07-21T15:00:00').status).toBe('due');
+  });
+
+  it('with no next occurrence there is nothing to come up for: stays done', () => {
+    // A completion recorded against a still-armed one-off…
+    expect(currentStatus({ '@type': 'Event', start: '2026-07-19', completions: { '2026-07-19T09:00:00': '' } }, NOW).status).toBe('done');
+    // …or a rule already ended by `until`: no re-entry, ever.
+    const ended = daily({
+      recurrenceRule: { '@type': 'RecurrenceRule', frequency: 'daily', until: '2026-07-19T00:00:00' },
+      completions: { '2026-07-19T09:00:00': '' },
+    });
+    expect(currentStatus(ended, NOW).status).toBe('done');
+  });
+
+  it('an upcoming habit files under To do, ordered by when it comes due', () => {
+    const then = '2026-09-19T10:00:00'; // two months after the kettle was done
+    const events: Record<string, CounterEvent> = {
+      kettle: every4Months({ start: '2026-07-19', completions: { '2026-07-19T09:00:00': '' } }),
+      stretch: daily({ start: '2026-09-18', completions: { '2026-09-18T09:00:00': '' } }),
+      neglected: daily({ title: 'neglected', start: '2026-09-15' }),
+    };
+    expect(sortedCounters(events, then).map(e => [e.uid, e.status])).toEqual([
+      ['neglected', 'overdue'],
+      ['stretch', 'due'],   // due tomorrow sorts above…
+      ['kettle', 'todo'],   // …due in two months, inside the one To do section
+    ]);
+  });
+});
+
 describe('a window that shut before the counter existed', () => {
   /** 06:00–07:00 daily, written at 10:00 — after today's hour had already gone. */
   const writtenLate = (at: string) => daily({
@@ -223,7 +341,9 @@ describe('a window that shut before the counter existed', () => {
     expect(currentStatus(writtenLate('2026-07-21T10:00:00'), NOW)).toEqual({
       status: 'todo',
       occurrence: '2026-07-22T06:00:00',
-      dueAt: '2026-07-22T07:00:00',
+      // A todo row counts down to the moment it comes DUE (the window start),
+      // not to when a completion would stop crediting it.
+      dueAt: '2026-07-22T06:00:00',
     });
   });
 
@@ -386,16 +506,17 @@ describe('currentStatus', () => {
     expect(currentStatus(daily({ completions: { '2026-07-21T08:00:00': '' } }), NOW)).toEqual({ status: 'done', occurrence: '2026-07-21', dueAt: '2026-07-22T00:00:00' });
   });
 
-  it('weekly Monday, now Tuesday, missed → still pending: a Tuesday click counts', () => {
-    // A weekly habit has a week, not a day. It stays pending until next Monday —
-    // exactly when a completion would stop crediting this occurrence.
+  it('weekly Monday, now Tuesday, missed → still pending: never started', () => {
+    // A habit with no completion yet escalates at the midpoint of its gap
+    // (Thursday noon), not the morning after its due day. Contrast the STARTED
+    // weekly in the deadline describe, which is red on Tuesday.
     const ev = daily({
       created: createdOn('2026-07-20'), // a Monday
       recurrenceRule: { '@type': 'RecurrenceRule', frequency: 'weekly', byDay: [{ '@type': 'NDay', day: 'mo' }] },
     });
-    expect(currentStatus(ev, NOW)).toEqual({ status: 'due', occurrence: '2026-07-20', dueAt: '2026-07-27T00:00:00' });
-    // …and a week later it is overdue, dated from the Monday it blew.
-    expect(currentStatus(ev, '2026-07-28T12:00:00')).toEqual({ status: 'overdue', occurrence: '2026-07-27', dueAt: '2026-07-27T00:00:00' });
+    expect(currentStatus(ev, NOW)).toEqual({ status: 'due', occurrence: '2026-07-20', dueAt: '2026-07-23T12:00:00' });
+    // …and a week later it is overdue, dated from its first blown deadline.
+    expect(currentStatus(ev, '2026-07-28T12:00:00')).toEqual({ status: 'overdue', occurrence: '2026-07-27', dueAt: '2026-07-23T12:00:00' });
   });
 
   it('weekly Monday, now Tuesday, done Monday → done', () => {
@@ -479,10 +600,21 @@ describe('currentStatus → dueAt (what the row renders as a relative time)', ()
     ['neglected for months', daily({ created: createdOn('2026-03-01') })],
     ['pending all-day', daily({ start: '2026-07-14', completions: { '2026-07-20T09:00:00': '' } })],
     ['pending timed', daily({ start: '2026-07-14', startTime: '11:00:00', duration: 'PT4H', completions: { '2026-07-20T11:00:00': '' } })],
-  ])('%s: overdue is in the past, pending is in the future', (_name, ev) => {
+    ['one-off armed for next week', { '@type': 'Event', start: '2026-07-28' } as CounterEvent],
+    ['started weekly, missed its day yesterday', daily({
+      created: createdOn('2026-07-06'),
+      recurrenceRule: { '@type': 'RecurrenceRule', frequency: 'weekly', byDay: [{ '@type': 'NDay', day: 'mo' }] },
+      completions: { '2026-07-13T10:00:00': '' },
+    })],
+    ['every 3 days, done past halfway', every3({ start: '2026-07-19', completions: { '2026-07-19T09:00:00': '' } })],
+    ['timed daily done yesterday, before today\'s window opens', daily({
+      created: createdOn('2026-07-14'), start: '2026-07-20', startTime: '14:00:00',
+      completions: { '2026-07-20T15:00:00': '' },
+    })],
+  ])('%s: overdue is in the past, pending and upcoming are in the future', (_name, ev) => {
     const r = currentStatus(ev, NOW);
     if (r.status === 'overdue') expect(r.dueAt! <= NOW).toBe(true);
-    if (r.status === 'due') expect(r.dueAt! > NOW).toBe(true);
+    if (r.status === 'due' || r.status === 'todo') expect(r.dueAt! > NOW).toBe(true);
   });
 });
 
@@ -671,13 +803,15 @@ describe('one-off to-do', () => {
     });
 
     it.each([
-      ['2026-07-21T17:00:00', 'todo'],
-      ['2026-07-21T19:00:00', 'due'],
-      ['2026-07-21T21:00:00', 'overdue'],
-    ])('at %s it is %s', (now, status) => {
+      // Before it opens, the countdown runs to the opening; after that, to the
+      // deadline (which is also where "overdue" is measured from).
+      ['2026-07-21T17:00:00', 'todo', '2026-07-21T18:00:00'],
+      ['2026-07-21T19:00:00', 'due', '2026-07-21T20:00:00'],
+      ['2026-07-21T21:00:00', 'overdue', '2026-07-21T20:00:00'],
+    ])('at %s it is %s', (now, status, dueAt) => {
       const r = currentStatus(ev, now);
       expect(r.status).toBe(status);
-      expect(r.dueAt).toBe('2026-07-21T20:00:00');
+      expect(r.dueAt).toBe(dueAt);
     });
   });
 

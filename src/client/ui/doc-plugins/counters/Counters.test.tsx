@@ -18,6 +18,9 @@ const mock = api as any;
 it('uses the manual worker-api mock', () => expect(mock.__isMock).toBe(true));
 const DOC = 'doc-counters';
 const rowOf = (title: string) => screen.getByText(title).closest('[data-status]') as HTMLElement;
+// The Done section rests collapsed to a count — its rows are not in the DOM
+// until the heading's disclosure button is tapped.
+const expandDone = () => fireEvent.click(screen.getByRole('button', { name: /^Done \(\d+\)$/ }));
 
 const dailyHabit = (title: string, start = '2026-07-01') => ({
   '@type': 'Event', title, start,
@@ -54,12 +57,16 @@ describe('Counters container', () => {
     expect(screen.getByRole('heading', { name: 'To do' })).toBeTruthy();
     expect(rowOf('Stretch').getAttribute('data-status')).toBe('due');
 
-    // Tapping the row records a completion → moves to "Done". A single-day
-    // streak is not a streak yet: the flame badge only renders once the streak
-    // reaches 2+ (recurring items show a streak, not a total).
+    // Tapping the row records a completion → moves to "Done", which rests
+    // collapsed: the row leaves the DOM and the heading carries the count.
     fireEvent.click(rowOf('Stretch'));
+    expect(screen.queryByText('Stretch')).toBeNull();
+    expect(screen.getByRole('heading', { name: 'Done (1)' })).toBeTruthy();
+    // Expanded, the row is done. A single-day streak is not a streak yet: the
+    // flame badge only renders once the streak reaches 2+ (recurring items show
+    // a streak, not a total).
+    expandDone();
     expect(rowOf('Stretch').getAttribute('data-status')).toBe('done');
-    expect(screen.getByRole('heading', { name: 'Done' })).toBeTruthy();
     expect(within(rowOf('Stretch')).queryByTitle('1-day streak')).toBeNull();
 
     // Tapping is the primary action, so a second tap adds another completion
@@ -169,7 +176,9 @@ describe('Counters container', () => {
       },
     });
     render(<Counters docId={DOC} />);
-    await waitFor(() => expect(screen.getByText('Meditate')).toBeTruthy());
+    // Done today, so it rests in the collapsed Done section.
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Done (1)' })).toBeTruthy());
+    expandDone();
     expect(within(rowOf('Meditate')).getByTitle('2-day streak')).toBeTruthy();
   });
 
@@ -196,6 +205,7 @@ describe('Counters container', () => {
     // history (and the chart) still runs from when it was made.
     expect(mock.__getDoc(DOC).events.e1.start).toBe(today);
     expect(mock.__getDoc(DOC).events.e1.created).toBe(created);
+    expandDone();
     expect(rowOf('Water plants').getAttribute('data-status')).toBe('done');
   });
 
@@ -221,6 +231,7 @@ describe('Counters container', () => {
     expect(ev.start).toBe(today); // the anchor moved…
     expect(ev.created.substring(0, 10)).toBe(d(10)); // …and the origin was preserved
     // Three days in a row, so the flame keeps counting across the re-anchor.
+    expandDone();
     expect(within(rowOf('Meditate')).getByTitle('3-day streak')).toBeTruthy();
   });
 
@@ -230,20 +241,24 @@ describe('Counters container', () => {
     mock.__setDoc(DOC, {
       '@type': 'Calendar+Counters', name: 'C',
       events: {
+        // Done TODAY: deterministic whatever the wall clock — a completion a day
+        // or more old can already be past the midpoint to the next occurrence,
+        // which would park this row as an upcoming todo some afternoons.
         e1: {
-          '@type': 'Event', title: 'Water plants', created: `${d(9)}T09:00:00Z`, start: d(1),
+          '@type': 'Event', title: 'Water plants', created: `${d(9)}T09:00:00Z`, start: d(0),
           recurrenceRule: { '@type': 'RecurrenceRule', frequency: 'daily', interval: 3 },
-          completions: { [`${d(4)}T09:00:00`]: '', [`${d(1)}T09:00:00`]: '' },
+          completions: { [`${d(3)}T09:00:00`]: '', [`${d(0)}T09:00:00`]: '' },
         },
       },
     });
     render(<Counters docId={DOC} />);
-    await waitFor(() => expect(screen.getByText('Water plants')).toBeTruthy());
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Done (1)' })).toBeTruthy());
+    expandDone();
 
     fireEvent.click(within(rowOf('Water plants')).getByTitle('Completions for Water plants'));
-    // Newest first, so the first delete button is yesterday's mis-click.
+    // Newest first, so the first delete button is today's mis-click.
     fireEvent.click(within(screen.getByTestId('completions-sheet')).getAllByTitle('Delete completion')[0]);
-    expect(mock.__getDoc(DOC).events.e1.start).toBe(d(4));
+    expect(mock.__getDoc(DOC).events.e1.start).toBe(d(3));
     confirmSpy.mockRestore();
   });
 
@@ -274,6 +289,7 @@ describe('Counters container', () => {
 
     // Recording it flips the row to Done, where the recurrence badge returns.
     fireEvent.click(rowOf('Stretch'));
+    expandDone();
     expect(rowOf('Stretch').getAttribute('data-status')).toBe('done');
     expect(within(rowOf('Stretch')).queryByTestId('counter-due')).toBeNull();
     expect(within(rowOf('Stretch')).getByText('daily')).toBeTruthy();
@@ -324,6 +340,64 @@ describe('Counters container', () => {
     await waitFor(() => expect(screen.getByText('Meditate')).toBeTruthy());
     expect(rowOf('Meditate').getAttribute('data-status')).toBe('overdue');
     expect(within(rowOf('Meditate')).queryByTitle(/streak/)).toBeNull();
+  });
+
+  it('Done rests collapsed to a count and the heading discloses it', async () => {
+    const today = Temporal.Now.plainDateISO().toString();
+    mock.__setDoc(DOC, {
+      '@type': 'Calendar+Counters', name: 'C',
+      events: {
+        e1: { ...dailyHabit('Meditate'), completions: { [`${today}T08:00:00`]: '' } },
+        e2: dailyHabit('Stretch', today),
+      },
+    });
+    render(<Counters docId={DOC} />);
+    await waitFor(() => expect(screen.getByText('Stretch')).toBeTruthy());
+
+    // Collapsed by default: the heading carries the count, the rows stay out of
+    // the DOM — Done is a shelf of recent wins, not the working list.
+    expect(screen.getByRole('heading', { name: 'Done (1)' })).toBeTruthy();
+    expect(screen.queryByText('Meditate')).toBeNull();
+    const disclosure = screen.getByRole('button', { name: 'Done (1)' });
+    expect(disclosure.getAttribute('aria-expanded')).toBe('false');
+
+    fireEvent.click(disclosure);
+    expect(rowOf('Meditate').getAttribute('data-status')).toBe('done');
+    expect(screen.getByRole('button', { name: 'Done (1)' }).getAttribute('aria-expanded')).toBe('true');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Done (1)' }));
+    expect(screen.queryByText('Meditate')).toBeNull();
+  });
+
+  it('a habit past halfway to its next occurrence is To do again, counting down', async () => {
+    const d = (n: number) => Temporal.Now.plainDateISO().subtract({ days: n }).toString();
+    mock.__setDoc(DOC, {
+      '@type': 'Calendar+Counters', name: 'C',
+      events: {
+        // Every 3 days, done 2 days ago → due again tomorrow: past the midpoint.
+        e1: {
+          '@type': 'Event', title: 'Water plants', start: d(2),
+          recurrenceRule: { '@type': 'RecurrenceRule', frequency: 'daily', interval: 3 },
+          completions: { [`${d(2)}T09:00:00`]: '' },
+        },
+      },
+    });
+    render(<Counters docId={DOC} />);
+    await waitFor(() => expect(screen.getByText('Water plants')).toBeTruthy());
+
+    // Back on the list ahead of its deadline — muted, empty circle — and the
+    // clock badge counts down to when it comes due, not "every 3 days".
+    expect(rowOf('Water plants').getAttribute('data-status')).toBe('todo');
+    expect(screen.getByRole('heading', { name: 'To do' })).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: /^Done/ })).toBeNull();
+    const due = within(rowOf('Water plants')).getByTestId('counter-due');
+    expect(due.textContent).toMatch(/^in /);
+    expect(due.getAttribute('title')).toMatch(/ · due \d{4}-\d\d-\d\d/);
+
+    // Tapping records → done again, resting in the (collapsed) Done section.
+    fireEvent.click(rowOf('Water plants'));
+    expect(screen.getByRole('heading', { name: 'Done (1)' })).toBeTruthy();
+    expect(screen.queryByText('Water plants')).toBeNull();
   });
 
   it('non-recurring tallies keep the lifetime N× badge', async () => {
@@ -494,6 +568,7 @@ describe('one-off to-dos', () => {
     // row toggling off the list.
     fireEvent.click(rowOf('Stretch'));
     expect(mock.__getDoc(DOC).events.e1.start).toBe(today());
+    expandDone();
     expect(rowOf('Stretch').getAttribute('data-status')).toBe('done');
   });
 
