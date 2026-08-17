@@ -4,17 +4,15 @@
  * All sync/keyhive/document logic now lives in src/shared/drive-engine.ts so it
  * can run in Node too (the CLI). This file is the browser-only host:
  *   - IndexedDB storage adapter + idb-storage-backed KVStore
- *   - a WebRTC-wrapped BrowserWebSocket network, with the raw-socket monkey-patch
- *     that intercepts rendezvous + WebRTC-signaling overlay frames
+ *   - a WebRTC-wrapped BrowserWebSocket network, with the shared overlay-frame
+ *     intercept/sender (src/shared/relay-overlay.ts) on the raw socket
  *   - `emit` = self.postMessage
  * plus the browser transport plumbing: the onmessage queue, the message → engine
  * dispatch, and the hf-port / webrtc-port MessagePort handlers.
  */
-import { decode as cborDecode, Encoder } from 'cbor-x';
-import { isRendezvousType } from '../../shared/rendezvous-protocol';
-import { isWebRTCSignalType, type WebRTCSignalFrame } from '../../shared/webrtc-signal';
-import { makeWebRTCRelayAdapter, type WebRTCRelayAdapter } from './webrtc-relay-adapter';
-import { RELAY_PEER_ID, PRODUCTION_RELAY_URL, isRelayLeaveFrame } from '../../shared/relay-identity';
+import { installOverlayIntercept, makeOverlayFrameSender } from '../../shared/relay-overlay';
+import { makeWebRTCRelayAdapter, type WebRTCRelayAdapter } from '../../shared/webrtc-relay-adapter';
+import { RELAY_PEER_ID, PRODUCTION_RELAY_URL } from '../../shared/relay-identity';
 import { errMsg } from '../../shared/keyhive-ops';
 import { idbKvStore } from './idb-kvstore';
 import { DriveEngine, type DriveEngineInstance } from '../../shared/drive-engine';
@@ -68,11 +66,6 @@ for (const level of ['log', 'debug', 'info'] as const) {
   };
 }
 
-// ── Overlay-frame transport ──────────────────────────────────────────────────
-// Rendezvous frames + WebRTC signaling ride the relay socket alongside the
-// automerge-repo protocol. Same encoder settings as the repo's cbor helper.
-const rdvEncoder = new Encoder({ tagUint8Array: false, useRecords: false });
-
 let engine: DriveEngineInstance | null = null;
 let p2pAdapter: WebRTCRelayAdapter | null = null;
 let pendingWebrtcPort: MessagePort | null = null;
@@ -80,8 +73,6 @@ let pendingWebrtcPort: MessagePort | null = null;
 let rdvHandler: ((frame: any) => void) | null = null;
 /** The engine's socket-(re)open handler — it re-sends the RELAY_WATCH declaration. */
 let socketOpenHandler: (() => void) | null = null;
-/** The underlying relay WebSocket; rendezvous/signal frames bypass the repo adapter. */
-let rdvSocket: WebSocket | undefined;
 
 try {
   log.info('importing modules...');
@@ -97,35 +88,18 @@ try {
       : `ws://${self.location?.hostname || 'localhost'}:${self.location?.port || 3000}`
   );
 
-  // Monkey-patch receiveMessage: rendezvous + WebRTC-signal frames ride the same
-  // socket but aren't automerge-repo protocol — handle them, don't forward to the repo.
-  const origReceive = secureWs.receiveMessage.bind(secureWs);
-  (secureWs as any).receiveMessage = (bytes: Uint8Array) => {
-    try {
-      const decoded = cborDecode(new Uint8Array(bytes));
-      if (isRendezvousType(decoded?.type)) { rdvHandler?.(decoded); return; }
-      if (isWebRTCSignalType(decoded?.type)) { p2pAdapter?.handleSignal(decoded as WebRTCSignalFrame); return; }
-      // The relay's departure broadcast — the stock adapter has no such message
-      // type, so translate it into the peer-disconnected the repo understands.
-      if (isRelayLeaveFrame(decoded)) {
-        (secureWs as any).emit('peer-disconnected', { peerId: decoded.senderId });
-        return;
-      }
-    } catch { /* not an overlay frame — fall through to the repo adapter */ }
-    return origReceive(bytes);
-  };
-  // Expose the raw socket lazily (the adapter recreates it on reconnect).
-  rdvSocket = (secureWs as any).socket;
-  const origOnOpenForRdv = secureWs.onOpen;
-  secureWs.onOpen = () => { rdvSocket = (secureWs as any).socket; origOnOpenForRdv(); };
+  // Intercept overlay frames (rendezvous, WebRTC signaling, relay leave) off the
+  // raw socket before the repo sees them, and write outbound overlay frames back
+  // onto it — both shared with the CLI (src/shared/relay-overlay.ts).
+  installOverlayIntercept(secureWs as any, {
+    onRendezvous: (frame) => rdvHandler?.(frame),
+    onWebRTCSignal: (frame) => p2pAdapter?.handleSignal(frame),
+  });
+  const sendOverlayFrame = makeOverlayFrameSender(secureWs);
 
   // Wrap the relay adapter so peers can be upgraded to direct WebRTC data channels.
   p2pAdapter = makeWebRTCRelayAdapter(NetworkAdapterBase, secureWs, {
-    sendSignalFrame: (frame) => {
-      if (rdvSocket && rdvSocket.readyState === WebSocket.OPEN) {
-        rdvSocket.send(rdvEncoder.encode(frame) as unknown as ArrayBuffer);
-      }
-    },
+    sendSignalFrame: sendOverlayFrame,
     onTransportChange: (peerId, transport) => {
       (self as any).postMessage({ type: 'p2p-status', peerId, transport } satisfies WorkerToMain);
     },
@@ -148,11 +122,7 @@ try {
 
   const network: EngineNetwork = {
     networkAdapter: p2pAdapter,
-    sendOverlayFrame: (frame) => {
-      if (rdvSocket && rdvSocket.readyState === WebSocket.OPEN) {
-        rdvSocket.send(rdvEncoder.encode(frame) as unknown as ArrayBuffer);
-      }
-    },
+    sendOverlayFrame,
     onRendezvousFrame: (handler) => { rdvHandler = handler; },
     onSocketOpen: (handler) => { socketOpenHandler = handler; },
   };

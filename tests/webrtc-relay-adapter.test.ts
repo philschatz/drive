@@ -12,8 +12,8 @@
 
 import { EventEmitter } from 'events';
 import { Encoder, decode } from 'cbor-x';
-import { makeWebRTCRelayAdapter } from '../src/client/worker/webrtc-relay-adapter';
-import { MAX_MESSAGE_BYTES } from '../src/client/shared/webrtc-chunk';
+import { makeWebRTCRelayAdapter } from '../src/shared/webrtc-relay-adapter';
+import { MAX_MESSAGE_BYTES } from '../src/shared/webrtc-chunk';
 import { WRTC_SIGNAL } from '../src/shared/webrtc-signal';
 
 const cbor = new Encoder({ tagUint8Array: false, useRecords: false });

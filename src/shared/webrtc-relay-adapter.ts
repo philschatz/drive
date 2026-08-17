@@ -9,9 +9,10 @@
  * Underneath, for each peer it opportunistically negotiates a direct WebRTC
  * data channel (via the relay for signaling + public STUN for NAT traversal):
  *   - peer discovery, signaling transport, and fallback all ride the relay.
- *   - the actual RTCPeerConnection lives on the MAIN thread (WebRTC is not
- *     available in Workers); we talk to it over a MessagePort (see
- *     `webrtc-bridge.ts`).
+ *   - the actual peer connections live in the bridge (`webrtc-bridge-core.ts`),
+ *     reached over a MessagePort. In the browser that is the main thread
+ *     (WebRTC is not available in Workers — `src/client/ui/webrtc-bridge.ts`);
+ *     in the Node CLI the port pair is in-process (`src/cli/webrtc-node-bridge.ts`).
  *   - once a data channel is open, `send()` for that peer routes through it;
  *     otherwise it falls back to the relay. Correctness never depends on the
  *     direct channel — if it never opens, the relay path is exactly today's.
@@ -22,11 +23,11 @@
  */
 
 import { Encoder, decode } from 'cbor-x';
-import { MAX_MESSAGE_BYTES } from '../shared/webrtc-chunk';
-import { WRTC_SIGNAL, type WebRTCSignalFrame } from '../../shared/webrtc-signal';
-import type { BridgeToWorkerMsg, WorkerToBridgeMsg } from '../../shared/worker-protocol';
+import { MAX_MESSAGE_BYTES } from './webrtc-chunk';
+import { WRTC_SIGNAL, type WebRTCSignalFrame } from './webrtc-signal';
+import type { BridgeToWorkerMsg, WorkerToBridgeMsg } from './worker-protocol';
 import type { Message, NetworkAdapterInterface, PeerId, PeerMetadata } from '@automerge/automerge-repo';
-import { createLogger } from '../../shared/logger';
+import { createLogger } from './logger';
 
 const log = createLogger('webrtc');
 

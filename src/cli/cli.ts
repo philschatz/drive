@@ -24,17 +24,20 @@
  *   ${dataDir}/kv.json   app metadata — the user-group id + doc list.
  *
  * Degraded vs. the browser: no HyperFormula (DataGrid formula recompute in
- * queries) and no WebRTC upgrade (relay-only). Both are fine for a headless peer.
+ * queries) — fine for a headless peer. Networked commands get the same
+ * opportunistic WebRTC upgrade as the browser (werift-backed, see
+ * webrtc-node-bridge.ts).
  */
 import * as fs from 'fs';
 import * as path from 'path';
 import { Command } from 'commander';
-import { decode as cborDecode, Encoder } from 'cbor-x';
 import { NetworkAdapter } from '@automerge/automerge-repo';
 import { WebSocketClientAdapter } from '@automerge/automerge-repo-network-websocket';
 import { NodeFSStorageAdapter } from '@automerge/automerge-repo-storage-nodefs';
-import { isRendezvousType } from '../shared/rendezvous-protocol';
-import { PRODUCTION_RELAY_URL, isRelayLeaveFrame } from '../shared/relay-identity';
+import { PRODUCTION_RELAY_URL, RELAY_PEER_ID } from '../shared/relay-identity';
+import { makeWebRTCRelayAdapter } from '../shared/webrtc-relay-adapter';
+import { installOverlayIntercept, makeOverlayFrameSender } from '../shared/relay-overlay';
+import { startNodeWebRTCBridge } from './webrtc-node-bridge';
 import { parseRendezvousToken } from '../shared/rendezvous-url';
 import { DriveEngine, type DriveEngineInstance, type WatchUpdate } from '../shared/drive-engine';
 import { relativeTime } from '../shared/relative-time';
@@ -167,7 +170,7 @@ function resolveDataDir(opts: CliOpts): string {
 async function startEngine(
   opts: CliOpts,
   mode: { network: boolean },
-): Promise<{ engine: DriveEngineInstance; kv: NodeKVStore; wsAdapter: any }> {
+): Promise<{ engine: DriveEngineInstance; kv: NodeKVStore; wsAdapter: any; stopBridge: (() => void) | null }> {
   const dataDir = resolveDataDir(opts);
 
   // Patch the keyhive slim build + initialize the subduction WASM for Node, both
@@ -183,29 +186,32 @@ async function startEngine(
   const storage = new NodeFSStorageAdapter(secureDir);
 
   let wsAdapter: any = null;
+  let stopBridge: (() => void) | null = null;
   let network: EngineNetwork;
   if (mode.network) {
     const relayUrl = opts.relay ?? process.env.DRIVE_RELAY_URL ?? PRODUCTION_RELAY_URL;
     log.info(`relay=${relayUrl} data-dir=${dataDir}`);
     wsAdapter = new WebSocketClientAdapter(relayUrl);
-    const rdvEncoder = new Encoder({ tagUint8Array: false, useRecords: false });
     let rdvHandler: ((frame: any) => void) | null = null;
+    const sendOverlayFrame = makeOverlayFrameSender(wsAdapter);
 
-    // Intercept rendezvous overlay frames off the raw socket before the repo sees them.
-    const origReceive = wsAdapter.receiveMessage.bind(wsAdapter);
-    (wsAdapter as any).receiveMessage = (bytes: Uint8Array) => {
-      try {
-        const decoded = cborDecode(new Uint8Array(bytes));
-        if (isRendezvousType(decoded?.type)) { rdvHandler?.(decoded); return; }
-        // The relay's departure broadcast — the stock adapter has no such message
-        // type, so translate it into the peer-disconnected the repo understands.
-        if (isRelayLeaveFrame(decoded)) {
-          (wsAdapter as any).emit('peer-disconnected', { peerId: decoded.senderId });
-          return;
-        }
-      } catch { /* not an overlay frame — fall through to the repo adapter */ }
-      return origReceive(bytes);
-    };
+    // Wrap the relay adapter so peers can be upgraded to direct WebRTC data
+    // channels — same adapter the browser worker uses; the peer connections
+    // live in the in-process werift bridge.
+    const p2pAdapter = makeWebRTCRelayAdapter(NetworkAdapter as any, wsAdapter, {
+      sendSignalFrame: sendOverlayFrame,
+      onTransportChange: (peerId, transport) => emit({ type: 'p2p-status', peerId, transport }),
+      relayPeerId: RELAY_PEER_ID,
+    });
+    const { port1, port2 } = new MessageChannel();
+    p2pAdapter.attachPort(port1 as unknown as MessagePort);
+    stopBridge = startNodeWebRTCBridge(port2 as unknown as MessagePort);
+
+    // Intercept overlay frames off the raw socket before the repo sees them.
+    installOverlayIntercept(wsAdapter, {
+      onRendezvous: (frame) => rdvHandler?.(frame),
+      onWebRTCSignal: (frame) => p2pAdapter.handleSignal(frame),
+    });
 
     // Notify the engine on every socket (re)open so it re-sends its RELAY_WATCH
     // declaration — the relay's discovery state is per-socket. The adapter's own
@@ -215,13 +221,8 @@ async function startEngine(
     wsAdapter.onOpen = () => { origOnOpen(); socketOpenHandler?.(); };
 
     network = {
-      networkAdapter: wsAdapter,
-      sendOverlayFrame: (frame) => {
-        // Read the socket lazily: the keyhive integration may re-wrap the adapter,
-        // and the socket is (re)created on connect/reconnect.
-        const sock: any = (wsAdapter as any).socket;
-        if (sock && sock.readyState === 1) sock.send(rdvEncoder.encode(frame));
-      },
+      networkAdapter: p2pAdapter,
+      sendOverlayFrame,
       onRendezvousFrame: (handler) => { rdvHandler = handler; },
       onSocketOpen: (handler) => { socketOpenHandler = handler; },
     };
@@ -247,6 +248,7 @@ async function startEngine(
       case 'data-warning': log.warn('warning:', event.message); return;
       case 'peer-connected':
       case 'peer-disconnected': log.info(`peers: ${event.peerCount}`); return;
+      case 'p2p-status': log.info(`p2p ${event.peerId} → ${event.transport}`); return;
       case 'doc-list-updated': log.info(`doc list: ${event.list.length} doc(s)`); return;
       case 'kh-rdv-event':
         log.info(`link ${event.status}${event.message ? `: ${event.message}` : ''}`); return;
@@ -257,7 +259,7 @@ async function startEngine(
   const host: EngineHost = { storage, kv, network, emit };
   const engine = new DriveEngine(host);
   await engine.init();
-  return { engine, kv, wsAdapter };
+  return { engine, kv, wsAdapter, stopBridge };
 }
 
 /** Exit with a hint unless this device already has a linked identity. */
@@ -308,7 +310,7 @@ async function main(): Promise<void> {
         log.error('could not parse an invite from the given URL/token (expected …/link-device/r.<id>.<key>).');
         process.exit(1);
       }
-      const { engine, wsAdapter } = await startEngine(opts, { network: true });
+      const { engine, wsAdapter, stopBridge } = await startEngine(opts, { network: true });
       // Rendezvous frames ride the raw relay socket — it must be OPEN before we
       // subscribe, or the RDV_SUB is dropped and the other device waits forever.
       log.info('connecting to relay…');
@@ -326,6 +328,7 @@ async function main(): Promise<void> {
       const ids = await waitForDocs(engine);
       log.info(`device linked; ${ids.length} document(s) visible so far.`);
       log.info("sync is not instantaneous — run 'npm run cli -- sync --forever' (or --duration <seconds>) to pull everything.");
+      stopBridge?.();
       process.exit(0);
     });
 
@@ -443,7 +446,7 @@ async function main(): Promise<void> {
       // keyhive archive, repo storage). Reading kv.json does not create files.
       await requireLinked(new NodeKVStore(path.join(resolveDataDir(opts), 'kv.json')));
 
-      const { engine } = await startEngine(opts, { network: true });
+      const { engine, stopBridge } = await startEngine(opts, { network: true });
       const ids = await waitForDocs(engine);
       log.info(`${ids.length} accessible document(s).`);
 
@@ -458,6 +461,7 @@ async function main(): Promise<void> {
         if (shuttingDown) return;
         shuttingDown = true;
         log.info(`${reason}`);
+        stopBridge?.();
         engine.stopWatching();
         process.exit(code);
       };

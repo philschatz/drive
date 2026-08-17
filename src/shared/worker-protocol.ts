@@ -12,7 +12,7 @@ import type { BackupTier, BackupPayload } from './backup';
 // ── worker ↔ WebRTC bridge (a MessagePort, not the worker's main channel) ────
 // RTCPeerConnection is window-only, so the peer connections live on the main
 // thread (src/client/ui/webrtc-bridge.ts) while the network adapter that drives
-// them lives in the worker (src/client/worker/webrtc-relay-adapter.ts). These
+// them lives in the shared adapter (src/shared/webrtc-relay-adapter.ts). These
 // two types are that MessagePort's contract; they live here so neither side has
 // to import the other across the ui/worker boundary.
 

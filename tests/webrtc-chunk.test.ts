@@ -15,7 +15,7 @@ import {
   MAX_FRAME_BYTES,
   MAX_MESSAGE_BYTES,
   MAX_MESSAGE_FRAMES,
-} from '../src/client/shared/webrtc-chunk';
+} from '../src/shared/webrtc-chunk';
 
 function randomBytes(n: number): Uint8Array {
   const out = new Uint8Array(n);
