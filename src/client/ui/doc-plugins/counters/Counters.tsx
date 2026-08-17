@@ -582,11 +582,18 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
       }
 
       const es = editorStateRef.current;
-      if (es && !es.isNew) {
+      if (es) {
         const fresh = (result.events || {})[es.uid];
         if (fresh) {
-          setEditorState(prev => (prev && prev.uid === es.uid) ? { ...prev, event: fresh } : prev);
-        } else {
+          // The document holding the uid is what makes an item no-longer-new,
+          // so isNew flips here as well as in onCreated: with a synchronous
+          // store (the jsdom mock) this delivery arrives DURING the creating
+          // save, before onCreated runs, and keeping the isNew draft would
+          // leave the editor holding the stale pre-save event.
+          setEditorState(prev => (prev && prev.uid === es.uid) ? { ...prev, event: fresh, isNew: false } : prev);
+        } else if (!es.isNew) {
+          // Gone from the document while being edited (deleted elsewhere) —
+          // but a NEW draft is not in the document yet, so it stays open.
           setEditorState(null);
         }
       }

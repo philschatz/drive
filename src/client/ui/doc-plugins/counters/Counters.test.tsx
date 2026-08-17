@@ -3,9 +3,9 @@ import { render, screen, fireEvent, within, waitFor } from '@testing-library/pre
 
 // In-memory + jq mock so the real Counters container runs in jsdom (single
 // browser, no peers). Schedule variety is seeded directly via __setDoc; the
-// default-Daily FAB-add path is still exercised live, and the editor's own panes
-// are driven in CounterEditor.test.tsx. md-* custom elements are NOT registered
-// here, so rows are inert hosts driven by their own handlers.
+// FAB-add path (default: a one-off due today) is still exercised live, and the
+// editor's own panes are driven in CounterEditor.test.tsx. md-* custom elements
+// are NOT registered here, so rows are inert hosts driven by their own handlers.
 jest.mock('../../worker-api');
 import * as api from '../../worker-api';
 import { Counters, counterIcon } from './Counters';
@@ -18,6 +18,14 @@ const mock = api as any;
 it('uses the manual worker-api mock', () => expect(mock.__isMock).toBe(true));
 const DOC = 'doc-counters';
 const rowOf = (title: string) => screen.getByText(title).closest('[data-status]') as HTMLElement;
+// A real tap is a whole gesture, not a bare click: the pointerdown is what
+// clears the click-swallow a preceding hold armed (useLongPress). A browser
+// always sends one before a click; jsdom's fireEvent.click does not.
+const tap = (el: HTMLElement) => {
+  fireEvent.pointerDown(el);
+  fireEvent.pointerUp(el);
+  fireEvent.click(el);
+};
 // The Done section rests collapsed to a count — its rows are not in the DOM
 // until the heading's disclosure button is tapped.
 const expandDone = () => fireEvent.click(screen.getByRole('button', { name: /^Done \(\d+\)$/ }));
@@ -30,7 +38,27 @@ const dailyHabit = (title: string, start = '2026-07-01') => ({
 describe('Counters container', () => {
   beforeEach(() => { mock.__reset(); });
 
-  it('adds a daily habit via the FAB and records a completion by tapping the row', async () => {
+  it('a counter added via the FAB is a one-off due today, on the to-do list', async () => {
+    mock.__setDoc(DOC, { '@type': 'Calendar+Counters', name: 'Test Counters', events: {} });
+    render(<Counters docId={DOC} />);
+    await waitFor(() => expect(document.querySelector('md-fab')).toBeTruthy());
+
+    fireEvent.click(document.querySelector('md-fab')!);
+    fireEvent.input(screen.getByTestId('ced-title'), { target: { value: 'Buy stamps' } });
+    fireEvent.keyDown(screen.getByTestId('ced-title'), { key: 'Enter' });
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+
+    // No repeat by default, wanted today — so it files under "To do" (due
+    // today), never Anytime.
+    expect(screen.getByRole('heading', { name: 'To do' })).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: 'Anytime' })).toBeNull();
+    expect(rowOf('Buy stamps').getAttribute('data-status')).toBe('due');
+    const ev = Object.values(mock.__getDoc(DOC).events)[0] as any;
+    expect(ev.start).toBe(Temporal.Now.plainDateISO().toString());
+    expect(ev.recurrenceRule).toBeUndefined();
+  });
+
+  it('adds a habit via the FAB (picking Daily) and records a completion by tapping the row', async () => {
     mock.__setDoc(DOC, { '@type': 'Calendar+Counters', name: 'Test Counters', events: {} });
     render(<Counters docId={DOC} />);
     await waitFor(() => expect(document.querySelector('md-fab')).toBeTruthy());
@@ -53,13 +81,21 @@ describe('Counters container', () => {
     expect((screen.getByTestId('ced-title') as HTMLInputElement).value).toBe('');
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
 
-    // New counters default to Daily → due today ("To do").
+    // A new counter is a one-off; make it a habit by picking Daily in the
+    // editor's Repeat pane (hold the row to edit).
+    fireEvent.contextMenu(rowOf('Stretch'));
+    fireEvent.click(screen.getByTestId('ced-repeat-row'));
+    fireEvent.input(screen.getByTestId('ced-freq'), { target: { value: 'daily' } });
+    fireEvent.click(screen.getByTestId('ced-repeat-save'));
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+
+    // Daily → due today ("To do").
     expect(screen.getByRole('heading', { name: 'To do' })).toBeTruthy();
     expect(rowOf('Stretch').getAttribute('data-status')).toBe('due');
 
     // Tapping the row records a completion → moves to "Done", which rests
     // collapsed: the row leaves the DOM and the heading carries the count.
-    fireEvent.click(rowOf('Stretch'));
+    tap(rowOf('Stretch'));
     expect(screen.queryByText('Stretch')).toBeNull();
     expect(screen.getByRole('heading', { name: 'Done (1)' })).toBeTruthy();
     // Expanded, the row is done. A single-day streak is not a streak yet: the
@@ -71,7 +107,7 @@ describe('Counters container', () => {
 
     // Tapping is the primary action, so a second tap adds another completion
     // (streak stays 1: same day) rather than opening the editor.
-    fireEvent.click(rowOf('Stretch'));
+    tap(rowOf('Stretch'));
     expect(screen.queryByText('Edit Counter')).toBeNull();
     const events = mock.__getDoc(DOC).events as Record<string, any>;
     const uid = Object.keys(events).find(k => events[k].title === 'Stretch')!;

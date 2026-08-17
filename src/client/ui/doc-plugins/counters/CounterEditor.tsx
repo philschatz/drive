@@ -97,16 +97,19 @@ export function CounterEditor({ uid, event, isNew, opened, canEdit = true, onSav
     if (onFieldFocus) onFieldFocus(null);
   }, [onFieldFocus]);
 
-  const [title, setTitle] = useState(event.title || '');
   // A non-recurring counter's `start` is its due date — the day it is wanted.
   // (A recurring one's is the schedule anchor, which this pane never shows.)
-  const [startDate, setStartDate] = useState(event.recurrenceRule ? '' : (event.start || '').substring(0, 10));
+  // A brand-new counter is a one-off wanted today, so it starts on the to-do
+  // list rather than in Anytime — clear Due to opt out, or pick a repeat.
+  const seedStartDate = () =>
+    event.recurrenceRule ? '' : (event.start || (isNew ? Temporal.Now.plainDateISO().toString() : '')).substring(0, 10);
+
+  const [title, setTitle] = useState(event.title || '');
+  const [startDate, setStartDate] = useState(seedStartDate);
   const [startTime, setStartTime] = useState(event.startTime ? event.startTime.substring(0, 5) : '');
   const [duration, setDuration] = useState(event.duration || '');
   const [description, setDescription] = useState(event.description || '');
-  // A brand-new habit defaults to daily recurrence (so new users start with a
-  // repeating habit); an existing checklist item keeps 'none'.
-  const [frequency, setFrequency] = useState(event.recurrenceRule?.frequency || (isNew ? 'daily' : 'none'));
+  const [frequency, setFrequency] = useState(event.recurrenceRule?.frequency || 'none');
   const [interval, setInterval] = useState<number | null>(event.recurrenceRule?.interval ?? null);
   const [byDay, setByDay] = useState<NDay['day'][]>((event.recurrenceRule?.byDay || []).map(d => d.day));
 
@@ -116,11 +119,11 @@ export function CounterEditor({ uid, event, isNew, opened, canEdit = true, onSav
     prevRef.current = event;
     if (prev === event) return;
     setTitle(event.title || '');
-    setStartDate(event.recurrenceRule ? '' : (event.start || '').substring(0, 10));
+    setStartDate(seedStartDate());
     setStartTime(event.startTime ? event.startTime.substring(0, 5) : '');
     setDuration(event.duration || '');
     setDescription(event.description || '');
-    setFrequency(event.recurrenceRule?.frequency || (isNew ? 'daily' : 'none'));
+    setFrequency(event.recurrenceRule?.frequency || 'none');
     setInterval(event.recurrenceRule?.interval ?? null);
     setByDay((event.recurrenceRule?.byDay || []).map(d => d.day));
   }, [event]);

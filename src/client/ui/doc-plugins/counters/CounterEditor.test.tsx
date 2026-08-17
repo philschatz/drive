@@ -259,27 +259,35 @@ describe('CounterEditor', () => {
       expect((screen.getByTestId('ced-title') as HTMLInputElement).value).toBe('');
       expect(screen.getByText('New Counter')).toBeTruthy();
 
+      // The chained item was created with the defaults: a one-off due today.
+      const today = Temporal.Now.plainDateISO().toString();
+      const floss = Object.values(eventsOf()).find((e: any) => e.title === 'Floss') as any;
+      expect(floss.start).toBe(today);
+      expect(floss.recurrenceRule).toBeUndefined();
+
       // Save: writes and goes to the list, where the schedule and reward are
-      // editable as part of creating the item.
+      // editable as part of creating the item. (The reward row only exists on a
+      // recurring counter, so the repeat is set first.)
       fireEvent.input(screen.getByTestId('ced-title'), { target: { value: 'Stretch' } });
       fireEvent.click(screen.getByTestId('ced-title-save'));
       expect(screen.getByText('Edit Counter')).toBeTruthy();
       expect(screen.getByTestId('ced-repeat-row')).toBeTruthy();
+
+      fireEvent.click(screen.getByTestId('ced-repeat-row'));
+      fireEvent.input(screen.getByTestId('ced-freq'), { target: { value: 'weekly' } });
+      fireEvent.click(screen.getByTestId('ced-repeat-save'));
 
       fireEvent.click(screen.getByTestId('ced-reward-row'));
       fireEvent.input(screen.getByTestId('ced-reward-goal'), { target: { value: '7' } });
       fireEvent.input(screen.getByTestId('ced-reward-text'), { target: { value: 'Cake' } });
       fireEvent.click(screen.getByTestId('ced-reward-save'));
 
-      fireEvent.click(screen.getByTestId('ced-repeat-row'));
-      fireEvent.input(screen.getByTestId('ced-freq'), { target: { value: 'weekly' } });
-      fireEvent.click(screen.getByTestId('ced-repeat-save'));
-
       const stretch = Object.values(eventsOf()).find((e: any) => e.title === 'Stretch') as any;
       expect(stretch).toMatchObject({ description: '7: Cake', recurrenceRule: { frequency: 'weekly' } });
       expect(stretch.created).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
-      // A brand-new counter has no schedule anchor until it is first done.
-      expect(stretch.start).toBeUndefined();
+      // It was created as a one-off due today, so promoting it to a habit
+      // carries that date over as the schedule anchor.
+      expect(stretch.start).toBe(today);
     });
 
     it('a repeat chosen before the title is carried into the counter it creates', async () => {
@@ -295,11 +303,14 @@ describe('CounterEditor', () => {
       fireEvent.click(screen.getByTestId('ced-repeat-save'));
       expect(Object.keys(eventsOf())).toHaveLength(0);
 
-      // …and the choice rides along with the title that does create it.
+      // …and the choice rides along with the title that does create it. Born
+      // recurring, it never was a one-off, so there is no due date to carry
+      // over — no schedule anchor until it is first done.
       fireEvent.click(screen.getByTestId('ced-title-row'));
       fireEvent.input(screen.getByTestId('ced-title'), { target: { value: 'Pay rent' } });
       fireEvent.click(screen.getByTestId('ced-title-save'));
       expect(only()).toMatchObject({ title: 'Pay rent', recurrenceRule: { frequency: 'monthly' } });
+      expect(only().start).toBeUndefined();
     });
   });
 });
