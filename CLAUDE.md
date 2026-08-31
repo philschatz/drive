@@ -41,7 +41,7 @@ Each top-level directory under `src/` is one program or one runtime, and the bou
 
 - `src/relay/` — the stateless WebSocket relay (`relay.ts`), the production SPA host (`serve.ts`), and the Vite dev plugin that embeds the relay in the dev server (`relay-plugin.ts`)
 - `src/bitrot-caldav/` — the CalDAV bridge: RFC 4791 handler, `/dav` + `/admin` routes, and the ICS↔JMAP `parser.ts` / `serializer.ts`. Depends on `src/relay` (it embeds one) and on `src/cli` (the keyhive Node shim)
-- `src/cli/` — the headless drive peer (`cli.ts`, driven by `scripts/drive-service.sh`), its JSON-file KVStore, the keyhive WASM shim for Node, and the Node half of the WebRTC upgrade (`webrtc-node-bridge.ts` + the werift driver `werift-rtc.ts`)
+- `src/cli/` — the headless drive peer (`cli.ts`, driven by `drive-service.sh` in the scripts repo: `~/code/mine/scripts/services/drive-sync/`), its JSON-file KVStore, the keyhive WASM shim for Node, and the Node half of the WebRTC upgrade (`webrtc-node-bridge.ts` + the werift driver `werift-rtc.ts`)
 
 **Browser** (`src/client/`) — split by *thread*, because the two halves cannot import each other:
 
