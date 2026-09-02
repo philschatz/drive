@@ -21,8 +21,9 @@ import { relativeDuration } from '../../../../shared/relative-time';
 import { MATERIAL_ORANGE } from '../../common/categorical-colors';
 import { sortedCounters, metMissedByWeek, isArchived, lastCompletionAnchor, createdStampFor, counterKind, type CounterEntry, type CounterKind, type CounterStatus, type RewardProgress } from './occurrences';
 import { MetMissedChart } from './Chart';
-import { CounterEditor } from './CounterEditor';
+import { CounterEditor, type CounterSuggestion, type UseExistingOutcome } from './CounterEditor';
 import { CompletionsSheet } from './CompletionsSheet';
+import { matchCounters } from './suggestions';
 
 interface EditorState {
   uid: string;
@@ -392,6 +393,14 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
     updateDoc(docId, (d, uid, ts) => { const r = d.events[uid]?.recurrenceRule; if (r) r.until = ts; }, uid, nowLocal());
   }, [docId]);
 
+  // The raw write, shared with the add-flow redirect (useExistingCounter) —
+  // which deliberately skips the confirm: typing an archived item's name is
+  // exactly the intent the question exists to check.
+  const unarchiveNow = useCallback((uid: string) => {
+    if (!canEditRef.current || !docId) return;
+    updateDoc(docId, (d, uid) => { const r = d.events[uid]?.recurrenceRule; if (r) delete r.until; }, uid);
+  }, [docId]);
+
   // Asked here rather than at the row, because both routes to unarchiving — the
   // archived row's own icon and the editor's Unarchive action — come through
   // this one callback, and both deserve the same question. Not `destructive`:
@@ -404,8 +413,8 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
       confirmLabel: 'Unarchive',
       confirmIcon: 'unarchive',
     })) return;
-    updateDoc(docId, (d, uid) => { const r = d.events[uid]?.recurrenceRule; if (r) delete r.until; }, uid);
-  }, [docId, confirm]);
+    unarchiveNow(uid);
+  }, [unarchiveNow, confirm]);
 
   /**
    * Append a completion and nothing else — the row's "Record" action, and the
@@ -483,6 +492,40 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
       ev.start = at;
     }, uid, at);
   }, [docId]);
+
+  /**
+   * The add-flow's duplicate redirect: route a typed title to the existing item
+   * instead of creating a twin. One change at most — arm a parked checklist
+   * item, unarchive an archived habit; anything already owed, or a done habit
+   * (whose schedule cannot be overridden — `start` there is the completion
+   * anchor), is left alone.
+   */
+  const useExistingCounter = useCallback((uid: string): UseExistingOutcome | undefined => {
+    const ev = eventsRef.current[uid];
+    if (!ev) return undefined; // deleted meanwhile — the caller creates normally
+    if (isArchived(ev)) { unarchiveNow(uid); return 'unarchived'; }
+    if (!ev.recurrenceRule && !ev.start) { armCounter(uid); return 'armed'; }
+    return 'listed';
+  }, [armCounter, unarchiveNow]);
+
+  /** Existing-item matches for the New-Counter title being typed — display-ready
+   * rows, so the editor needs none of this file's status/icon tables. */
+  const suggestCounters = useCallback((query: string): CounterSuggestion[] =>
+    matchCounters(eventsRef.current, query, nowLocal(), editorStateRef.current?.uid).map(m => {
+      const { icon, tone } = m.archived
+        ? { icon: 'inventory_2', tone: 'muted' as const } // the Archived section's glyph
+        : counterIcon(m.kind, m.status!);
+      return {
+        uid: m.uid,
+        title: m.title,
+        exact: m.exact,
+        icon,
+        color: TONE_COLORS[tone],
+        label: m.archived ? 'Archived'
+          : m.status === 'done' && m.dueAt ? 'Done — back in ' + relativeDuration(m.dueAt)
+          : STATUS_LABELS[m.status!],
+      };
+    }), []);
 
   /**
    * The row's tap, which for a checklist item is simply its checkbox: `start` is
@@ -810,6 +853,8 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
         onUnarchive={unarchiveCounter}
         onFieldFocus={handleFieldFocus}
         peerFocusedFields={peerFocusedFields}
+        suggestCounters={canEdit ? suggestCounters : undefined}
+        onUseExisting={useExistingCounter}
       />
 
       <CompletionsSheet

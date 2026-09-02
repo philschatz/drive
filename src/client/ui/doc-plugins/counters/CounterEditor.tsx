@@ -3,6 +3,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Label } from '@/components/ui/label';
 import { MdTextField } from '@/components/ui/md-text-field';
 import { MdSelect } from '@/components/ui/md-select';
+import { showToast } from '@/components/ui/toast';
 import { PropertySheet, SheetActions, SheetActionItem } from '../../common/PropertySheet';
 import type { PropertyDef } from '../../common/PropertySheet';
 import { FieldEditor, GroupEditor } from '../../common/FieldEditor';
@@ -56,6 +57,32 @@ interface RewardDraft {
   text: string;
 }
 
+/** What the duplicate redirect did to the existing item — see `onUseExisting`. */
+export type UseExistingOutcome = 'armed' | 'listed' | 'unarchived';
+
+/** One row of the New-Counter title pane's suggestion list. Display-ready —
+ * built by the container, so this file needs none of its status/icon tables. */
+export interface CounterSuggestion {
+  uid: string;
+  /** Stored title, original casing. */
+  title: string;
+  /** material-symbols glyph for the leading slot. */
+  icon: string;
+  /** Resolved CSS color for the glyph. */
+  color: string;
+  /** Status line: "Due" | "Done — back in 3 days" | "Archived" | … */
+  label: string;
+  /** Same title as the typed draft — saving redirects here instead of creating. */
+  exact: boolean;
+}
+
+/** The inline/toast line confirming where a redirected title went. */
+const REDIRECT_NOTICE: Record<UseExistingOutcome, (title: string) => string> = {
+  armed: t => `Added "${t}" to To do`,
+  listed: t => `"${t}" is already on the list`,
+  unarchived: t => `Unarchived "${t}"`,
+};
+
 interface CounterEditorProps {
   uid: string;
   event: CounterEvent;
@@ -79,9 +106,14 @@ interface CounterEditorProps {
   onFieldFocus?: (path: (string | number)[] | null) => void;
   /** Peers' focused fields keyed by editor input id (see FIELD_TO_PROP). */
   peerFocusedFields?: Record<string, PeerFieldInfo>;
+  /** Ranked existing-item matches for the New-Counter title being typed. */
+  suggestCounters?: (query: string) => CounterSuggestion[];
+  /** Route the typed/picked title to an existing item instead of creating a
+   * duplicate; undefined = it vanished meanwhile, so create normally. */
+  onUseExisting?: (uid: string) => UseExistingOutcome | undefined;
 }
 
-export function CounterEditor({ uid, event, isNew, opened, canEdit = true, onSave, onDelete, onShowCompletions, onClose, onAddAnother, onCreated, onArchive, onUnarchive, onFieldFocus, peerFocusedFields }: CounterEditorProps) {
+export function CounterEditor({ uid, event, isNew, opened, canEdit = true, onSave, onDelete, onShowCompletions, onClose, onAddAnother, onCreated, onArchive, onUnarchive, onFieldFocus, peerFocusedFields, suggestCounters, onUseExisting }: CounterEditorProps) {
   const fieldToPath = useMemo(() => {
     const map: Record<string, (string | number)[]> = {};
     for (const [inputId, prop] of Object.entries(FIELD_TO_PROP)) {
@@ -112,6 +144,12 @@ export function CounterEditor({ uid, event, isNew, opened, canEdit = true, onSav
   const [frequency, setFrequency] = useState(event.recurrenceRule?.frequency || 'none');
   const [interval, setInterval] = useState<number | null>(event.recurrenceRule?.interval ?? null);
   const [byDay, setByDay] = useState<NDay['day'][]>((event.recurrenceRule?.byDay || []).map(d => d.day));
+
+  // Feedback when a typed title was routed to an existing item (title pane).
+  // Lives here, not in FieldEditor: the keyed remount when Enter chains to
+  // another new counter is exactly the moment it is set.
+  const [notice, setNotice] = useState<string | null>(null);
+  useEffect(() => { if (!opened) setNotice(null); }, [opened]);
 
   const prevRef = useRef(event);
   useEffect(() => {
@@ -239,6 +277,28 @@ export function CounterEditor({ uid, event, isNew, opened, canEdit = true, onSav
           onSave={v => {
             const viaEnter = titleViaEnterRef.current;
             titleViaEnterRef.current = false;
+            // A title naming an existing item routes there instead of creating
+            // a twin — the container arms/unarchives it as appropriate.
+            const existing = isNew ? suggestCounters?.(v).find(s => s.exact) : undefined;
+            const outcome = existing ? onUseExisting?.(existing.uid) : undefined;
+            if (existing && outcome) {
+              if (viaEnter) {
+                // Chain like a normal rapid-entry create; the notice under the
+                // field says where the title went.
+                setNotice(REDIRECT_NOTICE[outcome](existing.title));
+                setTitle('');
+                onAddAnother?.();
+                return;
+              }
+              // Save button: close to the list, where the row now is. Landing on
+              // the existing item's property list would silently turn "add" into
+              // "edit", and nothing was created, so onCreated must not fire. The
+              // toast (stacked under the sheet's scrim while open) is visible now.
+              showToast(REDIRECT_NOTICE[outcome](existing.title));
+              onClose();
+              return;
+            }
+            // No match — or it vanished meanwhile (outcome undefined): create.
             change({ title: v });
             if (isNew && viaEnter) {
               // Rapid entry: keep the sheet open on a fresh blank counter. Clear
@@ -257,15 +317,32 @@ export function CounterEditor({ uid, event, isNew, opened, canEdit = true, onSav
           }}
         >
           {({ value, onInput, save }) => (
-            <MdTextField
-              label="Title"
-              data-testid="ced-title"
-              value={value}
-              onInput={onInput}
-              onFocus={() => focusField('ced-title')}
-              onBlur={blurField}
-              onEnter={() => { titleViaEnterRef.current = true; save(); }}
-            />
+            <>
+              <MdTextField
+                label="Title"
+                data-testid="ced-title"
+                value={value}
+                onInput={v => { setNotice(null); onInput(v); }}
+                onFocus={() => focusField('ced-title')}
+                onBlur={blurField}
+                onEnter={() => { titleViaEnterRef.current = true; save(); }}
+              />
+              {isNew && suggestCounters && (
+                <TitleSuggestions
+                  suggestions={suggestCounters(value)}
+                  onPick={s => {
+                    const outcome = onUseExisting?.(s.uid);
+                    if (!outcome) return; // vanished meanwhile — the row is stale
+                    setNotice(REDIRECT_NOTICE[outcome](s.title));
+                    setTitle('');
+                    onAddAnother?.(); // tap = chain, the same gesture as Enter
+                  }}
+                />
+              )}
+              {notice && (
+                <p data-testid="ced-title-notice" className="mt-2 text-sm text-muted-foreground">{notice}</p>
+              )}
+            </>
           )}
         </FieldEditor>
       ),
@@ -531,5 +608,35 @@ export function CounterEditor({ uid, event, isNew, opened, canEdit = true, onSav
         </SheetActions>
       ) : undefined}
     />
+  );
+}
+
+/**
+ * The existing items the typed title matches, under the New-Counter title field
+ * — a plain filtered list on the pane itself (the LevelList idiom), not an
+ * md-menu: a popover would clip against the sheet and is inert under jsdom,
+ * where these rows must stay drivable. Tapping one hands the title to the
+ * existing item and chains to the next blank counter, the same rhythm as Enter.
+ */
+function TitleSuggestions({ suggestions, onPick }: {
+  suggestions: CounterSuggestion[];
+  onPick: (s: CounterSuggestion) => void;
+}) {
+  if (suggestions.length === 0) return null;
+  return (
+    <div data-testid="ced-title-suggestions" className="mt-2">
+      <p className="text-xs text-muted-foreground">Already on this list — tap to use:</p>
+      <md-list style={{ background: 'transparent' }}>
+        {suggestions.map(s => (
+          <md-list-item key={s.uid} type="button" data-testid="counter-suggestion" onClick={() => onPick(s)}>
+            <span slot="start" aria-hidden="true" className="material-symbols-outlined text-lg" style={{ color: s.color }}>
+              {s.icon}
+            </span>
+            <div slot="headline">{s.title}</div>
+            <div slot="supporting-text">{s.label}</div>
+          </md-list-item>
+        ))}
+      </md-list>
+    </div>
   );
 }

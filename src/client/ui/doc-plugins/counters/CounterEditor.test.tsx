@@ -290,6 +290,28 @@ describe('CounterEditor', () => {
       expect(stretch.start).toBe(today);
     });
 
+    it('an exact-title Enter routes to the existing item instead of creating a twin', async () => {
+      // The rapid-entry chain retyping a name it already saved: "Floss" ⏎ made
+      // it (due today), so "floss" ⏎ must not make another.
+      mock.__setDoc(DOC, { '@type': 'Calendar+Counters', name: 'C', events: {} });
+      render(<Counters docId={DOC} />);
+      await waitFor(() => expect(document.querySelector('md-fab')).toBeTruthy());
+      fireEvent.click(document.querySelector('md-fab')!);
+
+      fireEvent.input(screen.getByTestId('ced-title'), { target: { value: 'Floss' } });
+      fireEvent.keyDown(screen.getByTestId('ced-title'), { key: 'Enter' });
+      expect(Object.keys(eventsOf())).toHaveLength(1);
+
+      fireEvent.input(screen.getByTestId('ced-title'), { target: { value: 'floss' } });
+      fireEvent.keyDown(screen.getByTestId('ced-title'), { key: 'Enter' });
+      expect(Object.keys(eventsOf())).toHaveLength(1);
+      // Still chaining: the sheet stays open on a fresh blank counter, with the
+      // notice saying where the title went.
+      expect(screen.getByText('New Counter')).toBeTruthy();
+      expect((screen.getByTestId('ced-title') as HTMLInputElement).value).toBe('');
+      expect(screen.getByTestId('ced-title-notice').textContent).toBe('"Floss" is already on the list');
+    });
+
     it('a repeat chosen before the title is carried into the counter it creates', async () => {
       mock.__setDoc(DOC, { '@type': 'Calendar+Counters', name: 'C', events: {} });
       render(<Counters docId={DOC} />);
@@ -311,6 +333,92 @@ describe('CounterEditor', () => {
       fireEvent.click(screen.getByTestId('ced-title-save'));
       expect(only()).toMatchObject({ title: 'Pay rent', recurrenceRule: { frequency: 'monthly' } });
       expect(only().start).toBeUndefined();
+    });
+  });
+
+  describe('title suggestions', () => {
+    const today = () => Temporal.Now.plainDateISO().toString();
+    /** A daily habit completed just now: reliably `done` until midnight (the
+     * resurface boundary is floored at end-of-day), whatever time the test runs. */
+    const doneHabit = () => {
+      const at = Temporal.Now.plainDateTimeISO().toString({ smallestUnit: 'second' });
+      return habit({ start: at, completions: { [at + '.000']: '' } });
+    };
+    const openNew = async () => {
+      render(<Counters docId={DOC} />);
+      await waitFor(() => expect(document.querySelector('md-fab')).toBeTruthy());
+      fireEvent.click(document.querySelector('md-fab')!);
+    };
+
+    it('lists matches while typing a NEW title, never when renaming an existing item', async () => {
+      mock.__setDoc(DOC, { '@type': 'Calendar+Counters', name: 'C', events: { e1: habit() } });
+      await openNew();
+      fireEvent.input(screen.getByTestId('ced-title'), { target: { value: 'str' } });
+      expect(screen.getByTestId('ced-title-suggestions').textContent).toContain('Stretch');
+      fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+
+      // Renaming must not offer to merge the item into its neighbours.
+      fireEvent.contextMenu(rowOf('Stretch'));
+      fireEvent.click(screen.getByTestId('ced-title-row'));
+      fireEvent.input(screen.getByTestId('ced-title'), { target: { value: 'str' } });
+      expect(screen.queryByTestId('ced-title-suggestions')).toBeNull();
+    });
+
+    it('tapping a parked item arms it instead of creating a twin, and chains', async () => {
+      mock.__setDoc(DOC, { '@type': 'Calendar+Counters', name: 'C', events: { e1: { '@type': 'Event', title: 'Buy stamps' } } });
+      await openNew();
+      fireEvent.input(screen.getByTestId('ced-title'), { target: { value: 'buy' } });
+      fireEvent.click(screen.getByTestId('counter-suggestion'));
+
+      expect(Object.keys(eventsOf())).toHaveLength(1);
+      expect(eventsOf().e1.start.startsWith(today())).toBe(true); // armed: wanted as of now
+      expect(screen.getByText('New Counter')).toBeTruthy();
+      expect((screen.getByTestId('ced-title') as HTMLInputElement).value).toBe('');
+      expect(screen.getByTestId('ced-title-notice').textContent).toBe('Added "Buy stamps" to To do');
+    });
+
+    it('an exact Enter on a done habit changes nothing — its schedule cannot be overridden', async () => {
+      mock.__setDoc(DOC, { '@type': 'Calendar+Counters', name: 'C', events: { e1: doneHabit() } });
+      await openNew();
+      fireEvent.input(screen.getByTestId('ced-title'), { target: { value: 'stretch' } });
+      expect(screen.getByTestId('ced-title-suggestions').textContent).toContain('Done — back in');
+      fireEvent.keyDown(screen.getByTestId('ced-title'), { key: 'Enter' });
+
+      expect(writes).not.toHaveBeenCalled();
+      expect(Object.keys(eventsOf())).toHaveLength(1);
+      expect(screen.getByText('New Counter')).toBeTruthy();
+      expect(screen.getByTestId('ced-title-notice').textContent).toBe('"Stretch" is already on the list');
+    });
+
+    it('the Save button on an exact match closes to the list without creating', async () => {
+      mock.__setDoc(DOC, { '@type': 'Calendar+Counters', name: 'C', events: { e1: { '@type': 'Event', title: 'Buy stamps', start: today() } } });
+      await openNew();
+      fireEvent.input(screen.getByTestId('ced-title'), { target: { value: 'Buy stamps' } });
+      fireEvent.click(screen.getByTestId('ced-title-save'));
+
+      expect(writes).not.toHaveBeenCalled();
+      expect(Object.keys(eventsOf())).toHaveLength(1);
+      // Not parked on the existing item's property list — that would turn "add"
+      // into "edit" — and not still adding: closed, back on the list.
+      expect(screen.queryByText('New Counter')).toBeNull();
+      expect(screen.queryByText('Edit Counter')).toBeNull();
+    });
+
+    it('picking an archived habit unarchives it, skipping the confirm', async () => {
+      mock.__setDoc(DOC, {
+        '@type': 'Calendar+Counters', name: 'C',
+        events: { e1: habit({ recurrenceRule: { '@type': 'RecurrenceRule', frequency: 'daily', until: '2026-07-01T00:00:00' } }) },
+      });
+      await openNew();
+      fireEvent.input(screen.getByTestId('ced-title'), { target: { value: 'stretch' } });
+      expect(screen.getByTestId('ced-title-suggestions').textContent).toContain('Archived');
+      fireEvent.click(screen.getByTestId('counter-suggestion'));
+
+      expect(eventsOf().e1.recurrenceRule.until).toBeUndefined();
+      expect(Object.keys(eventsOf())).toHaveLength(1);
+      // Typing its name IS the intent the unarchive confirm exists to check.
+      expect(screen.queryByText('Unarchive this counter?')).toBeNull();
+      expect(screen.getByTestId('ced-title-notice').textContent).toBe('Unarchived "Stretch"');
     });
   });
 });
