@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Collaborative document editor built on Automerge CRDTs. Currently supports Calendar, TaskList, and DataGrid document types. The frontend is a Preact PWA; the backend is an Express server with CalDAV support. Documents sync in real-time via automerge-repo through a WebSocket relay, with an opportunistic upgrade to direct peer-to-peer WebRTC channels (see Sync & Networking).
+Collaborative document editor built on Automerge CRDTs. Currently supports Calendar, TaskList, DataGrid, Counters, Sentences, and Kitchen (a schema.org/Recipe collection with cook-to-learn gamification) document types. The frontend is a Preact PWA; the backend is an Express server with CalDAV support. Documents sync in real-time via automerge-repo through a WebSocket relay, with an opportunistic upgrade to direct peer-to-peer WebRTC channels (see Sync & Networking).
 
 ## Commands
 
@@ -45,7 +45,7 @@ Each top-level directory under `src/` is one program or one runtime, and the bou
 
 **Browser** (`src/client/`) — split by *thread*, because the two halves cannot import each other:
 
-- `src/client/ui/` — everything Preact/DOM. `main.tsx`, `App.tsx`, `worker-api.ts` (the main thread's handle on the worker), `tab-transport.ts`/`tab-router.ts`/`multi-tab.ts` (the cross-tab layer — see Tabs & the single engine), `webrtc-bridge.ts`, and the feature dirs: `doc-plugins/` (`calendar/`, `tasks/`, `datagrid/`, `counters/`, `sentences/` + the registry `index.ts`/`types.ts`), `home/`, `source/`, `friends/`, `sharing/`, `settings/`, `debug/`, `components/`, `lib/`, and `common/` (shared UI hooks + components)
+- `src/client/ui/` — everything Preact/DOM. `main.tsx`, `App.tsx`, `worker-api.ts` (the main thread's handle on the worker), `tab-transport.ts`/`tab-router.ts`/`multi-tab.ts` (the cross-tab layer — see Tabs & the single engine), `webrtc-bridge.ts`, and the feature dirs: `doc-plugins/` (`calendar/`, `tasks/`, `datagrid/`, `counters/`, `sentences/`, `kitchen/` + the registry `index.ts`/`types.ts`), `home/`, `source/`, `friends/`, `sharing/`, `settings/`, `debug/`, `components/`, `lib/`, and `common/` (shared UI hooks + components)
 - `src/client/worker/` — the Web Worker: `automerge-worker.ts` and the things only it loads (`idb-kvstore.ts`)
 - `src/client/shared/` — the small set of modules genuinely used by *both* threads: `idb-storage.ts`, `worker-client.ts`, `tab-channel.ts`
 - `src/client/assets/` — `globals.css` and `public/` (favicon, PWA icons). `index.html` stays at `src/client/` because it is Vite's root entry

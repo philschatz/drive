@@ -27,6 +27,7 @@ import { taskListSchemaPlugin } from './tasks';
 import { dataGridSchemaPlugin } from './datagrid';
 import { countersSchemaPlugin } from './counters';
 import { sentencesSchemaPlugin } from './sentences';
+import { kitchenSchemaPlugin } from './kitchen';
 import { driveSettingsSchemaPlugin, DRIVE_SETTINGS_TYPE, createDriveSettingsDocJson } from './drive-settings';
 
 /** DriveSettings special-case surface shared with the engine (type + fresh-doc seed). */
@@ -42,6 +43,7 @@ export const SCHEMA_PLUGINS: DocSchemaPlugin[] = [
   dataGridSchemaPlugin,
   countersSchemaPlugin,
   sentencesSchemaPlugin,
+  kitchenSchemaPlugin,
   driveSettingsSchemaPlugin,
 ];
 

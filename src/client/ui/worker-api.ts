@@ -523,7 +523,7 @@ export function getConnectedPeers(): string[] {
 // ── jq filter constants ─────────────────────────────────────────────────────
 
 export const HOME_SUMMARY_QUERY =
-  '{ type: .["@type"], name: (.name // ""), eventCount: (if .events then (.events | length) else 0 end), taskCount: (if .tasks then [.tasks[] | select(.progress != "completed" and .progress != "cancelled")] | length else 0 end), cellCount: (if .sheets then [.sheets[].cells // {} | length] | add else 0 end) }';
+  '{ type: .["@type"], name: (.name // ""), eventCount: (if .events then (.events | length) else 0 end), taskCount: (if .tasks then [.tasks[] | select(.progress != "completed" and .progress != "cancelled")] | length else 0 end), cellCount: (if .sheets then [.sheets[].cells // {} | length] | add else 0 end), recipeCount: (if .recipes then (.recipes | length) else 0 end) }';
 
 // ── Cache controls ───────────────────────────────────────────────────────────
 

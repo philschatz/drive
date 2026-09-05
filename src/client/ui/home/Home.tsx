@@ -40,7 +40,7 @@ function applyQueryResult(prev: DocEntry[], docId: string, result: any, lastModi
   return prev.map(e => {
     if (e.documentId !== docId) return e;
     const type = typeof result.type === 'string' ? result.type : 'unknown';
-    const count = result.eventCount || result.taskCount || result.cellCount || null;
+    const count = result.eventCount || result.taskCount || result.cellCount || result.recipeCount || null;
     const lastUpdated = lastModified ? new Date(lastModified * 1000).toISOString() : e.lastUpdated;
     return { ...e, type, name: result.name || e.name, count, lastUpdated, loading: false };
   });
