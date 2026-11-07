@@ -3,12 +3,14 @@
  * projection is a flat string (marks and block markers live only in the
  * Automerge binary), so backup export renders the lossless `markdown` from
  * `Automerge.spans`. Covers exactly the document vocabulary (headings, quotes,
- * nested lists, dividers, strong/em/links) — no tables or images by design.
+ * nested lists, dividers, pipe tables, strong/em/links) — no images or code by
+ * design.
  *
  * Lives in src/shared (not the UI) because the export runs inside the worker;
  * the UI's markdown.ts re-exports it so there is one implementation.
  */
 import type { BlockValue, RichTextSpan } from './rich-text-ops';
+import { groupTables, type TableGroup } from './rich-text-tables';
 
 // ── Spans → Markdown ─────────────────────────────────────────────────────────
 
@@ -137,6 +139,22 @@ function orderedListNumbers(blocks: BlockNode[]): (number | null)[] {
   });
 }
 
+/**
+ * One table as GFM lines: the header row, a `---` delimiter row, the body rows.
+ * A pipe inside a cell is the one character that is only special here, so it
+ * is escaped here rather than in `escapeText`. Rows are padded or cut to the
+ * header's width, which is what a renderer does with a ragged table too.
+ */
+function tableLines(blocks: BlockNode[], g: TableGroup): string[] {
+  const cell = (bi: number | undefined) =>
+    bi === undefined ? '' : runsToMarkdown(blocks[bi].runs).replace(/\|/g, '\\|');
+  const row = (cells: string[]) => `| ${cells.join(' | ')} |`;
+  const width = Math.max(1, g.columns);
+  const lines = g.rows.map(r => row(Array.from({ length: width }, (_, c) => cell(r[c]))));
+  lines.splice(1, 0, row(Array(width).fill('---')));
+  return lines;
+}
+
 function blockPrefix(b: BlockNode, num: number | null): string {
   switch (b.type) {
     case 'heading': {
@@ -153,24 +171,37 @@ function blockPrefix(b: BlockNode, num: number | null): string {
 export function spansToMarkdown(spans: RichTextSpan[]): string {
   const blocks = blocksFromSpans(spans);
   const numbers = orderedListNumbers(blocks);
+  const tables = groupTables(blocks);
   const lines: string[] = [];
   let prevType: string | null = null;
 
-  blocks.forEach((b, i) => {
-    const t = b.type;
-    if (b.implicit && b.text.length === 0 && blocks.length > 1) return; // empty implicit leader
-    const line = t === 'divider' ? '---' : blockPrefix(b, numbers[i]) + runsToMarkdown(b.runs);
+  /** Append one block's worth of lines, separated from the previous block by a
+   * blank line unless both are items of a list or lines of a quote. */
+  const emit = (t: string, block: string[]) => {
     if (lines.length > 0) {
-      // Consecutive list items / quote lines sit on adjacent lines; everything
-      // else gets a blank line between blocks.
       const tight =
         ((t === 'unordered-list-item' || t === 'ordered-list-item') &&
           (prevType === 'unordered-list-item' || prevType === 'ordered-list-item')) ||
         (t === 'blockquote' && prevType === 'blockquote');
       if (!tight) lines.push('');
     }
-    lines.push(line);
+    lines.push(...block);
     prevType = t;
-  });
+  };
+
+  for (let i = 0; i < blocks.length;) {
+    const table = tables.find(g => g.start === i);
+    if (table) {
+      emit('table-cell', tableLines(blocks, table));
+      i = table.end;
+      continue;
+    }
+    const b = blocks[i];
+    const t = b.type;
+    if (!(b.implicit && b.text.length === 0 && blocks.length > 1)) { // skip an empty implicit leader
+      emit(t, [t === 'divider' ? '---' : blockPrefix(b, numbers[i]) + runsToMarkdown(b.runs)]);
+    }
+    i++;
+  }
   return lines.join('\n');
 }

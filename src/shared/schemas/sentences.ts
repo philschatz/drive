@@ -35,8 +35,8 @@ export const sentencesSchema = obj({
         em: bool({ literal: true }),
         link: json(obj({ href: str() })),
       },
-      // An `ordered-list-item` `start` or a code block's `language` would be
-      // declared here; neither is implemented.
+      // An `ordered-list-item` `start`, a code block's `language` or a task
+      // item's `checked` would be declared here; none is implemented.
       blocks: {
         paragraph: obj({}),
         heading: obj({ level: num({ min: 1, max: 6, integer: true }) }),
@@ -44,6 +44,13 @@ export const sentencesSchema = obj({
         'ordered-list-item': obj({}),
         blockquote: obj({}),
         divider: obj({}),
+        // A table is a run of cells, each an ordinary block (see
+        // src/shared/rich-text-tables.ts): `col` places it in its row, `header`
+        // marks the first row. Rows and columns are not editable in the UI.
+        'table-cell': obj({
+          col: num({ min: 0, integer: true }),
+          header: bool({ literal: true, optional: true }),
+        }),
       },
     },
   }),

@@ -12,6 +12,7 @@ import {
   collectChangedPaths, escapeString, parseValue, pathFromRest, resolveLevel,
   unescapeString, valueAt, valuePreview, nodeKind, containerSummary,
 } from './source-nodes';
+import { blockChipLabel } from './source-nodes';
 import { BLOCK_MARKER } from '../../../shared/rich-text-ops';
 
 const DOC = {
@@ -177,5 +178,18 @@ describe('collectChangedPaths', () => {
     const out = new Set<string>();
     collectChangedPaths(DOC, DOC, [], out);
     expect(out.size).toBe(0);
+  });
+});
+
+describe('blockChipLabel', () => {
+  it('abbreviates the common block types and keeps the nesting depth', () => {
+    expect(blockChipLabel({ type: 'heading', parents: [], attrs: { level: 2 } })).toBe('h2');
+    expect(blockChipLabel({ type: 'unordered-list-item', parents: ['unordered-list-item'] })).toBe('ul·1');
+    expect(blockChipLabel({ type: 'divider', parents: [] })).toBe('divider');
+  });
+
+  it('names a table cell by its row kind and column', () => {
+    expect(blockChipLabel({ type: 'table-cell', parents: [], attrs: { col: 1, header: true } })).toBe('th1');
+    expect(blockChipLabel({ type: 'table-cell', parents: [], attrs: { col: 0 } })).toBe('td0');
   });
 });

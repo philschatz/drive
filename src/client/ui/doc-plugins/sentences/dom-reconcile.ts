@@ -15,8 +15,9 @@
  * - **Blocks are matched positionally, never by `data-bi`.** That attribute is a
  *   render-relative index, and the live model is reset by any push and advanced
  *   ahead of the DOM by every optimistic edit — so `blocks[Number(el.dataset.bi)]`
- *   can name a different paragraph entirely. The i-th child of the root IS the
- *   i-th rendered block; nothing else is trustworthy.
+ *   can name a different paragraph entirely. The i-th `[data-bfrom]` element in
+ *   document order IS the i-th rendered block (a table's cells are such elements
+ *   inside a wrapper that is not one); nothing else is trustworthy.
  * - **The diff is against the blocks that produced the current DOM**, never the
  *   live model. The caller passes `rendered`, not `blocksRef.current`, whenever
  *   the two can differ.

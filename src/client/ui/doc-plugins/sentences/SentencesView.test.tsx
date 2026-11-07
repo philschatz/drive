@@ -135,6 +135,25 @@ describe('SentencesView container', () => {
     expect(mock.__getDoc(DOC).content).toBe('￼hello');
   });
 
+  it('pastes a Markdown table and round-trips it through the document', async () => {
+    seed('');
+    render(<SentencesView docId={DOC} />);
+    await editableEditor();
+    // An empty document is one empty block: the caret goes on the block itself.
+    const block = editor().querySelector('[data-bfrom]')!;
+    window.getSelection()!.setBaseAndExtent(block, 0, block, 0);
+    document.dispatchEvent(new Event('selectionchange'));
+
+    const TABLE = '| a | b |\n| --- | --- |\n| c | **d** |';
+    const ev = new InputEvent('beforeinput', { inputType: 'insertFromPaste', bubbles: true, cancelable: true });
+    Object.defineProperty(ev, 'dataTransfer', { value: { getData: (t: string) => (t === 'text/plain' ? TABLE : '') } });
+    fireEvent(editor(), ev);
+    // The table, then the empty paragraph the caret landed in.
+    await waitFor(() => expect(currentMarkdown()).toBe(`${TABLE}\n\n`));
+    expect(mock.__getDoc(DOC).content).toBe('￼a￼b￼c￼d￼');
+    await waitFor(() => expect(editor().querySelectorAll('th')).toHaveLength(2));
+  });
+
   it('sets a link over the selection', async () => {
     seed('read the docs now');
     render(<SentencesView docId={DOC} />);

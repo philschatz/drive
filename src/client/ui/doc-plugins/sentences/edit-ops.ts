@@ -8,13 +8,39 @@
 import type { BlockValue, RichTextOp, RichTextSpan } from '../../../../shared/rich-text-ops';
 import {
   type BlockNode, type BlockType,
-  blockDepth, blockIndexAt, blockType, contentLength, isListItem, marksInRange,
+  blockDepth, blockIndexAt, blockType, contentLength, isListItem, isTableCell, marksInRange, tableAt, tableGroups,
 } from './blocks';
 import { markdownToSpans } from './markdown';
 
 export interface Edit {
   ops: RichTextOp[];
   caret: number;
+}
+
+/**
+ * Keep a range inside the table structure it touches.
+ *
+ * A table's rows and columns are not editable, and in the flat text they are
+ * nothing but the cells' block markers — so any range that straddles a cell
+ * boundary would splice a marker away and silently reshape the table. Starting
+ * inside a cell, a range ends at that cell's end; starting before a table, it
+ * stops short of the table's first marker. A range that covers a whole table
+ * (first marker to last cell's end) is left alone: deleting it is how a table
+ * is removed.
+ */
+export function clampToCells(blocks: BlockNode[], from: number, to: number): { from: number; to: number } {
+  if (to <= from) return { from, to };
+  const fromBlock = blocks[blockIndexAt(blocks, from)];
+  if (isTableCell(fromBlock)) return { from, to: Math.min(to, fromBlock.textTo) };
+  for (const g of tableGroups(blocks)) {
+    const start = blocks[g.start].markerIndex!;
+    const end = blocks[g.end - 1].textTo;
+    if (from >= end) continue;   // a table before the range
+    if (to <= start) break;      // tables from here on are past it
+    if (from <= start && to >= end) continue;
+    return { from, to: start };
+  }
+  return { from, to };
 }
 
 /** Marks toggled at a collapsed caret, applied to the next insertion.
@@ -30,6 +56,7 @@ export function opsForInsertText(
   text: string,
   pending?: PendingMarks,
 ): Edit {
+  ({ from, to } = clampToCells(blocks, from, to));
   const ops: RichTextOp[] = [{ op: 'splice', index: from, del: to - from, text }];
   for (const [name, value] of Object.entries(pending ?? {})) {
     if (value === false) ops.push({ op: 'unmark', start: from, end: from + text.length, name, expand: 'after' });
@@ -58,6 +85,9 @@ export function opsForDeleteBackward(blocks: BlockNode[], from: number, to: numb
     // Collapsed, so this cannot re-enter the branch.
     if (b) return opsForDeleteBackward(blocks, b.textFrom, b.textFrom);
   }
+  // After the marker rule: a bare cell marker clamps to nothing, and the
+  // collapsed caret that left behind would then eat the previous block's text.
+  ({ from, to } = clampToCells(blocks, from, to));
   if (to > from) return { ops: [{ op: 'splice', index: from, del: to - from }], caret: from };
   if (from === 0) return { ops: [], caret: from };
 
@@ -66,6 +96,10 @@ export function opsForDeleteBackward(blocks: BlockNode[], from: number, to: numb
   if (b.markerIndex !== null && from === b.textFrom) {
     // Caret at the start of a block: structural backspace.
     const t = blockType(b);
+    // A cell's start is a table boundary, and so is the start of the block
+    // after a table: neither joins (a joinBlock would move text into or out of
+    // a cell and so reshape the table). The caret simply stays.
+    if (isTableCell(b)) return { ops: [], caret: from };
     if (isListItem(b)) return { ops: outdentBlockOps(b), caret: from };
     if (t === 'blockquote') return { ops: [{ op: 'updateBlock', index: b.markerIndex, block: P() }], caret: from };
     if (bi === 0) {
@@ -74,6 +108,7 @@ export function opsForDeleteBackward(blocks: BlockNode[], from: number, to: numb
       return { ops: [], caret: from };
     }
     const prev = blocks[bi - 1];
+    if (prev && isTableCell(prev)) return { ops: [], caret: from };
     if (prev && blockType(prev) === 'divider' && prev.markerIndex !== null) {
       // Backspacing "into" a divider removes the divider, not the merge.
       return { ops: [{ op: 'joinBlock', index: prev.markerIndex }], caret: from - 1 };
@@ -84,6 +119,7 @@ export function opsForDeleteBackward(blocks: BlockNode[], from: number, to: numb
 }
 
 export function opsForDeleteForward(blocks: BlockNode[], from: number, to: number): Edit {
+  ({ from, to } = clampToCells(blocks, from, to));
   if (to > from) return { ops: [{ op: 'splice', index: from, del: to - from }], caret: from };
   if (from >= contentLength(blocks)) return { ops: [], caret: from };
 
@@ -91,6 +127,9 @@ export function opsForDeleteForward(blocks: BlockNode[], from: number, to: numbe
   const b = blocks[bi];
   if (from === b.textTo) {
     const next = blocks[bi + 1];
+    // The end of a cell and the end of the block before a table are table
+    // boundaries — see opsForDeleteBackward.
+    if (isTableCell(b) || (next && isTableCell(next))) return { ops: [], caret: from };
     if (next?.markerIndex != null) return { ops: [{ op: 'joinBlock', index: next.markerIndex }], caret: from };
     return { ops: [], caret: from };
   }
@@ -98,11 +137,23 @@ export function opsForDeleteForward(blocks: BlockNode[], from: number, to: numbe
 }
 
 export function opsForInsertParagraph(blocks: BlockNode[], from: number, to: number): Edit {
+  ({ from, to } = clampToCells(blocks, from, to));
   const ops: RichTextOp[] = [];
   if (to > from) ops.push({ op: 'splice', index: from, del: to - from });
 
-  const b = blocks[blockIndexAt(blocks, from)];
+  const bi = blockIndexAt(blocks, from);
+  const b = blocks[bi];
   const t = blockType(b);
+
+  // A cell cannot split (that would add a cell), so Enter leaves the table: a
+  // fresh paragraph after its last cell, which is also the only way to write
+  // after a table that ends the document.
+  const table = tableAt(blocks, bi);
+  if (table) {
+    const end = blocks[table.end - 1].textTo - (to - from);
+    ops.push({ op: 'splitBlock', index: end, block: P() });
+    return { ops, caret: end + 1 };
+  }
 
   // Enter on an empty list item exits the list (outdent step by step).
   if (isListItem(b) && b.text.length === 0 && from === b.textFrom && b.markerIndex !== null) {
@@ -110,7 +161,9 @@ export function opsForInsertParagraph(blocks: BlockNode[], from: number, to: num
   }
 
   // Splitting at the end of a heading (or anywhere in a divider) starts a
-  // plain paragraph; otherwise the new block continues the current type.
+  // plain paragraph; otherwise the new block continues the current type — attrs
+  // included, so a per-item attr that must NOT carry over (a task item's
+  // `checked`, were one added) would need resetting here.
   const newBlock: BlockValue =
     t === 'divider' || (t === 'heading' && from === b.textTo)
       ? P()
@@ -144,8 +197,12 @@ export function setLinkOps(_blocks: BlockNode[], from: number, to: number, href:
  * TEXT — comparing against its `markerIndex` instead pulled in the following
  * block for any selection ending at a block boundary. */
 function intersectingBlocks(blocks: BlockNode[], from: number, to: number): BlockNode[] {
-  if (from === to) return [blocks[blockIndexAt(blocks, from)]];
-  return blocks.filter(b => from <= b.textTo && to >= b.textFrom);
+  const hit = from === to
+    ? [blocks[blockIndexAt(blocks, from)]]
+    : blocks.filter(b => from <= b.textTo && to >= b.textFrom);
+  // Every caller retypes or re-nests the blocks it gets, and a cell is neither
+  // retypable nor nestable: a heading cell would break the table it is in.
+  return hit.filter(b => !isTableCell(b));
 }
 
 /**
@@ -214,28 +271,64 @@ export function outdentOps(blocks: BlockNode[], from: number, to: number): RichT
   return ops;
 }
 
+/** Pasted blocks as one block's runs: block boundaries become single spaces.
+ * What a cell can take, since it cannot hold blocks. */
+function flattenToOneBlock(spans: RichTextSpan[]): RichTextSpan[] {
+  const out: RichTextSpan[] = [{ type: 'block', value: { type: 'paragraph', parents: [], attrs: {} } }];
+  let pendingSpace = false;
+  for (const s of spans) {
+    if (s.type === 'block') { pendingSpace = out.length > 1; continue; }
+    if (pendingSpace) { out.push({ type: 'text', value: ' ' }); pendingSpace = false; }
+    out.push(s);
+  }
+  return out;
+}
+
 /**
  * Paste plain text, read as Markdown. A single unformatted line splices in
  * like typing (inheriting surrounding marks); anything structured (multiple
  * blocks or inline formatting) inserts explicit blocks/marks, neutralizing
  * mark inheritance so pasted plain runs stay plain.
+ *
+ * Tables: inside a cell the paste is flattened to one line of runs. Elsewhere a
+ * pasted table never merges into the caret's block (its first cell is a block
+ * of its own — the caret's block is retyped into it only when that block is an
+ * empty paragraph), and it is followed by a fresh paragraph so the caret and any
+ * text after it have a home, the same shape `insertDividerOps` leaves.
  */
 export function opsForPasteText(blocks: BlockNode[], from: number, to: number, text: string): Edit {
-  const pasted: RichTextSpan[] = markdownToSpans(text);
+  ({ from, to } = clampToCells(blocks, from, to));
+  const b = blocks[blockIndexAt(blocks, from)];
+  const pasted: RichTextSpan[] = isTableCell(b) ? flattenToOneBlock(markdownToSpans(text)) : markdownToSpans(text);
   const simple = pasted.length === 2 && pasted[0].type === 'block' && pasted[1].type === 'text' && !pasted[1].marks;
-  if (pasted.length === 0) return { ops: [], caret: from };
+  if (pasted.length === 0 || (pasted.length === 1 && pasted[0].type === 'block')) return { ops: [], caret: from };
   if (simple) return opsForInsertText(blocks, from, to, (pasted[1] as any).value);
 
   const ops: RichTextOp[] = [];
   if (to > from) ops.push({ op: 'splice', index: from, del: to - from });
+  const caretBlockIsEmptyParagraph =
+    b.markerIndex !== null && blockType(b) === 'paragraph' && b.text.length === 0 && from === b.textFrom;
   let pos = from;
   let first = true;
+  let lastBlockIsCell = false;
   for (const s of pasted) {
     if (s.type === 'block') {
-      // The first pasted block merges into the block the caret is in.
-      if (first) { first = false; continue; }
-      ops.push({ op: 'splitBlock', index: pos, block: { type: s.value.type, parents: s.value.parents, attrs: s.value.attrs ?? {} } });
+      const isCell = s.value.type === 'table-cell';
+      const block: BlockValue = { type: s.value.type, parents: s.value.parents, attrs: s.value.attrs ?? {} };
+      if (first) {
+        first = false;
+        // The first pasted block merges into the block the caret is in —
+        // unless it is a cell, which must stay a block of its own.
+        if (!isCell) continue;
+        if (caretBlockIsEmptyParagraph) {
+          ops.push({ op: 'updateBlock', index: b.markerIndex!, block });
+          lastBlockIsCell = true;
+          continue;
+        }
+      }
+      ops.push({ op: 'splitBlock', index: pos, block });
       pos += 1;
+      lastBlockIsCell = isCell;
     } else {
       first = false;
       ops.push({ op: 'splice', index: pos, del: 0, text: s.value });
@@ -248,12 +341,18 @@ export function opsForPasteText(blocks: BlockNode[], from: number, to: number, t
       pos = end;
     }
   }
+  if (lastBlockIsCell) {
+    ops.push({ op: 'splitBlock', index: pos, block: P() });
+    pos += 1;
+  }
   return { ops, caret: pos };
 }
 
 /** Insert a divider at the caret; the caret lands in a fresh paragraph after
  * it (splitting any text that followed the caret into that paragraph). */
 export function insertDividerOps(blocks: BlockNode[], from: number, to: number): Edit {
+  ({ from, to } = clampToCells(blocks, from, to));
+  if (isTableCell(blocks[blockIndexAt(blocks, from)])) return { ops: [], caret: from };
   const ops: RichTextOp[] = [];
   if (to > from) ops.push({ op: 'splice', index: from, del: to - from });
   ops.push({ op: 'splitBlock', index: from, block: { type: 'divider', parents: [] } });

@@ -60,6 +60,22 @@ describe('spans-model parity with Automerge', () => {
     ]);
   });
 
+  it('table cells: marker attrs survive splitBlock, updateBlock and updateSpans', () => {
+    expectParity([
+      { op: 'splitBlock', index: 0, block: { type: 'table-cell', parents: [], attrs: { col: 0, header: true } } },
+      { op: 'splice', index: 1, del: 0, text: 'a' },
+      { op: 'splitBlock', index: 2, block: { type: 'table-cell', parents: [], attrs: { col: 1, header: true } } },
+      { op: 'splice', index: 3, del: 0, text: 'b' },
+      { op: 'updateBlock', index: 2, block: { type: 'table-cell', parents: [], attrs: { col: 1 } } },
+      { op: 'updateSpans', spans: [
+        { type: 'block', value: { type: 'table-cell', parents: [], attrs: { col: 0, header: true } } },
+        { type: 'text', value: 'a' },
+        { type: 'block', value: { type: 'table-cell', parents: [], attrs: { col: 0 } } },
+        { type: 'text', value: 'c' },
+      ] },
+    ]);
+  });
+
   it('unmark removes formatting from part of a run', () => {
     expectParity([
       { op: 'splice', index: 0, del: 0, text: 'aaabbbccc' },

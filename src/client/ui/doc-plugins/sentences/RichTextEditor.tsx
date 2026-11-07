@@ -10,6 +10,9 @@
  * Position mapping is integer arithmetic over data attributes: every inline run
  * carries `data-from` (global index of its first char) and every block
  * `data-bfrom`/`data-bi`, so DOM points ↔ global offsets without guessing.
+ * The `[data-bfrom]` elements, in document order, ARE the blocks positionally —
+ * most are children of the root, but a table's cells sit inside a wrapper that
+ * carries no data-* of its own (see `blockEls`).
  *
  * ── The exception: IME composition ──
  *
@@ -33,10 +36,11 @@
  * repaired. Changing the block keys discards those subtrees instead.
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'preact/hooks';
-import type { RefObject } from 'preact';
+import type { ComponentChildren, RefObject } from 'preact';
 import type { RichTextOp, RichTextSpan } from '../../../../shared/rich-text-ops';
 import {
-  blocksFromSpans, blockDepth, blockIndexAt, blockType, contentLength, isListItem, markExtentAt, marksInRange, orderedListNumbers,
+  blocksFromSpans, blockDepth, blockIndexAt, blockType, contentLength, isListItem, isTableCell, markExtentAt, marksInRange,
+  orderedListNumbers, tableGroups,
   type BlockNode, type BlockType, type InlineRun,
 } from './blocks';
 import {
@@ -74,6 +78,8 @@ export interface SelectionState {
   blockType: BlockType;
   headingLevel: number | null;
   inList: boolean;
+  /** In a table cell: text formatting applies, block structure does not. */
+  inTable: boolean;
   linkHref: string | null;
 }
 
@@ -163,8 +169,14 @@ function posFromDomPoint(root: HTMLElement, node: Node, offset: number): number 
   for (let i = Math.min(offset, kids.length) - 1; i >= 0; i--) {
     const k = kids[i];
     if (isBlock(k)) return Number(k.dataset.bfrom) + runTextLength(k);
+    // A table wrapper is not a block but holds several: the point is after
+    // its last cell.
+    const last = k instanceof HTMLElement
+      ? (Array.from(k.querySelectorAll('[data-bfrom]')).pop() as HTMLElement | undefined)
+      : undefined;
+    if (last) return Number(last.dataset.bfrom) + runTextLength(last);
   }
-  const first = kids.find(isBlock);
+  const first = root.querySelector('[data-bfrom]') as HTMLElement | null;
   return first ? Number(first.dataset.bfrom) : null;
 }
 
@@ -240,6 +252,12 @@ function BlockEl({ b, bi, num, editable }: { b: BlockNode; bi: number; num: numb
     case 'divider':
       // Atomic: not editable, deletable via backspace at the next block start.
       return <div {...attrs} className="rt-divider" contentEditable={false}><hr /></div>;
+    case 'table-cell': {
+      // The <table>/<tr> around it come from the root render (TableEl); the
+      // cell is the block, shaped like a paragraph: runs and nothing else.
+      const Cell = b.block?.attrs?.header === true ? 'th' : 'td';
+      return <Cell {...attrs} className="rt-cell">{children}</Cell>;
+    }
     case 'unordered-list-item':
     case 'ordered-list-item':
       // The bullet/number is drawn by `.rt-li::before` from `data-marker`, so the
@@ -270,6 +288,33 @@ function BlockEl({ b, bi, num, editable }: { b: BlockNode; bi: number; num: numb
     default:
       return <p {...attrs} className="rt-p">{children}</p>;
   }
+}
+
+/**
+ * A run of cells as a table. Only the cells carry `data-bfrom`/`data-bi`; the
+ * wrapper, table and rows are layout, invisible to the offset arithmetic. Every
+ * cell block is rendered — the model, not the first row, says how many a row
+ * has — and short rows are padded with inert cells so the grid stays square.
+ */
+function TableEl({ model, rows, columns, resyncEpoch, editable }: {
+  model: BlockNode[]; rows: number[][]; columns: number; resyncEpoch: number; editable: boolean;
+}) {
+  return (
+    <div className="rt-table-wrap">
+      <table className="rt-table">
+        <tbody>
+          {rows.map((row, ri) => (
+            <tr key={`${row[0]}:${resyncEpoch}`}>
+              {row.map(bi => <BlockEl key={`${bi}:${resyncEpoch}`} b={model[bi]} bi={bi} num={null} editable={editable} />)}
+              {Array.from({ length: Math.max(0, columns - row.length) }, (_, c) => (
+                <td key={`pad${ri}:${c}`} className="rt-cell" contentEditable={false} />
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
 }
 
 // ── The editor ───────────────────────────────────────────────────────────────
@@ -325,6 +370,7 @@ export function RichTextEditor({
   // put there are left strictly alone.
   const model = composingRef.current ? blocksRef.current : blocks;
   const numbers = useMemo(() => orderedListNumbers(model), [model]);
+  const tables = useMemo(() => tableGroups(model), [model]);
   // Caret (global offsets) to restore after the next spans render; while set,
   // it IS the selection (the DOM hasn't caught up yet).
   const pendingCaretRef = useRef<Sel | null>(null);
@@ -424,8 +470,19 @@ export function RichTextEditor({
       blockType: t,
       headingLevel: t === 'heading' ? Math.min(6, Math.max(1, Number(b.block?.attrs?.level) || 1)) : null,
       inList: isListItem(b),
+      inTable: isTableCell(b),
       linkHref: linkHrefOf(marks) ?? null,
     });
+  };
+
+  /** Put the caret at `index` with no document change (Tab between cells). The
+   * pending caret is left set so a render already in flight restores it too. */
+  const moveCaret = (index: number) => {
+    const target: Sel = { from: index, to: index, backward: false };
+    lastSelectionRef.current = target;
+    pendingCaretRef.current = target;
+    setDomSelection(target);
+    reportSelection();
   };
 
   /** Advance the live model past these ops so the next gesture (possibly
@@ -569,7 +626,16 @@ export function RichTextEditor({
       const sel = readSelection();
       if (!sel) return;
       const bl = blocksRef.current;
-      const b = bl[blockIndexAt(bl, sel.from)];
+      const bi = blockIndexAt(bl, sel.from);
+      const b = bl[bi];
+      if (isTableCell(b)) {
+        // Cells are blocks in reading order, so the next cell is the next block
+        // (the row wraps by itself); past either end of the table, nothing.
+        e.preventDefault();
+        const target = bl[bi + (e.shiftKey ? -1 : 1)];
+        if (target && isTableCell(target)) moveCaret(target.textFrom);
+        return;
+      }
       if (isListItem(b)) {
         e.preventDefault();
         emitFormat(e.shiftKey ? outdentOps(bl, sel.from, sel.to) : indentOps(bl, sel.from, sel.to), sel);
@@ -585,9 +651,11 @@ export function RichTextEditor({
     }
   };
 
-  /** The top-level block elements, which ARE the rendered blocks positionally. */
+  /** The block elements, which ARE the rendered blocks positionally. Document
+   * order, not `root.children`: a table's cells are blocks nested in a wrapper
+   * that is not one. */
   const blockEls = (root: HTMLElement): HTMLElement[] =>
-    Array.from(root.children).filter((c): c is HTMLElement => c instanceof HTMLElement);
+    Array.from(root.querySelectorAll('[data-bfrom]')) as HTMLElement[];
 
   /** Text offset of a DOM point within `container`, by pure text arithmetic —
    * never through data-from, which the browser's own writes have invalidated. */
@@ -615,12 +683,12 @@ export function RichTextEditor({
   const caretFromDom = (root: HTMLElement, els: HTMLElement[]): { block: number; offset: number } | null => {
     const sel = window.getSelection();
     if (!sel?.focusNode) return null;
-    let el: HTMLElement | null = sel.focusNode instanceof HTMLElement
+    const el: HTMLElement | null = sel.focusNode instanceof HTMLElement
       ? sel.focusNode : sel.focusNode.parentElement;
-    while (el && el.parentElement !== root) el = el.parentElement;
-    const block = el ? els.indexOf(el) : -1;
+    const blockEl = (el?.closest('[data-bfrom]') ?? null) as HTMLElement | null;
+    const block = blockEl ? els.indexOf(blockEl) : -1;
     if (block < 0) return null;
-    return { block, offset: textOffsetWithin(el!, sel.focusNode, sel.focusOffset) };
+    return { block, offset: textOffsetWithin(blockEl!, sel.focusNode, sel.focusOffset) };
   };
 
   /**
@@ -1035,9 +1103,23 @@ export function RichTextEditor({
         onBeforeInput={handleBeforeInput as any}
         onKeyDown={handleKeyDown}
       >
-        {model.map((b, bi) => (
-          <BlockEl key={`${bi}:${resyncEpoch}`} b={b} bi={bi} num={numbers[bi]} editable={editable} />
-        ))}
+        {(() => {
+          // Blocks in order, a table's cells grouped under one wrapper.
+          const out: ComponentChildren[] = [];
+          for (let bi = 0; bi < model.length;) {
+            const g = tables.find(t => t.start === bi);
+            if (g) {
+              out.push(
+                <TableEl key={`t${bi}:${resyncEpoch}`} model={model} rows={g.rows} columns={g.columns} resyncEpoch={resyncEpoch} editable={editable} />,
+              );
+              bi = g.end;
+              continue;
+            }
+            out.push(<BlockEl key={`${bi}:${resyncEpoch}`} b={model[bi]} bi={bi} num={numbers[bi]} editable={editable} />);
+            bi++;
+          }
+          return out;
+        })()}
       </div>
       {remoteCursors.map(c => {
         const o = peerOverlays[c.id];

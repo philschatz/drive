@@ -156,6 +156,10 @@ export function blockChipLabel(b: BlockValue): string {
   if (b.type === 'unordered-list-item') return `ul${suffix}`;
   if (b.type === 'ordered-list-item') return `ol${suffix}`;
   if (b.type === 'paragraph') return `p${suffix}`;
+  if (b.type === 'table-cell') {
+    const attrs = (b.attrs ?? {}) as Record<string, unknown>;
+    return `${attrs.header === true ? 'th' : 'td'}${typeof attrs.col === 'number' ? attrs.col : '?'}${suffix}`;
+  }
   return b.type + suffix;
 }
 

@@ -72,6 +72,9 @@ export function BottomFormatBar({
   const currentStyle = BLOCK_STYLES.find(isStyleActive);
 
   const hasRange = !!state && state.to > state.from;
+  // A cell's text is editable, its block is not: no retyping, listing or
+  // splitting a table from here. Bold, italic and links stay.
+  const inTable = !!state?.inTable;
 
   return (
     <>
@@ -110,19 +113,22 @@ export function BottomFormatBar({
         <BarButton
           icon={currentStyle?.icon ?? 'notes'}
           label="Text style"
-          active={!!state && state.blockType !== 'paragraph' && !state.inList}
+          active={!!state && state.blockType !== 'paragraph' && !state.inList && !inTable}
+          disabled={inTable}
           onAction={() => setStyleOpen(true)}
         />
         <BarButton
           icon="format_list_bulleted"
           label="Bulleted list"
           active={state?.blockType === 'unordered-list-item'}
+          disabled={inTable}
           onAction={() => api()?.toggleList('unordered-list-item')}
         />
         <BarButton
           icon="format_list_numbered"
           label="Numbered list"
           active={state?.blockType === 'ordered-list-item'}
+          disabled={inTable}
           onAction={() => api()?.toggleList('ordered-list-item')}
         />
         <BarButton
@@ -141,6 +147,7 @@ export function BottomFormatBar({
         <BarButton
           icon="horizontal_rule"
           label="Insert divider"
+          disabled={inTable}
           onAction={() => api()?.insertDivider()}
         />
       </div>

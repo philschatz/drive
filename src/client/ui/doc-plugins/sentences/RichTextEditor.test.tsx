@@ -747,3 +747,84 @@ describe('root-level selection points', () => {
     expect(ops[0]).toEqual([{ op: 'splice', index: 1, del: 7, text: 'x' }]);
   });
 });
+
+/**
+ * Tables. A cell is a block like any other — the same `data-bfrom` element, the
+ * same runs — but it lives inside a <table> rather than directly under the
+ * root, which is what the block lookup, the caret mapping and the standing
+ * divergence check all have to see through.
+ */
+describe('tables', () => {
+  const TABLE = '| a | b |\n| --- | --- |\n| c | d |';
+  const DOC = `para\n\n${TABLE}\n\nafter`;
+  // ￼para￼a￼b￼c￼d￼after — a: marker 5, text 6; b: 7/8; c: 9/10; d: 11/12; after: 13/14.
+
+  it('renders the cells as th/td inside one table, and nothing else as a block', () => {
+    const { root } = setup(markdownToSpans(DOC));
+    expect(Array.from(root.children).map(c => c.tagName.toLowerCase())).toEqual(['p', 'div', 'p']);
+    const table = root.querySelector('.rt-table-wrap > table')!;
+    expect(table.querySelectorAll('tr')).toHaveLength(2);
+    expect(Array.from(table.querySelectorAll('th')).map(c => c.textContent)).toEqual(['a', 'b']);
+    expect(Array.from(table.querySelectorAll('td')).map(c => c.textContent)).toEqual(['c', 'd']);
+    // Six blocks, six block elements, in document order — the wrapper, table
+    // and rows carry no data-bfrom.
+    const els = Array.from(root.querySelectorAll('[data-bfrom]'));
+    expect(els.map(e => e.getAttribute('data-bfrom'))).toEqual(['1', '6', '8', '10', '12', '14']);
+    expect(table.hasAttribute('data-bfrom')).toBe(false);
+  });
+
+  it('does not read a table as a divergence and rebuild it', async () => {
+    const { root, push } = setup(markdownToSpans(DOC));
+    const before = root.querySelector('td')!;
+    // A resync changes every block's key, which remounts the cell.
+    await new Promise(r => setTimeout(r, 20));
+    push();
+    await new Promise(r => setTimeout(r, 20));
+    expect(root.querySelector('td')).toBe(before);
+  });
+
+  it('types into a cell', () => {
+    const spans = markdownToSpans(DOC);
+    const { root, ops } = setup(spans);
+    put(runNode(root, 'c'), 1, runNode(root, 'c'), 1);
+    key(root, 'insertText', 'Z');
+    expect(ops).toEqual([[{ op: 'splice', index: 11, del: 0, text: 'Z' }]]);
+    expect(modelOf(spans, ops)).toBe('￼para￼a￼b￼cZ￼d￼after');
+  });
+
+  it('Tab and Shift+Tab move between cells without an edit', () => {
+    const { root, ops, selStates } = setup(markdownToSpans(DOC));
+    put(runNode(root, 'a'), 1, runNode(root, 'a'), 1);
+    root.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true }));
+    expect(where().anchor).toEqual(['b', 0]);
+    root.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true }));
+    expect(where().anchor).toEqual(['a', 0]);
+    expect(ops).toEqual([]);
+    expect(selStates[selStates.length - 1]?.inTable).toBe(true);
+  });
+
+  it('Enter in a cell starts a paragraph after the table', () => {
+    const spans = markdownToSpans(DOC);
+    const { root, ops } = setup(spans);
+    put(runNode(root, 'a'), 1, runNode(root, 'a'), 1);
+    key(root, 'insertParagraph');
+    expect(ops).toEqual([[{ op: 'splitBlock', index: 13, block: { type: 'paragraph', parents: [] } }]]);
+    expect(modelOf(spans, ops)).toBe('￼para￼a￼b￼c￼d￼￼after');
+  });
+
+  it('pastes a Markdown table into an empty document', () => {
+    const { root, ops, settle } = setup([]);
+    const p = root.querySelector('[data-bfrom]')!;
+    put(p, 0, p, 0);
+    const ev = new InputEvent('beforeinput', { inputType: 'insertFromPaste', bubbles: true, cancelable: true });
+    // jsdom has no DataTransfer; the editor only calls getData on it.
+    Object.defineProperty(ev, 'dataTransfer', { value: { getData: (t: string) => (t === 'text/plain' ? TABLE : '') } });
+    root.dispatchEvent(ev);
+    expect(modelOf([], ops)).toBe('￼a￼b￼c￼d￼');
+    settle();
+    expect(root.querySelectorAll('th')).toHaveLength(2);
+    expect(root.querySelectorAll('td')).toHaveLength(2);
+    // The caret has a paragraph of its own after the table.
+    expect(Array.from(root.children).map(c => c.tagName.toLowerCase())).toEqual(['div', 'p']);
+  });
+});

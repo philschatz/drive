@@ -41,6 +41,17 @@ describe('Sentences marker validation', () => {
     expect(validateDocument(doc, content(spans))).toEqual([]);
   });
 
+  it('accepts table cells and rejects a malformed one', () => {
+    expect(validateDocument(doc, content([
+      block('table-cell', { col: 0, header: true }), text('Hello'),
+      block('table-cell', { col: 0 }), text('world'),
+    ]))).toEqual([]);
+    const errors = validateDocument(doc, content([block('table-cell', { col: 1.5 }), text('Hello')]));
+    expect(errors).toHaveLength(1);
+    expect(errors[0].path).toEqual(['content', 'table-cell', 'col']);
+    expect(errors[0].message).toMatch(/Expected integer/);
+  });
+
   it('rejects an unknown mark name', () => {
     const errors = validateDocument(doc, content([text('Hello', { highlight: 'yellow' })]));
     expect(errors).toHaveLength(1);

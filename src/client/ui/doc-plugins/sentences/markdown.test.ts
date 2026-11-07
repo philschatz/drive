@@ -60,6 +60,30 @@ describe('spansToMarkdown', () => {
     expect(md).toBe('2\\*3 \\[not\\](a link)');
   });
 
+  it('serializes a table as GFM rows with a delimiter row, escaping pipes', () => {
+    const md = spansToMarkdown([
+      block('paragraph'), text('before'),
+      block('table-cell', [], { col: 0, header: true }), text('Name'),
+      block('table-cell', [], { col: 1, header: true }), text('Note'),
+      block('table-cell', [], { col: 0 }), text('a|b'),
+      block('table-cell', [], { col: 1 }), text('bold', { strong: true }),
+      block('paragraph'), text('after'),
+    ]);
+    expect(md).toBe('before\n\n| Name | Note |\n| --- | --- |\n| a\\|b | **bold** |\n\nafter');
+  });
+
+  it('pads and cuts ragged table rows to the header width', () => {
+    const md = spansToMarkdown([
+      block('table-cell', [], { col: 0, header: true }), text('a'),
+      block('table-cell', [], { col: 1, header: true }), text('b'),
+      block('table-cell', [], { col: 0 }), text('c'),
+      block('table-cell', [], { col: 0 }), text('d'),
+      block('table-cell', [], { col: 1 }), text('e'),
+      block('table-cell', [], { col: 2 }), text('f'),
+    ]);
+    expect(md).toBe('| a | b |\n| --- | --- |\n| c |  |\n| d | e |');
+  });
+
   it('treats text before the first marker as a paragraph', () => {
     expect(spansToMarkdown([text('leading')])).toBe('leading');
     expect(spansToMarkdown([])).toBe('');
@@ -105,6 +129,64 @@ describe('markdownToSpans', () => {
   it('honors escapes', () => {
     expect(markdownToSpans('2\\*3\\*4')).toEqual([block('paragraph'), text('2*3*4')]);
   });
+
+  describe('tables', () => {
+    const cell = (col: number, header = false) =>
+      block('table-cell', [], header ? { col, header: true } : { col });
+
+    it('parses a header row, a delimiter row and body rows into cells', () => {
+      expect(markdownToSpans('| Name | Note |\n| --- | --- |\n| a | b |\n| c | d |')).toEqual([
+        cell(0, true), text('Name'), cell(1, true), text('Note'),
+        cell(0), text('a'), cell(1), text('b'),
+        cell(0), text('c'), cell(1), text('d'),
+      ]);
+    });
+
+    it('ignores alignment colons and optional outer pipes', () => {
+      expect(markdownToSpans('a | b\n:-- | --:\nc | d')).toEqual([
+        cell(0, true), text('a'), cell(1, true), text('b'),
+        cell(0), text('c'), cell(1), text('d'),
+      ]);
+    });
+
+    it('keeps an escaped pipe inside a cell and parses inline marks', () => {
+      expect(markdownToSpans('| x |\n| --- |\n| a \\| **b** |')).toEqual([
+        cell(0, true), text('x'),
+        cell(0), text('a | '), text('b', { strong: true }),
+      ]);
+    });
+
+    it('pads short rows and drops cells past the header width', () => {
+      expect(markdownToSpans('| a | b |\n|---|---|\n| c |\n| d | e | f |')).toEqual([
+        cell(0, true), text('a'), cell(1, true), text('b'),
+        cell(0), text('c'), cell(1),
+        cell(0), text('d'), cell(1), text('e'),
+      ]);
+    });
+
+    it('ends at a blank line or at a line that starts another block', () => {
+      expect(markdownToSpans('| a |\n| - |\n| b |\n\nafter\n| c |\n| - |\n| d |\n# H')).toEqual([
+        cell(0, true), text('a'), cell(0), text('b'),
+        block('paragraph'), text('after'),
+        cell(0, true), text('c'), cell(0), text('d'),
+        block('heading', [], { level: 1 }), text('H'),
+      ]);
+    });
+
+    it('interrupts a paragraph, like GFM', () => {
+      expect(markdownToSpans('intro\n| a |\n| - |')).toEqual([
+        block('paragraph'), text('intro'),
+        cell(0, true), text('a'),
+      ]);
+    });
+
+    it('is not a table without a delimiter row of matching width', () => {
+      expect(markdownToSpans('a | b\n| --- |')).toEqual([
+        block('paragraph'), text('a | b'), text(' '), text('| --- |'),
+      ]);
+      expect(markdownToSpans('| a | b |')).toEqual([block('paragraph'), text('| a | b |')]);
+    });
+  });
 });
 
 describe('round trip', () => {
@@ -112,6 +194,7 @@ describe('round trip', () => {
     document: '# Title\n\nSome **bold** and *italic* text with a [link](https://x.dev).\n\n## Section\n\n> a quote\n> second line\n\n- item one\n  - nested\n1. numbered\n2. also\n\n---\n\nThe end.',
     escapes: 'Math: 2\\*3 and \\[brackets\\]',
     nestedMarks: 'A ***bold italic*** run.',
+    table: '# Title\n\n| Name | Note |\n| --- | --- |\n| a\\|b | **bold** [x](https://x.dev) |\n| c |  |\n\nAfter.',
   };
   for (const [name, md] of Object.entries(cases)) {
     it(`markdown → spans → markdown is stable (${name})`, () => {

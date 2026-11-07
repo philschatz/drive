@@ -9,7 +9,7 @@
  * level of its own at `#/source/<id>/<path>`: the text with its markers painted
  * on, then one tappable row per marker.
  */
-import { useMemo, useState } from 'preact/hooks';
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { Button } from '@/components/ui/button';
 import { PeerDot } from '../common/PeerDot';
 import { peerDisplayName, peerIdentityKey } from '../common/presence';
@@ -18,7 +18,7 @@ import type { ValidationError } from '../../../shared/schemas';
 import { markersFromSpans, type DocMarker, type RichTextOp, type RichTextSpan } from '../../../shared/rich-text-ops';
 import { escapeString, pathsEqual, type Path } from './source-nodes';
 import {
-  MarkedText, MarkerSheet, footnoteLabel, markerColor, markerError, markerHeadline, markerSummary,
+  MarkedText, MarkerSheet, footnoteLabel, markerColor, markerError, markerHeadline, markerSummary, type Reveal,
 } from './Markers';
 import { ValueSheet } from './ValueSheets';
 import type { PeerFocus } from './LevelList';
@@ -41,6 +41,22 @@ export function FieldScreen({
   const transports = usePeerTransports();
   const [markerIndex, setMarkerIndex] = useState<number | null>(null);
   const [editingText, setEditingText] = useState(false);
+  // The text and the list are the same markers twice, tied by footnote number;
+  // a tap on either side flashes and scrolls to the other. `where` says which
+  // side is the target, so the side that was tapped does not flash itself.
+  const [reveal, setReveal] = useState<(Reveal & { where: 'row' | 'text' }) | null>(null);
+  const screenRef = useRef<HTMLDivElement>(null);
+  const revealIn = (where: 'row' | 'text', index: number) =>
+    setReveal(r => ({ where, index, nonce: (r?.nonce ?? 0) + 1 }));
+  useEffect(() => {
+    if (!reveal) return;
+    const sel = reveal.where === 'row'
+      ? `[data-testid="marker-row"][data-marker-index="${reveal.index}"]`
+      : `[data-testid="field-text"] [data-marker-index="${reveal.index}"]`;
+    const el = screenRef.current?.querySelector(sel) as HTMLElement | null;
+    // Optional call: jsdom has no scrollIntoView.
+    el?.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
+  }, [reveal]);
 
   const markers = useMemo<DocMarker[]>(() => markersFromSpans(spans), [spans]);
   const fieldErrors = errors.filter(e => pathsEqual(e.path, fieldPath));
@@ -48,7 +64,7 @@ export function FieldScreen({
   const selected = markerIndex === null ? null : markers[markerIndex] ?? null;
 
   return (
-    <div data-testid="source-field">
+    <div data-testid="source-field" ref={screenRef}>
       {fieldErrors.length > 0 && (
         <div className="src-warn md-body-medium px-3 py-2 mt-2" data-testid="field-errors">
           {fieldErrors.map((e, i) => <div key={i}>{e.message}</div>)}
@@ -57,7 +73,14 @@ export function FieldScreen({
 
       <div className="mt-2 rounded-xl bg-surface-container-low p-3" data-testid="field-text">
         {text.length > 0
-          ? <MarkedText text={text} markers={markers} />
+          ? (
+            <MarkedText
+              text={text}
+              markers={markers}
+              onPick={(i) => revealIn('row', i)}
+              revealed={reveal?.where === 'text' ? reveal : null}
+            />
+          )
           : <span className="text-sm text-muted-foreground">Empty.</span>}
       </div>
 
@@ -91,18 +114,31 @@ export function FieldScreen({
         <md-list style={{ background: 'transparent' }}>
           {markers.map((m, i) => {
             const err = markerError(m, fieldPath, errors);
+            const lit = reveal?.where === 'row' && reveal.index === i;
             return (
               <md-list-item
-                key={`${markerHeadline(m)}-${i}`}
+                key={lit ? `${markerHeadline(m)}-${i}:r${reveal!.nonce}` : `${markerHeadline(m)}-${i}`}
                 type="button"
                 data-testid="marker-row"
+                data-marker-index={i}
+                className={lit ? 'src-revealed' : undefined}
                 onClick={() => setMarkerIndex(i)}
               >
                 {/* The footnote number and colour are the tie back to the
-                    highlight above — same index, same colour, both directions. */}
-                <span slot="start" className="src-footnote w-5 text-center" style={{ color: markerColor(i) }}>
+                    highlight above — same index, same colour, both directions:
+                    tapping the number here flashes that text up there, while
+                    the rest of the row opens the marker's sheet. */}
+                <button
+                  type="button"
+                  slot="start"
+                  className="src-footnote w-5 text-center"
+                  style={{ color: markerColor(i) }}
+                  data-testid="row-footnote"
+                  aria-label={`Show marker ${footnoteLabel(i)} in the text`}
+                  onClick={(e: MouseEvent) => { e.stopPropagation(); revealIn('text', i); }}
+                >
                   {footnoteLabel(i)}
-                </span>
+                </button>
                 <div slot="headline" className="src-mono">{markerHeadline(m)}</div>
                 <div slot="supporting-text" className="src-mono truncate">{markerSummary(m)}</div>
                 <div slot="end" className="flex items-center gap-1.5">

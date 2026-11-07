@@ -60,6 +60,10 @@ export function markerError(
     (same(e.path, fieldPath) && e.message.includes(`"${name}"`)));
 }
 
+/** Which marker's text and row are flashing, and a nonce so a second tap on the
+ * same one restarts the flash (it is folded into the element's key). */
+export interface Reveal { index: number; nonce: number }
+
 /**
  * The field's text with its markers painted on: each mark's range tinted and
  * underlined in its footnote colour, each block marker replaced by a chip naming
@@ -69,8 +73,35 @@ export function markerError(
  * tint can only show one of them. Inset shadows paint in declaration order, so
  * the innermost (2px) bar covers the bottom of the next, giving one visible band
  * per covering mark.
+ *
+ * Every painted thing is a tap target that names its marker (`onPick`): a run
+ * picks the topmost mark covering it, a footnote badge or chip picks exactly its
+ * own. The screen answers by revealing that marker's row below — and, the other
+ * way round, `revealed` flashes the text for a row's number tapped down there.
  */
-export function MarkedText({ text, markers }: { text: string; markers: DocMarker[] }) {
+export function MarkedText({ text, markers, onPick, revealed }: {
+  text: string;
+  markers: DocMarker[];
+  onPick?: (index: number) => void;
+  revealed?: Reveal | null;
+}) {
+  /** Tap-target props for marker `i`. Keyboard too: these are buttons in all
+   * but element type, which stays a span so the text keeps flowing inline. */
+  const pick = (i: number, testId: string) => (onPick ? {
+    role: 'button' as const,
+    tabIndex: 0,
+    'data-testid': testId,
+    'data-marker-index': i,
+    onClick: (e: MouseEvent) => { e.stopPropagation(); onPick(i); },
+    onKeyDown: (e: KeyboardEvent) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onPick(i); }
+    },
+  } : { 'data-testid': testId, 'data-marker-index': i });
+  const isRevealed = (i: number) => revealed?.index === i;
+  const revealKey = (base: string, i: number) => (isRevealed(i) ? `${base}:r${revealed!.nonce}` : base);
+  const revealClass = (i: number, cls?: string) =>
+    [cls, isRevealed(i) ? 'src-revealed' : undefined].filter(Boolean).join(' ') || undefined;
+
   const blocks = new Map<number, { marker: DocMarker; i: number }>();
   const footnotesAt = new Map<number, number[]>();
   const cuts = new Set<number>([0, text.length]);
@@ -91,7 +122,12 @@ export function MarkedText({ text, markers }: { text: string; markers: DocMarker
     for (const i of footnotesAt.get(at) ?? []) {
       if (i === skip) continue;
       parts.push(
-        <span key={`f${at}-${i}`} className="src-footnote" style={{ color: markerColor(i) }}>
+        <span
+          key={revealKey(`f${at}-${i}`, i)}
+          className={revealClass(i, 'src-footnote')}
+          style={{ color: markerColor(i) }}
+          {...pick(i, 'text-footnote')}
+        >
           {footnoteLabel(i)}
         </span>,
       );
@@ -107,9 +143,10 @@ export function MarkedText({ text, markers }: { text: string; markers: DocMarker
       pushFootnotes(from, block.i);
       parts.push(
         <span
-          key={from}
-          className="src-marker-chip"
+          key={revealKey(String(from), block.i)}
+          className={revealClass(block.i, 'src-marker-chip')}
           style={{ borderColor: markerColor(block.i), color: markerColor(block.i) }}
+          {...pick(block.i, 'marker-chip')}
         >
           ¶{blockChipLabel((block.marker as Extract<DocMarker, { kind: 'block' }>).block)}
           <span className="src-footnote">{footnoteLabel(block.i)}</span>
@@ -121,14 +158,17 @@ export function MarkedText({ text, markers }: { text: string; markers: DocMarker
     const covering = markers
       .map((m, i) => ({ m, i }))
       .filter(({ m }) => m.kind === 'mark' && m.start <= from && m.end >= to);
+    // A run flashes for any of the marks covering it, since all of them are its.
+    const lit = covering.find(({ i }) => isRevealed(i));
     parts.push(
       <span
-        key={from}
-        className={covering.length > 0 ? 'src-marked-run' : undefined}
+        key={lit ? revealKey(String(from), lit.i) : from}
+        className={covering.length > 0 ? (lit ? 'src-marked-run src-revealed' : 'src-marked-run') : undefined}
         style={covering.length > 0 ? {
           backgroundColor: markerColor(covering[0].i) + '2b',
           boxShadow: covering.map(({ i }, k) => `inset 0 ${-2 * (k + 1)}px 0 ${markerColor(i)}`).join(', '),
         } : undefined}
+        {...(covering.length > 0 ? pick(covering[0].i, 'marked-run') : {})}
       >
         {escapeString(text.slice(from, to))}
       </span>,

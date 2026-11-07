@@ -106,6 +106,28 @@
   margin: 0;
 }
 
+/* A table. The wrapper scrolls sideways so a wide table never widens the page,
+   and — like <table>, <tbody> and <tr> — carries no data-bfrom: the CELLS are
+   the blocks (see blockEls in RichTextEditor), each shaped like a paragraph. */
+.rt-table-wrap {
+  overflow-x: auto;
+  margin: 0 0 0.5rem;
+}
+.rt-table {
+  border-collapse: collapse;
+}
+.rt-cell {
+  border: 1px solid var(--md-sys-color-outline-variant);
+  padding: 0.25rem 0.5rem;
+  min-width: 3rem;
+  vertical-align: top;
+  text-align: left;
+}
+th.rt-cell {
+  font-weight: 600;
+  background: var(--md-sys-color-surface-container);
+}
+
 .rt-strong { font-weight: 700; }
 .rt-em { font-style: italic; }
 

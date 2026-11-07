@@ -157,6 +157,9 @@
 
 .src-revealed {
   animation: src-reveal 1.6s ease-out;
+  /* On an md-list-item the shadow root paints its own container over the host,
+     so let the host's flash show through while it runs. */
+  --md-list-item-container-color: transparent;
 }
 
 @keyframes src-reveal {

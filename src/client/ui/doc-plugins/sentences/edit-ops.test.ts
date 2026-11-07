@@ -5,8 +5,9 @@
  */
 import { blocksFromSpans, marksInRange, orderedListNumbers } from './blocks';
 import {
-  opsForInsertText, opsForDeleteBackward, opsForDeleteForward, opsForInsertParagraph,
+  opsForInsertText, opsForDeleteBackward, opsForDeleteForward, opsForInsertParagraph, opsForPasteText,
   toggleMarkOps, setLinkOps, setBlockTypeOps, toggleListOps, indentOps, outdentOps, insertDividerOps,
+  clampToCells,
 } from './edit-ops';
 import { markdownToSpans, spansToMarkdown } from './markdown';
 import { applyOpsToSpans } from './spans-model';
@@ -334,5 +335,152 @@ describe('block formatting', () => {
     const { ops, caret } = insertDividerOps(blocksOf(spans), 2, 2);
     expect(mdOf(applyOpsToSpans(spans, ops))).toBe('a\n\n---\n\nb');
     expect(caret).toBe(4);
+  });
+});
+
+/**
+ * Tables. A cell's text edits like a paragraph's; its boundaries are the
+ * table's shape, which the UI cannot change. So every gesture that would move a
+ * cell marker — a join, a split, a range reaching across one — is held inside
+ * the cell or stopped at the table's edge, and only a range covering the whole
+ * table (the way to delete one) is let through.
+ *
+ * Fixture: `x` ¶, a 2×2 table, `y` ¶ — flat `￼x￼a￼b￼c￼d￼y`:
+ *   x: marker 0, text [1,2)   a: 2,[3,4)   b: 4,[5,6)   c: 6,[7,8)   d: 8,[9,10)   y: 10,[11,12)
+ */
+describe('tables', () => {
+  const TABLE = '| a | b |\n| --- | --- |\n| c | d |';
+  const DOC = `x\n\n${TABLE}\n\ny`;
+  const spans = () => docOf(DOC);
+  const CELLS = ['table-cell', 'table-cell', 'table-cell', 'table-cell'];
+
+  it('clamps a range to the cell it starts in, or stops it before a table', () => {
+    const bl = blocksOf(spans());
+    expect(clampToCells(bl, 3, 7)).toEqual({ from: 3, to: 4 });   // a… into c → a's end
+    expect(clampToCells(bl, 1, 5)).toEqual({ from: 1, to: 2 });   // x… into b → before the table
+    expect(clampToCells(bl, 2, 10)).toEqual({ from: 2, to: 10 }); // the whole table: allowed
+    expect(clampToCells(bl, 9, 12)).toEqual({ from: 9, to: 10 }); // d… into y → d's end
+    expect(clampToCells(bl, 11, 12)).toEqual({ from: 11, to: 12 }); // outside: untouched
+  });
+
+  it('types inside a cell', () => {
+    const s = spans();
+    const { ops, caret } = opsForInsertText(blocksOf(s), 4, 4, 'Z');
+    expect(mdOf(applyOpsToSpans(s, ops))).toBe(`x\n\n| aZ | b |\n| --- | --- |\n| c | d |\n\ny`);
+    expect(caret).toBe(5);
+  });
+
+  it('a replacement that started in a cell stays in that cell', () => {
+    const s = spans();
+    const { ops } = opsForInsertText(blocksOf(s), 3, 7, 'Z');
+    expect(mdOf(applyOpsToSpans(s, ops))).toBe(`x\n\n| Z | b |\n| --- | --- |\n| c | d |\n\ny`);
+  });
+
+  it('a deletion dragged from a paragraph into the table stops at the table', () => {
+    const s = spans();
+    const { ops } = opsForDeleteBackward(blocksOf(s), 1, 5);
+    expect(typesOf(applyOpsToSpans(s, ops))).toEqual(['paragraph', ...CELLS, 'paragraph']);
+    expect(mdOf(applyOpsToSpans(s, ops))).toBe(`\n\n${TABLE}\n\ny`);
+  });
+
+  it('a range covering the whole table deletes it', () => {
+    const s = spans();
+    const { ops, caret } = opsForDeleteBackward(blocksOf(s), 2, 10);
+    expect(mdOf(applyOpsToSpans(s, ops))).toBe('x\n\ny');
+    expect(caret).toBe(2);
+  });
+
+  it('Enter in a cell starts a paragraph after the table', () => {
+    const s = spans();
+    const { ops, caret } = opsForInsertParagraph(blocksOf(s), 3, 3);
+    expect(typesOf(applyOpsToSpans(s, ops))).toEqual(['paragraph', ...CELLS, 'paragraph', 'paragraph']);
+    expect(caret).toBe(11); // the new, empty paragraph between d and y
+  });
+
+  it('Enter over a selection in a cell deletes it first, then leaves the table', () => {
+    const s = spans();
+    const { ops, caret } = opsForInsertParagraph(blocksOf(s), 3, 4);
+    const after = applyOpsToSpans(s, ops);
+    expect(mdOf(after)).toBe(`x\n\n|  | b |\n| --- | --- |\n| c | d |\n\n\n\ny`);
+    expect(caret).toBe(10);
+  });
+
+  it('backspace at a cell start, and at the block after a table, is a no-op', () => {
+    const bl = blocksOf(spans());
+    expect(opsForDeleteBackward(bl, 3, 3).ops).toEqual([]);   // start of a
+    expect(opsForDeleteBackward(bl, 7, 7).ops).toEqual([]);   // start of c
+    expect(opsForDeleteBackward(bl, 11, 11).ops).toEqual([]); // start of y: prev is a cell
+    // The Android bare-marker ranges for the same gestures.
+    expect(opsForDeleteBackward(bl, 2, 3).ops).toEqual([]);
+    expect(opsForDeleteBackward(bl, 10, 11).ops).toEqual([]);
+  });
+
+  it('delete-forward at a cell end, and at the block before a table, is a no-op', () => {
+    const bl = blocksOf(spans());
+    expect(opsForDeleteForward(bl, 4, 4).ops).toEqual([]);  // end of a
+    expect(opsForDeleteForward(bl, 10, 10).ops).toEqual([]); // end of d
+    expect(opsForDeleteForward(bl, 2, 2).ops).toEqual([]);  // end of x: next is a cell
+  });
+
+  it('retyping, listing, indenting and dividers skip cells', () => {
+    const bl = blocksOf(spans());
+    expect(setBlockTypeOps(bl, 3, 3, 'heading', { level: 1 })).toEqual([]);
+    expect(toggleListOps(bl, 3, 9, 'unordered-list-item')).toEqual([]);
+    expect(indentOps(bl, 3, 3)).toEqual([]);
+    expect(outdentOps(bl, 3, 3)).toEqual([]);
+    expect(insertDividerOps(bl, 3, 3).ops).toEqual([]);
+    // A selection spanning x and the table still retypes x.
+    expect(setBlockTypeOps(bl, 1, 5, 'heading', { level: 1 }))
+      .toEqual([{ op: 'updateBlock', index: 0, block: { type: 'heading', parents: [], attrs: { level: 1 } } }]);
+  });
+
+  it('bold across cells marks the text in both (marks do not touch structure)', () => {
+    const s = spans();
+    const ops = toggleMarkOps(blocksOf(s), 3, 6, 'strong');
+    expect(mdOf(applyOpsToSpans(s, ops))).toBe(`x\n\n| **a** | **b** |\n| --- | --- |\n| c | d |\n\ny`);
+  });
+
+  describe('pasting', () => {
+    it('a table into an empty document', () => {
+      const s = docOf('');
+      const { ops, caret } = opsForPasteText(blocksOf(s), 0, 0, TABLE);
+      const after = applyOpsToSpans(s, ops);
+      expect(typesOf(after)).toEqual([...CELLS, 'paragraph']);
+      expect(mdOf(after)).toBe(`${TABLE}\n\n`);
+      expect(caret).toBe(9); // in the paragraph after the table
+    });
+
+    it('a table into an empty paragraph retypes that paragraph into the first cell', () => {
+      const s: RichTextSpan[] = [blockSpan('paragraph'), textSpan('x'), blockSpan('paragraph')];
+      const { ops } = opsForPasteText(blocksOf(s), 3, 3, TABLE);
+      expect(typesOf(applyOpsToSpans(s, ops))).toEqual(['paragraph', ...CELLS, 'paragraph']);
+    });
+
+    it('a table mid-paragraph puts the text after the caret in a paragraph after the table', () => {
+      const s = docOf('hello world');
+      const { ops, caret } = opsForPasteText(blocksOf(s), 7, 7, TABLE); // "￼hello |world"
+      const after = applyOpsToSpans(s, ops);
+      expect(mdOf(after)).toBe(`hello \n\n${TABLE}\n\nworld`);
+      expect(caret).toBe(16); // start of "world"
+    });
+
+    it('structured text into a cell is flattened to one line', () => {
+      const s = spans();
+      const { ops } = opsForPasteText(blocksOf(s), 4, 4, '# T\n\n- one\n- **two**');
+      expect(mdOf(applyOpsToSpans(s, ops))).toBe(`x\n\n| aT one **two** | b |\n| --- | --- |\n| c | d |\n\ny`);
+    });
+
+    it('a table into a cell is flattened too', () => {
+      const s = spans();
+      const { ops } = opsForPasteText(blocksOf(s), 4, 4, TABLE);
+      expect(typesOf(applyOpsToSpans(s, ops))).toEqual(['paragraph', ...CELLS, 'paragraph']);
+      expect(mdOf(applyOpsToSpans(s, ops))).toContain('| aa b c d | b |');
+    });
+
+    it('a plain word into a cell types like typing', () => {
+      const s = spans();
+      const { ops } = opsForPasteText(blocksOf(s), 4, 4, 'zz');
+      expect(ops).toEqual([{ op: 'splice', index: 4, del: 0, text: 'zz' }]);
+    });
   });
 });

@@ -261,3 +261,40 @@ describe('source inspector markers', () => {
     });
   });
 });
+
+/**
+ * The text and the marker list show the same markers; the footnote number ties
+ * one to the other. A tap on either side flashes and scrolls to its twin on the
+ * other — the list row is still what opens the sheet, so the number in a row is
+ * its own button.
+ */
+describe('text ↔ marker list jumps', () => {
+  const revealedRows = () => rows().filter(r => r.className.includes('src-revealed'));
+
+  it('tapping a marked run reveals that mark\'s row, without opening its sheet', async () => {
+    await renderWithMarkers();
+    fireEvent.click(document.querySelector('[data-testid="marked-run"][data-marker-index="1"]')!);
+    await waitFor(() => expect(revealedRows()).toHaveLength(1));
+    expect(revealedRows()[0].getAttribute('data-marker-index')).toBe('1');
+    expect(screen.queryByTestId('marker-sheet')).toBeNull();
+  });
+
+  it('tapping a block chip reveals the block marker\'s row', async () => {
+    await renderWithMarkers();
+    fireEvent.click(document.querySelector('[data-testid="marker-chip"]')!);
+    await waitFor(() => expect(revealedRows().map(r => r.getAttribute('data-marker-index'))).toEqual(['0']));
+  });
+
+  it('tapping a row\'s number reveals its text and does not open the sheet', async () => {
+    await renderWithMarkers();
+    fireEvent.click(within(rows()[2]).getByTestId('row-footnote'));
+    await waitFor(() => {
+      const run = document.querySelector('[data-testid="marked-run"][data-marker-index="2"]')!;
+      expect(run.className).toContain('src-revealed');
+    });
+    // Only the link run lit up, and only on the text side.
+    expect(document.querySelector('[data-testid="marked-run"][data-marker-index="1"]')!.className).not.toContain('src-revealed');
+    expect(revealedRows()).toHaveLength(0);
+    expect(screen.queryByTestId('marker-sheet')).toBeNull();
+  });
+});

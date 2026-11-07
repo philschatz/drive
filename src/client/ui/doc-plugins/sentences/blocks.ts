@@ -4,10 +4,13 @@
  * so the DOM ↔ model mapping in the editor is pure integer arithmetic.
  */
 import type { BlockValue, RichTextSpan } from '../../../../shared/rich-text-ops';
+import { groupTables, tableContaining, type TableGroup } from '../../../../shared/rich-text-tables';
+
+export type { TableGroup };
 
 export type BlockType =
   | 'paragraph' | 'heading' | 'unordered-list-item' | 'ordered-list-item'
-  | 'blockquote' | 'divider';
+  | 'blockquote' | 'divider' | 'table-cell';
 
 export interface InlineRun {
   text: string;
@@ -39,6 +42,23 @@ export function blockDepth(b: BlockNode): number {
 export function isListItem(b: BlockNode): boolean {
   const t = blockType(b);
   return t === 'unordered-list-item' || t === 'ordered-list-item';
+}
+
+/** A table cell: its text edits like a paragraph's, its boundaries do not (see
+ * src/shared/rich-text-tables.ts for how cells make up a table). */
+export function isTableCell(b: BlockNode): boolean {
+  return blockType(b) === 'table-cell';
+}
+
+/** Every table in the document, as block-index rows. */
+export function tableGroups(blocks: BlockNode[]): TableGroup[] {
+  return groupTables(blocks.map(b => b.block));
+}
+
+/** The table block `bi` is a cell of, or null. */
+export function tableAt(blocks: BlockNode[], bi: number): TableGroup | null {
+  if (!isTableCell(blocks[bi])) return null;
+  return tableContaining(tableGroups(blocks), bi);
 }
 
 /**
