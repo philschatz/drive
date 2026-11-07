@@ -57,13 +57,37 @@ export function opsForInsertText(
   pending?: PendingMarks,
 ): Edit {
   ({ from, to } = clampToCells(blocks, from, to));
-  const ops: RichTextOp[] = [{ op: 'splice', index: from, del: to - from, text }];
+  const ops: RichTextOp[] = [];
+  const b = blocks[blockIndexAt(blocks, from)];
+  if (isDivider(b) && b.markerIndex !== null) {
+    // The caret on a divider's line sits BEFORE the rule (see the divider
+    // notes above caretOnDivider), and the block draws an <hr>, never its
+    // text — so typing there opens a paragraph before the divider and goes
+    // into that, in the same change. The new paragraph's text starts where
+    // the divider's did, so `from` needs no shift.
+    ops.push({ op: 'splitBlock', index: b.markerIndex, block: P() });
+    to = from;
+  }
+  ops.push({ op: 'splice', index: from, del: to - from, text });
   for (const [name, value] of Object.entries(pending ?? {})) {
     if (value === false) ops.push({ op: 'unmark', start: from, end: from + text.length, name, expand: 'after' });
     else ops.push({ op: 'mark', start: from, end: from + text.length, name, value: value as any, expand: 'after' });
   }
   return { ops, caret: from + text.length };
 }
+
+/**
+ * Dividers. A divider block has exactly one caret position — its own (empty)
+ * text — and the editor draws that position as a line ABOVE the rule, so a
+ * caret there reads as "before the divider". Every builder honours that
+ * reading: typing or pasting opens a paragraph before the divider, Enter
+ * opens one before it (after it only when the divider ends the document,
+ * since nothing else could reach that spot), Backspace steps up to the block
+ * above, Delete removes the rule the caret sits in front of. Without this a
+ * table followed by a divider had no position between them at all — and
+ * nothing is inserted until something is typed.
+ */
+const isDivider = (b: BlockNode | undefined): boolean => !!b && blockType(b) === 'divider';
 
 export function opsForDeleteBackward(blocks: BlockNode[], from: number, to: number): Edit {
   // A range covering exactly one block marker and no text IS a caret at that
@@ -100,6 +124,10 @@ export function opsForDeleteBackward(blocks: BlockNode[], from: number, to: numb
     // after a table: neither joins (a joinBlock would move text into or out of
     // a cell and so reshape the table). The caret simply stays.
     if (isTableCell(b)) return { ops: [], caret: from };
+    // On a divider's line the caret is before the rule: step up to the end of
+    // the block above rather than delete what is after the caret. A leading
+    // divider falls through to the first-block rule and becomes a paragraph.
+    if (isDivider(b) && bi > 0) return { ops: [], caret: blocks[bi - 1].textTo };
     if (isListItem(b)) return { ops: outdentBlockOps(b), caret: from };
     if (t === 'blockquote') return { ops: [{ op: 'updateBlock', index: b.markerIndex, block: P() }], caret: from };
     if (bi === 0) {
@@ -130,6 +158,9 @@ export function opsForDeleteForward(blocks: BlockNode[], from: number, to: numbe
     // The end of a cell and the end of the block before a table are table
     // boundaries — see opsForDeleteBackward.
     if (isTableCell(b) || (next && isTableCell(next))) return { ops: [], caret: from };
+    // Delete "in" a divider removes the divider; joining the next block into it
+    // would hide that block's text behind the <hr>.
+    if (isDivider(b) && b.markerIndex !== null) return { ops: [{ op: 'joinBlock', index: b.markerIndex }], caret: from - 1 };
     if (next?.markerIndex != null) return { ops: [{ op: 'joinBlock', index: next.markerIndex }], caret: from };
     return { ops: [], caret: from };
   }
@@ -153,6 +184,19 @@ export function opsForInsertParagraph(blocks: BlockNode[], from: number, to: num
     const end = blocks[table.end - 1].textTo - (to - from);
     ops.push({ op: 'splitBlock', index: end, block: P() });
     return { ops, caret: end + 1 };
+  }
+
+  // Enter on a divider's line: a paragraph before the rule, caret in it — the
+  // caret sits before the rule, so that is where the new line goes. A divider
+  // that ENDS the document gets the paragraph after it instead: typing already
+  // reaches "before", and nothing else can reach "after".
+  if (isDivider(b) && b.markerIndex !== null) {
+    if (bi === blocks.length - 1) {
+      ops.push({ op: 'splitBlock', index: from, block: P() });
+      return { ops, caret: from + 1 };
+    }
+    ops.push({ op: 'splitBlock', index: b.markerIndex, block: P() });
+    return { ops, caret: from };
   }
 
   // Enter on an empty list item exits the list (outdent step by step).
@@ -300,15 +344,28 @@ export function opsForPasteText(blocks: BlockNode[], from: number, to: number, t
   ({ from, to } = clampToCells(blocks, from, to));
   const b = blocks[blockIndexAt(blocks, from)];
   const pasted: RichTextSpan[] = isTableCell(b) ? flattenToOneBlock(markdownToSpans(text)) : markdownToSpans(text);
-  const simple = pasted.length === 2 && pasted[0].type === 'block' && pasted[1].type === 'text' && !pasted[1].marks;
+  // One block and one plain run is "a line of text" — unless that block is a
+  // cell, which is a table however small.
+  const simple = pasted.length === 2 && pasted[0].type === 'block' && pasted[0].value.type !== 'table-cell'
+    && pasted[1].type === 'text' && !pasted[1].marks;
   if (pasted.length === 0 || (pasted.length === 1 && pasted[0].type === 'block')) return { ops: [], caret: from };
   if (simple) return opsForInsertText(blocks, from, to, (pasted[1] as any).value);
 
   const ops: RichTextOp[] = [];
   if (to > from) ops.push({ op: 'splice', index: from, del: to - from });
-  const caretBlockIsEmptyParagraph =
-    b.markerIndex !== null && blockType(b) === 'paragraph' && b.text.length === 0 && from === b.textFrom;
   let pos = from;
+  // An empty paragraph the caret sits in takes the first pasted block's type
+  // (a pasted heading on an empty line IS a heading; a pasted table's first
+  // cell takes it over rather than leaving an empty line above the table).
+  let emptyParagraphMarker: number | null =
+    b.markerIndex !== null && blockType(b) === 'paragraph' && b.text.length === 0 && from === b.textFrom
+      ? b.markerIndex : null;
+  if (isDivider(b) && b.markerIndex !== null) {
+    // Nothing can go into a divider: paste into a paragraph opened before it
+    // (whose text starts where the divider's did, so `pos` stays).
+    ops.push({ op: 'splitBlock', index: b.markerIndex, block: P() });
+    emptyParagraphMarker = b.markerIndex;
+  }
   let first = true;
   let lastBlockIsCell = false;
   for (const s of pasted) {
@@ -317,14 +374,14 @@ export function opsForPasteText(blocks: BlockNode[], from: number, to: number, t
       const block: BlockValue = { type: s.value.type, parents: s.value.parents, attrs: s.value.attrs ?? {} };
       if (first) {
         first = false;
+        if (emptyParagraphMarker !== null) {
+          if (s.value.type !== 'paragraph') ops.push({ op: 'updateBlock', index: emptyParagraphMarker, block });
+          lastBlockIsCell = isCell;
+          continue;
+        }
         // The first pasted block merges into the block the caret is in —
         // unless it is a cell, which must stay a block of its own.
         if (!isCell) continue;
-        if (caretBlockIsEmptyParagraph) {
-          ops.push({ op: 'updateBlock', index: b.markerIndex!, block });
-          lastBlockIsCell = true;
-          continue;
-        }
       }
       ops.push({ op: 'splitBlock', index: pos, block });
       pos += 1;

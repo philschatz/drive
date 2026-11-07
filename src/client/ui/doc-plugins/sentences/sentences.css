@@ -97,13 +97,16 @@
 }
 
 .rt-divider {
-  padding: 0.625rem 0;
-  user-select: none;
+  /* The block's <br> line is where the caret sits, before the rule — kept
+     short so the rule does not float far below the text above it. */
+  line-height: 1.25;
+  padding: 0 0 0.5rem;
 }
 .rt-divider hr {
   border: none;
   border-top: 1px solid var(--md-sys-color-outline-variant);
   margin: 0;
+  user-select: none;
 }
 
 /* A table. The wrapper scrolls sideways so a wide table never widens the page,

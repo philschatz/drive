@@ -309,6 +309,26 @@ describe('SentencesView container', () => {
     inputType: 'insertText', data: ch, bubbles: true, cancelable: true,
   }));
 
+  it('does not rebase the caret through its own edit when that edit left the index unchanged', async () => {
+    // Enter on a divider's line inserts the paragraph BEFORE the caret, so the
+    // caret keeps its index (3) while the character that index named — the
+    // next block's marker — moved to 4. A token minted before the edit resolves
+    // to 4; applying that would put the caret back on the divider's line, and
+    // the next keystroke would open a second paragraph.
+    seed('a\n\n---\n\nb');
+    render(<SentencesView docId={DOC} />);
+    await waitFor(() => expect(screen.getByText('a')).toBeTruthy());
+    await editableEditor();
+    const divider = editor().querySelector('.rt-divider')!;
+    fireEvent.click(divider);
+    await act(() => new Promise(r => setTimeout(r, 50)));
+    fireEvent(editor(), new InputEvent('beforeinput', { inputType: 'insertParagraph', bubbles: true, cancelable: true }));
+    await waitFor(() => expect(mock.__getDoc(DOC).content).toBe('￼a￼￼￼b'));
+    await act(() => new Promise(r => setTimeout(r, 50)));
+    fireEvent(editor(), new InputEvent('beforeinput', { inputType: 'insertText', data: 'x', bubbles: true, cancelable: true }));
+    await waitFor(() => expect(currentMarkdown()).toBe('a\n\nx\n\n---\n\nb'));
+  });
+
   it('rebases the local caret when a peer inserts before it', async () => {
     // Flat text '￼hello world'; offset 8 in the run = flat 9, i.e. "hello wo|rld".
     await renderWithCaret('hello world', 'hello world', 8);

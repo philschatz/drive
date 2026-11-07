@@ -828,3 +828,42 @@ describe('tables', () => {
     expect(Array.from(root.children).map(c => c.tagName.toLowerCase())).toEqual(['div', 'p']);
   });
 });
+
+describe('divider clicks', () => {
+  const dividerEl = (root: HTMLElement) => root.querySelector('.rt-divider') as HTMLElement;
+
+  it('puts the caret on the divider\'s own line, before the rule, without an edit', () => {
+    const { root, ops } = setup(markdownToSpans('para\n\n---\n\nafter'));
+    dividerEl(root).click();
+    const sel = window.getSelection()!;
+    expect(sel.anchorNode).toBe(dividerEl(root));
+    expect(sel.anchorOffset).toBe(0);
+    // The caret line is the <br> that precedes the rule, as in an empty paragraph.
+    expect(Array.from(dividerEl(root).children).map(c => c.tagName.toLowerCase())).toEqual(['br', 'hr']);
+    expect(ops).toEqual([]);
+  });
+
+  it('typing there under a table opens a paragraph between the table and the rule', () => {
+    const spans = markdownToSpans('| a |\n| - |\n\n---\n\nafter'); // ￼a￼￼after — divider marker 2, line 3
+    const { root, ops, settle } = setup(spans);
+    dividerEl(root).click();
+    expect(ops).toEqual([]);
+    key(root, 'insertText', 'x');
+    expect(ops).toEqual([[
+      { op: 'splitBlock', index: 2, block: { type: 'paragraph', parents: [] } },
+      { op: 'splice', index: 3, del: 0, text: 'x' },
+    ]]);
+    settle();
+    expect(Array.from(root.children).map(c => c.tagName.toLowerCase())).toEqual(['div', 'p', 'div', 'p']);
+    expect(root.children[1].textContent).toBe('x');
+    expect(where().anchor).toEqual(['x', 1]);
+  });
+
+  it('Backspace on the divider line steps up into the block above', () => {
+    const { root, ops } = setup(markdownToSpans('para\n\n---\n\nafter'));
+    dividerEl(root).click();
+    key(root, 'deleteContentBackward');
+    expect(ops).toEqual([]);
+    expect(where().anchor).toEqual(['para', 4]);
+  });
+});

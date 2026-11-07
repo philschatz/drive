@@ -113,7 +113,7 @@ export function BottomFormatBar({
         <BarButton
           icon={currentStyle?.icon ?? 'notes'}
           label="Text style"
-          active={!!state && state.blockType !== 'paragraph' && !state.inList && !inTable}
+          active={!!state && state.blockType !== 'paragraph' && state.blockType !== 'divider' && !state.inList && !inTable}
           disabled={inTable}
           onAction={() => setStyleOpen(true)}
         />

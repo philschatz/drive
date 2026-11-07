@@ -76,7 +76,7 @@ export function SentencesView({ docId, readOnly }: { docId?: string; rest?: stri
         // The tokens still point at the same characters, so re-key them to the
         // rebased selection rather than re-minting — back-to-back remote pushes
         // then each get rebased instead of tripping the staleness guard.
-        if (api.rebaseCaret(held.sel, sel)) localCursorRef.current = { tokens: held.tokens, sel };
+        if (api.rebaseCaret(held.sel, sel, held.serial)) localCursorRef.current = { ...held, sel };
       }
     }
     setSpans(next);
@@ -139,7 +139,10 @@ export function SentencesView({ docId, readOnly }: { docId?: string; rest?: stri
   // Which selection the current tokens describe. If the user types past it
   // before the mint returns, a resolution from those tokens describes an older
   // caret — the editor's rebaseCaret guard refuses it.
-  const localCursorRef = useRef<{ tokens: [string, string]; sel: { from: number; to: number } } | null>(null);
+  // `serial` is the editor's edit count at the mint: a local edit re-mints
+  // (see the deps), and a resolution from older tokens is refused by
+  // rebaseCaret — such tokens can name the right index for the wrong caret.
+  const localCursorRef = useRef<{ tokens: [string, string]; sel: { from: number; to: number }; serial: number } | null>(null);
   useEffect(() => {
     if (!docId || !canEdit || !selState) {
       localCursorRef.current = null;
@@ -148,15 +151,16 @@ export function SentencesView({ docId, readOnly }: { docId?: string; rest?: stri
     }
     let cancelled = false;
     const sel = { from: selState.from, to: selState.to };
+    const serial = selState.editSerial;
     getTextCursors(docId, ['content'], [sel.from, sel.to])
       .then(([from, to]) => {
         if (cancelled) return;
-        localCursorRef.current = { tokens: [from, to], sel };
+        localCursorRef.current = { tokens: [from, to], sel, serial };
         setCursorPath(['content', from, to]);
       })
       .catch(() => { /* doc not ready — next selection change retries */ });
     return () => { cancelled = true; };
-  }, [docId, canEdit, selState?.from, selState?.to]);
+  }, [docId, canEdit, selState?.from, selState?.to, selState?.editSerial]);
 
   // Only a real caret is broadcast: `selState` (and so `cursorPath`) exists only
   // once the user has put a selection inside the editor, so merely having an

@@ -477,10 +477,81 @@ describe('tables', () => {
       expect(mdOf(applyOpsToSpans(s, ops))).toContain('| aa b c d | b |');
     });
 
+    it('an empty paragraph takes the first pasted block\'s type', () => {
+      const s: RichTextSpan[] = [blockSpan('paragraph'), textSpan('x'), blockSpan('paragraph')];
+      const { ops } = opsForPasteText(blocksOf(s), 3, 3, '# Title\n\nbody');
+      expect(mdOf(applyOpsToSpans(s, ops))).toBe('x\n\n# Title\n\nbody');
+    });
+
     it('a plain word into a cell types like typing', () => {
       const s = spans();
       const { ops } = opsForPasteText(blocksOf(s), 4, 4, 'zz');
       expect(ops).toEqual([{ op: 'splice', index: 4, del: 0, text: 'zz' }]);
     });
+  });
+});
+
+/**
+ * Dividers. The block's one caret position is drawn as a line ABOVE the rule,
+ * so a caret there is "before the divider" — and nothing is inserted by merely
+ * putting the caret there: the paragraph appears with the first keystroke.
+ * Fixture `a\n\n---\n\nb` is ￼a￼￼b: a: marker 0, text 1; divider: marker 2, its
+ * position 3; b: marker 3, text 4.
+ */
+describe('dividers', () => {
+  it('typing on the divider line opens a paragraph BEFORE the rule', () => {
+    const spans = docOf('a\n\n---\n\nb');
+    const { ops, caret } = opsForInsertText(blocksOf(spans), 3, 3, 'x', { strong: true });
+    expect(mdOf(applyOpsToSpans(spans, ops))).toBe('a\n\n**x**\n\n---\n\nb');
+    expect(caret).toBe(4);
+  });
+
+  it('typing on a divider line under a table writes between the table and the rule', () => {
+    const spans = docOf('| a |\n| - |\n\n---\n\nb'); // ￼a￼￼b — same offsets as above
+    const { ops } = opsForInsertText(blocksOf(spans), 3, 3, 'x');
+    expect(typesOf(applyOpsToSpans(spans, ops))).toEqual(['table-cell', 'paragraph', 'divider', 'paragraph']);
+    expect(mdOf(applyOpsToSpans(spans, ops))).toBe('| a |\n| --- |\n\nx\n\n---\n\nb');
+  });
+
+  it('pasting on the divider line lands before it, and a pasted table takes the fresh paragraph', () => {
+    const spans = docOf('a\n\n---\n\nb');
+    const { ops } = opsForPasteText(blocksOf(spans), 3, 3, '# T\n\np');
+    expect(mdOf(applyOpsToSpans(spans, ops))).toBe('a\n\n# T\n\np\n\n---\n\nb');
+    const table = opsForPasteText(blocksOf(spans), 3, 3, '| x |\n| - |');
+    expect(typesOf(applyOpsToSpans(spans, table.ops))).toEqual(['paragraph', 'table-cell', 'paragraph', 'divider', 'paragraph']);
+  });
+
+  it('Enter on the divider line opens a paragraph before it and moves the caret in', () => {
+    const spans = docOf('a\n\n---\n\nb');
+    const { ops, caret } = opsForInsertParagraph(blocksOf(spans), 3, 3);
+    const after = applyOpsToSpans(spans, ops);
+    expect(typesOf(after)).toEqual(['paragraph', 'paragraph', 'divider', 'paragraph']);
+    expect(caret).toBe(3);
+    expect(blocksOf(after)[1].textFrom).toBe(3);
+  });
+
+  it('Enter on a divider that ends the document continues after it', () => {
+    const spans = docOf('a\n\n---');
+    const { ops, caret } = opsForInsertParagraph(blocksOf(spans), 3, 3);
+    expect(typesOf(applyOpsToSpans(spans, ops))).toEqual(['paragraph', 'divider', 'paragraph']);
+    expect(caret).toBe(4);
+  });
+
+  it('Backspace on the divider line steps up to the block above without an edit', () => {
+    const bl = blocksOf(docOf('a\n\n---\n\nb'));
+    expect(opsForDeleteBackward(bl, 3, 3)).toEqual({ ops: [], caret: 2 });
+    expect(opsForDeleteBackward(bl, 2, 3)).toEqual({ ops: [], caret: 2 }); // Android bare-marker range
+    // A leading divider has nothing above: it becomes a paragraph, like any
+    // non-paragraph first block.
+    const lead = docOf('---\n\nb');
+    const { ops } = opsForDeleteBackward(blocksOf(lead), 1, 1);
+    expect(typesOf(applyOpsToSpans(lead, ops))).toEqual(['paragraph', 'paragraph']);
+  });
+
+  it('Delete on the divider line removes the rule, not the next block\'s text', () => {
+    const spans = docOf('a\n\n---\n\nb');
+    const { ops, caret } = opsForDeleteForward(blocksOf(spans), 3, 3);
+    expect(mdOf(applyOpsToSpans(spans, ops))).toBe('a\n\nb');
+    expect(caret).toBe(2);
   });
 });

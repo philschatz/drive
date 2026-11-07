@@ -81,6 +81,11 @@ export interface SelectionState {
   /** In a table cell: text formatting applies, block structure does not. */
   inTable: boolean;
   linkHref: string | null;
+  /** Counts the editor's own edits. A cursor token minted under one serial
+   * describes a caret that later edits may have moved WITHOUT changing its
+   * index (Enter on a divider's line inserts the paragraph before the caret),
+   * so `rebaseCaret` refuses a resolution minted under an older serial. */
+  editSerial: number;
 }
 
 /** Another user's caret, derived from presence (see SentencesView). Positions are
@@ -120,7 +125,7 @@ export interface RichTextEditorApi {
    * has since typed past must lose to the pending local caret. Returns whether
    * it applied.
    */
-  rebaseCaret(expect: { from: number; to: number }, next: { from: number; to: number }): boolean;
+  rebaseCaret(expect: { from: number; to: number }, next: { from: number; to: number }, serial?: number): boolean;
   focus(): void;
 }
 
@@ -234,7 +239,11 @@ function RunEl({ run, editable }: { run: InlineRun; editable: boolean }) {
   return <span data-from={run.from} className={cls || undefined}>{run.text}</span>;
 }
 
-function BlockEl({ b, bi, num, editable }: { b: BlockNode; bi: number; num: number | null; editable: boolean }) {
+function BlockEl({ b, bi, num, editable, onDividerClick }: {
+  b: BlockNode; bi: number; num: number | null; editable: boolean;
+  /** A click on a divider, which the browser cannot place a caret in. */
+  onDividerClick?: (bi: number) => void;
+}) {
   const t = blockType(b);
   const attrs = { 'data-bfrom': b.textFrom, 'data-bi': bi } as any;
   const children = b.runs.length > 0
@@ -250,8 +259,22 @@ function BlockEl({ b, bi, num, editable }: { b: BlockNode; bi: number; num: numb
     case 'blockquote':
       return <blockquote {...attrs} className="rt-quote">{children}</blockquote>;
     case 'divider':
-      // Atomic: not editable, deletable via backspace at the next block start.
-      return <div {...attrs} className="rt-divider" contentEditable={false}><hr /></div>;
+      // The block's one position is a real caret line ABOVE the rule (the <br>,
+      // exactly as an empty paragraph has one), so a caret can sit "before the
+      // divider" without the document changing — the paragraph appears when
+      // something is typed (edit-ops.ts, dividers). The <hr> itself is inert;
+      // a click on it lands wherever the browser likes, so it is redirected
+      // to that line.
+      return (
+        <div
+          {...attrs}
+          className="rt-divider"
+          onClick={onDividerClick ? () => onDividerClick(bi) : undefined}
+        >
+          <br />
+          <hr contentEditable={false} />
+        </div>
+      );
     case 'table-cell': {
       // The <table>/<tr> around it come from the root render (TableEl); the
       // cell is the block, shaped like a paragraph: runs and nothing else.
@@ -390,6 +413,7 @@ export function RichTextEditor({
    */
   const [resyncEpoch, setResyncEpoch] = useState(0);
   const resyncPendingRef = useRef(false);
+  const editSerialRef = useRef(0);
   const requestResync = () => setResyncEpoch(n => n + 1);
 
   /** The live DOM selection, direction included. */
@@ -472,6 +496,7 @@ export function RichTextEditor({
       inList: isListItem(b),
       inTable: isTableCell(b),
       linkHref: linkHrefOf(marks) ?? null,
+      editSerial: editSerialRef.current,
     });
   };
 
@@ -485,6 +510,15 @@ export function RichTextEditor({
     reportSelection();
   };
 
+  /** A click anywhere on a divider puts the caret on its line, before the rule. */
+  const handleDividerClick = (bi: number) => {
+    if (composingRef.current) return;
+    const b = blocksRef.current[bi];
+    if (!b || blockType(b) !== 'divider') return;
+    rootRef.current?.focus();
+    moveCaret(b.textFrom);
+  };
+
   /** Advance the live model past these ops so the next gesture (possibly
    * arriving before the re-render) computes against fresh state. */
   const advanceLiveModel = (ops: RichTextOp[]) => {
@@ -493,9 +527,16 @@ export function RichTextEditor({
   };
 
   const emitEdit = (edit: Edit) => {
-    if (edit.ops.length === 0) return;
+    if (edit.ops.length === 0) {
+      // A gesture that moves the caret without touching the document
+      // (Backspace on a divider's line steps up to the block above).
+      const cur = readSelection();
+      if (cur && (cur.from !== edit.caret || cur.to !== edit.caret)) moveCaret(edit.caret);
+      return;
+    }
     pendingCaretRef.current = { from: edit.caret, to: edit.caret, backward: false };
     pendingMarksRef.current = {};
+    editSerialRef.current++;
     advanceLiveModel(edit.ops);
     onOps(edit.ops);
   };
@@ -506,6 +547,7 @@ export function RichTextEditor({
     // Marker inserts before the selection shift it by one.
     const shift = ops.filter(o => o.op === 'splitBlock' && o.index <= sel.from).length;
     pendingCaretRef.current = { from: sel.from + shift, to: sel.to + shift, backward: sel.backward };
+    editSerialRef.current++;
     advanceLiveModel(ops);
     onOps(ops);
   };
@@ -876,10 +918,13 @@ export function RichTextEditor({
     getSelection: () => readSelection() ?? lastSelectionRef.current,
     isFocused: () => !!rootRef.current?.contains(document.activeElement),
     isComposing: () => composingRef.current,
-    rebaseCaret(expect, next) {
+    rebaseCaret(expect, next, serial) {
       // Refuse if the caret has moved on since the position was resolved: the
       // local user typing past it makes the resolution describe an older caret,
-      // and the pending local caret is then the correct one.
+      // and the pending local caret is then the correct one. An edit since the
+      // mint is refused even when the index is unchanged — the index is not the
+      // caret's identity (see SelectionState.editSerial).
+      if (serial !== undefined && serial !== editSerialRef.current) return false;
       const cur = pendingCaretRef.current ?? lastSelectionRef.current;
       if (!cur || cur.from !== expect.from || cur.to !== expect.to) return false;
       // IME owns the DOM until compositionend; moving the caret would kill it.
@@ -1115,7 +1160,12 @@ export function RichTextEditor({
               bi = g.end;
               continue;
             }
-            out.push(<BlockEl key={`${bi}:${resyncEpoch}`} b={model[bi]} bi={bi} num={numbers[bi]} editable={editable} />);
+            out.push(
+              <BlockEl
+                key={`${bi}:${resyncEpoch}`} b={model[bi]} bi={bi} num={numbers[bi]} editable={editable}
+                onDividerClick={editable ? handleDividerClick : undefined}
+              />,
+            );
             bi++;
           }
           return out;
