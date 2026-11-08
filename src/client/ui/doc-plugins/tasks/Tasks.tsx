@@ -9,6 +9,8 @@ import { useEditorUndoRedo } from '../../common/useUndoRedo';
 import { useCanEdit } from '../../common/useCanEdit';
 import { useFocusPathSync } from '../../common/useFocusPathSync';
 import { HistorySlider } from '../../common/HistorySlider';
+import { useRevealChange } from '../../common/useRevealChange';
+import { itemChanges, removedItems, withGhosts, type ChangeKind } from '../../../../shared/version-changes';
 import { ListRow } from '../../common/ListRow';
 import type { TaskDocument, Task } from '../../../../shared/schemas/tasks';
 import { TaskEditor } from './TaskEditor';
@@ -32,6 +34,8 @@ const PATH_PROP_TO_FIELDS: Record<string, string[]> = {
   progress: ['ted-progress'],
   description: ['ted-desc'],
 };
+
+const NO_GHOSTS: ReadonlySet<string> = new Set();
 
 function generateUid() {
   return Date.now() + '-' + Math.random().toString(36).substr(2, 9);
@@ -70,18 +74,25 @@ function sortedTasks(tasks: Record<string, Task>): { uid: string; task: Task }[]
  * action — so ListRow gives it a pencil rather than a kebab, and a hold (or
  * right-click, or Shift+F10) opens it. Delete lives inside the editor, not on the
  * row, which is why the count is one and not two.
+ *
+ * In history mode `diff` tints the row with what the version on screen did to
+ * it, and a `ghost` row is a task that version removed — rendered from its old
+ * value, struck through, with nothing to tap.
  */
-function TaskListItem({ uid, task, canEdit, peerEditingTasks, onToggle, onEdit }: {
+function TaskListItem({ uid, task, canEdit, peerEditingTasks, onToggle, onEdit, diff, ghost }: {
   uid: string;
   task: Task;
   canEdit: boolean;
   peerEditingTasks: Record<string, PeerFieldInfo>;
   onToggle: (uid: string, task: Task) => void;
   onEdit: (uid: string, task: Task) => void;
+  diff?: ChangeKind;
+  ghost?: boolean;
 }) {
   const isDone = task.progress === 'completed' || task.progress === 'cancelled';
   const peerEdit = peerEditingTasks[uid];
   const title = task.title || 'Untitled';
+  const interactive = canEdit && !ghost;
 
   return (
     // NOTE: @material/web components shim host `role`/`aria-*` attributes into
@@ -92,9 +103,11 @@ function TaskListItem({ uid, task, canEdit, peerEditingTasks, onToggle, onEdit }
       // Styling + test hook: tasks.css animates [data-progress='in-process'].
       data-progress={task.progress || 'needs-action'}
       data-testid="task-row"
+      data-diff={diff}
+      data-ghost={ghost ? '' : undefined}
       style={{ opacity: peerEdit ? 0.5 : undefined }}
-      onTap={canEdit ? () => onToggle(uid, task) : undefined}
-      actions={canEdit
+      onTap={interactive ? () => onToggle(uid, task) : undefined}
+      actions={interactive
         ? [{ icon: 'edit', label: 'Edit', title: `Edit ${title}`, onSelect: () => onEdit(uid, task) }]
         : []}
       end={
@@ -112,7 +125,7 @@ function TaskListItem({ uid, task, canEdit, peerEditingTasks, onToggle, onEdit }
       <md-checkbox
         slot="start"
         checked={isDone}
-        disabled={!canEdit}
+        disabled={!interactive}
         tabIndex={-1}
         className="pointer-events-none"
       />
@@ -286,7 +299,17 @@ export function Tasks({ docId, rest, readOnly }: { docId?: string; rest?: string
     }
     return result;
   }, [peers]);
-  const sorted = sortedTasks(tasks);
+  // History mode: what the version on screen did to each task, and the tasks it
+  // removed put back as ghosts — for display only; every action above works on
+  // the real `tasks`.
+  const changes = history.changes;
+  const diff = useMemo(() => (changes ? itemChanges(changes, ['tasks']) : null), [changes]);
+  const shown = useMemo(
+    () => (changes ? withGhosts(tasks, removedItems<Task>(changes, ['tasks'])) : { record: tasks, ghosts: NO_GHOSTS }),
+    [tasks, changes],
+  );
+  useRevealChange(changes, [shown.record]);
+  const sorted = sortedTasks(shown.record);
 
   return (
     <DocLoader docId={docId}>
@@ -340,6 +363,8 @@ export function Tasks({ docId, rest, readOnly }: { docId?: string; rest?: string
             peerEditingTasks={peerEditingTasks}
             onToggle={toggleComplete}
             onEdit={openEditor}
+            diff={diff?.get(uid)}
+            ghost={shown.ghosts.has(uid)}
           />
         ))}
       </md-list>

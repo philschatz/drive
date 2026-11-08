@@ -4,13 +4,15 @@
    gradient/200%-background technique as datagrid's cell-shimmer, on MD3 tokens
    so it reads in light and dark. Painted on the md-list-item host: the item's
    shadow DOM paints no container background of its own, so nothing covers it.
-   Only task rows carry data-progress, which scopes the bare tag selector. */
+   Only task rows carry data-progress, which scopes the bare tag selector.
+   `:not([data-diff])`: in history mode the diff tint (globals.css) says what the
+   version did to the row, and this rule would out-specify it. */
 @keyframes task-row-sweep {
   0% { background-position: 200% 0; }
   100% { background-position: -200% 0; }
 }
 
-md-list-item[data-progress='in-process'] {
+md-list-item[data-progress='in-process']:not([data-diff]) {
   background: linear-gradient(
     90deg,
     transparent 30%,
@@ -22,7 +24,7 @@ md-list-item[data-progress='in-process'] {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  md-list-item[data-progress='in-process'] {
+  md-list-item[data-progress='in-process']:not([data-diff]) {
     animation: none;
     background: color-mix(in srgb, var(--md-sys-color-secondary-container) 30%, transparent);
   }

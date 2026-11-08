@@ -197,3 +197,59 @@ describe('Tasks container CRUD', () => {
     expect(rowOf('Waiting').getAttribute('data-progress')).toBe('needs-action');
   });
 });
+
+describe('history mode highlights', () => {
+  const proto = Element.prototype as any;
+  let scrolled: jest.Mock;
+  beforeEach(() => {
+    mock.__reset();
+    scrolled = jest.fn();
+    proto.scrollIntoView = function (this: Element) { scrolled(this); };
+  });
+  afterEach(() => { delete proto.scrollIntoView; });
+
+  const headlines = () =>
+    screen.getAllByTestId('task-row').map(r => r.querySelector('[slot="headline"]')!.textContent);
+
+  it('tints what the version on screen changed, ghosts what it removed, reveals the first, and clears on close', async () => {
+    mock.__setDoc(DOC, {
+      '@type': 'TaskList', name: 'T',
+      tasks: {
+        a: { '@type': 'Task', title: 'Renamed', progress: 'needs-action', priority: 1 },
+        n: { '@type': 'Task', title: 'Brand new', progress: 'needs-action', priority: 9 },
+      },
+    });
+    mock.__setHistory(DOC, [{ version: 0, time: 1 }, { version: 1, time: 2 }]);
+    mock.__setVersionChanges(DOC, 1, [
+      { path: ['tasks', 'n'], kind: 'added', action: 'put' },
+      { path: ['tasks', 'a', 'title'], kind: 'changed', action: 'put', before: 'Old', after: 'Renamed' },
+      { path: ['tasks', 'g'], kind: 'removed', action: 'del',
+        before: { '@type': 'Task', title: 'Gone', progress: 'needs-action', priority: 5 } },
+    ]);
+    render(<Tasks docId={DOC} />);
+    await waitFor(() => expect(screen.getByText('Renamed')).toBeTruthy());
+
+    fireEvent.click(screen.getByTitle('History'));
+    // History opens at the latest version; its description lands after a short settle.
+    await waitFor(() => expect(rowOf('Brand new').getAttribute('data-diff')).toBe('added'));
+    expect(rowOf('Renamed').getAttribute('data-diff')).toBe('changed');
+
+    // The removed task is back as a ghost, where it used to sort (priority 5
+    // sits between 9 and 1), struck through by its kind, with nothing to tap.
+    const ghost = rowOf('Gone');
+    expect(ghost.getAttribute('data-diff')).toBe('removed');
+    expect(ghost.hasAttribute('data-ghost')).toBe(true);
+    expect(ghost.getAttribute('type')).toBeNull();
+    expect(headlines()).toEqual(['Brand new', 'Gone', 'Renamed']);
+    expect(mock.__getDoc(DOC).tasks.g).toBeUndefined();
+
+    // The first highlighted row in display order was scrolled into view, once.
+    expect(scrolled).toHaveBeenCalledTimes(1);
+    expect(scrolled.mock.calls[0][0]).toBe(rowOf('Brand new'));
+
+    fireEvent.click(screen.getByTitle('History'));
+    await waitFor(() => expect(screen.queryByText('Gone')).toBeNull());
+    expect(rowOf('Brand new').getAttribute('data-diff')).toBeNull();
+    expect(scrolled).toHaveBeenCalledTimes(1);
+  });
+});
