@@ -111,6 +111,17 @@ describe('version history sheet', () => {
     expect(list.scrollTop).toBe(0);
   });
 
+  it('shows what the version on screen changed once its description lands', async () => {
+    mock.__setVersionChanges(DOC, 7, [
+      { path: ['tasks', 'a'], kind: 'added', action: 'put' },
+      { path: ['tasks', 'b', 'title'], kind: 'changed', action: 'put' },
+      { path: ['tasks', 'c'], kind: 'removed', action: 'del', before: {} },
+    ]);
+    await open();
+    const legend = await waitFor(() => screen.getByTestId('history-legend'));
+    expect(legend.textContent).toMatch(/1 added.*1 changed.*1 removed/);
+  });
+
   it('tapping a row previews it', async () => {
     await open();
     fireEvent.click(rows()[3].querySelector('button')!);

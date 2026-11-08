@@ -90,6 +90,24 @@
   --elevation-4: 0 6px 10px 4px rgb(0 0 0 / 0.15), 0 2px 3px 0 rgb(0 0 0 / 0.30);
   --elevation-5: 0 8px 12px 6px rgb(0 0 0 / 0.15), 0 4px 4px 0 rgb(0 0 0 / 0.30);
 
+  /* Categorical hues — a CVD-validated set shared by the source inspector's
+   * marker slots (source.css, "Marker slots") and history mode's diff kinds. */
+  --src-marker-0: #2a78d6;
+  --src-marker-1: #eb6834;
+  --src-marker-2: #1baf7a;
+  --src-marker-3: #eda100;
+  --src-marker-4: #e87ba4;
+  --src-marker-5: #008300;
+  --src-marker-6: #6250d6;
+  --src-marker-7: #e34948;
+
+  /* History mode: what the version on screen added / removed / changed. Each
+   * kind also carries a non-colour cue (solid bar, dashed bar, strikethrough —
+   * see the diff rules at the end of this file), so hue is never the only signal. */
+  --diff-added: var(--src-marker-2);
+  --diff-removed: var(--src-marker-7);
+  --diff-changed: var(--src-marker-3);
+
   /* Legacy shadcn token still referenced as var(--radius) by some components. */
   --radius: 0.5rem;
 }
@@ -135,6 +153,15 @@
 
   /* Dark grey, a clear step above the page (#1D2024) — see the light-mode note. */
   --md-app-sheet: var(--md-sys-color-surface-container-high);
+
+  --src-marker-0: #3987e5;
+  --src-marker-1: #d95926;
+  --src-marker-2: #199e70;
+  --src-marker-3: #c98500;
+  --src-marker-4: #d55181;
+  --src-marker-5: #008300;
+  --src-marker-6: #9085e9;
+  --src-marker-7: #e66767;
 }
 
 /* Map Tailwind color utilities onto the (mode-aware) MD3 roles. `inline`
@@ -259,4 +286,37 @@
   }
   .state-layer:hover::after  { opacity: 0.08; }
   .state-layer:active::after { opacity: 0.12; }
+}
+
+/* ── History mode: highlighted changes ─────────────────────────────────────
+ * An editor marks what the version on screen touched with `data-diff` on the
+ * element it can point at (a list row, a cell, an event) and `data-ghost` on a
+ * display-only row standing in for removed content. Unlayered on purpose: the
+ * tint has to win over the element's ordinary `bg-*` utility. `md-list-item`
+ * paints no background of its own (its inner element is `background: none`),
+ * so a tint on the host shows through. `scroll-margin-block` makes a
+ * `scrollIntoView({ block: 'center' })` land the element mid-way between the
+ * title bar and the 35vh history sheet rather than under the sheet. */
+[data-diff] {
+  scroll-margin-block: 4rem 40vh;
+}
+[data-diff="added"] {
+  background-color: color-mix(in srgb, var(--diff-added) 18%, transparent);
+  box-shadow: inset 4px 0 0 var(--diff-added);
+}
+[data-diff="changed"] {
+  background-color: color-mix(in srgb, var(--diff-changed) 18%, transparent);
+  /* A dashed bar, so "changed" reads apart from "added" without the hue. */
+  background-image: repeating-linear-gradient(to bottom, var(--diff-changed) 0 6px, transparent 6px 10px);
+  background-size: 4px 100%;
+  background-repeat: no-repeat;
+}
+[data-diff="removed"] {
+  background-color: color-mix(in srgb, var(--diff-removed) 14%, transparent);
+  box-shadow: inset 4px 0 0 var(--diff-removed);
+  opacity: 0.7;
+}
+[data-diff="removed"],
+[data-diff="removed"] [slot="headline"] {
+  text-decoration: line-through;
 }

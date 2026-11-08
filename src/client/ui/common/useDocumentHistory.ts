@@ -1,5 +1,6 @@
-import { useState, useRef, useCallback } from 'preact/hooks';
-import { getDocHistory, setDocVersion, restoreDocToVersion } from '../worker-api';
+import { useState, useRef, useCallback, useEffect } from 'preact/hooks';
+import { getDocHistory, setDocVersion, restoreDocToVersion, getVersionChanges } from '../worker-api';
+import type { VersionChange } from '../../../shared/version-changes';
 
 export interface DocumentHistory {
   /** Whether history mode is active */
@@ -29,6 +30,14 @@ export interface DocumentHistory {
    * Used to track when new changes arrive while in history mode.
    */
   onNewHeads: (heads: string[]) => void;
+  /**
+   * What the version on screen changed (shared/version-changes.ts), for the
+   * editor to highlight: null while history is inactive or the description is
+   * still loading. Loaded 120 ms after `version` settles, so a scrub does not
+   * fetch every version it passes, and cleared the moment the version moves so
+   * no highlight outlives the version it describes.
+   */
+  changes: VersionChange[] | null;
 }
 
 export function useDocumentHistory(docId: string): DocumentHistory {
@@ -103,6 +112,23 @@ export function useDocumentHistory(docId: string): DocumentHistory {
     }
   }, [active]);
 
+  const [changes, setChanges] = useState<VersionChange[] | null>(null);
+  const changesSerial = useRef(0);
+  useEffect(() => {
+    const serial = ++changesSerial.current;
+    setChanges(null);
+    if (version < 0) return;
+    const timer = setTimeout(() => {
+      getVersionChanges(docId, version).then(
+        got => { if (changesSerial.current === serial) setChanges(got); },
+        () => { /* the version is still viewable without its description */ },
+      );
+    }, 120);
+    // Bumping the serial here too keeps a response in flight at close from
+    // resurrecting the highlights.
+    return () => { clearTimeout(timer); changesSerial.current++; };
+  }, [docId, version]);
+
   const time = active && entries[version] ? entries[version].time : null;
 
   return {
@@ -118,5 +144,6 @@ export function useDocumentHistory(docId: string): DocumentHistory {
     jumpToLatest,
     restoreToVersion,
     onNewHeads,
+    changes,
   };
 }

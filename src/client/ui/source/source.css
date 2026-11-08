@@ -27,15 +27,9 @@
   --src-warn-fg: #6d4b00;
   --src-warn-muted: #8a6400;
 
-  /* Marker hues — see "Marker slots" below for what they are and why. */
-  --src-marker-0: #2a78d6;
-  --src-marker-1: #eb6834;
-  --src-marker-2: #1baf7a;
-  --src-marker-3: #eda100;
-  --src-marker-4: #e87ba4;
-  --src-marker-5: #008300;
-  --src-marker-6: #6250d6;
-  --src-marker-7: #e34948;
+  /* Marker hues (--src-marker-0..7) live in globals.css — history mode's diff
+   * colours draw from the same CVD-validated set. "Marker slots" below says
+   * what they are and why. */
 }
 
 .dark {
@@ -49,15 +43,6 @@
   --src-warn-edge: #b58900;
   --src-warn-fg: #ffd980;
   --src-warn-muted: #d9b45a;
-
-  --src-marker-0: #3987e5;
-  --src-marker-1: #d95926;
-  --src-marker-2: #199e70;
-  --src-marker-3: #c98500;
-  --src-marker-4: #d55181;
-  --src-marker-5: #008300;
-  --src-marker-6: #9085e9;
-  --src-marker-7: #e66767;
 }
 
 /**

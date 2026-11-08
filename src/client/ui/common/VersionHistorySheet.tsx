@@ -14,12 +14,16 @@
  * closes the sheet.
  */
 
+import { useMemo } from 'preact/hooks';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { relativeTime } from '../../../shared/relative-time';
 import type { DocumentHistory } from './useDocumentHistory';
 import { useVersionScrub } from './useVersionScrub';
+import { summarizeChanges, type ChangeKind } from '../../../shared/version-changes';
+
+const LEGEND_KINDS: ChangeKind[] = ['added', 'changed', 'removed'];
 
 interface VersionHistorySheetProps {
   open: boolean;
@@ -28,9 +32,10 @@ interface VersionHistorySheetProps {
 }
 
 export function VersionHistorySheet({ open, onOpenChange, history }: VersionHistorySheetProps) {
-  const { entries, version, changeCount, restoreToVersion, onSliderChange } = history;
+  const { entries, version, changeCount, restoreToVersion, onSliderChange, changes } = history;
   const latestVersion = entries.length - 1;
   const { listRef, onScroll } = useVersionScrub(version, onSliderChange);
+  const summary = useMemo(() => (changes ? summarizeChanges(changes) : null), [changes]);
 
   const handleRestore = async (target: number) => {
     if (
@@ -48,6 +53,25 @@ export function VersionHistorySheet({ open, onOpenChange, history }: VersionHist
       <SheetContent side="bottom" className="max-h-[35vh] flex flex-col">
         <SheetHeader>
           <SheetTitle>Version history ({changeCount})</SheetTitle>
+          {/* What the version on screen changed — the same three colours the
+              editor behind the sheet highlights with. */}
+          {summary && (
+            <p
+              className="text-xs text-muted-foreground flex items-center justify-center sm:justify-start gap-3"
+              data-testid="history-legend"
+            >
+              {LEGEND_KINDS.map(kind => (
+                <span key={kind} className="inline-flex items-center gap-1">
+                  <span
+                    className="inline-block h-2.5 w-2.5 rounded-full"
+                    style={{ background: `var(--diff-${kind})` }}
+                    aria-hidden="true"
+                  />
+                  {summary[kind]} {kind}
+                </span>
+              ))}
+            </p>
+          )}
         </SheetHeader>
 
         {/* The slider, the list's scroll position and a row tap all drive the

@@ -367,6 +367,8 @@ export function SourceViewer({ docId, rest, readOnly }: { docId?: string; rest?:
     changeCount,
     entries: historyMeta,
     time: historyMeta[version]?.time ?? null,
+    // The changes sheet lists a version's operations itself; nothing here highlights.
+    changes: null,
     toggleHistory: () => {
       // Closing also returns the view to the live latest version, so the document
       // never stays silently pinned to an old snapshot.
