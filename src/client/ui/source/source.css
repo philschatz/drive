@@ -26,6 +26,16 @@
   --src-warn-edge: #e0a800;
   --src-warn-fg: #6d4b00;
   --src-warn-muted: #8a6400;
+
+  /* Marker hues — see "Marker slots" below for what they are and why. */
+  --src-marker-0: #2a78d6;
+  --src-marker-1: #eb6834;
+  --src-marker-2: #1baf7a;
+  --src-marker-3: #eda100;
+  --src-marker-4: #e87ba4;
+  --src-marker-5: #008300;
+  --src-marker-6: #6250d6;
+  --src-marker-7: #e34948;
 }
 
 .dark {
@@ -39,6 +49,15 @@
   --src-warn-edge: #b58900;
   --src-warn-fg: #ffd980;
   --src-warn-muted: #d9b45a;
+
+  --src-marker-0: #3987e5;
+  --src-marker-1: #d95926;
+  --src-marker-2: #199e70;
+  --src-marker-3: #c98500;
+  --src-marker-4: #d55181;
+  --src-marker-5: #008300;
+  --src-marker-6: #9085e9;
+  --src-marker-7: #e66767;
 }
 
 /**
@@ -88,58 +107,97 @@
 /* ── Markers ────────────────────────────────────────────────────────────────
    Marks and block markers are invisible to the JSON projection, so a rich-text
    field is rendered twice: highlighted in place (this block) and listed as rows
-   beneath it. Both key off one footnote index per marker. */
+   beneath it. Both key off one footnote index per marker, and both wear the
+   marker's type as colour + line (next block). */
 
 /* The field's full text. Wraps and preserves whitespace — the old version was a
    nowrap flex row, which is what made a page of prose scroll sideways. */
 .src-text {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  line-height: 1.9;
+  line-height: 2.1;
 }
 
-/* A run covered by one or more marks. The tint names the topmost mark; the
-   stacked underline bars (set inline as inset shadows, so they paint in
-   declaration order) are what make an overlap readable, since a tint can only
-   show one colour. */
+/* ── Marker slots ──────────────────────────────────────────────────────────
+   A marker's colour and line style follow its TYPE (markerSlots in Markers.tsx):
+   `src-mk-c<N>` picks one of eight hues, `src-mk-<line>` one of three line
+   styles, and everything painted — run, chip, row number — reads both from
+   `--mk-color` / `--mk-line`. Two types may share a hue; the line is what still
+   tells them apart, and what keeps a hue pair apart for colour-vision deficiency.
+
+   The eight hues are a categorical palette validated for CVD separation and
+   contrast in both modes (the dataviz reference palette), not the Material set
+   the peer dots use — that one has green, brown and orange merging under
+   deuteranopia. The dark column is the same hues re-stepped for the dark
+   surface, not an automatic flip. */
+.src-mk-c0 { --mk-color: var(--src-marker-0); }
+.src-mk-c1 { --mk-color: var(--src-marker-1); }
+.src-mk-c2 { --mk-color: var(--src-marker-2); }
+.src-mk-c3 { --mk-color: var(--src-marker-3); }
+.src-mk-c4 { --mk-color: var(--src-marker-4); }
+.src-mk-c5 { --mk-color: var(--src-marker-5); }
+.src-mk-c6 { --mk-color: var(--src-marker-6); }
+.src-mk-c7 { --mk-color: var(--src-marker-7); }
+.src-mk-solid { --mk-line: solid; }
+.src-mk-dotted { --mk-line: dotted; }
+.src-mk-dashed { --mk-line: dashed; }
+
+/* The underline a mark draws, in its colour and line style. Overlapping marks
+   are nested spans, each one step lower (`src-mk-d<depth>`), so they stack as
+   separate lines rather than one covering the other. Skip-ink is off so a
+   dotted line is not broken further by descenders. */
+.src-mark-line {
+  text-decoration-line: underline;
+  text-decoration-style: var(--mk-line);
+  text-decoration-color: var(--mk-color);
+  text-decoration-thickness: 2px;
+  text-decoration-skip-ink: none;
+}
+.src-mk-d0 { text-underline-offset: 2px; }
+.src-mk-d1 { text-underline-offset: 5px; }
+.src-mk-d2 { text-underline-offset: 8px; }
+
+/* A run covered by one or more marks: the tint is the topmost mark's. */
 .src-marked-run {
+  background: color-mix(in srgb, var(--mk-color) 17%, transparent);
   padding-bottom: 3px;
   border-radius: 2px;
 }
 
-/* The reference tying a highlight in the text to its row in the list below.
-   A plain inline number on the baseline, not a raised superscript — at the sizes
-   this screen uses a superscript was unreadable, and it is a real number the
-   marker list repeats, not a typographic footnote.
-   The tinted chip is what keeps it from being read as content: bare, `note` +
-   `3` + `s` ran together as one word. */
+/* The marker's number in the list, wearing its type's colour and line — the
+   same two its highlight wears in the text above. The number itself is the tie
+   between the two (it is not repeated in the text); the colour and line say
+   what kind of marker it is. A plain inline number on the baseline, not a raised
+   superscript — at the sizes this screen uses a superscript was unreadable. */
 .src-footnote {
+  color: var(--mk-color);
   font-weight: 700;
   padding: 0 0.25rem;
   margin: 0 0.15rem;
-  border-radius: 4px;
-  background: color-mix(in srgb, currentColor 14%, transparent);
+  border-radius: 4px 4px 0 0;
+  border-bottom: 2px var(--mk-line) var(--mk-color);
+  background: color-mix(in srgb, var(--mk-color) 14%, transparent);
   user-select: none;
   font-variant-numeric: tabular-nums;
 }
 
-/* Inside a chip the number is already fenced by the chip's own border. */
-.src-marker-chip .src-footnote {
-  background: none;
-  margin: 0 0 0 0.15rem;
-  padding: 0;
-}
-
-/* A block marker occupies one position, so it has no range to tint. */
+/* A block marker occupies one position, so it has no range to tint: a chip in
+   its type's colour, bordered in its line style. */
 .src-marker-chip {
   display: inline-block;
-  border: 1px solid;
+  color: var(--mk-color);
+  border: 1.5px var(--mk-line) var(--mk-color);
   border-radius: var(--md-sys-shape-corner-small, 8px);
   padding: 0 0.35rem;
   margin: 0 0.15rem;
   font-size: 0.8em;
   line-height: 1.5;
   white-space: nowrap;
+}
+
+/* The "Edit text" field: monospace, so the marker tokens read as markup. */
+.src-mono-field {
+  --md-outlined-text-field-input-text-font: 'SF Mono', 'Consolas', 'Menlo', ui-monospace, monospace;
 }
 
 /* ── Change and reveal flashes ──────────────────────────────────────────────

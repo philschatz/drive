@@ -16,21 +16,54 @@ import { useMemo } from 'preact/hooks';
 import { PropertySheet, SheetActionItem, SheetActions, type PropertyDef } from '../common/PropertySheet';
 import { FieldEditor, GroupEditor } from '../common/FieldEditor';
 import { MdTextField } from '@/components/ui/md-text-field';
-import { MATERIAL_CATEGORICAL } from '../common/categorical-colors';
 import type { ValidationError } from '../../../shared/schemas';
 import { markerEditOps, type DocMarker, type RichTextOp } from '../../../shared/rich-text-ops';
-import { blockChipLabel, escapeString, reparseMarkValue, type Path } from './source-nodes';
+import { blockChipLabel, escapeString, footnoteLabel, reparseMarkValue, type Path } from './source-nodes';
 import './source.css';
 import { createLogger } from '../../../shared/logger';
 
 const log = createLogger('source');
 
-export const markerColor = (i: number) => MATERIAL_CATEGORICAL[i % MATERIAL_CATEGORICAL.length];
-/** The 1-based reference tying a highlight to its row in the list below. */
-export const footnoteLabel = (i: number) => String(i + 1);
-
 export const markerStart = (m: DocMarker) => (m.kind === 'block' ? m.index : m.start);
 export const markerName = (m: DocMarker) => (m.kind === 'block' ? m.block.type : m.name);
+
+/**
+ * A marker's colour follows its TYPE, so every bold run and every heading look
+ * the same wherever they fall — a page of markers then reads by colour, where a
+ * colour per position only told two neighbours apart. The palette is a fixed,
+ * colourblind-validated eight (`--src-marker-*` in source.css), handed out
+ * round-robin over the types: the known vocabulary first, in a fixed order, so a
+ * heading is the same colour in every document, then anything else by first
+ * appearance in this field. Two types may share a hue; what keeps them apart —
+ * and keeps apart a hue pair that colour-vision deficiency merges — is the second
+ * channel, the LINE: a run's underline and a chip's border cycle
+ * solid/dotted/dashed with a period coprime to the palette's, so no colour+line
+ * pair repeats before 24 types.
+ */
+export type LineStyle = 'solid' | 'dotted' | 'dashed';
+export interface MarkerSlot { color: number; line: LineStyle }
+export const MARKER_COLORS = 8;
+const LINE_STYLES: LineStyle[] = ['solid', 'dotted', 'dashed'];
+const KNOWN_TYPES = [
+  'paragraph', 'heading', 'unordered-list-item', 'ordered-list-item', 'blockquote', 'divider', 'table-cell',
+  'strong', 'em', 'link',
+];
+
+/** The slot of every type among `markers` — the same marker always gets the same answer. */
+export function markerSlots(markers: DocMarker[]): (m: DocMarker) => MarkerSlot {
+  const index = new Map<string, number>(KNOWN_TYPES.map((t, i) => [t, i]));
+  for (const m of markers) {
+    const name = markerName(m);
+    if (!index.has(name)) index.set(name, index.size);
+  }
+  return (m) => {
+    const k = index.get(markerName(m)) ?? index.size;
+    return { color: k % MARKER_COLORS, line: LINE_STYLES[k % LINE_STYLES.length] };
+  };
+}
+
+/** The classes painting a slot: `src-mk-c3 src-mk-dotted` (see source.css). */
+export const markerClass = (s: MarkerSlot) => `src-mk-c${s.color} src-mk-${s.line}`;
 
 /** Row headline for a marker: `strong` or `¶ heading`. */
 export function markerHeadline(m: DocMarker): string {
@@ -66,13 +99,15 @@ export interface Reveal { index: number; nonce: number }
 
 /**
  * The field's text with its markers painted on: each mark's range tinted and
- * underlined in its footnote colour, each block marker replaced by a chip naming
- * its type.
+ * underlined in its type's colour and line style, each block marker replaced by
+ * a chip naming its type. The footnote NUMBER is not repeated here — the tap
+ * that reveals the row is the tie to the numbered list below; colour and line
+ * say what KIND of marker it is, there and here alike.
  *
- * Overlapping marks are the reason for the stacked underline bars — a background
- * tint can only show one of them. Inset shadows paint in declaration order, so
- * the innermost (2px) bar covers the bottom of the next, giving one visible band
- * per covering mark.
+ * Overlapping marks are the reason a run is nested spans — a background tint can
+ * only show one of them. Each covering mark is a span of its own drawing its own
+ * underline one step lower, so an overlap reads as stacked lines, each in its
+ * mark's colour and style.
  *
  * Every painted thing is a tap target that names its marker (`onPick`): a run
  * picks the topmost mark covering it, a footnote badge or chip picks exactly its
@@ -101,13 +136,11 @@ export function MarkedText({ text, markers, onPick, revealed }: {
   const revealKey = (base: string, i: number) => (isRevealed(i) ? `${base}:r${revealed!.nonce}` : base);
   const revealClass = (i: number, cls?: string) =>
     [cls, isRevealed(i) ? 'src-revealed' : undefined].filter(Boolean).join(' ') || undefined;
+  const slot = markerSlots(markers);
 
   const blocks = new Map<number, { marker: DocMarker; i: number }>();
-  const footnotesAt = new Map<number, number[]>();
   const cuts = new Set<number>([0, text.length]);
   markers.forEach((m, i) => {
-    const start = markerStart(m);
-    footnotesAt.set(start, [...(footnotesAt.get(start) ?? []), i]);
     if (m.kind === 'block') {
       blocks.set(m.index, { marker: m, i });
       cuts.add(m.index); cuts.add(m.index + 1);
@@ -118,65 +151,61 @@ export function MarkedText({ text, markers, onPick, revealed }: {
   const boundaries = [...cuts].filter(c => c >= 0 && c <= text.length).sort((a, b) => a - b);
 
   const parts: any[] = [];
-  const pushFootnotes = (at: number, skip?: number) => {
-    for (const i of footnotesAt.get(at) ?? []) {
-      if (i === skip) continue;
-      parts.push(
-        <span
-          key={revealKey(`f${at}-${i}`, i)}
-          className={revealClass(i, 'src-footnote')}
-          style={{ color: markerColor(i) }}
-          {...pick(i, 'text-footnote')}
-        >
-          {footnoteLabel(i)}
-        </span>,
-      );
-    }
-  };
-
   for (let b = 0; b < boundaries.length - 1; b++) {
     const from = boundaries[b];
     const to = boundaries[b + 1];
     if (to <= from) continue;
     const block = blocks.get(from);
     if (block && to === from + 1) {
-      pushFootnotes(from, block.i);
       parts.push(
         <span
           key={revealKey(String(from), block.i)}
-          className={revealClass(block.i, 'src-marker-chip')}
-          style={{ borderColor: markerColor(block.i), color: markerColor(block.i) }}
+          className={revealClass(block.i, `src-marker-chip ${markerClass(slot(block.marker))}`)}
           {...pick(block.i, 'marker-chip')}
         >
           ¶{blockChipLabel((block.marker as Extract<DocMarker, { kind: 'block' }>).block)}
-          <span className="src-footnote">{footnoteLabel(block.i)}</span>
         </span>,
       );
       continue;
     }
-    pushFootnotes(from);
     const covering = markers
       .map((m, i) => ({ m, i }))
       .filter(({ m }) => m.kind === 'mark' && m.start <= from && m.end >= to);
+    if (covering.length === 0) {
+      parts.push(<span key={from}>{escapeString(text.slice(from, to))}</span>);
+      continue;
+    }
+    // One nested span per covering mark, the later-starting ones inside, each
+    // drawing its own underline one step deeper. Depth is capped where the line
+    // would leave the line box — three overlapping marks is already the limit of
+    // what this app's vocabulary (strong, em, link) can produce.
+    let inner: any = escapeString(text.slice(from, to));
+    for (let k = covering.length - 1; k >= 1; k--) {
+      const { m, i } = covering[k];
+      inner = (
+        <span
+          className={`src-mark-line src-mk-d${Math.min(k, 2)} ${markerClass(slot(m))}`}
+          data-testid="mark-line"
+          data-marker-index={i}
+        >
+          {inner}
+        </span>
+      );
+    }
     // A run flashes for any of the marks covering it, since all of them are its.
     const lit = covering.find(({ i }) => isRevealed(i));
+    const top = covering[0];
     parts.push(
       <span
         key={lit ? revealKey(String(from), lit.i) : from}
-        className={covering.length > 0 ? (lit ? 'src-marked-run src-revealed' : 'src-marked-run') : undefined}
-        style={covering.length > 0 ? {
-          backgroundColor: markerColor(covering[0].i) + '2b',
-          boxShadow: covering.map(({ i }, k) => `inset 0 ${-2 * (k + 1)}px 0 ${markerColor(i)}`).join(', '),
-        } : undefined}
-        {...(covering.length > 0 ? pick(covering[0].i, 'marked-run') : {})}
+        className={['src-marked-run src-mark-line src-mk-d0', markerClass(slot(top.m)), lit ? 'src-revealed' : '']
+          .filter(Boolean).join(' ')}
+        {...pick(top.i, 'marked-run')}
       >
-        {escapeString(text.slice(from, to))}
+        {inner}
       </span>,
     );
   }
-  // A marker sitting at the very end of the text has no following segment.
-  pushFootnotes(text.length);
-
   return <span className="src-mono src-text src-string">{parts}</span>;
 }
 

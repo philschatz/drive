@@ -145,14 +145,77 @@ export function markersFromSpans(spans: RichTextSpan[]): DocMarker[] {
   }
   closeAllExcept(() => false, index);
 
-  return markers.sort((a, b) => {
-    const aStart = a.kind === 'block' ? a.index : a.start;
-    const bStart = b.kind === 'block' ? b.index : b.start;
-    if (aStart !== bStart) return aStart - bStart;
-    const aEnd = a.kind === 'block' ? a.index : a.end;
-    const bEnd = b.kind === 'block' ? b.index : b.end;
-    return aEnd - bEnd;
-  });
+  return markers.sort(compareMarkers);
+}
+
+/** Position order, the order the inspector numbers markers in. */
+export function compareMarkers(a: DocMarker, b: DocMarker): number {
+  const aStart = a.kind === 'block' ? a.index : a.start;
+  const bStart = b.kind === 'block' ? b.index : b.start;
+  if (aStart !== bStart) return aStart - bStart;
+  const aEnd = a.kind === 'block' ? a.index : a.end;
+  const bEnd = b.kind === 'block' ? b.index : b.end;
+  return aEnd - bEnd;
+}
+
+/**
+ * Spans for a flat text and its markers — the inverse of {@link markersFromSpans}.
+ *
+ * This is how the source inspector's "Edit text" hands a whole field back: the
+ * text with its markers wherever the edit put them becomes the spans that one
+ * `updateSpans` op reconciles against the live document, so the arithmetic of
+ * moving, duplicating and removing markers is Automerge's diff rather than ours.
+ *
+ * Every block index and mark boundary is a cut; each run between cuts carries
+ * whichever marks cover it, the later marker in list order winning a same-name
+ * overlap (one character can hold one value per mark name). A block carries no
+ * marks, and adjacent runs with equal marks merge, so the output is canonical:
+ * `markersFromSpans(spansFromMarkers(text, ms))` is `ms` again.
+ */
+export function spansFromMarkers(text: string, markers: DocMarker[]): RichTextSpan[] {
+  const blocks = new Map<number, BlockValue>();
+  const cuts = new Set<number>([0, text.length]);
+  for (const m of markers) {
+    if (m.kind === 'block') {
+      blocks.set(m.index, m.block);
+      cuts.add(m.index); cuts.add(m.index + 1);
+    } else {
+      cuts.add(m.start); cuts.add(m.end);
+    }
+  }
+  const bounds = [...cuts].filter(c => c >= 0 && c <= text.length).sort((a, b) => a - b);
+
+  const spans: RichTextSpan[] = [];
+  for (let b = 0; b < bounds.length - 1; b++) {
+    const from = bounds[b];
+    const to = bounds[b + 1];
+    if (to <= from) continue;
+    const block = blocks.get(from);
+    if (block && to === from + 1) {
+      spans.push({
+        type: 'block',
+        value: { type: block.type, parents: [...(block.parents ?? [])], attrs: { ...(block.attrs ?? {}) } },
+      });
+      continue;
+    }
+    const marks: Record<string, unknown> = {};
+    for (const m of markers) {
+      if (m.kind === 'mark' && m.start <= from && m.end >= to) marks[m.name] = m.value;
+    }
+    const value = text.slice(from, to);
+    const prev = spans[spans.length - 1];
+    if (prev && prev.type === 'text' && sameMarks(prev.marks ?? {}, marks)) {
+      prev.value += value;
+      continue;
+    }
+    spans.push(Object.keys(marks).length ? { type: 'text', value, marks } : { type: 'text', value });
+  }
+  return spans;
+}
+
+function sameMarks(a: Record<string, unknown>, b: Record<string, unknown>): boolean {
+  const ka = Object.keys(a);
+  return ka.length === Object.keys(b).length && ka.every(k => k in b && a[k] === b[k]);
 }
 
 /** The flat string as the JSON projection sees it (`￼` per block marker). */

@@ -9,7 +9,7 @@
 import * as A from '@automerge/automerge';
 import {
   BLOCK_MARKER, applyRichTextOps, flatTextEditOps, flatTextFromSpans, markerEditOps, markersFromSpans,
-  strayBlockMarkers,
+  spansFromMarkers, strayBlockMarkers,
   type DocMarker, type RichTextOp, type RichTextSpan,
 } from './rich-text-ops';
 
@@ -76,6 +76,39 @@ describe('markersFromSpans', () => {
 
   it('returns nothing for plain text', () => {
     expect(markersFromSpans([text('nothing to see')])).toEqual([]);
+  });
+});
+
+describe('spansFromMarkers', () => {
+  const a = JSON.stringify({ href: 'https://a.example' });
+  const b = JSON.stringify({ href: 'https://b.example' });
+
+  it('is the inverse of markersFromSpans', () => {
+    const cases: RichTextSpan[][] = [
+      [text('one ', { strong: true }), text('two', { strong: true, em: true })],
+      [block('heading', { level: 1 }), text('Title', { strong: true }), block('paragraph'), text('Body')],
+      [text('aaa', { link: a }), text('bbb', { link: b })],
+      [text('plain')],
+      [],
+    ];
+    for (const spans of cases) {
+      const markers = markersFromSpans(spans);
+      const rebuilt = spansFromMarkers(flatTextFromSpans(spans), markers);
+      expect(rebuilt).toEqual(spans);
+      expect(markersFromSpans(rebuilt)).toEqual(markers);
+    }
+  });
+
+  it('gives a same-name overlap to the later marker, and a block marker no marks', () => {
+    expect(spansFromMarkers('abcd', [
+      { kind: 'mark', name: 'link', value: a, start: 0, end: 3 },
+      { kind: 'mark', name: 'link', value: b, start: 2, end: 4 },
+    ])).toEqual([text('ab', { link: a }), text('cd', { link: b })]);
+    // A mark laid across a block marker covers the text on both sides, not the block.
+    expect(spansFromMarkers('a￼b', [
+      { kind: 'mark', name: 'strong', value: true, start: 0, end: 3 },
+      { kind: 'block', index: 1, block: { type: 'paragraph', parents: [], attrs: {} } },
+    ])).toEqual([text('a', { strong: true }), block('paragraph'), text('b', { strong: true })]);
   });
 });
 
@@ -308,6 +341,41 @@ describe('against real Automerge', () => {
     }));
     expect((after[0] as any).value.type).toBe('blockquote');
     expect(flat(after)).toBe('￼Hello world');
+  });
+
+  /** The field as "Edit text" hands it back: text and markers, as one updateSpans. */
+  const edited = (flatText: string, markers: DocMarker[]): RichTextOp[] =>
+    [{ op: 'updateSpans', spans: spansFromMarkers(flatText, markers) }];
+  const heading = (index: number): DocMarker =>
+    ({ kind: 'block', index, block: { type: 'heading', parents: [], attrs: { level: 1 } } });
+  const strong = (start: number, end: number): DocMarker => ({ kind: 'mark', name: 'strong', value: true, start, end });
+  const link = (start: number, end: number): DocMarker => ({ kind: 'mark', name: 'link', value: href, start, end });
+
+  it('moves a block marker through updateSpans, and it stays what it was', () => {
+    const after = run(DOC, edited('Hello ￼world', [strong(0, 6), heading(6), link(7, 12)]));
+    expect(flat(after)).toBe('Hello ￼world');
+    expect(markersFromSpans(after)).toEqual([strong(0, 6), heading(6), link(7, 12)]);
+  });
+
+  it('duplicates and removes markers through updateSpans', () => {
+    const after = run(DOC, edited('￼Hello ￼world', [heading(0), strong(1, 7), heading(7), strong(8, 13)]));
+    expect(flat(after)).toBe('￼Hello ￼world');
+    expect(markersFromSpans(after)).toEqual([heading(0), strong(1, 7), heading(7), strong(8, 13)]);
+  });
+
+  it('keeps untouched text its identity across an updateSpans edit', () => {
+    let doc = A.from({ content: '' });
+    doc = A.change(doc, (d: any) => applyRichTextOps(A, d, ['content'], [{ op: 'updateSpans', spans: DOC }]));
+    const l = A.getCursor(doc, ['content'], 3); // the first "l" of "Hello"
+    doc = A.change(doc, (d: any) =>
+      applyRichTextOps(A, d, ['content'], edited('Hello ￼world', [strong(0, 6), heading(6), link(7, 12)])));
+    // The heading left index 0, so "l" is one position earlier — and still itself.
+    expect(A.getCursorPosition(doc, ['content'], l)).toBe(2);
+    // And the change is the marker's move, not the field re-typed: deleting and
+    // re-inserting the eleven characters alone would be 22 ops (a replace-all of
+    // this field measures 27; the move, 17).
+    const ops = A.decodeChange(A.getLastLocalChange(doc)!).ops.length;
+    expect(ops).toBeLessThan(22);
   });
 
   it('moves a block marker to a later index', () => {

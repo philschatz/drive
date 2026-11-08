@@ -44,7 +44,7 @@ import { ValidationList } from './ValidationList';
 import { AddPropertySheet, ValueSheet } from './ValueSheets';
 import {
   collectChangedPaths, escapeString, isContainer, parseValue, pathFromRest,
-  resolveLevel, unescapeString, valueAt, type Path,
+  resolveLevel, valueAt, type Path,
 } from './source-nodes';
 import './source.css';
 import { createLogger } from '../../../shared/logger';
@@ -312,13 +312,6 @@ export function SourceViewer({ docId, rest, readOnly }: { docId?: string; rest?:
     }, path, value);
   }, [docId, editable, spansByKey, handleRichTextOps]);
 
-  /** A rich-text field's whole text, replaced by the minimal set of ops. */
-  const handleSetText = useCallback((path: Path, raw: string) => {
-    const spans = spansByKey.get(path.join('/'));
-    if (!spans) return;
-    handleRichTextOps(path, flatTextEditOps(flatTextFromSpans(spans), unescapeString(raw)));
-  }, [spansByKey, handleRichTextOps]);
-
   const handleDelete = useCallback(async (target: RowTarget) => {
     if (!docId || !editable || target.path.length === 0) return;
     if (!await confirm({
@@ -476,7 +469,6 @@ export function SourceViewer({ docId, rest, readOnly }: { docId?: string; rest?:
             errors={validationErrors}
             peerFocusedPaths={peerFocusedPaths}
             onOps={handleRichTextOps}
-            onSetText={handleSetText}
           />
         ) : isContainer(levelValue) ? (
           <LevelList

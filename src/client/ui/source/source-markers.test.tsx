@@ -8,8 +8,9 @@ import { render, screen, fireEvent, within, waitFor } from '@testing-library/pre
 // assignment that used to flatten the whole field.
 jest.mock('../worker-api');
 import * as api from '../worker-api';
-import type { RichTextSpan } from '../../../shared/rich-text-ops';
+import type { DocMarker, RichTextSpan } from '../../../shared/rich-text-ops';
 import { SourceViewer } from './SourceViewer';
+import { markerClass, markerSlots } from './Markers';
 
 const mock = api as any;
 
@@ -114,9 +115,10 @@ describe('source inspector markers', () => {
     const chip = document.querySelector('.src-marker-chip');
     expect(chip).toBeTruthy();
     // The block's type reaches the chip — `¶` alone would not say which it is.
-    expect(chip!.textContent).toContain('¶h1');
-    // One reference per marker, tying each highlight to its row below.
-    expect(document.querySelectorAll('.src-footnote').length).toBeGreaterThanOrEqual(6);
+    expect(chip!.textContent).toBe('¶h1');
+    // The numbers live in the list only; the text carries colour and a tap.
+    expect(document.querySelectorAll('[data-testid="field-text"] .src-footnote')).toHaveLength(0);
+    expect(document.querySelectorAll('[data-testid="row-footnote"]')).toHaveLength(3);
   });
 
   it('counts the markers on the field row in the level above', async () => {
@@ -176,12 +178,8 @@ describe('source inspector markers', () => {
 
     // Two identically-typed items; only `parents` tells them apart, so both the
     // chip and the list have to surface it.
-    // The chip carries its reference number in a trailing span; drop it to read the label.
     const chips = Array.from(document.querySelectorAll('.src-marker-chip'));
-    const chipLabel = (c: Element) => Array.from(c.childNodes)
-      .filter(n => !(n as HTMLElement).classList?.contains('src-footnote'))
-      .map(n => n.textContent).join('');
-    expect(chips.map(chipLabel)).toEqual(['¶ul', '¶ul·1']);
+    expect(chips.map(c => c.textContent)).toEqual(['¶ul', '¶ul·1']);
     // The rows say the same thing without needing the chip decoded.
     expect(rows()[1].textContent).toContain('depth 1');
 
@@ -203,12 +201,12 @@ describe('source inspector markers', () => {
   it('edits the string itself without flattening its markers', async () => {
     await renderWithMarkers();
 
-    // `￼` is the escape the value renders block markers as, so the whole field is
-    // editable as text — including where its blocks sit.
+    // Every marker is a numbered token, so the whole field is editable as text —
+    // including where its blocks and marks sit.
     fireEvent.click(screen.getByTestId('field-edit-text'));
     const input = await waitFor(() => screen.getByTestId('value-field') as HTMLTextAreaElement);
-    expect(input.value).toBe('\\uFFFCHello world');
-    fireEvent.input(input, { target: { value: '\\uFFFCHello brave world' } });
+    expect(input.value).toBe('⟦1 h1⟧⟨2 strong⟩Hello ⟨/2⟩⟨3 link⟩world⟨/3⟩');
+    fireEvent.input(input, { target: { value: '⟦1 h1⟧⟨2 strong⟩Hello ⟨/2⟩brave ⟨3 link⟩world⟨/3⟩' } });
     fireEvent.click(screen.getByTestId('value-save'));
 
     await waitFor(() => expect(mock.__getDoc(DOC).content).toBe('￼Hello brave world'));
@@ -219,16 +217,16 @@ describe('source inspector markers', () => {
     expect(marksAt(16)).toEqual({ link: HREF }); // "world" is still linked
   });
 
-  it('adds a block marker by typing its escape into the string', async () => {
+  it('adds a block marker by typing an unnumbered token into the string', async () => {
     await renderWithMarkers();
 
     fireEvent.click(screen.getByTestId('field-edit-text'));
     const input = await waitFor(() => screen.getByTestId('value-field') as HTMLTextAreaElement);
-    fireEvent.input(input, { target: { value: '\\uFFFCHello \\uFFFCworld' } });
+    fireEvent.input(input, { target: { value: '⟦1 h1⟧⟨2 strong⟩Hello ⟨/2⟩⟦⟧⟨3 link⟩world⟨/3⟩' } });
     fireEvent.click(screen.getByTestId('value-save'));
 
     await waitFor(() => expect(rows()).toHaveLength(4));
-    // A typed marker is a real block marker (a default paragraph), not a literal
+    // A typed token is a real block marker (a default paragraph), not a literal
     // character — the difference the whole rich-text edit path exists for.
     expect(contentSpans().filter(s => s.type === 'block').map(s => (s.value as any).type))
       .toEqual(['heading', 'paragraph']);
@@ -296,5 +294,110 @@ describe('text ↔ marker list jumps', () => {
     expect(document.querySelector('[data-testid="marked-run"][data-marker-index="1"]')!.className).not.toContain('src-revealed');
     expect(revealedRows()).toHaveLength(0);
     expect(screen.queryByTestId('marker-sheet')).toBeNull();
+  });
+});
+
+/**
+ * "Edit text" shows every marker as a numbered token. Moving, deleting or
+ * pasting a token moves, removes or duplicates the marker it names — and the
+ * marker stays what it was, which is the whole point: the old flat-text diff
+ * could only turn a moved heading into a paragraph.
+ */
+describe('Edit text tokens', () => {
+  async function saveMarkup(value: string) {
+    fireEvent.click(screen.getByTestId('field-edit-text'));
+    const input = await waitFor(() => screen.getByTestId('value-field') as HTMLTextAreaElement);
+    fireEvent.input(input, { target: { value } });
+    fireEvent.click(screen.getByTestId('value-save'));
+  }
+  const blockTypes = () => contentSpans().filter(s => s.type === 'block').map(s => (s.value as any).type);
+
+  it('moves a marker with its token, keeping what it is', async () => {
+    await renderWithMarkers();
+    await saveMarkup('⟨2 strong⟩Hello ⟨/2⟩⟦1 h1⟧⟨3 link⟩world⟨/3⟩');
+
+    await waitFor(() => expect(mock.__getDoc(DOC).content).toBe('Hello ￼world'));
+    expect(contentSpans()[1]).toEqual({ type: 'block', value: { type: 'heading', parents: [], attrs: { level: 1 } } });
+    expect(marksAt(0)).toEqual({ strong: true });
+    expect(marksAt(7)).toEqual({ link: HREF });
+  });
+
+  it('removes a marker whose token is deleted, and nothing else', async () => {
+    await renderWithMarkers();
+    await saveMarkup('⟦1 h1⟧⟨2 strong⟩Hello ⟨/2⟩world');
+
+    await waitFor(() => expect(rows()).toHaveLength(2));
+    expect(marksAt(7)).toEqual({});
+    expect(marksAt(1)).toEqual({ strong: true });
+    expect(mock.__getDoc(DOC).content).toBe('￼Hello world');
+  });
+
+  it('duplicates a marker whose token is pasted twice', async () => {
+    await renderWithMarkers();
+    await saveMarkup('⟦1 h1⟧⟨2 strong⟩Hello ⟨/2⟩⟦1 h1⟧⟨2 strong⟩world⟨/2⟩');
+
+    await waitFor(() => expect(blockTypes()).toEqual(['heading', 'heading']));
+    // The copy carries the original's attrs, not a default.
+    expect((contentSpans()[2].value as any).attrs).toEqual({ level: 1 });
+    expect(marksAt(8)).toEqual({ strong: true });
+    expect(rows()).toHaveLength(4);
+  });
+});
+
+/**
+ * Colour and line style follow the marker's TYPE, from one fixed palette, and
+ * the text and the list paint from the same slot — that is what lets a reader
+ * learn "dotted orange is a heading" once.
+ */
+describe('marker colours', () => {
+  const strong = (start: number): DocMarker => ({ kind: 'mark', name: 'strong', value: true, start, end: start + 1 });
+  const blockOf = (type: string): DocMarker => ({ kind: 'block', index: 0, block: { type, parents: [] } });
+  const slot = markerSlots([blockOf('heading'), strong(0), blockOf('aside'), blockOf('note')]);
+
+  it('follow the marker type, not its position', () => {
+    expect(slot(strong(0))).toEqual(slot(strong(40)));
+    expect(slot(blockOf('heading'))).toEqual(slot(blockOf('heading')));
+    expect(slot(strong(0))).not.toEqual(slot({ ...strong(0), name: 'em' }));
+    expect(slot(blockOf('heading'))).not.toEqual(slot(blockOf('unordered-list-item')));
+  });
+
+  it('are fixed for the known vocabulary, so a heading looks the same in every document', () => {
+    expect(markerSlots([])(blockOf('heading'))).toEqual(markerSlots([strong(0), blockOf('heading')])(blockOf('heading')));
+  });
+
+  it('give an unknown type the next slot, by first appearance, stably', () => {
+    expect(slot(blockOf('aside'))).toEqual(slot(blockOf('aside')));
+    expect(slot(blockOf('aside'))).not.toEqual(slot(blockOf('note')));
+  });
+
+  it('never repeat a colour without changing the line, across any 24 types', () => {
+    const types = Array.from({ length: 24 }, (_, i) => blockOf(`t${i}`));
+    const classes = new Set(types.map(t => markerClass(markerSlots(types)(t))));
+    expect(classes.size).toBe(24);
+  });
+
+  it('paint the text and the row from the same slot, as classes rather than inline hex', async () => {
+    await renderWithMarkers();
+    const chip = document.querySelector('[data-testid="marker-chip"]')!;
+    const run = document.querySelector('[data-testid="marked-run"][data-marker-index="1"]')!;
+    const [headingRow, strongRow] = rows().map(r => within(r).getByTestId('row-footnote'));
+    const mk = (el: Element) => Array.from(el.classList).filter(c => /^src-mk-(c\d|solid|dotted|dashed)$/.test(c)).sort();
+    expect(mk(chip)).toEqual(mk(headingRow));
+    expect(mk(run)).toEqual(mk(strongRow));
+    expect(mk(chip)).not.toEqual(mk(run));
+    expect(chip.getAttribute('style')).toBeNull();
+    expect(run.getAttribute('style')).toBeNull();
+  });
+
+  it('stack overlapping marks as nested lines, each in its own slot', async () => {
+    await renderWithMarkers(undefined, [text('Hel', { strong: true }), text('lo', { strong: true, em: true })]);
+    // "lo" is strong AND em: the em line nests inside the strong run, one step deeper.
+    const inner = document.querySelector('[data-testid="mark-line"]')!;
+    expect(inner.getAttribute('data-marker-index')).toBe('1');
+    expect(inner.className).toContain('src-mk-d1');
+    expect(inner.parentElement!.getAttribute('data-testid')).toBe('marked-run');
+    expect(inner.parentElement!.className).toContain('src-mk-d0');
+    expect(markerSlots([])({ kind: 'mark', name: 'em', value: true, start: 0, end: 1 }))
+      .not.toEqual(markerSlots([])(strong(0)));
   });
 });

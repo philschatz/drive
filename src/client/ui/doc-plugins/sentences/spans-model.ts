@@ -146,7 +146,8 @@ export function applyOpsToSpans(spans: RichTextSpan[], ops: RichTextOp[]): RichT
  * diffs it minimally and so really does keep the cursor (a 3-char prefix moves
  * 6 → 9), but reproducing that diff here is not worth it. The emulation is
  * pessimistic — a jsdom test sees "caret not rebased" where the real engine
- * rebases. `updateSpans` only fires on Markdown import and version restore.
+ * rebases. `updateSpans` only fires on Markdown import, version restore and the
+ * source inspector's "Edit text" — never from the editor's own typing.
  */
 export function shiftPositionThroughOps(pos: number, ops: RichTextOp[]): number | null {
   let p = pos;

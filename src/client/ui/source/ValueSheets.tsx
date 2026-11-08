@@ -26,7 +26,7 @@ import './source.css';
  * first line of it.
  */
 export function ValueSheet({
-  open, title, label, value, multiline, readOnly, supportingText, onSave, onClose,
+  open, title, label, value, multiline, readOnly, supportingText, className, onSave, onClose,
 }: {
   open: boolean;
   title: string;
@@ -36,6 +36,8 @@ export function ValueSheet({
   /** No edit affordance — just show the value in full. */
   readOnly?: boolean;
   supportingText?: string;
+  /** Extra class on the field — the rich-text markup wants monospace. */
+  className?: string;
   onSave: (raw: string) => void;
   onClose: () => void;
 }) {
@@ -77,6 +79,7 @@ export function ValueSheet({
           type={multiline ? 'textarea' : 'text'}
           rows={8}
           supportingText={supportingText}
+          className={className}
           data-testid="value-field"
           onInput={onInput}
           // Enter saves a single-line field; a textarea keeps Enter for newlines.

@@ -163,6 +163,10 @@ export function blockChipLabel(b: BlockValue): string {
   return b.type + suffix;
 }
 
+/** The 1-based number tying a marker's highlight, its row and its "Edit text"
+ * token together — what the list shows, and what a token names. */
+export const footnoteLabel = (i: number) => String(i + 1);
+
 export function pathsEqual(a: Path, b: Path): boolean {
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;

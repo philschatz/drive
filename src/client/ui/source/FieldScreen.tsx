@@ -16,16 +16,17 @@ import { peerDisplayName, peerIdentityKey } from '../common/presence';
 import { usePeerTransports } from '../worker-api';
 import type { ValidationError } from '../../../shared/schemas';
 import { markersFromSpans, type DocMarker, type RichTextOp, type RichTextSpan } from '../../../shared/rich-text-ops';
-import { escapeString, pathsEqual, type Path } from './source-nodes';
+import { footnoteLabel, pathsEqual, type Path } from './source-nodes';
 import {
-  MarkedText, MarkerSheet, footnoteLabel, markerColor, markerError, markerHeadline, markerSummary, type Reveal,
+  MarkedText, MarkerSheet, markerClass, markerError, markerHeadline, markerSlots, markerSummary, type Reveal,
 } from './Markers';
+import { markedText, markedTextOps } from './marker-markup';
 import { ValueSheet } from './ValueSheets';
 import type { PeerFocus } from './LevelList';
 import './source.css';
 
 export function FieldScreen({
-  fieldPath, text, spans, editable, errors, peerFocusedPaths, onOps, onSetText,
+  fieldPath, text, spans, editable, errors, peerFocusedPaths, onOps,
 }: {
   fieldPath: Path;
   /** The flat text, block markers included as `￼`. */
@@ -35,8 +36,6 @@ export function FieldScreen({
   errors: ValidationError[];
   peerFocusedPaths: PeerFocus[];
   onOps: (path: Path, ops: RichTextOp[]) => void;
-  /** The new flat text, unescaped — diffed into ops by the caller. */
-  onSetText: (path: Path, next: string) => void;
 }) {
   const transports = usePeerTransports();
   const [markerIndex, setMarkerIndex] = useState<number | null>(null);
@@ -59,6 +58,7 @@ export function FieldScreen({
   }, [reveal]);
 
   const markers = useMemo<DocMarker[]>(() => markersFromSpans(spans), [spans]);
+  const slot = useMemo(() => markerSlots(markers), [markers]);
   const fieldErrors = errors.filter(e => pathsEqual(e.path, fieldPath));
   const peer = peerFocusedPaths.find(p => pathsEqual(p.path, fieldPath));
   const selected = markerIndex === null ? null : markers[markerIndex] ?? null;
@@ -124,15 +124,14 @@ export function FieldScreen({
                 className={lit ? 'src-revealed' : undefined}
                 onClick={() => setMarkerIndex(i)}
               >
-                {/* The footnote number and colour are the tie back to the
-                    highlight above — same index, same colour, both directions:
-                    tapping the number here flashes that text up there, while
-                    the rest of the row opens the marker's sheet. */}
+                {/* The footnote number is the tie back to the highlight above
+                    — and wears the same colour and line, which say the marker's
+                    type. Both directions: tapping the number here flashes that
+                    text up there, while the rest of the row opens the sheet. */}
                 <button
                   type="button"
                   slot="start"
-                  className="src-footnote w-5 text-center"
-                  style={{ color: markerColor(i) }}
+                  className={`src-footnote w-5 text-center ${markerClass(slot(m))}`}
                   data-testid="row-footnote"
                   aria-label={`Show marker ${footnoteLabel(i)} in the text`}
                   onClick={(e: MouseEvent) => { e.stopPropagation(); revealIn('text', i); }}
@@ -179,11 +178,14 @@ export function FieldScreen({
         open={editingText}
         title={`Edit ${String(fieldPath[fieldPath.length - 1] ?? 'text')}`}
         label="Text"
-        value={escapeString(text)}
+        value={markedText(text, markers)}
         multiline
-        // `￼` is not decoration: typing one splits a block, deleting one joins.
-        supportingText="￼ is a block marker — add or remove one to split or join a block"
-        onSave={(raw) => onSetText(fieldPath, raw)}
+        className="src-mono-field"
+        // Every marker is a numbered token (see marker-markup.ts): tokens can be
+        // moved, copied and deleted, and that is all — what a marker IS is
+        // edited in its own sheet.
+        supportingText="⟦1 h1⟧ is block marker 1, ⟨2 strong⟩…⟨/2⟩ is mark 2. Move or copy a token to move or duplicate its marker; delete it to remove the marker. The word after the number is a label, not editable."
+        onSave={(raw) => onOps(fieldPath, markedTextOps(raw, text, markers))}
         onClose={() => setEditingText(false)}
       />
     </div>
