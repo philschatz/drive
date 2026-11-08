@@ -1,5 +1,6 @@
 import { useMemo } from 'preact/hooks';
 import { ListRow } from '../../common/ListRow';
+import type { ChangeKind } from '../../../../shared/version-changes';
 import type { InventoryEntry, InventoryKind, KitchenRecipe } from '../../../../shared/schemas/kitchen';
 import { vocabulary } from './logic';
 import { relativeTime } from '../../../../shared/relative-time';
@@ -24,11 +25,15 @@ interface Row {
  * merged with what is owned. Tapping a row toggles owned — this is where tools
  * are marked "I have this" and techniques can be hand-marked learned.
  */
-export function InventoryTab({ recipes, inventory, canEdit, onToggle }: {
+export function InventoryTab({ recipes, inventory, canEdit, onToggle, diff, ghosts }: {
   recipes: Record<string, KitchenRecipe>;
   inventory: Record<string, InventoryEntry>;
   canEdit: boolean;
   onToggle: (norm: string, name: string, kind: InventoryKind) => void;
+  /** History mode: per entry, what the version on screen did to it. */
+  diff?: Map<string, ChangeKind>;
+  /** History mode: entries that version removed (no longer owned), shown inert. */
+  ghosts?: ReadonlySet<string>;
 }) {
   const rows = useMemo(() => {
     const vocab = vocabulary(recipes);
@@ -64,12 +69,14 @@ export function InventoryTab({ recipes, inventory, canEdit, onToggle }: {
                   key={row.norm}
                   data-testid="inventory-row"
                   data-owned={row.owned ? 'true' : 'false'}
-                  onTap={canEdit ? () => onToggle(row.norm, row.name, row.kind) : undefined}
+                  data-diff={diff?.get(row.norm)}
+                  data-ghost={ghosts?.has(row.norm) ? '' : undefined}
+                  onTap={canEdit && !ghosts?.has(row.norm) ? () => onToggle(row.norm, row.name, row.kind) : undefined}
                 >
                   <md-checkbox
                     slot="start"
                     checked={!!row.owned}
-                    disabled={!canEdit}
+                    disabled={!canEdit || ghosts?.has(row.norm)}
                     tabIndex={-1}
                     className="pointer-events-none"
                   />

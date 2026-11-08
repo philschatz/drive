@@ -295,3 +295,58 @@ describe('Kitchen container', () => {
     expect(mock.__getDoc(DOC).recipes['plainer-salad']).toBeUndefined();
   });
 });
+
+describe('history mode highlights', () => {
+  const proto = Element.prototype as any;
+  let scrolled: jest.Mock;
+  beforeEach(() => {
+    mock.__reset();
+    window.location.hash = '';
+    scrolled = jest.fn();
+    proto.scrollIntoView = function (this: Element) { scrolled(this); };
+  });
+  afterEach(() => { delete proto.scrollIntoView; });
+
+  const openHistory = () => fireEvent.click(screen.getByTitle('History'));
+  const rowOf = (text: string) => screen.getByText(text).closest('md-list-item') as HTMLElement;
+
+  it('switches to the tab holding the first change: a new shopping line', async () => {
+    mock.__setDoc(DOC, { ...doc(), shopping: { 'smoked-paprika': { name: 'Smoked Paprika', added: '2026-01-01T00:00:00' } } });
+    mock.__setHistory(DOC, [{ version: 0, time: 1 }, { version: 1, time: 2 }]);
+    mock.__setVersionChanges(DOC, 1, [{ path: ['shopping', 'smoked-paprika'], kind: 'added', action: 'put' }]);
+    await renderKitchen();
+    tab('locked');
+    expect(document.querySelector('[data-testid="shopping-row"]')).toBeNull();
+
+    openHistory();
+    await waitFor(() => expect(rowOf('Smoked Paprika').getAttribute('data-diff')).toBe('added'));
+    expect(scrolled).toHaveBeenCalledTimes(1);
+    expect(scrolled.mock.calls[0][0]).toBe(rowOf('Smoked Paprika'));
+  });
+
+  it('tints a changed recipe and ghosts a removed one, on the tab its state puts it in', async () => {
+    mock.__setDoc(DOC, doc());
+    mock.__setHistory(DOC, [{ version: 0, time: 1 }, { version: 1, time: 2 }]);
+    mock.__setVersionChanges(DOC, 1, [
+      { path: ['recipes', 'poached-eggs', 'name'], kind: 'changed', action: 'put', before: 'Eggs', after: 'Poached Eggs' },
+      // Nothing missing ⇒ ready, so the ghost files under Ready alongside the eggs.
+      { path: ['recipes', 'old-soup'], kind: 'removed', action: 'del', before: recipe({ name: 'Old Soup' }) },
+    ]);
+    await renderKitchen();
+    // Locked is the default; neither highlighted recipe is there.
+    expect(screen.queryByText('Poached Eggs')).toBeNull();
+
+    openHistory();
+    await waitFor(() => expect(rowOf('Poached Eggs').getAttribute('data-diff')).toBe('changed'));
+    const ghost = rowOf('Old Soup');
+    expect(ghost.getAttribute('data-diff')).toBe('removed');
+    expect(ghost.hasAttribute('data-ghost')).toBe(true);
+    expect(ghost.getAttribute('href')).toBeNull();   // nowhere to go
+    expect(mock.__getDoc(DOC).recipes['old-soup']).toBeUndefined();
+    expect(scrolled).toHaveBeenCalledTimes(1);
+
+    openHistory();
+    await waitFor(() => expect(screen.queryByText('Old Soup')).toBeNull());
+    expect(rowOf('Poached Eggs').getAttribute('data-diff')).toBeNull();
+  });
+});

@@ -7,6 +7,8 @@ import { useEditorUndoRedo } from '../../common/useUndoRedo';
 import { useCanEdit } from '../../common/useCanEdit';
 import { useFocusPathSync } from '../../common/useFocusPathSync';
 import { HistorySlider } from '../../common/HistorySlider';
+import { useRevealChange } from '../../common/useRevealChange';
+import { itemChanges, removedItems, withGhosts, type ChangeKind } from '../../../../shared/version-changes';
 import { useDocumentValidation } from '../../common/useDocumentValidation';
 import { DocLoader } from '../../common/useDocument';
 import { Fab } from '@/components/ui/fab';
@@ -44,6 +46,8 @@ interface EditorState {
   id: string | null;
   recipe: KitchenRecipe | null;
 }
+
+const NO_GHOSTS: ReadonlySet<string> = new Set();
 
 export function Kitchen({ docId, recipeId, readOnly }: {
   docId?: string;
@@ -254,12 +258,43 @@ export function Kitchen({ docId, recipeId, readOnly }: {
   }, [peers, editor]);
 
   // ------------------------------------------------------------------
+  // History mode: what the version on screen did to each recipe, shopping line
+  // and inventory entry, with the ones it removed put back as ghosts — display
+  // only; every action works on the real records. A cook-log entry's value is
+  // the recipe it logged, so a logged cook marks that recipe changed.
+  // ------------------------------------------------------------------
+
+  const changes = history.changes;
+  const diff = useMemo(() => {
+    if (!changes) return null;
+    const recipeDiff = itemChanges(changes, ['recipes']);
+    for (const c of changes) {
+      if (c.path[0] === 'cookLog' && c.path.length === 2 && typeof c.after === 'string' && !recipeDiff.has(c.after)) {
+        recipeDiff.set(c.after, 'changed');
+      }
+    }
+    return { recipes: recipeDiff, shopping: itemChanges(changes, ['shopping']), inventory: itemChanges(changes, ['inventory']) };
+  }, [changes]);
+  const shownRecipes = useMemo(
+    () => (changes ? withGhosts(recipes, removedItems<KitchenRecipe>(changes, ['recipes'])) : { record: recipes, ghosts: NO_GHOSTS }),
+    [recipes, changes],
+  );
+  const shownShopping = useMemo(
+    () => (changes ? withGhosts(shopping, removedItems<ShoppingItem>(changes, ['shopping'])) : { record: shopping, ghosts: NO_GHOSTS }),
+    [shopping, changes],
+  );
+  const shownInventory = useMemo(
+    () => (changes ? withGhosts(inventory, removedItems<InventoryEntry>(changes, ['inventory'])) : { record: inventory, ghosts: NO_GHOSTS }),
+    [inventory, changes],
+  );
+
+  // ------------------------------------------------------------------
   // Derived view state
   // ------------------------------------------------------------------
 
   const entries: RecipeEntry[] = useMemo(
-    () => Object.entries(recipes).map(([id, recipe]) => ({ id, recipe, state: recipeState(recipe, inventory) })),
-    [recipes, inventory],
+    () => Object.entries(shownRecipes.record).map(([id, recipe]) => ({ id, recipe, state: recipeState(recipe, inventory) })),
+    [shownRecipes, inventory],
   );
   const locked = useMemo(() => sortLocked(entries.filter(e => e.state.status === 'locked')), [entries]);
   const ready = useMemo(() => sortReady(entries.filter(e => e.state.status !== 'locked'), cookLog), [entries, cookLog]);
@@ -268,7 +303,8 @@ export function Kitchen({ docId, recipeId, readOnly }: {
   const purchase = useMemo(() => bestPurchase(recipes, inventory), [recipes, inventory]);
 
   const pendingCount = Object.values(shopping).filter(it => !it.bought).length;
-  const hasShopping = Object.keys(shopping).length > 0;
+  // A ghost of a removed line still needs the tab to show it on.
+  const hasShopping = Object.keys(shownShopping.record).length > 0;
   const tabs: PillTab[] = [
     ...(hasShopping ? [{ id: 'shopping', label: 'To buy', count: pendingCount }] : []),
     { id: 'locked', label: 'Locked', count: locked.length },
@@ -279,6 +315,20 @@ export function Kitchen({ docId, recipeId, readOnly }: {
   // Locked — the "what could I unlock next" view — is the default.
   const activeTab =
     userTab && tabs.some(t => t.id === userTab) ? userTab : pendingCount > 0 ? 'shopping' : 'locked';
+
+  // In history mode, show the tab holding the first highlighted item (a recipe
+  // lives in Locked or Ready by its state), then reveal it once that tab has
+  // rendered — `activeTab` is a reveal dep for exactly that.
+  const highlightTab = useMemo(() => {
+    if (!diff) return null;
+    const hit = [...locked, ...ready].find(e => diff.recipes.has(e.id));
+    if (hit) return hit.state.status === 'locked' ? 'locked' : 'ready';
+    if (diff.shopping.size > 0) return 'shopping';
+    if (diff.inventory.size > 0) return 'inventory';
+    return null;
+  }, [diff, locked, ready]);
+  useEffect(() => { if (highlightTab) setUserTab(highlightTab); }, [highlightTab, changes]);
+  useRevealChange(changes, [shownRecipes.record, shownShopping.record, shownInventory.record, activeTab]);
 
   const detail = recipeId !== undefined ? entries.find(e => e.id === recipeId) : undefined;
 
@@ -341,9 +391,11 @@ export function Kitchen({ docId, recipeId, readOnly }: {
               <PillTabs tabs={tabs} active={activeTab} onSelect={setUserTab} />
               {activeTab === 'shopping' && (
                 <ShoppingList
-                  shopping={shopping}
+                  shopping={shownShopping.record}
                   recipes={recipes}
                   canEdit={canEdit}
+                  diff={diff?.shopping}
+                  ghosts={shownShopping.ghosts}
                   onToggleBought={toggleBought}
                   onRemove={removeShopping}
                   onClearBought={clearBought}
@@ -374,6 +426,8 @@ export function Kitchen({ docId, recipeId, readOnly }: {
                     entries={locked}
                     cookCounts={counts}
                     lastCooked={last}
+                    diff={diff?.recipes}
+                    ghosts={shownRecipes.ghosts}
                     emptyText={entries.length === 0 ? 'No recipes yet — add one with the + button.' : 'Nothing is locked — your kitchen can cook it all.'}
                   />
                 </>
@@ -384,15 +438,19 @@ export function Kitchen({ docId, recipeId, readOnly }: {
                   entries={ready}
                   cookCounts={counts}
                   lastCooked={last}
+                  diff={diff?.recipes}
+                  ghosts={shownRecipes.ghosts}
                   emptyText="Nothing is cookable yet — check the Locked tab for the cheapest unlock."
                 />
               )}
               {activeTab === 'inventory' && (
                 <InventoryTab
                   recipes={recipes}
-                  inventory={inventory}
+                  inventory={shownInventory.record}
                   canEdit={canEdit}
                   onToggle={toggleOwned}
+                  diff={diff?.inventory}
+                  ghosts={shownInventory.ghosts}
                 />
               )}
             </>

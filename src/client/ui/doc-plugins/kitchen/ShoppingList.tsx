@@ -1,18 +1,23 @@
 import { ListRow } from '../../common/ListRow';
 import type { KitchenRecipe, ShoppingItem } from '../../../../shared/schemas/kitchen';
+import type { ChangeKind } from '../../../../shared/version-changes';
 
 /**
  * The grocery list. A row's tap toggles bought (a bought row stays, greyed and
  * struck through, until "Clear bought" sweeps it — the Tasks delete-completed
  * idiom), so an accidental check is one tap to undo.
  */
-export function ShoppingList({ shopping, recipes, canEdit, onToggleBought, onRemove, onClearBought }: {
+export function ShoppingList({ shopping, recipes, canEdit, onToggleBought, onRemove, onClearBought, diff, ghosts }: {
   shopping: Record<string, ShoppingItem>;
   recipes: Record<string, KitchenRecipe>;
   canEdit: boolean;
   onToggleBought: (key: string) => void;
   onRemove: (key: string) => void;
   onClearBought: () => void;
+  /** History mode: per line, what the version on screen did to it. */
+  diff?: Map<string, ChangeKind>;
+  /** History mode: lines that version removed, shown from their old value, inert. */
+  ghosts?: ReadonlySet<string>;
 }) {
   const entries = Object.entries(shopping);
   const pending = entries.filter(([, it]) => !it.bought)
@@ -30,18 +35,22 @@ export function ShoppingList({ shopping, recipes, canEdit, onToggleBought, onRem
 
   const row = ([key, item]: [string, ShoppingItem]) => {
     const isBought = !!item.bought;
+    const ghost = ghosts?.has(key) ?? false;
+    const interactive = canEdit && !ghost;
     return (
       <ListRow
         key={key}
         data-testid="shopping-row"
         data-bought={isBought ? 'true' : 'false'}
-        onTap={canEdit ? () => onToggleBought(key) : undefined}
-        actions={canEdit ? [{ icon: 'close', label: 'Remove', title: `Remove ${item.name}`, onSelect: () => onRemove(key) }] : []}
+        data-diff={diff?.get(key)}
+        data-ghost={ghost ? '' : undefined}
+        onTap={interactive ? () => onToggleBought(key) : undefined}
+        actions={interactive ? [{ icon: 'close', label: 'Remove', title: `Remove ${item.name}`, onSelect: () => onRemove(key) }] : []}
       >
         <md-checkbox
           slot="start"
           checked={isBought}
-          disabled={!canEdit}
+          disabled={!interactive}
           tabIndex={-1}
           className="pointer-events-none"
         />
