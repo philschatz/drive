@@ -14,7 +14,7 @@
  * closes the sheet.
  */
 
-import { useMemo } from 'preact/hooks';
+import { useEffect, useMemo, useState } from 'preact/hooks';
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
@@ -36,6 +36,13 @@ export function VersionHistorySheet({ open, onOpenChange, history }: VersionHist
   const latestVersion = entries.length - 1;
   const { listRef, onScroll } = useVersionScrub(version, onSliderChange);
   const summary = useMemo(() => (changes ? summarizeChanges(changes) : null), [changes]);
+  // The description is cleared the moment the version moves and lands ~120 ms
+  // after it settles. Dropping the legend in between resized the header under a
+  // scrub — jitter — so the line keeps its place and its last counts, dimmed,
+  // until the new ones arrive.
+  const [shownSummary, setShownSummary] = useState(summary);
+  useEffect(() => { if (summary) setShownSummary(summary); }, [summary]);
+  const loading = summary === null;
 
   const handleRestore = async (target: number) => {
     if (
@@ -54,24 +61,27 @@ export function VersionHistorySheet({ open, onOpenChange, history }: VersionHist
         <SheetHeader>
           <SheetTitle>Version history ({changeCount})</SheetTitle>
           {/* What the version on screen changed — the same three colours the
-              editor behind the sheet highlights with. */}
-          {summary && (
-            <p
-              className="text-xs text-muted-foreground flex items-center justify-center sm:justify-start gap-3"
-              data-testid="history-legend"
-            >
-              {LEGEND_KINDS.map(kind => (
-                <span key={kind} className="inline-flex items-center gap-1">
-                  <span
-                    className="inline-block h-2.5 w-2.5 rounded-full"
-                    style={{ background: `var(--diff-${kind})` }}
-                    aria-hidden="true"
-                  />
-                  {summary[kind]} {kind}
-                </span>
-              ))}
-            </p>
-          )}
+              editor behind the sheet highlights with. Always rendered at a fixed
+              height (see `shownSummary`). */}
+          <p
+            className={cn(
+              'text-xs text-muted-foreground flex items-center justify-center sm:justify-start gap-3 h-4',
+              loading && 'opacity-40',
+            )}
+            data-testid="history-legend"
+            aria-busy={loading}
+          >
+            {LEGEND_KINDS.map(kind => (
+              <span key={kind} className="inline-flex items-center gap-1">
+                <span
+                  className="inline-block h-2.5 w-2.5 rounded-full"
+                  style={{ background: `var(--diff-${kind})` }}
+                  aria-hidden="true"
+                />
+                {shownSummary ? shownSummary[kind] : '–'} {kind}
+              </span>
+            ))}
+          </p>
         </SheetHeader>
 
         {/* The slider, the list's scroll position and a row tap all drive the

@@ -118,8 +118,18 @@ describe('version history sheet', () => {
       { path: ['tasks', 'c'], kind: 'removed', action: 'del', before: {} },
     ]);
     await open();
-    const legend = await waitFor(() => screen.getByTestId('history-legend'));
+    const legend = screen.getByTestId('history-legend');
+    await waitFor(() => expect(legend.textContent).toMatch(/1 added.*1 changed.*1 removed/));
+    expect(legend.getAttribute('aria-busy')).toBe('false');
+
+    // Moving the version clears the description; the line stays put with its
+    // last counts, dimmed, until the next one lands (unseeded here: all zero).
+    fireEvent.input(slider(), { target: { value: '6' } });
+    expect(screen.getByTestId('history-legend')).toBe(legend);
+    expect(legend.getAttribute('aria-busy')).toBe('true');
     expect(legend.textContent).toMatch(/1 added.*1 changed.*1 removed/);
+    await waitFor(() => expect(legend.textContent).toMatch(/0 added.*0 changed.*0 removed/));
+    expect(legend.getAttribute('aria-busy')).toBe('false');
   });
 
   it('tapping a row previews it', async () => {
