@@ -38,7 +38,7 @@ import { useAutofillDrag } from './useAutofillDrag';
 import { useDataGridDoc } from './useDataGridDoc';
 import { useSheetActions } from './useSheetActions';
 import { GridHeaderRow } from './GridHeaderRow';
-import { sheetDiff, sheetKinds, sheetOfFirstChange, firstDiffCell, type SheetDiff } from './diff-cells';
+import { sheetDiff, sheetKinds, sheetToShow, firstDiffCell, type SheetDiff } from './diff-cells';
 import type { ChangeKind } from '../../../../shared/version-changes';
 import { GridSheets } from './GridSheets';
 import './datagrid.css';
@@ -1066,17 +1066,23 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
   }, [diff, visibleRowIds]);
   const diffSheets = useMemo(() => (changes ? sheetKinds(changes) : null), [changes]);
 
-  // Show the sheet the version touched when the current one was not (Back still
-  // works: it pushes the hash like a tap on the tab), then scroll the top-left
-  // most changed cell into the band above the history sheet — once per
-  // description, retried as the sheet's rows and columns land.
+  // Show the sheet the version touched when the one on screen was not — or when
+  // the one on screen does not exist at this version at all (added later), since
+  // its subscription then renders nothing. Keyed on the sheet the subscription is
+  // actually on (`currentSheetId`, not the display fallback), and re-run as the
+  // version's metadata lands, which can be after its description. Back still
+  // works: the switch pushes the hash like a tap on the tab. Then the top-left
+  // most changed cell is scrolled into the band above the history sheet — once
+  // per description, retried as the sheet's rows and columns land.
   const handleSelectSheetRef = useRef(handleSelectSheet);
   handleSelectSheetRef.current = handleSelectSheet;
   useEffect(() => {
     if (!changes) return;
-    const target = sheetOfFirstChange(changes, effectiveSheetId ?? null, id => !!docMetaRef.current?.sheets[id]);
-    if (target && target !== effectiveSheetId) handleSelectSheetRef.current(target);
-  }, [changes]);
+    const exists = (id: string) => !!docMetaRef.current?.sheets[id];
+    const shown = currentSheetId ?? effectiveSheetId ?? null;
+    const target = sheetToShow(changes, shown, effectiveSheetId ?? null, exists);
+    if (target && target !== shown) handleSelectSheetRef.current(target);
+  }, [changes, rawDoc]);
   const revealedChangesRef = useRef<unknown>(null);
   useEffect(() => {
     if (!changes || !diff || revealedChangesRef.current === changes) return;

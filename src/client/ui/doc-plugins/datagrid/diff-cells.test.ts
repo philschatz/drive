@@ -1,4 +1,4 @@
-import { sheetDiff, sheetKinds, sheetOfFirstChange, firstDiffCell } from './diff-cells';
+import { sheetDiff, sheetKinds, sheetToShow, firstDiffCell } from './diff-cells';
 import type { VersionChange } from '../../../../shared/version-changes';
 
 const changes: VersionChange[] = [
@@ -31,15 +31,22 @@ describe('sheetDiff', () => {
   });
 });
 
-describe('sheetOfFirstChange', () => {
+describe('sheetToShow', () => {
   const exists = (id: string) => ['s1', 's2'].includes(id);
-  it('stays on the current sheet when the version touched it', () => {
-    expect(sheetOfFirstChange(changes, 's2', exists)).toBe('s2');
+  it('stays on the sheet on screen when the version touched it', () => {
+    expect(sheetToShow(changes, 's2', 's1', exists)).toBe('s2');
   });
   it('otherwise goes to the first touched sheet that exists', () => {
-    expect(sheetOfFirstChange(changes, 'other', exists)).toBe('s1');
-    expect(sheetOfFirstChange([changes[7]], 'other', exists)).toBeNull();   // s3 does not exist here
-    expect(sheetOfFirstChange([changes[8]], 's1', exists)).toBeNull();      // nothing sheet-scoped
+    expect(sheetToShow(changes, 's1', 's1', exists)).toBe('s1');
+    expect(sheetToShow([changes[6]], 's1', 's1', exists)).toBe('s2');      // only s2 touched
+    expect(sheetToShow([changes[8]], 's1', 's1', exists)).toBeNull();      // nothing sheet-scoped: stay
+  });
+  it('a sheet on screen that does not exist at this version is left for one that does', () => {
+    // The version added s3 (not in this doc's sheets yet) while "later" sheet is shown.
+    expect(sheetToShow([changes[7]], 'later', 's1', exists)).toBe('s1');   // s3 missing ⇒ fallback
+    expect(sheetToShow([changes[8]], 'later', 's1', exists)).toBe('s1');   // nothing touched ⇒ fallback
+    expect(sheetToShow([changes[6]], 'later', 's1', exists)).toBe('s2');   // the touched sheet wins
+    expect(sheetToShow([changes[8]], 'later', 'gone', exists)).toBeNull();  // no fallback either
   });
 });
 

@@ -59,19 +59,24 @@ export function sheetKinds(changes: VersionChange[]): Map<string, ChangeKind> {
 }
 
 /**
- * The sheet to show: the current one if the version touched it, else the first
- * sheet the version touched that still exists, else null (nothing to switch to).
+ * The sheet to show for a version: the one on screen if the version touched it,
+ * else the first sheet the version touched that exists at this version, else —
+ * when the sheet on screen does not exist at this version (it was added later,
+ * so its subscription has nothing to render) — `fallback`. Null means stay.
  */
-export function sheetOfFirstChange(
+export function sheetToShow(
   changes: VersionChange[],
-  currentSheetId: string | null,
+  shown: string | null,
+  fallback: string | null,
   exists: (sheetId: string) => boolean,
 ): string | null {
   const touched = sheetKinds(changes);
-  if (currentSheetId && touched.has(currentSheetId)) return currentSheetId;
+  const shownExists = !!shown && exists(shown);
+  if (shownExists && touched.has(shown!)) return shown;
   for (const [sid, kind] of touched) {
     if (kind !== 'removed' && exists(sid)) return sid;
   }
+  if (!shownExists && fallback && exists(fallback)) return fallback;
   return null;
 }
 
