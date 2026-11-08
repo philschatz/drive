@@ -58,7 +58,7 @@ export interface EngineWatchSurface {
   emitWatchUpdate(docId: string): void;
   diffVersions(
     docId: string, fromVersion?: number, toVersion?: number,
-  ): Promise<{ from: number; to: number; patches: any[] }>;
+  ): Promise<{ from: number; to: number; patches: any[]; beforeHeads: string[]; afterHeads: string[] }>;
   enumerateAccessibleDocIds(): Promise<string[]>;
   getDocMeta(docId: string): Promise<WatchUpdate>;
   getDocJson(docId: string, version?: number): Promise<any>;
@@ -101,12 +101,10 @@ export function EngineWatch<C extends EngineWatchCtor>(Base: C):
       if (doc) {
         docType = doc['@type'];
         name = doc.name;
-        const history = this.Automerge.getHistory(doc);
-        versions = history.length;
-        if (history.length > 0) {
-          const ts = history[history.length - 1].change.time;
-          if (ts) lastModified = ts;
-        }
+        const index = this.historyIndexFor(docId, doc);
+        versions = index.times.length;
+        const ts = index.times[index.times.length - 1];
+        if (ts) lastModified = ts;
       }
       return { docId, docType, name, heads, lastModified, versions };
     }
@@ -120,11 +118,11 @@ export function EngineWatch<C extends EngineWatchCtor>(Base: C):
       if (handle.whenReady) { try { await handle.whenReady(['ready', 'unavailable']); } catch { /* keep going */ } }
       const doc = handle.doc();
       if (!doc || version === undefined) return doc ?? null;
-      const history = this.Automerge.getHistory(doc);
-      if (version < 0 || version >= history.length) {
-        throw new Error(`version ${version} out of range (0..${history.length - 1})`);
+      const index = this.historyIndexFor(docId, doc);
+      if (version < 0 || version >= index.heads.length) {
+        throw new Error(`version ${version} out of range (0..${index.heads.length - 1})`);
       }
-      return history[version].snapshot ?? null;
+      return this.Automerge.view(doc, index.heads[version]) ?? null;
     }
 
     /**
@@ -135,13 +133,13 @@ export function EngineWatch<C extends EngineWatchCtor>(Base: C):
      */
     async diffVersions(
       docId: string, fromVersion?: number, toVersion?: number,
-    ): Promise<{ from: number; to: number; patches: any[] }> {
+    ): Promise<{ from: number; to: number; patches: any[]; beforeHeads: string[]; afterHeads: string[] }> {
       const handle = await this.getOrLoadHandle(docId);
       if (handle.whenReady) { try { await handle.whenReady(['ready', 'unavailable']); } catch { /* keep going */ } }
       const doc = handle.doc();
       if (!doc) throw new Error('document not ready');
-      const history = this.Automerge.getHistory(doc);
-      const n = history.length;
+      const index = this.historyIndexFor(docId, doc);
+      const n = index.heads.length;
       if (n === 0) throw new Error('document has no history');
 
       const to = toVersion ?? (n - 1);
@@ -149,10 +147,13 @@ export function EngineWatch<C extends EngineWatchCtor>(Base: C):
       if (to < 0 || to >= n) throw new Error(`version ${to} out of range (0..${n - 1})`);
       if (from < -1 || from >= n) throw new Error(`version ${from} out of range (-1..${n - 1})`);
 
-      const beforeHeads = from < 0 ? [] : [history[from].change.hash];
-      const afterHeads = [history[to].change.hash];
+      // A version's heads are "changes 0..i applied" (history-index.ts) — NOT
+      // `[history[i].change.hash]`, which on a concurrent branch names only that
+      // branch and so reports its sibling as reverted.
+      const beforeHeads = from < 0 ? [] : index.heads[from];
+      const afterHeads = index.heads[to];
       const patches = this.Automerge.diff(doc, beforeHeads, afterHeads);
-      return { from, to, patches };
+      return { from, to, patches, beforeHeads, afterHeads };
     }
 
     emitWatchUpdate(docId: string): void {

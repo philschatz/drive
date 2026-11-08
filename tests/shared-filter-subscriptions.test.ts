@@ -17,6 +17,7 @@
  */
 
 import { DriveEngine } from '../src/shared/drive-engine';
+import { stubAutomerge } from './support/automerge-stub';
 
 const FILTER = 'NAME_ONLY';
 
@@ -60,7 +61,7 @@ describe('subscriptions sharing one filter', () => {
   it('delivers a change to every subscriber, not just the first', async () => {
     const { engine } = makeEngine();
     const history: any[] = [{ change: { time: 1000, hash: 'h1' } }];
-    (engine as any).Automerge = { getHistory: () => history };
+    (engine as any).Automerge = stubAutomerge(history);
     const { handle, setDoc, setHeads, fireChange } = makeHandle({ doc: { name: 'A' }, heads: ['h1'] });
     (engine as any).getOrCreateEntry('d1', handle);
 
@@ -90,7 +91,7 @@ describe('subscriptions sharing one filter', () => {
   it('does not re-deliver an unchanged projection to either subscriber', async () => {
     const { engine } = makeEngine();
     const history: any[] = [{ change: { time: 1000, hash: 'h1' } }];
-    (engine as any).Automerge = { getHistory: () => history };
+    (engine as any).Automerge = stubAutomerge(history);
     const { handle, setDoc, setHeads, fireChange } = makeHandle({ doc: { name: 'A' }, heads: ['h1'] });
     (engine as any).getOrCreateEntry('d1', handle);
 
@@ -117,7 +118,7 @@ describe('subscriptions sharing one filter', () => {
   it('seeds a late subscriber from the cache without duplicating it', async () => {
     const { engine } = makeEngine();
     const history: any[] = [{ change: { time: 1000, hash: 'h1' } }];
-    (engine as any).Automerge = { getHistory: () => history };
+    (engine as any).Automerge = stubAutomerge(history);
     const { handle } = makeHandle({ doc: { name: 'A' }, heads: ['h1'] });
     (engine as any).getOrCreateEntry('d1', handle);
 

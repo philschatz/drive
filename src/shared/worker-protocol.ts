@@ -78,6 +78,8 @@ export type MainToWorker =
   | { type: 'flush-storage'; id: number; docId?: string }
   | { type: 'get-doc-history'; id: number; docId: string }
   | { type: 'debug-get-version-patches'; id: number; docId: string; version: number }
+  // What a version changed, with the old values — history mode's highlights (shared/version-changes.ts).
+  | { type: 'get-version-changes'; id: number; docId: string; version: number }
   | { type: 'restore-doc-to-heads'; id: number; docId: string; heads: string[] }
   | { type: 'restore-doc-to-version'; id: number; docId: string; version: number }
   | { type: 'subscribe-presence'; docId: string }

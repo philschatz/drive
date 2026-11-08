@@ -28,6 +28,7 @@ import type { RichTextOp, RichTextSpan } from '../../shared/rich-text-ops';
 import type { BackupTier, BackupPayload, BackupResult } from '../../shared/backup';
 import { createLogger } from '../../shared/logger';
 import { coalesce, type Coalescer } from '../../shared/coalesce';
+import type { VersionChange } from '../../shared/version-changes';
 
 // Shares the `main` namespace with worker-client.ts: from a reader's point of
 // view the two halves are one main-thread client. `tab` is the cross-tab layer.
@@ -802,6 +803,11 @@ export function getDocHistory(docId: string): Promise<Array<{ version: number; t
 
 export function debugGetVersionPatches(docId: string, version: number): Promise<any[]> {
   return request('debug-get-version-patches', { docId, version });
+}
+
+/** What `version` changed — added / removed / changed, with old values (shared/version-changes.ts). */
+export function getVersionChanges(docId: string, version: number): Promise<VersionChange[]> {
+  return request('get-version-changes', { docId, version });
 }
 
 /**

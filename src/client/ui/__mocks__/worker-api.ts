@@ -27,6 +27,7 @@ import { compile } from '../../../shared/jq';
 import { deepAssign as realDeepAssign } from '../../../shared/deep-assign';
 import type { RichTextOp, RichTextSpan } from '../../../shared/rich-text-ops';
 import type { MarkerField } from '../../../shared/worker-protocol';
+import type { VersionChange } from '../../../shared/version-changes';
 import { applyOpsToSpans, flatTextFromSpans, shiftPositionThroughOps, spansFromFlatText } from '../doc-plugins/sentences/spans-model';
 
 type Doc = any;
@@ -139,6 +140,7 @@ export function __reset(): void {
   unseenSubs.clear();
   histories.clear();
   patches.clear();
+  versionChanges.clear();
   pinnedVersion = null;
 }
 /** Push a presence peer map ({ peerId: { peerId, value } }) to subscribers. */
@@ -296,6 +298,7 @@ export function importBackup(): Promise<any> { return Promise.resolve({ imported
 // other consumer expects.
 const histories = new Map<string, Array<{ version: number; time: number }>>();
 const patches = new Map<string, any[]>();
+const versionChanges = new Map<string, VersionChange[]>();
 
 /** Seed a document's version list (as `Automerge.getHistory` reports it). */
 export function __setHistory(docId: string, entries: Array<{ version: number; time: number }>): void {
@@ -317,6 +320,13 @@ export function restoreDocToVersion(): Promise<void> { return Promise.resolve();
 export function restoreDocToHeads(): Promise<void> { return Promise.resolve(); }
 export function debugGetVersionPatches(docId: string, version: number): Promise<any[]> {
   return Promise.resolve(patches.get(docId + '@' + version) ?? []);
+}
+/** Seed what one version changed (as `get-version-changes` would describe it). */
+export function __setVersionChanges(docId: string, version: number, changes: VersionChange[]): void {
+  versionChanges.set(docId + '@' + version, changes);
+}
+export function getVersionChanges(docId: string, version: number): Promise<VersionChange[]> {
+  return Promise.resolve(versionChanges.get(docId + '@' + version) ?? []);
 }
 
 export function subscribeValidation(_docId: string, cb: (e: any[]) => void): () => void {

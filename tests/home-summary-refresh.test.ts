@@ -23,6 +23,7 @@
  */
 
 import { DriveEngine } from '../src/shared/drive-engine';
+import { stubAutomerge } from './support/automerge-stub';
 
 const FILTER = 'HOME_SUMMARY';
 
@@ -78,7 +79,7 @@ describe('home summary refresh', () => {
   it('re-delivers lastModified on a change that leaves the projection unchanged (Fix 1)', async () => {
     const { engine } = makeEngine();
     const history: any[] = [{ change: { time: 1000, hash: 'h1' } }];
-    (engine as any).Automerge = { getHistory: () => history };
+    (engine as any).Automerge = stubAutomerge(history);
     const { handle, setDoc, setHeads, fireChange } =
       makeHandle({ ready: true, doc: { name: 'A', count: 1 }, heads: ['h1'] });
     (engine as any).getOrCreateEntry('d1', handle);
@@ -109,7 +110,7 @@ describe('home summary refresh', () => {
   it('delivers the initial summary once a background-opened handle becomes ready (Fix 2)', async () => {
     const { engine } = makeEngine();
     const history: any[] = [{ change: { time: 1000, hash: 'h1' } }];
-    (engine as any).Automerge = { getHistory: () => history };
+    (engine as any).Automerge = stubAutomerge(history);
     const { handle, becomeReady } =
       makeHandle({ ready: false, doc: { name: 'A', count: 1 }, heads: ['h1'] });
     // No registry entry yet → subscribeQuery background-opens via repo.find.

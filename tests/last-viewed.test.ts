@@ -14,6 +14,7 @@
  */
 
 import { DriveEngine, headsEqual } from '../src/shared/drive-engine';
+import { stubAutomerge } from './support/automerge-stub';
 
 /** In-memory KV + emit recorder standing in for the EngineHost. */
 function makeEngine() {
@@ -30,7 +31,7 @@ function makeEngine() {
   } as any);
   // Skip init(): seed the pieces the seen-state machine needs directly.
   (engine as any).lastViewedHeads = {};
-  (engine as any).Automerge = { getHistory: () => [] };
+  (engine as any).Automerge = stubAutomerge([]);
   const unseenEvents = () => emitted.filter((e) => e.type === 'unseen-changes-updated');
   const viewedHeads = () => (engine as any).lastViewedHeads;
   return { engine, kv, emitted, unseenEvents, viewedHeads };

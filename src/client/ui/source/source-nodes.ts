@@ -8,6 +8,7 @@
  */
 
 import { BLOCK_MARKER, type BlockValue } from '../../../shared/rich-text-ops';
+import { valueAt } from '../../../shared/version-changes';
 
 export type Path = (string | number)[];
 
@@ -180,15 +181,8 @@ export function isPrefix(prefix: Path, full: Path): boolean {
   return true;
 }
 
-/** Read a path out of a document, or `undefined` if any segment is missing. */
-export function valueAt(doc: any, path: Path): any {
-  let current = doc;
-  for (const seg of path) {
-    if (current === null || typeof current !== 'object') return undefined;
-    current = current[seg as any];
-  }
-  return current;
-}
+// `valueAt` moved to src/shared (the engine reads paths too); kept exported here.
+export { valueAt };
 
 /** Decode a router `rest` remainder into a path, coercing numeric segments. */
 export function pathFromRest(rest: string | undefined): Path {

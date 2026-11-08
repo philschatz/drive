@@ -14,6 +14,8 @@
  * `this`) so the core can reach INTO the subsystem for state that the subsystem
  * owns — e.g. archive-doc's presence teardown, update-doc's settings validation.
  */
+import { buildHistoryIndex, headsKeyOf, type HistoryIndex } from './history-index';
+import { describeVersionChanges } from './version-changes';
 import { deepAssign } from './deep-assign';
 import { syncToTarget } from './sync-to-target';
 import { validateDocument, markerFieldsFor, type MarkerField, DRIVE_SETTINGS_TYPE } from './schemas';
@@ -137,6 +139,8 @@ export class EngineCore {
   // Query caching.
   private jqCache = new LRU<string, (input: any) => any>(64);
   private queryResultCache = new LRU<string, QueryCacheEntry>(256);
+  // Per-doc version heads + times, rebuilt when the live heads change (history-index.ts).
+  private historyIndexes = new Map<string, HistoryIndex>();
   private debugEnabled = false;
   /**
    * Debug mode only: the name of the most-recent keyhive (Rust/WASM) call, set
@@ -252,6 +256,16 @@ export class EngineCore {
       log.warn('getKhDoc failed:', errMsg(err));
       return null;
     }
+  }
+
+  /** The version index for `doc`, cached per docId until its live heads change. */
+  protected historyIndexFor(docId: string, doc: any): HistoryIndex {
+    const key = headsKeyOf(this.Automerge.getHeads(doc));
+    const cached = this.historyIndexes.get(docId);
+    if (cached && cached.headsKey === key) return cached;
+    const index = buildHistoryIndex(this.Automerge, doc);
+    this.historyIndexes.set(docId, index);
+    return index;
   }
 
   // ── Doc registry ───────────────────────────────────────────────────────────
@@ -712,20 +726,19 @@ export class EngineCore {
     if (handle.isReady && !handle.isReady()) return;
     const rawDoc = handle.doc();
     if (!rawDoc) return;
-    const history = this.Automerge.getHistory(rawDoc);
-    let activeDoc: any;
+    const index = this.historyIndexFor(docId, rawDoc);
+    let activeDoc: any = rawDoc;
     if (entry.pinnedVersion !== null) {
-      activeDoc = history[entry.pinnedVersion]?.snapshot ?? rawDoc;
-    } else {
-      activeDoc = rawDoc;
+      // A view at the version's heads: the state getHistory's snapshot would
+      // hold, without replaying the document from its first change per push.
+      const pinnedHeads = index.heads[entry.pinnedVersion];
+      if (pinnedHeads) activeDoc = this.Automerge.view(rawDoc, pinnedHeads);
     }
     const heads: string[] = handle.heads ? handle.heads() : [];
 
     let lastModified: number | undefined;
-    if (history.length > 0) {
-      const ts = history[history.length - 1].change.time;
-      if (ts) lastModified = ts;
-    }
+    const ts = index.times[index.times.length - 1];
+    if (ts) lastModified = ts;
 
     // Shared by every allRichText sub on this doc — the walk is the expensive
     // part, and it depends only on the document, not on the subscription.
@@ -1403,7 +1416,7 @@ export class EngineCore {
         const handle = await this.getOrLoadHandle(msg.docId);
         const doc = handle.doc();
         if (!doc) throw new Error('Document not ready');
-        return this.Automerge.getHistory(doc).map((e: any, i: number) => ({ version: i, time: e.change.time }));
+        return this.historyIndexFor(msg.docId, doc).times.map((time, version) => ({ version, time }));
       });
       return;
     }
@@ -1412,6 +1425,18 @@ export class EngineCore {
       await this.respond(msg.id, async () => {
         const { patches } = await this.watchSurface.diffVersions(msg.docId, msg.version - 1, msg.version);
         return patches;
+      });
+      return;
+    }
+
+    if (msg.type === 'get-version-changes') {
+      await this.respond(msg.id, async () => {
+        const { patches, beforeHeads } = await this.watchSurface.diffVersions(msg.docId, msg.version - 1, msg.version);
+        const doc = (await this.getOrLoadHandle(msg.docId)).doc();
+        // Old values come from a plain mirror of the document BEFORE the version,
+        // patched forward as the walk goes (version-changes.ts).
+        const mirror = beforeHeads.length === 0 ? {} : this.Automerge.toJS(this.Automerge.view(doc, beforeHeads));
+        return describeVersionChanges(patches, mirror, (m, p) => this.Automerge.applyPatch(m, p));
       });
       return;
     }
@@ -1428,10 +1453,10 @@ export class EngineCore {
 
     if (msg.type === 'restore-doc-to-version') {
       await this.respond(msg.id, async () => {
-        const history = this.Automerge.getHistory((await this.getOrLoadHandle(msg.docId)).doc());
-        const snap = history[msg.version]?.snapshot;
-        if (!snap) throw new Error(`Version ${msg.version} not found`);
-        await this.restoreDoc(msg.docId, snap);
+        const doc = (await this.getOrLoadHandle(msg.docId)).doc();
+        const versionHeads = doc ? this.historyIndexFor(msg.docId, doc).heads[msg.version] : undefined;
+        if (!versionHeads) throw new Error(`Version ${msg.version} not found`);
+        await this.restoreDoc(msg.docId, this.Automerge.view(doc, versionHeads));
       });
       return;
     }
