@@ -542,3 +542,17 @@
   color: var(--md-sys-color-on-surface-variant);
   flex-wrap: wrap;
 }
+
+/* History mode. Cells get their tint inline (buildCellStyle) because their own
+   surface background would cover the global [data-diff] rule; headers and sheet
+   tabs carry `data-mark` instead of `data-diff` so that rule — a tint and a
+   left bar — leaves their own backgrounds alone: a bottom bar is their cue. */
+.datagrid-col-header[data-mark="added"], .datagrid-row-header[data-mark="added"], [data-sheet-tab][data-mark="added"] {
+  box-shadow: inset 0 -3px 0 var(--diff-added);
+}
+.datagrid-col-header[data-mark="changed"], .datagrid-row-header[data-mark="changed"], [data-sheet-tab][data-mark="changed"] {
+  box-shadow: inset 0 -3px 0 var(--diff-changed);
+}
+.datagrid-col-header[data-mark="removed"], .datagrid-row-header[data-mark="removed"], [data-sheet-tab][data-mark="removed"] {
+  box-shadow: inset 0 -3px 0 var(--diff-removed);
+}

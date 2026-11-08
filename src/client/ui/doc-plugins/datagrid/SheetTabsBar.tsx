@@ -18,6 +18,7 @@ export function SheetTabsBar({
   onAdd,
   onOpenList,
   onOpenOptions,
+  diffSheets,
 }: {
   sheets: SheetTabInfo[];
   currentSheetId: string;
@@ -29,6 +30,8 @@ export function SheetTabsBar({
   onOpenList: () => void;
   /** Open the options sheet for the active sheet. */
   onOpenOptions: (id: string) => void;
+  /** History mode: per sheet id, what the version on screen did to it. */
+  diffSheets?: Map<string, 'added' | 'removed' | 'changed'> | null;
 }) {
   const visibleSheets = sheets.filter(s => !s.hidden);
 
@@ -59,6 +62,7 @@ export function SheetTabsBar({
             <button
               key={sheet.id}
               data-sheet-tab={sheet.id}
+              data-mark={diffSheets?.get(sheet.id)}
               className={
                 'inline-flex items-center gap-0.5 rounded-full px-3 h-8 whitespace-nowrap md-label-large state-layer shrink-0' +
                 (isActive ? ' bg-secondary-container text-on-secondary-container font-semibold' : '')

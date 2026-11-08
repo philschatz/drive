@@ -11,6 +11,8 @@ export type ColHiddenGap = { beforeVisualIndex: number; hiddenIds: string[] };
  */
 export function GridHeaderRow(props: {
   columnDefs: ColDef[];
+  /** History mode: per visible column index, what the version on screen did to it. */
+  diffCols?: Map<number, 'added' | 'removed' | 'changed'>;
   visibleColOriginalIndices: number[];
   frozenColOffsets: number[];
   frozenColCount: number;
@@ -67,6 +69,7 @@ export function GridHeaderRow(props: {
               className={'datagrid-col-header' + (isColSelected ? ' selected' : selectedCell && selectedCell[0] === ci ? ' active' : '') + dropClass + (isLastFrozenCol ? ' frozen-col-last' : '')}
               style={{ width: (resizingCol?.index === ci ? resizingCol.width : col.width) || 100, ...frozenStyle }}
               data-col-index={ci}
+              data-mark={props.diffCols?.get(ci)}
               onClick={(e: any) => onHeaderClick('col', ci, e)}
               onContextMenu={(e: any) => onHeaderContextMenu('col', ci, e)}
               onMouseDown={(e: any) => onHeaderMouseDown('col', ci, e)}

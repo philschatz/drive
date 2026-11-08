@@ -293,6 +293,9 @@ function matchesCondition(value: string, type: string, conditionValue?: string):
 // buildCellStyle — the per-cell render pipeline
 // ============================================================
 
+/** History mode: what the version on screen did to the cell. */
+export type CellDiffInfo = { kind: 'added' | 'removed' | 'changed' };
+
 export type CellRefInfo = {
   color: string; active: boolean;
   top: boolean; right: boolean; bottom: boolean; left: boolean;
@@ -306,6 +309,7 @@ type BuildCellStyleOpts = {
   cfRowIdxMap: Map<string, number>; cfColIdxMap: Map<string, number>;
   condFormatResults: { matches: Map<string, Set<string>> } | null;
   peers: { color: string } | undefined;
+  diff?: CellDiffInfo;
   refInfo: CellRefInfo | undefined;
   clipboardSource: { minCol: number; maxCol: number; minRow: number; maxRow: number } | null;
   ci: number; ri: number;
@@ -347,6 +351,19 @@ export function buildCellStyle(opts: BuildCellStyleOpts): { style: Record<string
 
   // UI overlays override formatting
   if (peers) style.boxShadow = `inset 0 0 0 2px ${peers.color}`;
+  if (opts.diff) {
+    // Inline, as two inset shadows (a ring and a fill): the cell paints its own
+    // surface background, which would cover the global [data-diff] tint. A peer's
+    // ring keeps precedence; "changed" gets a dashed outline, the non-colour cue.
+    const c = `var(--diff-${opts.diff.kind})`;
+    const fill = `inset 0 0 0 100vmax color-mix(in srgb, ${c} 18%, transparent)`;
+    const ring = `inset 0 0 0 2px ${c}`;
+    style.boxShadow = peers ? `${style.boxShadow}, ${fill}` : opts.diff.kind === 'changed' ? fill : `${ring}, ${fill}`;
+    if (opts.diff.kind === 'changed' && !peers) {
+      style.outline = `2px dashed ${c}`;
+      style.outlineOffset = '-2px';
+    }
+  }
   if (refInfo) {
     const c = refInfo.color;
     const dash = `2px dashed ${c}`;

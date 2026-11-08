@@ -61,3 +61,40 @@ describe('resolveConditionalFormat with precomputed index maps', () => {
       .toBeUndefined();
   });
 });
+
+import { buildCellStyle as buildCellStyleForDiff } from './formatting';
+
+describe('buildCellStyle: history diff overlay', () => {
+  const opts = (over: Partial<Parameters<typeof buildCellStyleForDiff>[0]> = {}) => ({
+    format: undefined, display: '5', conditionalFormats: undefined, rowId: 'r1', colId: 'c1',
+    cfRowIdxMap: new Map<string, number>(), cfColIdxMap: new Map<string, number>(), condFormatResults: null,
+    peers: undefined, refInfo: undefined, clipboardSource: null, ci: 0, ri: 0,
+    isFrozenCol: false, isFrozenRow: false, frozenColOffsets: [], frozenRowTop: undefined, isSpillTarget: false,
+    ...over,
+  });
+
+  it('an added cell gets a ring and a fill in the diff colour, inline', () => {
+    const { style } = buildCellStyleForDiff(opts({ diff: { kind: 'added' } }));
+    expect(style.boxShadow).toBe(
+      'inset 0 0 0 2px var(--diff-added), inset 0 0 0 100vmax color-mix(in srgb, var(--diff-added) 18%, transparent)',
+    );
+    expect(style.outline).toBeUndefined();
+  });
+
+  it('a changed cell gets a dashed outline instead of a ring — the non-colour cue', () => {
+    const { style } = buildCellStyleForDiff(opts({ diff: { kind: 'changed' } }));
+    expect(style.boxShadow).toBe('inset 0 0 0 100vmax color-mix(in srgb, var(--diff-changed) 18%, transparent)');
+    expect(style.outline).toBe('2px dashed var(--diff-changed)');
+  });
+
+  it('a peer\'s ring keeps precedence over the diff ring', () => {
+    const { style } = buildCellStyleForDiff(opts({ diff: { kind: 'removed' }, peers: { color: '#abc' } }));
+    expect(style.boxShadow).toBe(
+      'inset 0 0 0 2px #abc, inset 0 0 0 100vmax color-mix(in srgb, var(--diff-removed) 18%, transparent)',
+    );
+  });
+
+  it('no diff, no overlay', () => {
+    expect(buildCellStyleForDiff(opts()).style.boxShadow).toBeUndefined();
+  });
+});

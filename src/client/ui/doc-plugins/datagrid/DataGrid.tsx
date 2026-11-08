@@ -38,6 +38,8 @@ import { useAutofillDrag } from './useAutofillDrag';
 import { useDataGridDoc } from './useDataGridDoc';
 import { useSheetActions } from './useSheetActions';
 import { GridHeaderRow } from './GridHeaderRow';
+import { sheetDiff, sheetKinds, sheetOfFirstChange, firstDiffCell, type SheetDiff } from './diff-cells';
+import type { ChangeKind } from '../../../../shared/version-changes';
 import { GridSheets } from './GridSheets';
 import './datagrid.css';
 
@@ -406,9 +408,12 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
     tableRef.current?.focus();
   }, []);
 
-  const scrollCellIntoView = useCallback((col: number, row: number) => {
+  // `bottomInset`: part of the container covered by something else (the history
+  // sheet), which a cell must clear to count as visible.
+  const scrollCellIntoView = useCallback((col: number, row: number, opts?: { bottomInset?: number }) => {
     const el = tableRef.current;
     if (!el) return;
+    const inset = opts?.bottomInset ?? 0;
 
     // Vertical: account for sticky header + frozen rows
     const stickyTop = headerHeight + rowOffsets[frozenRowCount];
@@ -416,12 +421,12 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
     const cellTop = rowOffsets[row] ?? 0;
     const cellBottom = rowOffsets[row + 1] ?? cellTop + ROW_HEIGHT;
     const visibleTop = el.scrollTop + stickyTop;
-    const visibleBottom = el.scrollTop + el.clientHeight;
+    const visibleBottom = el.scrollTop + el.clientHeight - inset;
 
     if (cellTop < visibleTop) {
       el.scrollTop = Math.max(0, cellTop - stickyTop);
     } else if (cellBottom > visibleBottom) {
-      el.scrollTop = cellBottom - el.clientHeight;
+      el.scrollTop = cellBottom - (el.clientHeight - inset);
     }
 
     // Horizontal: account for sticky row header + frozen columns
@@ -1030,6 +1035,58 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
     return map;
   }, [formulaRefHighlights, editingCell]);
 
+  // History mode: what the version on screen did to this sheet, keyed by visible
+  // cell position like refHighlightMap (a removed cell keeps its old value, shown
+  // as ghost text); column/row headers and sheet tabs get a mark of their own.
+  const changes = history.changes;
+  const diff: SheetDiff | null = useMemo(
+    () => (changes && effectiveSheetId ? sheetDiff(changes, effectiveSheetId) : null),
+    [changes, effectiveSheetId],
+  );
+  const diffCellMap = useMemo(() => {
+    const map = new Map<string, { kind: ChangeKind; before?: string }>();
+    if (!diff) return map;
+    for (const [key, info] of diff.cells) {
+      const sep = key.indexOf(':');
+      const ri = visibleRowIds.indexOf(key.slice(0, sep));
+      const ci = visibleColIds.indexOf(key.slice(sep + 1));
+      if (ri >= 0 && ci >= 0) map.set(`${ci}:${ri}`, info);
+    }
+    return map;
+  }, [diff, visibleRowIds, visibleColIds]);
+  const diffCols = useMemo(() => {
+    const map = new Map<number, ChangeKind>();
+    if (diff) for (const [colId, kind] of diff.columns) { const ci = visibleColIds.indexOf(colId); if (ci >= 0) map.set(ci, kind); }
+    return map;
+  }, [diff, visibleColIds]);
+  const diffRows = useMemo(() => {
+    const map = new Map<number, ChangeKind>();
+    if (diff) for (const [rowId, kind] of diff.rows) { const ri = visibleRowIds.indexOf(rowId); if (ri >= 0) map.set(ri, kind); }
+    return map;
+  }, [diff, visibleRowIds]);
+  const diffSheets = useMemo(() => (changes ? sheetKinds(changes) : null), [changes]);
+
+  // Show the sheet the version touched when the current one was not (Back still
+  // works: it pushes the hash like a tap on the tab), then scroll the top-left
+  // most changed cell into the band above the history sheet — once per
+  // description, retried as the sheet's rows and columns land.
+  const handleSelectSheetRef = useRef(handleSelectSheet);
+  handleSelectSheetRef.current = handleSelectSheet;
+  useEffect(() => {
+    if (!changes) return;
+    const target = sheetOfFirstChange(changes, effectiveSheetId ?? null, id => !!docMetaRef.current?.sheets[id]);
+    if (target && target !== effectiveSheetId) handleSelectSheetRef.current(target);
+  }, [changes]);
+  const revealedChangesRef = useRef<unknown>(null);
+  useEffect(() => {
+    if (!changes || !diff || revealedChangesRef.current === changes) return;
+    const cell = firstDiffCell(diff.cells, visibleRowIds, visibleColIds);
+    if (!cell) return;
+    revealedChangesRef.current = changes;
+    const el = tableRef.current;
+    scrollCellIntoView(cell[0], cell[1], { bottomInset: el ? el.clientHeight * 0.35 : 0 });
+  }, [changes, diff, visibleRowIds, visibleColIds, scrollCellIntoView]);
+
   const doc2 = activeSheetRef.current;
   const computedValues = computedValuesRef.current;
   const errorMessages = errorMessagesRef.current;
@@ -1292,6 +1349,7 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
               <thead>
                 <tr>
                   <GridHeaderRow
+                    diffCols={diffCols}
                     columnDefs={columnDefs}
                     visibleColOriginalIndices={visibleColOriginalIndices}
                     frozenColOffsets={frozenColOffsets}
@@ -1376,6 +1434,7 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
                         // ladder in datagrid.css.
                         style={isFrozenRow ? { position: 'sticky', left: 0, top: frozenRowTop, zIndex: 5 } : undefined}
                         data-row-index={ri}
+                        data-mark={diffRows.get(ri)}
                         onClick={(e: any) => handleHeaderClick('row', ri, e)}
                         onContextMenu={(e: any) => handleHeaderContextMenu('row', ri, e)}
                         onMouseDown={(e: any) => handleHeaderMouseDown('row', ri, e)}
@@ -1388,6 +1447,7 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
                         const isEditing = editingCell && editingCell[0] === ci && editingCell[1] === ri;
                         const peers = peerCellMap[`${ci}:${ri}`];
                         const refInfo = refHighlightMap.get(`${ci}:${ri}`);
+                        const diffInfo = diffCellMap.get(`${ci}:${ri}`);
                         const rawValue = currentSheet?.cells[`${rowId}:${colId}`]?.value || '';
                         let display = getDisplayValue(computedValues, rawValue, effectiveSheetId ?? '', rowId, colId);
                         const cellFmt = formatCache.get(`${visibleRowOriginalIndices[ri]}:${visibleColOriginalIndices[ci]}`);
@@ -1411,6 +1471,8 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
                           cfRowIdxMap, cfColIdxMap,
                           condFormatResults: condFormatResultsRef.current,
                           peers, refInfo, clipboardSource,
+                          // The selection outline says "selected" louder than a diff could.
+                          diff: diffInfo && !isSelected ? { kind: diffInfo.kind } : undefined,
                           ci, ri,
                           isFrozenCol: ci < frozenColCount,
                           isFrozenRow: ri < frozenRowCount,
@@ -1418,6 +1480,9 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
                           isSpillTarget: spillTargetsRef.current.has(`${effectiveSheetId}:${rowId}:${colId}`),
                         });
                         display = formattedDisplay;
+                        // A removed cell is empty now; show what it held, as a ghost.
+                        const ghostValue = diffInfo?.kind === 'removed' && rawValue === '' && diffInfo.before !== undefined;
+                        if (ghostValue) display = diffInfo.before!;
 
                         const isLastFrozenCol = ci === frozenColCount - 1;
                         const isLastFrozenRow = ri === frozenRowCount - 1;
@@ -1431,6 +1496,8 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
                             title={mcStats ? `μ=${mcStats.mean.toFixed(2)} σ=${mcStats.stdev.toFixed(2)} [P5=${mcStats.p5.toFixed(2)}, P95=${mcStats.p95.toFixed(2)}]` : peers ? `${peerDisplayName(peers.peerId, peers.userGroupId)} is editing` : undefined}
                             data-cell-col={ci}
                             data-cell-row={ri}
+                            data-diff={diffInfo?.kind}
+                            data-ghost={ghostValue ? '' : undefined}
                             onMouseDown={(e: any) => {
                               if (e.button !== 0) return;
                               if (isEditing) return; // clicking the cell being edited keeps the edit
@@ -1584,6 +1651,7 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
           {!focusMode && (
             <SheetTabsBar
               sheets={sheetOrder}
+              diffSheets={diffSheets}
               currentSheetId={effectiveSheetId ?? ''}
               readOnly={!canEdit}
               onSelect={handleSelectSheet}
