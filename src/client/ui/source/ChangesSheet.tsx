@@ -139,7 +139,7 @@ export function ChangesSheet({
   const [detail, setDetail] = useState(false);
   const { confirm, confirmSheet } = useConfirm();
   // Scrolling the version list scrubs too (rule: common/version-scrub.ts).
-  const { listRef, onScroll } = useVersionScrub(version, onSliderChange);
+  const { listProps } = useVersionScrub(version, onSliderChange);
 
   const latestVersion = entries.length - 1;
   const time = entries[version]?.time;
@@ -261,8 +261,7 @@ export function ChangesSheet({
               )}
 
               <div
-                ref={listRef}
-                onScroll={onScroll}
+                {...listProps}
                 className="mt-3 -mx-2 min-h-0 flex-1 overflow-y-auto overscroll-contain relative divide-y divide-border"
                 data-testid="changes-versions"
               >

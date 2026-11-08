@@ -139,3 +139,53 @@ describe('version history sheet', () => {
     expect(current()).toBe('4');
   });
 });
+
+describe('with a mouse: the version is the row last under the pointer', () => {
+  // jsdom has no matchMedia; a hover-capable pointer is declared for these tests.
+  const win = window as any;
+  const saved = { matchMedia: win.matchMedia, elementFromPoint: (document as any).elementFromPoint };
+  beforeEach(() => {
+    mock.__reset();
+    win.matchMedia = (q: string) => ({ matches: q.includes('hover: hover'), media: q, addEventListener() {}, removeEventListener() {} });
+  });
+  afterEach(() => {
+    win.matchMedia = saved.matchMedia;
+    (document as any).elementFromPoint = saved.elementFromPoint;
+  });
+  const rowOf = (version: number) => document.querySelector(`[data-version="${version}"]`) as HTMLElement;
+
+  it('moving onto a row previews it, and leaving the list keeps it', async () => {
+    const list = await open();
+    fireEvent.mouseMove(rowOf(5).querySelector('button')!, { clientX: 10, clientY: 100 });
+    await waitFor(() => expect(mock.__getPinnedVersion()).toBe(5));
+    expect(list.scrollTop).toBe(0);                      // a hovered row is visible: no scroll
+    fireEvent.mouseLeave(list);
+    expect(mock.__getPinnedVersion()).toBe(5);
+  });
+
+  it('a wheel scroll under a resting pointer previews the row now under it, not the edge rule\'s', async () => {
+    const list = await open();
+    fireEvent.mouseMove(rowOf(7), { clientX: 10, clientY: 20 });
+    (document as any).elementFromPoint = () => rowOf(3);  // what slid under the pointer
+    scrollTo(list, 80);                                   // the edge rule alone would say 5
+    await waitFor(() => expect(mock.__getPinnedVersion()).toBe(3));
+  });
+
+  it('falls back to the edge rule once the pointer has left the list', async () => {
+    const list = await open();
+    fireEvent.mouseMove(rowOf(7), { clientX: 10, clientY: 20 });
+    fireEvent.mouseLeave(list);
+    (document as any).elementFromPoint = () => rowOf(3);
+    scrollTo(list, 80);
+    await waitFor(() => expect(mock.__getPinnedVersion()).toBe(5));
+  });
+});
+
+describe('without a hover-capable pointer, moving the mouse does nothing', () => {
+  it('a synthetic mouse move (touch devices send those after a tap) is ignored', async () => {
+    mock.__reset();
+    await open();
+    fireEvent.mouseMove(document.querySelector('[data-version="4"]')!, { clientX: 10, clientY: 50 });
+    expect(mock.__getPinnedVersion()).toBe(7);
+  });
+});

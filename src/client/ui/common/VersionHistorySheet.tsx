@@ -5,13 +5,14 @@
  * Lists every version (newest first) with a relative time and a per-row Restore
  * button. The list is a scrubber: scrolling it, dragging the slider and tapping
  * a row all drive the one `version`, which the editor behind the sheet previews
- * live. Scrolling down hands the selection to the row at the top edge as the
- * selected row leaves (and to the oldest once the list hits bottom); scrolling
- * up hands it to the row at the bottom edge (and to the newest at the top) —
- * the rule is spelled out in version-scrub.ts. The slider does the same in
- * reverse: it scrolls the list so the row lands where scrolling would have put
- * it. Restore applies a version via the worker (a forward-only change) and
- * closes the sheet.
+ * live. With a mouse, the row under the pointer is the version (moving onto a
+ * row or wheeling one under the pointer previews it); on touch, scrolling down
+ * hands the selection to the row at the top edge as the selected row leaves
+ * (and to the oldest once the list hits bottom), scrolling up to the row at the
+ * bottom edge (and the newest at the top) — see useVersionScrub / version-
+ * scrub.ts. The slider does the same in reverse: it scrolls the list so the
+ * row lands where scrolling would have put it. Restore applies a version via
+ * the worker (a forward-only change) and closes the sheet.
  */
 
 import { useEffect, useMemo, useState } from 'preact/hooks';
@@ -34,7 +35,7 @@ interface VersionHistorySheetProps {
 export function VersionHistorySheet({ open, onOpenChange, history }: VersionHistorySheetProps) {
   const { entries, version, changeCount, restoreToVersion, onSliderChange, changes } = history;
   const latestVersion = entries.length - 1;
-  const { listRef, onScroll } = useVersionScrub(version, onSliderChange);
+  const { listProps } = useVersionScrub(version, onSliderChange);
   const summary = useMemo(() => (changes ? summarizeChanges(changes) : null), [changes]);
   // The description is cleared the moment the version moves and lands ~120 ms
   // after it settles. Dropping the legend in between resized the header under a
@@ -100,8 +101,7 @@ export function VersionHistorySheet({ open, onOpenChange, history }: VersionHist
         )}
 
         <div
-          ref={listRef}
-          onScroll={onScroll}
+          {...listProps}
           data-testid="history-versions"
           className="mt-4 -mx-2 min-h-0 flex-1 overflow-y-auto overscroll-contain relative divide-y divide-border"
         >

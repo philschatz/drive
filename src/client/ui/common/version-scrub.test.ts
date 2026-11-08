@@ -43,10 +43,11 @@ describe('scrubTarget', () => {
 });
 
 describe('placementFor', () => {
-  it('leaves a visible row where it is', () => {
+  it('leaves a row where it is when any of it is visible', () => {
     expect(placementFor(rows[1], view(0))).toBeNull();
-    // Half visible is visible: row 2 spans 80–120, viewport 100–220.
+    // Row 2 spans 80–120: still showing at viewport 100–220 and at 0–100 alike.
     expect(placementFor(rows[2], view(100))).toBeNull();
+    expect(placementFor(rows[2], { scrollTop: 0, clientHeight: 100, scrollHeight: 320 })).toBeNull();
   });
 
   it('puts a row below the viewport at the top edge, clamped to the end of the list', () => {

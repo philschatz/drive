@@ -66,15 +66,15 @@ export function scrubTarget(rows: ScrubRow[], view: ScrubView, current: number):
 
 /**
  * Where to scroll so `row` sits where scrolling would have put it, or null when
- * it is already (at least half) visible and should be left alone.
+ * any of it is already visible and it should be left alone (a row the mouse is
+ * over is always partly visible, so a hover never moves the list).
  */
 export function placementFor(row: ScrubRow, view: ScrubView): number | null {
   const { scrollTop, clientHeight, scrollHeight } = view;
-  const m = mid(row);
   const bottom = scrollTop + clientHeight;
-  if (m >= scrollTop && m <= bottom) return null;
+  if (row.top + row.height > scrollTop && row.top < bottom) return null;
   const max = Math.max(0, scrollHeight - clientHeight);
   // Below the viewport (older): top edge. Above (newer): bottom edge.
-  if (m > bottom) return Math.min(row.top, max);
+  if (row.top >= bottom) return Math.min(row.top, max);
   return Math.max(0, row.top + row.height - clientHeight);
 }
