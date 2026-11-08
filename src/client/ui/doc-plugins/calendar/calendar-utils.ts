@@ -51,6 +51,8 @@ export interface EventLookupItem {
   ev: CalendarEvent;
   recurrenceDate: string | null;
   calDocId?: string;
+  /** History mode: a removed event drawn for display — nothing to open. */
+  ghost?: boolean;
 }
 
 /**
@@ -70,7 +72,7 @@ export function makeSXCallbacks(opts: {
   return {
     onEventClick: (event: any) => {
       const item = opts.eventLookupRef.current[event.id];
-      if (item) opts.openEditor(item.uid, item.ev, null, item.recurrenceDate, item.calDocId);
+      if (item && !item.ghost) opts.openEditor(item.uid, item.ev, null, item.recurrenceDate, item.calDocId);
     },
     onClickDate: (date: any) => {
       const calDocId = opts.getDefaultCalDocId?.();

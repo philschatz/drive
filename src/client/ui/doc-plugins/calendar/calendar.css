@@ -27,3 +27,21 @@ body.dragging { user-select: none; }
 body.dragging--move { cursor: grabbing; }
 body.dragging--resize { cursor: ns-resize; }
 .hidden { display: none; }
+
+/* History mode: what the version on screen did to an event. schedule-x puts
+   the event's `_options.additionalClasses` on its element in every view; the
+   cues match the lists' (solid bar, dashed outline, strikethrough + fade). */
+#sx-cal [data-event-id].diff-added {
+  box-shadow: inset 4px 0 0 var(--diff-added), 0 0 0 2px var(--diff-added);
+}
+#sx-cal [data-event-id].diff-changed {
+  box-shadow: inset 4px 0 0 var(--diff-changed);
+  outline: 2px dashed var(--diff-changed);
+  outline-offset: -2px;
+}
+#sx-cal [data-event-id].diff-removed {
+  box-shadow: inset 4px 0 0 var(--diff-removed);
+  text-decoration: line-through;
+  opacity: 0.6;
+  cursor: default;
+}

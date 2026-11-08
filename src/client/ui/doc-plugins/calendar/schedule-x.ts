@@ -6,11 +6,13 @@ import { rebuildExpanded, isAllDay } from './recurrence';
 import { isDark } from '../../common/theme';
 import type { CalendarDocument } from '../../../../shared/schemas/calendar';
 import { createLogger } from '../../../../shared/logger';
+import { eventHighlight, type EventHighlight } from './diff-events';
 
 const log = createLogger('calendar');
 
 export interface EventLookupMap {
-  [id: string]: ExpandedEvent;
+  /** `ghost`: an occurrence of an event the version on screen removed — drawn, not editable. */
+  [id: string]: ExpandedEvent & { ghost?: boolean };
 }
 
 export interface CalendarSource extends CalendarDocument {
@@ -21,7 +23,11 @@ export interface MultiCalEventLookupMap {
   [id: string]: ExpandedEvent & { calDocId: string };
 }
 
-export function mapToSXEvents(expanded: ExpandedEvent[], calTZ: string, calColor: string): { sxEvents: any[]; eventLookup: EventLookupMap } {
+export function mapToSXEvents(
+  expanded: ExpandedEvent[], calTZ: string, calColor: string,
+  /** History mode: diff classes per uid, and which uids are ghosts. */
+  highlight?: Pick<EventHighlight, 'diff' | 'ghosts'>,
+): { sxEvents: any[]; eventLookup: EventLookupMap } {
   const eventLookup: EventLookupMap = {};
   const sxEvents: any[] = [];
   for (const item of expanded) {
@@ -49,19 +55,32 @@ export function mapToSXEvents(expanded: ExpandedEvent[], calTZ: string, calColor
       const isPast = allDay
         ? Temporal.PlainDate.compare(sxEnd, Temporal.Now.plainDateISO()) < 0
         : Temporal.Instant.compare(sxEnd.toInstant(), Temporal.Now.instant()) < 0;
-      eventLookup[id] = item;
+      const { classes, ghost } = eventHighlight(item.uid, highlight);
+      eventLookup[id] = ghost ? { ...item, ghost: true } : item;
       sxEvents.push({
         id,
         title: (ev.title || 'Untitled') + (item.isRecurring ? ' \u21bb' : ''),
         start: sxStart,
         end: sxEnd,
         calendarId: isPast ? 'cal-past' : 'cal',
+        // schedule-x puts these on the event element in every view.
+        ...(classes ? { _options: { additionalClasses: classes } } : {}),
       });
     } catch (err) {
       log.warn(`Skipping malformed calendar event "${item.uid}":`, err);
     }
   }
   return { sxEvents, eventLookup };
+}
+
+/**
+ * Move the visible range to `date`. There is no public controls plugin in this
+ * build, so this reaches schedule-x's internal `$app` state (private on the
+ * type, hence `any`), guarded so a future internal rename degrades to a no-op.
+ */
+export function goToDate(calendar: any, date: Temporal.PlainDate): void {
+  const selected = calendar?.$app?.datePickerState?.selectedDate;
+  if (selected && typeof selected === 'object' && 'value' in selected) selected.value = date;
 }
 
 export function createSXCalendar(

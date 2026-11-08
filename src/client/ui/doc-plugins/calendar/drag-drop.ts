@@ -184,7 +184,7 @@ export function initDragDrop(
     const eventLookup = getEventLookup();
     const events = getEvents();
     const item = eventLookup[state.eventId];
-    if (!item) return;
+    if (!item || item.ghost) return; // a ghost of a removed event has nothing to move
 
     if (state.isMonthGrid) {
       calEl.querySelectorAll('.sx__month-grid-day--dragover').forEach(d => d.classList.remove('sx__month-grid-day--dragover'));

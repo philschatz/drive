@@ -12,7 +12,9 @@ import { onThemeChange } from '../../common/theme';
 import { HistorySlider } from '../../common/HistorySlider';
 import type { CalendarEvent } from '../../../../shared/schemas/calendar';
 import { rebuildExpanded } from './recurrence';
-import { mapToSXEvents, createSXCalendar } from './schedule-x';
+import { mapToSXEvents, createSXCalendar, goToDate } from './schedule-x';
+import { firstHighlightedDate, type EventHighlight } from './diff-events';
+import { itemChanges, removedItems, withGhosts } from '../../../../shared/version-changes';
 import type { EventLookupMap } from './schedule-x';
 import { initDragDrop } from './drag-drop';
 import { EventEditor } from './EventEditor';
@@ -66,6 +68,8 @@ function CalendarInner({ docId, readOnly, initialEventId }: { docId: string; rea
   const calColorRef = useRef('#039be5');
   const calTZRef = useRef(Intl.DateTimeFormat().resolvedOptions().timeZone);
   const pendingEventIdRef = useRef(initialEventId);
+  // History mode (see the effect below); read by refreshCalendar on every rebuild.
+  const highlightRef = useRef<EventHighlight | null>(null);
 
   const getEvents = useCallback(() => eventsRef.current, []);
   const { editorState, setEditorState, openEditor, refreshEditorFromEvents } = useCalendarEditor(getEvents);
@@ -76,8 +80,12 @@ function CalendarInner({ docId, readOnly, initialEventId }: { docId: string; rea
   const refreshCalendar = useCallback(() => {
     const range = currentRangeRef.current;
     if (!range.start || !range.end) return;
-    const expanded = rebuildExpanded(eventsRef.current, range.start, range.end);
-    const { sxEvents, eventLookup } = mapToSXEvents(expanded, calTZRef.current, calColorRef.current);
+    // In history mode the removed events ride along as ghosts — merged here, at
+    // rebuild time, so a fresh snapshot never renders against stale ghosts.
+    const h = highlightRef.current;
+    const source = h ? withGhosts(eventsRef.current, h.removed).record : eventsRef.current;
+    const expanded = rebuildExpanded(source, range.start, range.end);
+    const { sxEvents, eventLookup } = mapToSXEvents(expanded, calTZRef.current, calColorRef.current, h ?? undefined);
     eventLookupRef.current = eventLookup;
     if (eventsPluginRef.current) {
       eventsPluginRef.current.set(sxEvents);
@@ -95,6 +103,34 @@ function CalendarInner({ docId, readOnly, initialEventId }: { docId: string; rea
   // Clear a stale field focus when the editor closes; sync presence.
   useEffect(() => { if (!editorState) setFocusedPath(null); }, [editorState]);
   useFocusPathSync(focusPath, broadcast);
+
+  // History mode: tint what the version on screen did to each event, bring the
+  // ones it removed back as ghosts (drawn, never opened or dragged), move the
+  // view to the first highlighted event and scroll it into view. schedule-x
+  // renders on its own schedule, so the reveal polls briefly for the element.
+  const changes = history.changes;
+  useEffect(() => {
+    if (!changes) {
+      if (highlightRef.current) { highlightRef.current = null; refreshCalendar(); }
+      return;
+    }
+    const diff = itemChanges(changes, ['events']);
+    const removed = removedItems<CalendarEvent>(changes, ['events']);
+    highlightRef.current = { diff, removed, ghosts: new Set(removed.map(r => r.id)) };
+    const day = firstHighlightedDate(withGhosts(eventsRef.current, removed).record, diff);
+    if (day && calendarRef.current) goToDate(calendarRef.current, Temporal.PlainDate.from(day));
+    refreshCalendar();
+    let tries = 0;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const reveal = () => {
+      timer = null;
+      const el = document.getElementById('sx-cal')?.querySelector<HTMLElement>('[data-event-id][class*="diff-"]');
+      if (el) { el.scrollIntoView?.({ block: 'center', behavior: 'smooth' }); return; }
+      if (++tries < 20) timer = setTimeout(reveal, 50);
+    };
+    timer = setTimeout(reveal, 0);
+    return () => { if (timer !== null) clearTimeout(timer); };
+  }, [changes, refreshCalendar]);
 
   useEffect(() => {
     if (!docId) return;
