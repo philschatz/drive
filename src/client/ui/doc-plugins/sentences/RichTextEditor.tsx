@@ -43,6 +43,7 @@ import {
   orderedListNumbers, tableGroups,
   type BlockNode, type BlockType, type InlineRun,
 } from './blocks';
+import type { TextRange } from '../../../../shared/version-changes';
 import {
   opsForDeleteBackward, opsForDeleteForward, opsForInsertParagraph, opsForInsertText, opsForPasteText,
   toggleMarkOps, setLinkOps, setBlockTypeOps, toggleListOps, indentOps, outdentOps, insertDividerOps,
@@ -340,6 +341,71 @@ function TableEl({ model, rows, columns, resyncEpoch, editable }: {
   );
 }
 
+// ── Overlays (peer carets, history diffs) ───────────────────────────────────
+
+interface Box { left: number; top: number; width: number; height: number }
+interface RangeOverlay { caret: { left: number; top: number; height: number }; highlights: Box[] }
+interface DiffOverlay { kind: TextRange['kind']; boxes: Box[]; caret?: RangeOverlay['caret']; tip?: string }
+
+const NO_RANGES: TextRange[] = [];
+
+/**
+ * Measure a model range in wrapper coordinates: the caret line (collapsed Range
+ * at `to`) and, when `from < to`, one translucent box per rendered line fragment.
+ */
+function measureRange(root: HTMLElement, blocks: BlockNode[], wrapRect: DOMRect, from: number, to: number): RangeOverlay | null {
+  const len = contentLength(blocks);
+  const focus = domPointAt(root, blocks, Math.max(0, Math.min(to, len)));
+  if (!focus) return null;
+  let rect: { left: number; top: number; height: number } | undefined;
+  if (focus.node.nodeType === Node.TEXT_NODE) {
+    try {
+      const range = document.createRange();
+      range.setStart(focus.node, focus.offset);
+      range.collapse(true);
+      rect = range.getClientRects()?.[0] ?? range.getBoundingClientRect();
+    } catch { /* Range rects unavailable (jsdom) — fall back below */ }
+  }
+  if (!rect) {
+    const el = focus.node instanceof HTMLElement ? focus.node : focus.node.parentElement;
+    rect = el?.getBoundingClientRect();
+  }
+  if (!rect) return null;
+
+  const highlights: Box[] = [];
+  if (from < to) {
+    const anchor = domPointAt(root, blocks, Math.max(0, Math.min(from, len)));
+    try {
+      if (anchor) {
+        const range = document.createRange();
+        range.setStart(anchor.node, anchor.offset);
+        range.setEnd(focus.node, focus.offset);
+        for (const r of Array.from(range.getClientRects?.() ?? [])) {
+          if (r.width <= 0 || r.height <= 0) continue;
+          // Browsers report both a parent span's box and its text's box for
+          // formatted runs — keep only boxes not contained in an earlier one.
+          const contained = highlights.some(h =>
+            r.left >= h.left + wrapRect.left - 0.5 && r.top >= h.top + wrapRect.top - 0.5 &&
+            r.right <= h.left + h.width + wrapRect.left + 0.5 && r.bottom <= h.top + h.height + wrapRect.top + 0.5);
+          if (contained) continue;
+          highlights.push({ left: r.left - wrapRect.left, top: r.top - wrapRect.top, width: r.width, height: r.height });
+        }
+      }
+    } catch { /* no Range rects (jsdom) — caret + tip still render */ }
+  }
+  return {
+    caret: { left: rect.left - wrapRect.left, top: rect.top - wrapRect.top, height: rect.height || 20 },
+    highlights,
+  };
+}
+
+/** The deleted text for a removal's tip: markers shown as ¶, long runs cut. */
+function tipText(before: string | undefined): string | undefined {
+  if (!before) return undefined;
+  const shown = before.replace(/\uFFFC/g, '¶');
+  return shown.length > 40 ? shown.slice(0, 39) + '…' : shown;
+}
+
 // ── The editor ───────────────────────────────────────────────────────────────
 
 export function RichTextEditor({
@@ -351,6 +417,7 @@ export function RichTextEditor({
   onRedo,
   apiRef,
   remoteCursors = [],
+  diffRanges = NO_RANGES,
 }: {
   spans: RichTextSpan[];
   editable: boolean;
@@ -362,6 +429,13 @@ export function RichTextEditor({
   apiRef?: RefObject<RichTextEditorApi | null>;
   /** Other users' carets, drawn as colored vertical lines over the text. */
   remoteCursors?: RemoteCursor[];
+  /**
+   * History mode: the ranges the version on screen changed, in the indices of
+   * these `spans` (shared/version-changes.ts `textRanges`). Drawn as an overlay
+   * like the peer cursors — never as nodes inside the contenteditable, whose DOM
+   * must stay f(spans). Pass a memoized array: a new identity reveals again.
+   */
+  diffRanges?: TextRange[];
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -1060,14 +1134,20 @@ export function RichTextEditor({
     return () => document.removeEventListener('selectionchange', onSelChange);
   }, [editable]);
 
+  // Overlays are measured off the DOM, so a resize re-measures them.
+  const [layoutTick, setLayoutTick] = useState(0);
+  useEffect(() => {
+    const onResize = () => setLayoutTick(t => t + 1);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
   // Peer carets: measure each remote cursor — the caret line (collapsed Range
   // at its focus point), the selection's per-line highlight boxes, and a name
   // tip anchored above the line — all in wrapper coordinates. The overlay
   // lives OUTSIDE the contenteditable so it never disturbs selection mapping
   // or the DOM = f(spans) invariant.
-  interface Box { left: number; top: number; width: number; height: number }
-  interface PeerOverlay { caret: { left: number; top: number; height: number }; highlights: Box[] }
-  const [peerOverlays, setPeerOverlays] = useState<Record<string, PeerOverlay>>({});
+  const [peerOverlays, setPeerOverlays] = useState<Record<string, RangeOverlay>>({});
   useLayoutEffect(() => {
     const root = rootRef.current;
     const wrap = wrapRef.current;
@@ -1076,56 +1156,56 @@ export function RichTextEditor({
       return;
     }
     const wrapRect = wrap.getBoundingClientRect();
-    const len = contentLength(blocks);
-    const next: Record<string, PeerOverlay> = {};
+    const next: Record<string, RangeOverlay> = {};
     for (const c of remoteCursors) {
-      const focus = domPointAt(root, blocks, Math.max(0, Math.min(c.to, len)));
-      if (!focus) continue;
-      let rect: { left: number; top: number; height: number } | undefined;
-      if (focus.node.nodeType === Node.TEXT_NODE) {
-        try {
-          const range = document.createRange();
-          range.setStart(focus.node, focus.offset);
-          range.collapse(true);
-          rect = range.getClientRects()?.[0] ?? range.getBoundingClientRect();
-        } catch { /* Range rects unavailable (jsdom) — fall back below */ }
-      }
-      if (!rect) {
-        const el = focus.node instanceof HTMLElement ? focus.node : focus.node.parentElement;
-        rect = el?.getBoundingClientRect();
-      }
-      if (!rect) continue;
-
-      // Selection highlight: one translucent box per rendered line fragment.
-      const highlights: Box[] = [];
-      if (c.from < c.to) {
-        const anchor = domPointAt(root, blocks, Math.max(0, Math.min(c.from, len)));
-        try {
-          if (anchor) {
-            const range = document.createRange();
-            range.setStart(anchor.node, anchor.offset);
-            range.setEnd(focus.node, focus.offset);
-            for (const r of Array.from(range.getClientRects?.() ?? [])) {
-              if (r.width <= 0 || r.height <= 0) continue;
-              // Browsers report both a parent span's box and its text's box for
-              // formatted runs — keep only boxes not contained in an earlier one.
-              const contained = highlights.some(h =>
-                r.left >= h.left + wrapRect.left - 0.5 && r.top >= h.top + wrapRect.top - 0.5 &&
-                r.right <= h.left + h.width + wrapRect.left + 0.5 && r.bottom <= h.top + h.height + wrapRect.top + 0.5);
-              if (contained) continue;
-              highlights.push({ left: r.left - wrapRect.left, top: r.top - wrapRect.top, width: r.width, height: r.height });
-            }
-          }
-        } catch { /* no Range rects (jsdom) — caret + tip still render */ }
-      }
-
-      next[c.id] = {
-        caret: { left: rect.left - wrapRect.left, top: rect.top - wrapRect.top, height: rect.height || 20 },
-        highlights,
-      };
+      const m = measureRange(root, blocks, wrapRect, c.from, c.to);
+      if (m) next[c.id] = m;
     }
     setPeerOverlays(next);
-  }, [spans, remoteCursors, editable]);
+  }, [spans, remoteCursors, editable, layoutTick]);
+
+  // History mode: the changed ranges, drawn the same way. A range spanning text
+  // gets translucent boxes; a zero-length `removed` range is a bar where the
+  // text was, with the deleted text in a tip; a block-level range covers the
+  // whole block element (a new or restyled block has no text of its own to box).
+  const [diffOverlays, setDiffOverlays] = useState<DiffOverlay[]>([]);
+  useLayoutEffect(() => {
+    const root = rootRef.current;
+    const wrap = wrapRef.current;
+    if (!root || !wrap || diffRanges.length === 0) {
+      setDiffOverlays(prev => (prev.length > 0 ? [] : prev));
+      return;
+    }
+    const wrapRect = wrap.getBoundingClientRect();
+    const next: DiffOverlay[] = [];
+    for (const r of diffRanges) {
+      if (r.block) {
+        const el = root.querySelector(`[data-bi="${blockIndexAt(blocks, r.from)}"]`);
+        const rect = el?.getBoundingClientRect();
+        if (!rect) continue;
+        next.push({ kind: r.kind, boxes: [{ left: rect.left - wrapRect.left, top: rect.top - wrapRect.top, width: rect.width, height: rect.height }] });
+        continue;
+      }
+      const m = measureRange(root, blocks, wrapRect, r.from, r.to);
+      if (!m) continue;
+      if (r.from === r.to) next.push({ kind: r.kind, boxes: [], caret: m.caret, tip: tipText(r.before) });
+      else next.push({ kind: r.kind, boxes: m.highlights });
+    }
+    setDiffOverlays(next);
+  }, [spans, diffRanges, editable, layoutTick]);
+
+  // Scroll the first changed range's block into view, once per set of ranges
+  // (the ranges and the spans they index arrive separately, so retry on spans).
+  const revealedRef = useRef<TextRange[] | null>(null);
+  useLayoutEffect(() => {
+    const root = rootRef.current;
+    if (!root || diffRanges.length === 0 || revealedRef.current === diffRanges) return;
+    const first = diffRanges.reduce((a, b) => (b.from < a.from ? b : a));
+    const el = root.querySelector<HTMLElement>(`[data-bi="${blockIndexAt(blocks, first.from)}"]`);
+    if (!el) return;
+    revealedRef.current = diffRanges;
+    el.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
+  }, [diffRanges, spans]);
 
   return (
     <div ref={wrapRef} className="rt-wrap">
@@ -1200,6 +1280,39 @@ export function RichTextEditor({
           </div>
         );
       })}
+      {diffOverlays.map((o, i) => (
+        <div key={i}>
+          {o.boxes.map((h, j) => (
+            <div
+              key={j}
+              className="rt-diff-box"
+              data-kind={o.kind}
+              data-testid="diff-box"
+              style={{ left: h.left, top: h.top, width: h.width, height: h.height }}
+            />
+          ))}
+          {o.caret && (
+            <>
+              <div
+                className="rt-diff-caret"
+                data-kind={o.kind}
+                data-testid="diff-caret"
+                style={{ left: o.caret.left, top: o.caret.top, height: o.caret.height }}
+              />
+              {o.tip && (
+                <div
+                  className="rt-diff-tip"
+                  data-kind={o.kind}
+                  data-testid="diff-tip"
+                  style={{ left: o.caret.left - 1, top: o.caret.top }}
+                >
+                  {o.tip}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      ))}
     </div>
   );
 }

@@ -14,6 +14,7 @@ import { useFocusPathSync } from '../../common/useFocusPathSync';
 import { useKeyboardInset } from '../../common/useKeyboardInset';
 import { useDocumentValidation } from '../../common/useDocumentValidation';
 import { HistorySlider } from '../../common/HistorySlider';
+import { textRanges, type TextRange } from '../../../../shared/version-changes';
 import { DocLoader } from '../../common/useDocument';
 import { RichTextEditor, type RemoteCursor, type RichTextEditorApi, type SelectionState } from './RichTextEditor';
 import { BottomFormatBar } from './BottomFormatBar';
@@ -28,6 +29,8 @@ const DOC_QUERY = '{ name: (.name // "Sentences") }';
  * DataGrid-style formatting bar docked to the bottom — that bar is the
  * affordance. Read-only access renders the same document with neither.
  */
+const NO_RANGES: TextRange[] = [];
+
 export function SentencesView({ docId, readOnly }: { docId?: string; rest?: string; readOnly?: boolean }) {
   const [name, setName] = useState('Sentences');
   const [spans, setSpans] = useState<RichTextSpan[] | null>(null);
@@ -39,6 +42,12 @@ export function SentencesView({ docId, readOnly }: { docId?: string; rest?: stri
   const { canEdit, canEditRef, noAccess } = useCanEdit(docId, readOnly, history);
   const { peers, peerList, broadcast } = usePresence(docId);
   const keyboardInset = useKeyboardInset();
+  // History mode: the text ranges the version on screen changed, which the
+  // editor draws as an overlay (memoized — a new array means "reveal again").
+  const diffRanges = useMemo(
+    () => (history.changes ? textRanges(history.changes, ['content']) : NO_RANGES),
+    [history.changes],
+  );
   const editorApiRef = useRef<RichTextEditorApi | null>(null);
   const importInputRef = useRef<HTMLInputElement>(null);
   // While local writes are in flight, subscription pushes lag the optimistic
@@ -312,6 +321,7 @@ export function SentencesView({ docId, readOnly }: { docId?: string; rest?: stri
             onRedo={redo}
             apiRef={editorApiRef}
             remoteCursors={remoteCursors}
+            diffRanges={diffRanges}
           />
         )}
       </div>

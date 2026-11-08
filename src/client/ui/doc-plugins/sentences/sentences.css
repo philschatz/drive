@@ -35,6 +35,47 @@
   z-index: 0;
 }
 
+/* History mode: what the version on screen changed, drawn in the same wrapper
+   coords as peer cursors and never inside the contenteditable (DOM = f(spans)).
+   `data-kind`, not `data-diff`: the global row rules must not restyle these. */
+.rt-diff-box {
+  position: absolute;
+  border-radius: 2px;
+  opacity: 0.3;
+  pointer-events: none;
+  z-index: 0;
+  background: var(--diff-added);
+}
+.rt-diff-box[data-kind="changed"] { background: var(--diff-changed); }
+.rt-diff-box[data-kind="removed"] { background: var(--diff-removed); }
+.rt-diff-caret {
+  position: absolute;
+  width: 2px;
+  border-radius: 1px;
+  pointer-events: none;
+  z-index: 1;
+  background: var(--diff-removed);
+}
+.rt-diff-tip {
+  position: absolute;
+  transform: translateY(-100%);
+  max-width: 16rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 10px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 3px 3px 3px 0;
+  color: #fff;
+  text-decoration: line-through;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 2;
+  background: var(--diff-removed);
+}
+/* So revealing a changed block centres it between the title bar and the sheet. */
+.rt-editor [data-bi] { scroll-margin-block: 4rem 40vh; }
+
 .rt-editor {
   outline: none;
   padding: 0.5rem 0;

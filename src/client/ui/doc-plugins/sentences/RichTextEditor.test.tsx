@@ -867,3 +867,62 @@ describe('divider clicks', () => {
     expect(where().anchor).toEqual(['para', 4]);
   });
 });
+
+describe('history diff overlay', () => {
+  const rangeProto = Range.prototype as any;
+  const elProto = Element.prototype as any;
+  const saved = { rects: rangeProto.getClientRects, bounds: rangeProto.getBoundingClientRect, scroll: elProto.scrollIntoView };
+  let scrolled: jest.Mock;
+  const rect = (left: number, top: number, width: number, height: number) =>
+    ({ left, top, width, height, right: left + width, bottom: top + height });
+  beforeEach(() => {
+    // jsdom lays nothing out: give every Range one line box and a caret rect.
+    rangeProto.getClientRects = () => [rect(10, 20, 50, 18)];
+    rangeProto.getBoundingClientRect = () => rect(10, 20, 0, 18);
+    scrolled = jest.fn();
+    elProto.scrollIntoView = function (this: Element) { scrolled(this); };
+  });
+  afterEach(() => {
+    rangeProto.getClientRects = saved.rects;
+    rangeProto.getBoundingClientRect = saved.bounds;
+    if (saved.scroll) elProto.scrollIntoView = saved.scroll; else delete elProto.scrollIntoView;
+  });
+
+  const spans = [blockSpan('paragraph'), textSpan('Hello brave world')];
+  const editor = () => screen.getByTestId('rt-editor');
+
+  it('boxes an added range outside the contenteditable, and reveals its block once', () => {
+    const ranges = [{ from: 7, to: 12, kind: 'added' as const }];
+    const { rerender } = render(<RichTextEditor spans={spans} editable={false} onOps={() => {}} diffRanges={ranges} />);
+    const box = screen.getByTestId('diff-box');
+    expect(box.getAttribute('data-kind')).toBe('added');
+    expect(box.style.width).toBe('50px');
+    expect(editor().contains(box)).toBe(false);
+    expect(editor().querySelector('[data-testid^="diff-"]')).toBeNull();
+    expect(scrolled).toHaveBeenCalledTimes(1);
+    expect(scrolled.mock.calls[0][0]).toBe(editor().querySelector('[data-bi="0"]'));
+    rerender(<RichTextEditor spans={spans} editable={false} onOps={() => {}} diffRanges={ranges} />);
+    expect(scrolled).toHaveBeenCalledTimes(1);
+  });
+
+  it('marks a deletion point with a bar and the deleted text, struck through in a tip', () => {
+    render(<RichTextEditor spans={spans} editable={false} onOps={() => {}}
+      diffRanges={[{ from: 7, to: 7, kind: 'removed', before: 'old￼text' }]} />);
+    expect(screen.getByTestId('diff-caret').getAttribute('data-kind')).toBe('removed');
+    expect(screen.getByTestId('diff-tip').textContent).toBe('old¶text');
+    expect(screen.queryByTestId('diff-box')).toBeNull();
+  });
+
+  it('a block-level range covers the block element', () => {
+    render(<RichTextEditor spans={spans} editable={false} onOps={() => {}}
+      diffRanges={[{ from: 0, to: 1, kind: 'added', block: true }]} />);
+    const box = screen.getByTestId('diff-box');
+    expect(box.getAttribute('data-kind')).toBe('added');
+  });
+
+  it('draws nothing without ranges', () => {
+    render(<RichTextEditor spans={spans} editable={false} onOps={() => {}} />);
+    expect(screen.queryByTestId('diff-box')).toBeNull();
+    expect(scrolled).not.toHaveBeenCalled();
+  });
+});

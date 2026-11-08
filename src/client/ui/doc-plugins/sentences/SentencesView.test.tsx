@@ -524,3 +524,30 @@ describe('SentencesView container', () => {
     expect(screen.getByText('docs').closest('a')?.getAttribute('href')).toBe('https://x.dev');
   });
 });
+
+describe('history mode highlights', () => {
+  it('draws what the version on screen changed over the text', async () => {
+    mock.__reset();
+    mock.__setDoc(DOC, { '@type': 'Sentences', name: 'My Doc', content: '' });
+    mock.__setSpans(DOC, ['content'], markdownToSpans('Hello brave world'));
+    mock.__setHistory(DOC, [{ version: 0, time: 1 }, { version: 1, time: 2 }]);
+    // "brave " typed at 7 (after the marker and "Hello "), and "old " cut after it.
+    mock.__setVersionChanges(DOC, 1, [
+      { path: ['content', 7], kind: 'added', action: 'splice', after: 'brave ', length: 6 },
+      { path: ['content', 13], kind: 'removed', action: 'del', before: 'old ', length: 4 },
+    ]);
+    render(<SentencesView docId={DOC} />);
+    await waitFor(() => expect(screen.getByText('Hello brave world')).toBeTruthy());
+
+    fireEvent.click(screen.getByTitle('History'));
+    // The deletion bar needs no layout (jsdom gives it an empty rect); the added
+    // range's boxes would, so the bar is what proves the wiring.
+    const caret = await waitFor(() => screen.getByTestId('diff-caret'));
+    expect(caret.getAttribute('data-kind')).toBe('removed');
+    expect(screen.getByTestId('diff-tip').textContent).toBe('old ');
+    expect(screen.getByTestId('rt-editor').querySelector('[data-testid^="diff-"]')).toBeNull();
+
+    fireEvent.click(screen.getByTitle('History'));
+    await waitFor(() => expect(screen.queryByTestId('diff-caret')).toBeNull());
+  });
+});
