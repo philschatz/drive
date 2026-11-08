@@ -9,6 +9,9 @@ import {
 import type { DataGridDocument, DataGridCellFormat } from '../../../../shared/schemas/datagrid';
 import { applyFreezeCount } from './sheet-actions';
 import { toggleFormat, type ToggleableFormatKey } from './formatting';
+import { createLogger } from '../../../../shared/logger';
+
+const log = createLogger('datagrid');
 
 // ============================================================
 // Shortcut — canonical keyboard shortcut definition
@@ -553,7 +556,11 @@ const clipboardPlugin: GridPlugin = {
               try {
                 const text = await navigator.clipboard.readText();
                 if (text) rows = text.split('\n').map(l => l.split('\t'));
-              } catch { /* denied */ }
+              } catch (err) {
+                // Expected when the clipboard-read prompt is refused (or never
+                // shown, as in headless Chromium): the paste just does nothing.
+                log.debug('paste: clipboard read denied', err);
+              }
             }
             if (rows?.length) doPaste(rows);
           })();

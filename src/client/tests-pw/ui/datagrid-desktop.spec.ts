@@ -7,6 +7,14 @@ import { openApp, createDocViaUI, renameDocViaUI, type App } from './support';
  * pressSequentially rather than fill(); and clipboard work needs a native
  * ClipboardEvent and the async Clipboard API, which exist nowhere else.
  *
+ * The context is opened with the clipboard permissions granted. CI runs
+ * Playwright's bundled Chrome Headless Shell, whose permission manager answers
+ * "ask" to everything not granted over CDP — so without the grant the copy's
+ * `navigator.clipboard.write` is refused (silently: the app swallows it), the OS
+ * clipboard never gets the value, and the second paste below finds nothing to
+ * read. Real Chrome auto-grants sanitized clipboard writes under a user gesture,
+ * which is why that failure never reproduced against the system Chromium.
+ *
  * The formula semantics behind all of it are covered exhaustively in Jest
  * (datagrid.test.ts, formula-parser.test.ts, commands.test.ts) — including the
  * parse and dispatch halves of paste. The asymmetry the clipboard cases guard is
@@ -24,7 +32,9 @@ test.describe('DataGrid (desktop)', () => {
   let app: App;
 
   test.beforeAll(async ({ browser }) => {
-    app = await openApp(browser, 'datagrid');
+    app = await openApp(browser, 'datagrid', {
+      permissions: ['clipboard-read', 'clipboard-write'],
+    });
     await createDocViaUI(app, 'Spreadsheet', 'Test Spreadsheet');
     await expect(app.page.locator('.datagrid-table')).toBeVisible({ timeout: 10_000 });
   });
@@ -113,7 +123,6 @@ test.describe('DataGrid (desktop)', () => {
     const page = app.page;
     // Put tab/newline-separated text on the clipboard the way a spreadsheet or
     // text editor would, with nothing copied in-app.
-    await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
     await page.evaluate(() => navigator.clipboard.writeText('ext1\text2\next3\text4'));
     await page.reload();
     await expect(page.locator('.datagrid-table')).toBeVisible({ timeout: 20_000 });

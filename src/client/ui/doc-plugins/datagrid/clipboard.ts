@@ -1,6 +1,9 @@
 import { internalToR1C1, getDisplayValue } from './helpers';
 import type { DataGridCell, DataGridCellFormat } from '../../../../shared/schemas/datagrid';
 import { formatToCss } from './formatting';
+import { createLogger } from '../../../../shared/logger';
+
+const log = createLogger('datagrid');
 
 // ============================================================
 // Shared types
@@ -142,6 +145,12 @@ export function writeClipboard(tsv: string, html: string): void {
       'text/html': new Blob([html], { type: 'text/html' }),
     }),
   ]).catch(() => {
-    navigator.clipboard.writeText(tsv).catch(() => {});
+    navigator.clipboard.writeText(tsv).catch((err: unknown) => {
+      // The in-grid clipboard still works; what is lost is pasting into another
+      // app — and a second in-grid paste, which re-reads the OS clipboard once
+      // the internal one has been consumed. Headless Chromium refuses this
+      // unless the clipboard-write permission was granted explicitly.
+      log.warn('copy: OS clipboard write refused', err);
+    });
   });
 }
