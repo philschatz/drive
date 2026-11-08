@@ -166,6 +166,55 @@ describe('ListRow', () => {
       fireEvent.keyDown(row(), { key: 'F10', shiftKey: true });
       expect(onSelect).toHaveBeenCalledTimes(1);
     });
+
+    /**
+     * md-list-item's link variant renders its `end` slot INSIDE its shadow <a>,
+     * so a click on a trailing control bubbles through that anchor and the
+     * browser follows it — the kebab opened the doc instead of its menu. jsdom
+     * has no shadow anchor, so these read `defaultPrevented`, which is exactly
+     * what stops the real one.
+     */
+    it('cancels the row link for a click on the kebab and its plain items', () => {
+      window.location.hash = '#/';
+      const rename = jest.fn();
+      render(
+        <ListRow
+          data-testid="row" href="#/d/abc" actionsLabel="More actions for Doc"
+          actions={[
+            { icon: 'edit', label: 'Rename', onSelect: rename },
+            { icon: 'code', label: 'View source', href: '#/source/abc' },
+          ]}
+        ><div slot="headline">Doc</div></ListRow>,
+      );
+
+      const kebab = screen.getByRole('button', { name: 'More actions for Doc' });
+      expect(fireEvent.click(kebab)).toBe(false);
+      expect(window.location.hash).toBe('#/');
+
+      const [plain, linked] = row().querySelectorAll('md-menu-item');
+      expect(fireEvent.click(plain)).toBe(false);
+      expect(rename).toHaveBeenCalledTimes(1);
+      expect(window.location.hash).toBe('#/');
+
+      // An href item renders its own inner <a>; the innermost anchor wins, so
+      // cancelling would only kill "View source".
+      expect(fireEvent.click(linked)).toBe(true);
+    });
+
+    it('cancels the row link for a click on a lone action icon', () => {
+      const onSelect = renderLink();
+      expect(fireEvent.click(screen.getByRole('button', { name: 'Rename' }))).toBe(false);
+      expect(onSelect).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('leaves a trailing click alone on a row that is not a link', () => {
+    render(
+      <ListRow data-testid="row" onTap={jest.fn()} actions={[{ icon: 'edit', label: 'Edit', testId: 'act', onSelect: jest.fn() }]}>
+        <div slot="headline">A</div>
+      </ListRow>,
+    );
+    expect(fireEvent.click(screen.getByTestId('act'))).toBe(true);
   });
 
   it('a press on the trailing control fires neither the tap nor the hold', () => {

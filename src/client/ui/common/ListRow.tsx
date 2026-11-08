@@ -79,6 +79,27 @@ export function ListRow({
       }
     : undefined;
 
+  // md-list-item's link variant renders EVERY slot, `end` included, inside its
+  // shadow <a>. So a click on a trailing control — the kebab, a plain menu item,
+  // a lone action icon — bubbles through that anchor and the browser follows it:
+  // the kebab opened the document instead of its menu. useLongPress keeps such a
+  // click from firing `onTap`, but only cancelling the event stops the native
+  // anchor. An item with its own href (OverflowMenu's "View source") renders an
+  // inner <a>, which is the one the browser activates, so that click is left be.
+  // No stopPropagation: the kebab's toggle and md-menu's close already ran on
+  // the target before the click reached this span.
+  const keepRowLink = href
+    ? (e: MouseEvent) => {
+        const span = e.currentTarget;
+        for (const el of e.composedPath()) {
+          if (el === span) break;
+          // The md-menu-item[href] host, or its shadow <a> once upgraded.
+          if (el instanceof Element && el.hasAttribute('href')) return;
+        }
+        e.preventDefault();
+      }
+    : undefined;
+
   const lp = useLongPress({
     onTap: onTap ?? follow,
     onLongPress: run,
@@ -108,7 +129,7 @@ export function ListRow({
     >
       {children}
       {(end || actions.length > 0) && (
-        <span slot="end" className="flex items-center gap-1.5">
+        <span slot="end" className="flex items-center gap-1.5" onClick={keepRowLink}>
           {end}
           {actions.length === 1 && (
             // One destination, so its own glyph — a kebab would promise a menu
