@@ -692,3 +692,60 @@ describe('one-off to-dos', () => {
     expect(mock.__getDoc(DOC).events.e1.start).toBe(today());
   });
 });
+
+describe('history mode highlights', () => {
+  const proto = Element.prototype as any;
+  let scrolled: jest.Mock;
+  beforeEach(() => {
+    mock.__reset();
+    scrolled = jest.fn();
+    proto.scrollIntoView = function (this: Element) { scrolled(this); };
+  });
+  afterEach(() => { delete proto.scrollIntoView; });
+
+  it('tints changed rows, opens the Done shelf for one, and ghosts a removed one-off in its old section', async () => {
+    const d = (n: number) => Temporal.Now.plainDateISO().subtract({ days: n }).toString();
+    mock.__setDoc(DOC, {
+      '@type': 'Calendar+Counters', name: 'C',
+      events: {
+        e1: dailyHabit('Meditate', d(10)),                                            // overdue
+        e2: { ...dailyHabit('Stretch', d(5)), completions: { [`${d(0)}T09:00:00`]: '' } }, // done today
+      },
+    });
+    mock.__setHistory(DOC, [{ version: 0, time: 1 }, { version: 1, time: 2 }]);
+    mock.__setVersionChanges(DOC, 1, [
+      { path: ['events', 'e2', 'completions', `${d(0)}T09:00:00`], kind: 'added', action: 'put' },
+      // Completing a one-off deletes it: the common removal here.
+      { path: ['events', 'g'], kind: 'removed', action: 'del',
+        before: { '@type': 'Event', title: 'Buy stamps', start: d(0) } },
+    ]);
+    render(<Counters docId={DOC} />);
+    await waitFor(() => expect(screen.getByText('Meditate')).toBeTruthy());
+    // Done rests collapsed: the row done today is not in the DOM yet.
+    expect(screen.queryByText('Stretch')).toBeNull();
+
+    fireEvent.click(screen.getByTitle('History'));
+    // The description lands; the highlighted Done row forces its shelf open.
+    await waitFor(() => expect(rowOf('Stretch').getAttribute('data-diff')).toBe('changed'));
+    expect(screen.getByRole('button', { name: /^Done \(1\)$/ }).getAttribute('aria-expanded')).toBe('true');
+
+    // The removed one-off is back as a ghost, filed where it used to be (wanted
+    // today ⇒ To do), with nothing to tap, and never in the document.
+    const ghost = rowOf('Buy stamps');
+    expect(ghost.getAttribute('data-diff')).toBe('removed');
+    expect(ghost.hasAttribute('data-ghost')).toBe(true);
+    expect(ghost.getAttribute('type')).toBeNull();
+    const todo = screen.getByRole('heading', { name: 'To do' }).parentElement!;
+    expect(within(todo).getByText('Buy stamps')).toBeTruthy();
+    expect(mock.__getDoc(DOC).events.g).toBeUndefined();
+    expect(rowOf('Meditate').getAttribute('data-diff')).toBeNull();
+
+    // The first highlighted row in display order was revealed, once.
+    expect(scrolled).toHaveBeenCalledTimes(1);
+    expect(scrolled.mock.calls[0][0]).toBe(ghost);
+
+    fireEvent.click(screen.getByTitle('History'));
+    await waitFor(() => expect(screen.queryByText('Buy stamps')).toBeNull());
+    expect(rowOf('Stretch').getAttribute('data-diff')).toBeNull();
+  });
+});

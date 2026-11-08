@@ -8,6 +8,8 @@ import { useEditorUndoRedo } from '../../common/useUndoRedo';
 import { useCanEdit } from '../../common/useCanEdit';
 import { useFocusPathSync } from '../../common/useFocusPathSync';
 import { HistorySlider } from '../../common/HistorySlider';
+import { useRevealChange } from '../../common/useRevealChange';
+import { itemChanges, removedItems, withGhosts, type ChangeKind } from '../../../../shared/version-changes';
 import { ListRow } from '../../common/ListRow';
 import { useConfirm } from '../../common/ConfirmSheet';
 import { useDocumentValidation } from '../../common/useDocumentValidation';
@@ -57,6 +59,7 @@ const STATUS_LABELS: Record<CounterStatus, string> = {
  * it grows without bound.
  */
 const SECTION_LABELS: Record<CounterStatus, string> = { ...STATUS_LABELS, due: 'To do' };
+const NO_GHOSTS: ReadonlySet<string> = new Set();
 
 /** Which editor inputs highlight when a peer focuses a given event property.
  * The recurrence-rule cluster (freq/interval/weekdays) shares one doc path. */
@@ -162,7 +165,7 @@ function streakTitle(streak: number, frequency?: string): string {
  * Delete), the completions log, Record, and Not now; a hold (or right-click, or
  * Shift+F10) runs the first, Edit.
  */
-function CounterListItem({ uid, ev, status, streak, reward, dueAt, canEdit, peerEditingEvents, onTick, onRecord, onEdit, onShowCompletions, onDisarm }: {
+function CounterListItem({ uid, ev, status, streak, reward, dueAt, canEdit, peerEditingEvents, onTick, onRecord, onEdit, onShowCompletions, onDisarm, diff, ghost }: {
   uid: string;
   ev: CounterEvent;
   status: CounterStatus;
@@ -181,8 +184,13 @@ function CounterListItem({ uid, ev, status, streak, reward, dueAt, canEdit, peer
   onShowCompletions: (uid: string) => void;
   /** Off the to-do list without claiming it was done. */
   onDisarm: (uid: string) => void;
+  /** History mode: what the version on screen did to this counter. */
+  diff?: ChangeKind;
+  /** A counter that version removed, rendered from its old value: nothing to do. */
+  ghost?: boolean;
 }) {
   const kind = counterKind(ev);
+  const interactive = canEdit && !ghost;
   // Only a checklist item has a to-do list to be on or off — a habit is always
   // on its own schedule, and `start` there is an anchor rather than an arm.
   const armable = kind === 'checklist';
@@ -217,11 +225,13 @@ function CounterListItem({ uid, ev, status, streak, reward, dueAt, canEdit, peer
     <ListRow
       data-status={status}
       data-testid="counter-row"
+      data-diff={diff}
+      data-ghost={ghost ? '' : undefined}
       style={{ opacity: peerEditingEvents[uid] ? 0.5 : status === 'done' ? 0.6 : 1 }}
-      onTap={canEdit ? () => onTick(uid) : undefined}
+      onTap={interactive ? () => onTick(uid) : undefined}
       // Edit first: it is what a hold runs, and holding a row means "edit this"
       // everywhere else in the app.
-      actions={canEdit ? [
+      actions={interactive ? [
         { icon: 'edit', label: 'Edit', title: `Edit ${title}`, onSelect: () => onEdit(uid, ev) },
         // Counting without arming, and ONLY when nothing is owed. The tap is a
         // checkbox now, so on a settled row it means "I want this" rather than
@@ -676,21 +686,37 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
     return result;
   }, [peers, editorState]);
 
+  // History mode: what the version on screen did to each counter, and the ones
+  // it removed put back as ghosts — the common case here, since completing a
+  // one-off deletes it. Display only: every action works on the real `events`.
+  const changes = history.changes;
+  const diff = useMemo(() => (changes ? itemChanges(changes, ['events']) : null), [changes]);
+  const shown = useMemo(
+    () => (changes ? withGhosts(events, removedItems<CounterEvent>(changes, ['events'])) : { record: events, ghosts: NO_GHOSTS }),
+    [events, changes],
+  );
+
   // Archived habits (recurrence ended) drop out of the active list, the section
   // counts, and the chart — shown separately at the bottom, newest first.
   const [active, archived] = useMemo(() => {
     const a: Record<string, CounterEvent> = {};
     const arch: { uid: string; ev: CounterEvent; until: string }[] = [];
-    for (const [uid, ev] of Object.entries(events)) {
+    for (const [uid, ev] of Object.entries(shown.record)) {
       if (isArchived(ev)) arch.push({ uid, ev, until: ev.recurrenceRule!.until! });
       else a[uid] = ev;
     }
     arch.sort((x, y) => (x.until > y.until ? -1 : 1));
     return [a, arch] as const;
-  }, [events]);
+  }, [shown]);
 
   const sorted = sortedCounters(active, now);
-  const stats = useMemo(() => metMissedByWeek(active, now), [active, now]);
+  // The chart counts real counters only — a ghost is display, not data.
+  const stats = useMemo(() => {
+    const real = shown.ghosts.size
+      ? Object.fromEntries(Object.entries(active).filter(([uid]) => !shown.ghosts.has(uid)))
+      : active;
+    return metMissedByWeek(real, now);
+  }, [active, shown.ghosts, now]);
 
   // Group the sorted entries into contiguous sections so each renders as a
   // header + its own Material list. Keyed on the section LABEL, not the status:
@@ -703,6 +729,13 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
     if (last && last.label === label) last.entries.push(entry);
     else sections.push({ label, entries: [entry] });
   }
+
+  // A highlighted row inside the collapsed Done shelf would go unseen: open it.
+  const doneHighlighted = diff !== null
+    && sections.some(sec => sec.label === SECTION_LABELS.done && sec.entries.some(e => diff.has(e.uid)));
+  useEffect(() => { if (doneHighlighted) setDoneOpen(true); }, [doneHighlighted]);
+  // `doneOpen` is a dep so the reveal retries once the shelf has rendered its rows.
+  useRevealChange(changes, [shown.record, doneOpen]);
 
   return (
     <DocLoader docId={docId}>
@@ -780,6 +813,8 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
                   onEdit={openEditor}
                   onShowCompletions={setCompletionsUid}
                   onDisarm={disarmCounter}
+                  diff={diff?.get(uid)}
+                  ghost={shown.ghosts.has(uid)}
                 />
               ))}
             </md-list>
@@ -802,8 +837,10 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
                 <ListRow
                   key={uid}
                   data-testid="archived-row"
+                  data-diff={diff?.get(uid)}
+                  data-ghost={shown.ghosts.has(uid) ? '' : undefined}
                   style={{ opacity: 0.6 }}
-                  actions={canEdit
+                  actions={canEdit && !shown.ghosts.has(uid)
                     ? [{ icon: 'unarchive', label: 'Unarchive', onSelect: () => unarchiveCounter(uid) }]
                     : []}
                   end={<Badge variant="secondary">archived {until.substring(0, 10)}</Badge>}
