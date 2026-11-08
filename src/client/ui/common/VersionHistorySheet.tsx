@@ -3,9 +3,15 @@
  * title-bar overflow's "View history" (see HistorySlider).
  *
  * Lists every version (newest first) with a relative time and a per-row Restore
- * button. Clicking a row previews that version live in the editor behind the
- * sheet (drives the slider); Restore applies it via the worker (a forward-only
- * change) and closes the sheet.
+ * button. The list is a scrubber: scrolling it, dragging the slider and tapping
+ * a row all drive the one `version`, which the editor behind the sheet previews
+ * live. Scrolling down hands the selection to the row at the top edge as the
+ * selected row leaves (and to the oldest once the list hits bottom); scrolling
+ * up hands it to the row at the bottom edge (and to the newest at the top) —
+ * the rule is spelled out in version-scrub.ts. The slider does the same in
+ * reverse: it scrolls the list so the row lands where scrolling would have put
+ * it. Restore applies a version via the worker (a forward-only change) and
+ * closes the sheet.
  */
 
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet';
@@ -13,6 +19,7 @@ import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { relativeTime } from '../../../shared/relative-time';
 import type { DocumentHistory } from './useDocumentHistory';
+import { useVersionScrub } from './useVersionScrub';
 
 interface VersionHistorySheetProps {
   open: boolean;
@@ -23,6 +30,7 @@ interface VersionHistorySheetProps {
 export function VersionHistorySheet({ open, onOpenChange, history }: VersionHistorySheetProps) {
   const { entries, version, changeCount, restoreToVersion, onSliderChange } = history;
   const latestVersion = entries.length - 1;
+  const { listRef, onScroll } = useVersionScrub(version, onSliderChange);
 
   const handleRestore = async (target: number) => {
     if (
@@ -42,8 +50,8 @@ export function VersionHistorySheet({ open, onOpenChange, history }: VersionHist
           <SheetTitle>Version history ({changeCount})</SheetTitle>
         </SheetHeader>
 
-        {/* Scrub through versions. Dragging the slider and clicking a row below
-            both drive the same `version`, so the two stay in sync. */}
+        {/* The slider, the list's scroll position and a row tap all drive the
+            same `version`, so none of them can disagree about what is shown. */}
         {changeCount > 1 && (
           <div className="mt-3 flex items-center">
             <input
@@ -57,7 +65,12 @@ export function VersionHistorySheet({ open, onOpenChange, history }: VersionHist
           </div>
         )}
 
-        <div className="mt-4 -mx-2 min-h-0 flex-1 overflow-y-auto divide-y divide-border">
+        <div
+          ref={listRef}
+          onScroll={onScroll}
+          data-testid="history-versions"
+          className="mt-4 -mx-2 min-h-0 flex-1 overflow-y-auto overscroll-contain relative divide-y divide-border"
+        >
           {/* Newest first — copy before reversing (entries is shared state). */}
           {[...entries].reverse().map((entry) => {
             const isCurrent = entry.version === version;
@@ -65,7 +78,14 @@ export function VersionHistorySheet({ open, onOpenChange, history }: VersionHist
             return (
               <div
                 key={entry.version}
-                className={cn('flex items-center gap-3 px-2 py-2', isCurrent && 'bg-muted/50 rounded')}
+                data-version={entry.version}
+                data-testid="history-row"
+                className={cn(
+                  'flex items-center gap-3 px-2 py-2',
+                  // The selected row is no longer always at an edge, so the tint
+                  // is the one thing saying which version is on screen.
+                  isCurrent && 'bg-muted/50 rounded shadow-[inset_3px_0_0_var(--md-sys-color-primary)]',
+                )}
               >
                 <button
                   className="flex-1 text-left hover:text-foreground"

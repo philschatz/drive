@@ -24,6 +24,7 @@ import { useConfirm } from '../common/ConfirmSheet';
 import { cn } from '@/lib/utils';
 import { relativeTime } from '../../../shared/relative-time';
 import type { DocumentHistory } from '../common/useDocumentHistory';
+import { useVersionScrub } from '../common/useVersionScrub';
 import type { Path } from './source-nodes';
 
 // ---------------------------------------------------------------------------
@@ -137,6 +138,8 @@ export function ChangesSheet({
   // Which pane: the version list, or one version's operations.
   const [detail, setDetail] = useState(false);
   const { confirm, confirmSheet } = useConfirm();
+  // Scrolling the version list scrubs too (rule: common/version-scrub.ts).
+  const { listRef, onScroll } = useVersionScrub(version, onSliderChange);
 
   const latestVersion = entries.length - 1;
   const time = entries[version]?.time;
@@ -240,8 +243,9 @@ export function ChangesSheet({
             </div>
           ) : (
             <>
-              {/* Scrubbing and tapping a row drive the same `version`, so the two
-                  never disagree about what is being previewed. */}
+              {/* The slider, the list's scroll position and a row tap drive the
+                  same `version`, so none of them can disagree about what is
+                  being previewed. */}
               {changeCount > 1 && (
                 <div className="mt-3 flex items-center">
                   <input
@@ -257,7 +261,9 @@ export function ChangesSheet({
               )}
 
               <div
-                className="mt-3 -mx-2 min-h-0 flex-1 overflow-y-auto divide-y divide-border"
+                ref={listRef}
+                onScroll={onScroll}
+                className="mt-3 -mx-2 min-h-0 flex-1 overflow-y-auto overscroll-contain relative divide-y divide-border"
                 data-testid="changes-versions"
               >
                 {/* Newest first — copy before reversing (entries is shared state). */}
@@ -267,7 +273,10 @@ export function ChangesSheet({
                   return (
                     <div
                       key={entry.version}
-                      className={cn('flex items-center gap-2 px-2', isCurrent && 'bg-muted/50 rounded')}
+                      className={cn(
+                        'flex items-center gap-2 px-2',
+                        isCurrent && 'bg-muted/50 rounded shadow-[inset_3px_0_0_var(--md-sys-color-primary)]',
+                      )}
                     >
                       <button
                         className="flex-1 text-left py-3 min-w-0"

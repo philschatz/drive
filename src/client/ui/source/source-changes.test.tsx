@@ -148,6 +148,53 @@ describe('source inspector changes sheet', () => {
   });
 });
 
+describe('scrubbing the version list', () => {
+  // jsdom has no layout: give every version row 40px and the list a 40px
+  // viewport over 120px of content, on the prototype so a remounted list has
+  // its geometry from its first frame.
+  const PROTO: Record<string, PropertyDescriptor> = {
+    offsetTop: { configurable: true, get(this: HTMLElement) {
+      const v = this.getAttribute('data-version');
+      return v === null ? 0 : (2 - Number(v)) * 40;
+    } },
+    offsetHeight: { configurable: true, get(this: HTMLElement) { return this.hasAttribute('data-version') ? 40 : 0; } },
+    clientHeight: { configurable: true, get(this: HTMLElement) { return this.getAttribute('data-testid') === 'changes-versions' ? 40 : 0; } },
+    scrollHeight: { configurable: true, get(this: HTMLElement) { return this.getAttribute('data-testid') === 'changes-versions' ? 120 : 0; } },
+  };
+  const saved: Record<string, PropertyDescriptor | undefined> = {};
+  beforeEach(() => {
+    for (const [k, d] of Object.entries(PROTO)) {
+      saved[k] = Object.getOwnPropertyDescriptor(HTMLElement.prototype, k);
+      Object.defineProperty(HTMLElement.prototype, k, d);
+    }
+  });
+  afterEach(() => {
+    for (const k of Object.keys(PROTO)) {
+      const d = saved[k];
+      if (d) Object.defineProperty(HTMLElement.prototype, k, d);
+      else delete (HTMLElement.prototype as any)[k];
+    }
+  });
+
+  it('scrolling the list previews the version at the edge', async () => {
+    await open();
+    const list = screen.getByTestId('changes-versions');
+    list.scrollTop = 40; fireEvent.scroll(list);
+    await waitFor(() => expect(mock.__getPinnedVersion()).toBe(1));
+    list.scrollTop = 80; fireEvent.scroll(list);
+    await waitFor(() => expect(mock.__getPinnedVersion()).toBe(0));
+  });
+
+  it('coming back from the operations pane scrolls the previewed version into view', async () => {
+    await open();
+    fireEvent.click(versionRows()[2]); // version 0, the row below the one-row viewport
+    await waitFor(() => expect(screen.getByTestId('changes-ops')).toBeTruthy());
+    fireEvent.click(screen.getByTestId('ops-back'));
+    const list = await waitFor(() => screen.getByTestId('changes-versions'));
+    expect(list.scrollTop).toBe(80);
+  });
+});
+
 describe('patch formatting', () => {
   it('names a block-marker insert instead of rendering it as an empty map', () => {
     // Automerge inserts an empty map at a block marker's position, so `{}` is what

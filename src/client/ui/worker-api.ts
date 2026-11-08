@@ -27,6 +27,7 @@ export type { TabRole };
 import type { RichTextOp, RichTextSpan } from '../../shared/rich-text-ops';
 import type { BackupTier, BackupPayload, BackupResult } from '../../shared/backup';
 import { createLogger } from '../../shared/logger';
+import { coalesce, type Coalescer } from '../../shared/coalesce';
 
 // Shares the `main` namespace with worker-client.ts: from a reader's point of
 // view the two halves are one main-thread client. `tab` is the cross-tab layer.
@@ -804,19 +805,46 @@ export function debugGetVersionPatches(docId: string, version: number): Promise<
 }
 
 /**
- * Pin all subscriptions for a document to a historical version.
- * Pass null to resume live view. Worker immediately re-runs all subscriptions.
+ * Pins are coalesced per document: a scrub of the slider or the version list
+ * asks for a version per pixel, and each pin makes the worker materialise a
+ * snapshot and re-run every subscription on the doc. The latest pin goes out
+ * once the scrub pauses for 100 ms, and at least every 250 ms while it keeps
+ * going, so the document behind the sheet keeps up without rendering every
+ * version passed on the way.
  */
-export function setDocVersion(docId: string, version: number | null): void {
-  fire('set-doc-version', { docId, version });
+const pendingPins = new Map<string, Coalescer<number>>();
+function pinFor(docId: string): Coalescer<number> {
+  let c = pendingPins.get(docId);
+  if (!c) {
+    c = coalesce<number>(v => fire('set-doc-version', { docId, version: v }), { wait: 100, maxWait: 250 });
+    pendingPins.set(docId, c);
+  }
+  return c;
 }
 
+/**
+ * Pin all subscriptions for a document to a historical version (coalesced, see
+ * above), or pass null to resume the live view — immediately, dropping any
+ * pending pin. The worker re-runs all the doc's subscriptions on each.
+ */
+export function setDocVersion(docId: string, version: number | null): void {
+  if (version === null) {
+    pendingPins.get(docId)?.cancel();
+    fire('set-doc-version', { docId, version: null });
+    return;
+  }
+  pinFor(docId)(version);
+}
+
+/** A restore clears the pin in the worker, so a pin still pending here must not land after it. */
 export function restoreDocToHeads(docId: string, heads: string[]): Promise<void> {
+  pendingPins.get(docId)?.cancel();
   return request('restore-doc-to-heads', { docId, heads });
 }
 
 /** Restore a document to a specific history version index. Clears pinned version after restore. */
 export function restoreDocToVersion(docId: string, version: number): Promise<void> {
+  pendingPins.get(docId)?.cancel();
   return request('restore-doc-to-version', { docId, version });
 }
 
