@@ -1,2577 +1,1999 @@
 /**
- * Tests for KeyhiveOps — the extracted keyhive handler logic from automerge-worker.
+ * KeyhiveOps against the real keyhive 0.8.0 WASM — no shims.
  *
- * These tests exercise the real keyhive WASM (via keyhive-shim.js) with no-op
- * side effects, verifying the business logic without worker infrastructure.
+ * Two layers are pinned here:
+ *
+ * - what the app does through KeyhiveOps: contact bundles, sharing with a
+ *   friend's user-group, device linking, the home page's group-access lens;
+ * - the raw keyhive behaviour those depend on, where getting it wrong would be
+ *   silent: key agreement across peers and reloads, which revocations orphan a
+ *   group, what `accessForDoc` resolves.
+ *
+ * Peers are synced by hand (tests/support/keyhive-harness.ts): `syncAsBridge`
+ * transfers what the bridge would, `syncPeers` transfers everything.
  */
-
-import { initKeyhiveWasm } from '@automerge/automerge-repo-keyhive';
 import {
-  Signer,
-  Keyhive,
-  CiphertextStore,
-  Access,
   ChangeId,
-  DocumentId,
-  Identifier,
-  GroupId,
   ContactCard,
+  DocumentId,
   Encrypted,
-  Archive,
-} from '@keyhive/keyhive/slim';
-import { KeyhiveOps, KeyhiveBridge, KeyhiveOpsSideEffects, bytesToBase64, base64ToBytes } from './keyhive-ops';
-
-initKeyhiveWasm();
-
-const bridge: KeyhiveBridge = {
-  ChangeId,
-  DocumentId,
-  Identifier,
   GroupId,
-  Signer,
-  CiphertextStore,
-  Keyhive,
-  Access,
-  ContactCard,
-};
+  Identifier,
+  IndividualId,
+  MemberedId,
+  Power,
+} from '@keyhive/keyhive/slim';
+import { CONTACT_BUNDLE_VERSION_MISMATCH, base64ToBytes, bytesToBase64 } from './keyhive-ops';
+import type { DeviceEntry, MemberInfo } from './keyhive-types';
+import {
+  befriend,
+  createOps,
+  decrypt,
+  docIdOf,
+  encrypt,
+  exchangeCards,
+  identifierOf,
+  learnContact,
+  linkDevices,
+  pushVisibleEvents,
+  reload,
+  shareDocWithDevice,
+  shareWithFriend,
+  syncAsBridge,
+  syncPeers,
+  type Peer,
+} from '../../tests/support/keyhive-harness';
 
-function noopSideEffects(): KeyhiveOpsSideEffects & { calls: Record<string, any[][]> } {
-  const calls: Record<string, any[][]> = {
-    persist: [],
-    syncKeyhive: [],
-    forceResyncAllPeers: [],
-  };
-  let userGroupId: string | null = null;
-  return {
-    calls,
-    persist: async () => { calls.persist.push([]); },
-    syncKeyhive: () => { calls.syncKeyhive.push([]); },
-    forceResyncAllPeers: () => { calls.forceResyncAllPeers.push([]); },
-    getUserGroupId: async () => userGroupId,
-    setUserGroupId: async (id) => { userGroupId = id; },
-  };
+const b64 = bytesToBase64;
+const groupIdOf = (idB64: string) => new GroupId(base64ToBytes(idB64));
+const knowsDevice = (peer: Peer, agentId: string) => peer.kh.hasIndividual(new IndividualId(base64ToBytes(agentId)));
+const knowsGroup = (peer: Peer, groupId: string) => peer.kh.hasGroup(groupIdOf(groupId));
+const memberOf = (members: MemberInfo[], agentId: string) => members.find((m) => m.agentId === agentId);
+const deviceOf = (devices: DeviceEntry[], agentId: string) => devices.find((d) => d.agentId === agentId);
+
+/** Raw power one identifier holds on a document, as `peer`'s keyhive sees it ("Admin"/…/undefined). */
+async function rawAccess(peer: Peer, idB64: string, khDocId: string): Promise<string | undefined> {
+  return (await peer.kh.accessForDoc(identifierOf(idB64), docIdOf(khDocId)))?.toString();
 }
 
-async function createOps() {
-  const signer = Signer.memorySignerFromBytes(crypto.getRandomValues(new Uint8Array(32)));
-  const kh = await Keyhive.init(signer, CiphertextStore.newInMemory(), () => {});
-  const fx = noopSideEffects();
-  const ops = new KeyhiveOps(kh, bridge, fx);
-  return { ops, kh, fx };
+/** The direct members of a document: base64 id → the capability keyhive reports for it. */
+async function directMembers(peer: Peer, khDocId: string): Promise<Map<string, any>> {
+  const doc = await peer.kh.getDocument(docIdOf(khDocId));
+  const out = new Map<string, any>();
+  for (const cap of await doc!.members()) out.set(b64(cap.who.toBytes()), cap);
+  return out;
 }
 
-/**
- * Test-only harness: grant a second peer access to a shared doc using raw keyhive
- * primitives — a temporary signer is added as an individual member of the doc.
- * This mirrors how the app's cross-peer encryption works (individual membership)
- * without depending on any product-level "invite" API. Returns the seed bytes the
- * claimant uses to reconstruct that membership in {@link claimViaArchive}.
- */
-async function grantPeerAccessViaTempSigner(
-  ops: KeyhiveOps,
-  khDocId: string,
-  role: string,
-) {
-  const doc = ops.khDocuments.get(khDocId);
-  if (!doc) throw new Error('Document not found');
-  const seed = crypto.getRandomValues(new Uint8Array(32));
-  const tempSigner = Signer.memorySignerFromBytes(seed);
-  const tempKh = await Keyhive.init(tempSigner, CiphertextStore.newInMemory(), () => {});
-  const tempIndividual = await ops.kh.receiveContactCard(await tempKh.contactCard());
-  // Ingest the temp keyhive's events (prekeys, identity ops) into ops' keyhive.
-  await ops.kh.ingestArchive(await tempKh.toArchive());
-  const access = Access.tryFromString(role);
-  if (!access) throw new Error(`Invalid role: ${role}`);
-  await ops.kh.addMember(tempIndividual.toAgent(), doc.toMembered(), access, []);
-  return {
-    inviteKeyBytes: Array.from(seed) as number[],
-    inviteSignerAgentId: bytesToBase64(tempIndividual.id.toBytes()),
-  };
-}
-
-/**
- * Test-only counterpart to {@link grantPeerAccessViaTempSigner}: reconstruct the
- * temp signer's keyhive from the granter's archive, add the claimant as an
- * individual member, and ingest the resulting events into the claimant's keyhive —
- * giving the claimant cross-peer access for encryption tests.
- */
-async function claimViaArchive(
-  opsGranter: KeyhiveOps,
-  opsClaimant: KeyhiveOps,
-  inviteKeyBytes: number[],
-  _automergeDocId?: string,
-) {
-  const seed = new Uint8Array(inviteKeyBytes);
-  const tempSigner = Signer.memorySignerFromBytes(seed);
-  const archive = await opsGranter.kh.toArchive();
-  const tempKh = await archive.tryToKeyhive(CiphertextStore.newInMemory(), tempSigner, () => {});
-
-  const ourIndividual = await tempKh.receiveContactCard(await opsClaimant.kh.contactCard());
-  const ourAgent = ourIndividual.toAgent();
-  const reachable = await tempKh.reachableDocs();
-  if (reachable.length === 0) throw new Error('Grant has no document access');
-  const grantedDoc = reachable[0].doc;
-  await tempKh.addMember(ourAgent, grantedDoc.toMembered(), reachable[0].access, []);
-
-  const eventsForUs: Map<Uint8Array, Uint8Array> = await tempKh.eventsForAgent(ourAgent);
-  const eventsArr: Uint8Array[] = [];
-  eventsForUs.forEach((v: Uint8Array) => eventsArr.push(v));
-  await opsClaimant.kh.ingestArchive(await tempKh.toArchive());
-  await opsClaimant.kh.ingestEventsBytes(eventsArr);
-
-  const khDocId = bytesToBase64(grantedDoc.id.toBytes());
-  const docFromOurKh = await opsClaimant.kh.getDocument(grantedDoc.doc_id);
-  if (docFromOurKh) opsClaimant.khDocuments.set(khDocId, docFromOurKh);
-  return { khDocId };
+/** Whether any of these base64 events contains the 32 raw bytes of an id. */
+function mentions(eventsB64: string[], idB64: string): boolean {
+  const needle = Buffer.from(base64ToBytes(idB64));
+  return eventsB64.some((e) => Buffer.from(base64ToBytes(e)).includes(needle));
 }
 
 describe('KeyhiveOps', () => {
   describe('getIdentity', () => {
-    it('returns the keyhive device ID', async () => {
-      const { ops, kh } = await createOps();
-      const result = await ops.getIdentity();
-      expect(result.deviceId).toBe(kh.idString);
+    it('reports the device id, the agentId (the signer\'s verifying key) and the user-group once there is one', async () => {
+      const { ops, kh, signer } = await createOps();
+
+      const before = await ops.getIdentity();
+      expect(before.deviceId).toBe(kh.idString);
+      // A peerId is `<base64 verifying key>-…`, and friends, devices and the
+      // share gate all key off the agentId — so the two must be the same bytes.
+      expect(before.agentId).toBe(b64(signer.verifyingKey));
+      expect(before.userGroupId).toBeNull();
+
+      const groupId = await ops.ensureUserGroup({ create: true });
+      expect((await ops.getIdentity()).userGroupId).toBe(groupId);
     });
   });
 
-  describe('getContactCard / receiveContactCard', () => {
-    it('round-trips a contact card via JSON', async () => {
-      const { ops: opsA } = await createOps();
-      const { ops: opsB } = await createOps();
+  describe('contact bundle (getContactCard / receiveContactCard)', () => {
+    it('round-trips: JSON carrying the signed card as base64 bytes, and the receiver learns the sender', async () => {
+      const alice = await createOps();
+      const bob = await createOps();
 
-      const cardJson = await opsA.getContactCard();
-      expect(typeof cardJson).toBe('string');
+      const bundle = await alice.ops.getContactCard();
+      const parsed = JSON.parse(bundle);
+      expect(parsed).toMatchObject({ __kind: 'contact-bundle', v: 2 });
+      // The card is keyhive's own signed frame, not a re-encoding of it.
+      const card = ContactCard.fromBytes(base64ToBytes(parsed.card));
+      expect(b64(card.individualId.toBytes())).toBe(alice.agentId);
+      // The bundle travels inside a URL / QR payload as text.
+      expect(new TextDecoder().decode(new TextEncoder().encode(bundle))).toBe(bundle);
 
-      const result = await opsB.receiveContactCard(cardJson);
-      expect(result.agentId).toBeDefined();
+      const result = await bob.ops.receiveContactCard(bundle);
+      expect(result).toEqual({ agentId: alice.agentId, isOwnCard: false });
+      expect(await knowsDevice(bob, alice.agentId)).toBe(true);
     });
 
-    it('returns a JSON string suitable for URL encoding (not [object Object])', async () => {
-      const { ops } = await createOps();
-      const cardJson = await ops.getContactCard();
-
-      // Must be a string, not an object
-      expect(typeof cardJson).toBe('string');
-
-      // Must be valid parseable JSON
-      const parsed = JSON.parse(cardJson);
-      expect(parsed).toBeDefined();
-      expect(typeof parsed).toBe('object');
-
-      // TextEncoder.encode must not produce "[object Object]"
-      // (this is the bug: if toJson() returns an object, encode() stringifies it)
-      const encoded = new TextDecoder().decode(new TextEncoder().encode(cardJson));
-      expect(encoded).not.toBe('[object Object]');
-      expect(encoded).toBe(cardJson);
-    });
-
-    it('raw card.toJson() is handled correctly regardless of return type', async () => {
-      const { kh } = await createOps();
-      const card = await kh.contactCard();
-      const rawJson = card.toJson();
-
-      // Document what the WASM binding actually returns
-      // (it may be a string or an object depending on the binding version)
-      if (typeof rawJson === 'string') {
-        // If it's a string, it must be valid JSON
-        expect(() => JSON.parse(rawJson)).not.toThrow();
-      } else {
-        // If it's an object, JSON.stringify must not produce "[object Object]"
-        const stringified = JSON.stringify(rawJson);
-        expect(stringified).not.toBe('[object Object]');
-        expect(() => JSON.parse(stringified)).not.toThrow();
-      }
-    });
-
-    it('detects own contact card', async () => {
-      const { ops, fx } = await createOps();
-      const cardJson = await ops.getContactCard();
-      const result = await ops.receiveContactCard(cardJson);
+    it('detects its own card, and does not persist for it', async () => {
+      const { ops, fx, agentId } = await createOps();
+      const result = await ops.receiveContactCard(await ops.getContactCard());
       expect(result.isOwnCard).toBe(true);
-      expect(result.agentId).toBeDefined();
-      expect(result.agentId).not.toBe('[object Object]');
-      // Should not persist when own card
-      expect(fx.calls.persist.length).toBe(0);
+      expect(result.agentId).toBe(agentId);
+      expect(fx.calls.persist).toHaveLength(0);
     });
 
-    it('does not flag other contact cards as own', async () => {
-      const { ops: opsA } = await createOps();
-      const { ops: opsB, fx: fxB } = await createOps();
-      const cardJson = await opsA.getContactCard();
-      const result = await opsB.receiveContactCard(cardJson);
+    it('does not flag another device\'s card as its own, and persists the new contact', async () => {
+      const alice = await createOps();
+      const bob = await createOps();
+      const result = await bob.ops.receiveContactCard(await alice.ops.getContactCard());
       expect(result.isOwnCard).toBe(false);
-      expect(result.agentId).toBeDefined();
-      expect(result.agentId).not.toBe('[object Object]');
-      // Should persist when not own card
-      expect(fxB.calls.persist.length).toBe(1);
+      expect(result.agentId).toBe(alice.agentId);
+      expect(bob.fx.calls.persist).toHaveLength(1);
+    });
+
+    it('carries the sender\'s user-group, which the receiver can then resolve', async () => {
+      const alice = await createOps();
+      const bob = await createOps();
+      const aliceGroupId = (await alice.ops.ensureUserGroup({ create: true }))!;
+
+      // A group never reaches a non-member through keyhive sync, so without
+      // this the receiver would have nothing to share a document with.
+      expect(await knowsGroup(bob, aliceGroupId)).toBe(false);
+      const result = await bob.ops.receiveContactCard(await alice.ops.getContactCard());
+      expect(result.groupId).toBe(aliceGroupId);
+      expect(await knowsGroup(bob, aliceGroupId)).toBe(true);
     });
 
     it('rejects a bundle whose groupEvents count exceeds the bound', async () => {
-      const { ops: opsA } = await createOps();
-      const { ops: opsB } = await createOps();
+      const alice = await createOps();
+      const bob = await createOps();
 
-      // An attacker-controlled bundle: valid card, but a flood of "group ops".
-      const bundle = JSON.parse(await opsA.getContactCard());
+      // An attacker-controlled bundle: a valid card, then a flood of "group ops".
+      const bundle = JSON.parse(await alice.ops.getContactCard());
       bundle.groupEvents = Array.from({ length: 1025 }, () => 'AAAA');
 
-      await expect(opsB.receiveContactCard(JSON.stringify(bundle)))
-        .rejects.toThrow(/group ops too large/i);
+      await expect(bob.ops.receiveContactCard(JSON.stringify(bundle))).rejects.toThrow(/group ops too large/i);
     });
 
     it('rejects a bundle whose groupEvents total size exceeds the bound', async () => {
-      const { ops: opsA } = await createOps();
-      const { ops: opsB } = await createOps();
+      const alice = await createOps();
+      const bob = await createOps();
 
-      const bundle = JSON.parse(await opsA.getContactCard());
+      const bundle = JSON.parse(await alice.ops.getContactCard());
       const big = 'A'.repeat(64 * 1024);
       bundle.groupEvents = Array.from({ length: 17 }, () => big); // 17 × 64 KiB > 1 MiB
 
-      await expect(opsB.receiveContactCard(JSON.stringify(bundle)))
-        .rejects.toThrow(/group ops too large/i);
+      await expect(bob.ops.receiveContactCard(JSON.stringify(bundle))).rejects.toThrow(/group ops too large/i);
+    });
+
+    // Bundle format 2 is keyhive >= 0.6's framed encoding. A device still on the
+    // old build produces (and expects) something this keyhive cannot read, and
+    // the user has to be told to update — not shown a decode error.
+    it('rejects a bundle of another format version with the update-both-devices message', async () => {
+      const alice = await createOps();
+      const bob = await createOps();
+      const { v: _v, ...unversioned } = JSON.parse(await alice.ops.getContactCard());
+
+      // What the previous build sent: no `v`, and the card as ContactCard.toJson().
+      const legacy = { __kind: 'contact-bundle', card: '{"op":{"Rotate":{}}}', groupId: 'x', groupEvents: [] };
+      for (const bundle of [unversioned, { ...unversioned, v: 1 }, { ...unversioned, v: 3 }, legacy]) {
+        await expect(bob.ops.receiveContactCard(JSON.stringify(bundle))).rejects.toThrow(CONTACT_BUNDLE_VERSION_MISMATCH);
+      }
+      expect(await knowsDevice(bob, alice.agentId)).toBe(false);
+      expect(bob.fx.calls.persist).toHaveLength(0);
+    });
+
+    it('rejects anything that is not a bundle as an invalid contact card', async () => {
+      const alice = await createOps();
+      const bob = await createOps();
+      const bareCard = b64((await alice.kh.contactCard()).toBytes());
+
+      // The envelope is mandatory: a bare card string is not accepted either.
+      for (const notABundle of ['hello', '{"foo":1}', '[]', 'null', bareCard, JSON.stringify({ __kind: 'contact-bundle', v: 2 })]) {
+        await expect(bob.ops.receiveContactCard(notABundle)).rejects.toThrow('Invalid contact card');
+      }
+      expect(await knowsDevice(bob, alice.agentId)).toBe(false);
+    });
+
+    it('rejects a bundle whose card bytes were tampered with, and records nothing', async () => {
+      const alice = await createOps();
+      const bob = await createOps();
+      const bundle = JSON.parse(await alice.ops.getContactCard());
+      const original = base64ToBytes(bundle.card);
+
+      // Frame header, signed payload, and the signature's last byte.
+      for (const index of [0, 4, 40, 100, original.length - 1]) {
+        const bytes = original.slice();
+        bytes[index] ^= 0x01;
+        const tampered = JSON.stringify({ ...bundle, card: b64(bytes) });
+        await expect(bob.ops.receiveContactCard(tampered)).rejects.toThrow(/cannot read ContactCard/);
+      }
+      // A flipped payload byte is caught by the signature, not by luck of parsing.
+      const payloadFlip = original.slice();
+      payloadFlip[40] ^= 0x01;
+      await expect(bob.ops.receiveContactCard(JSON.stringify({ ...bundle, card: b64(payloadFlip) })))
+        .rejects.toThrow(/signature does not verify/);
+
+      expect(await knowsDevice(bob, alice.agentId)).toBe(false);
+      expect(bob.fx.calls.persist).toHaveLength(0);
     });
   });
 
-  describe('contact card size', () => {
+  // The bundle is shown as a QR and sent over the rendezvous channel, both of
+  // which have hard size limits — and it is handed to people who are not yet
+  // trusted with anything. It must say who the sender is, and nothing about what
+  // they have or who else they know.
+  describe('contact bundle size', () => {
     /**
-     * Give `ops` a user-group and `docCount` shared documents, encrypting into
-     * each one a few times so every doc accumulates several CGKA (BeeKEM) epochs
-     * — the same thing normal editing does in the app.
+     * Give `peer` a user-group, a friend, and `docCount` documents shared with
+     * that friend and written to. Sharing forces a key rotation on each
+     * document, so every one accumulates membership AND CGKA history.
      */
-    async function seedDocs(ops: KeyhiveOps, docCount: number) {
-      await ops.ensureUserGroup({ create: true });
+    async function seedAccount(peer: Peer, docCount: number): Promise<{ friend: Peer; khDocIds: string[] }> {
+      await peer.ops.ensureUserGroup({ create: true });
+      const friend = await createOps();
+      const friendGroupId = (await friend.ops.ensureUserGroup({ create: true }))!;
+      await befriend(peer, friend);
+      const khDocIds: string[] = [];
       for (let i = 0; i < docCount; i++) {
-        const { khDocId } = await ops.enableSharing(`doc-${i}`);
-        for (let n = 0; n < 3; n++) {
-          const doc = await ops.kh.getDocument(ops.khDocuments.get(khDocId)!.doc_id);
-          const ref = new ChangeId(crypto.getRandomValues(new Uint8Array(32)));
-          await ops.kh.tryEncryptArchive(doc!, ref, [], new TextEncoder().encode(`edit ${i}.${n}`));
-        }
+        const { khDocId } = await peer.ops.enableSharing(`doc-${i}`);
+        await peer.ops.addMember(friendGroupId, khDocId, 'edit');
+        for (let n = 0; n < 3; n++) await encrypt(peer, khDocId, `edit ${i}.${n}`);
+        khDocIds.push(khDocId);
       }
+      return { friend, khDocIds };
     }
 
-    /**
-     * Bucket a bundle's groupEvents by StaticEvent variant. bincode 1.3's free
-     * `serialize` uses fixint encoding, so an event's first 4 bytes are the
-     * variant index as u32-LE; the order is fixed by
-     * keyhive_core/src/event/static_event.rs:18-33.
-     */
-    /**
-     * Total bytes of a card's `groupEvents`. Asserted instead of the whole card
-     * length because `ContactCard.toJson()` renders keys as arrays of decimal
-     * numbers, so a fresh random key jitters the card by a few characters —
-     * noise that would make an exact size assertion flaky. `groupEvents` is the
-     * term that actually accumulated.
-     */
-    async function groupEventBytes(ops: KeyhiveOps): Promise<number> {
-      const events: string[] = JSON.parse(await ops.getContactCard()).groupEvents ?? [];
-      return events.reduce((n, e) => n + e.length, 0);
+    /** The base64 group events of a real (minting) card. */
+    async function groupEvents(peer: Peer): Promise<string[]> {
+      return JSON.parse(await peer.ops.getContactCard()).groupEvents ?? [];
     }
 
-    const VARIANTS = ['PrekeysExpanded', 'PrekeyRotated', 'CgkaOperation', 'Delegated', 'Revoked'];
-    function breakdown(cardJson: string) {
-      const events: string[] = JSON.parse(cardJson).groupEvents ?? [];
-      const byVariant: Record<string, { count: number; bytes: number }> = {};
-      for (const b64 of events) {
-        const bytes = base64ToBytes(b64);
-        const tag = bytes[1] === 0 && bytes[2] === 0 && bytes[3] === 0 ? bytes[0] : -1;
-        const name = VARIANTS[tag] ?? `unknown(${tag})`;
-        byVariant[name] ??= { count: 0, bytes: 0 };
-        byVariant[name].count++;
-        byVariant[name].bytes += bytes.length;
-      }
-      return byVariant;
+    /** Prekey ops keyhive holds for our own device — the set every real card adds to. */
+    async function ownPrekeyOpCount(peer: Peer): Promise<number> {
+      const all = await peer.kh.allAgentEvents();
+      let count = 0;
+      all.prekeySources.forEach((hashes: Uint8Array[], source: Uint8Array) => {
+        if (b64(source) === peer.agentId) count = hashes.length;
+      });
+      return count;
     }
 
     it('does not grow with the number of documents', async () => {
-      const { ops: opsOne } = await createOps();
-      await seedDocs(opsOne, 1);
-      const one = await opsOne.getContactCard();
+      const few = await createOps();
+      await seedAccount(few, 1);
+      const many = await createOps();
+      await seedAccount(many, 10);
 
-      const { ops: opsMany } = await createOps();
-      await seedDocs(opsMany, 10);
-      const many = await opsMany.getContactCard();
-
-      // Surfaced so a regression shows *which* op family regrew. Behind TEST_LOG
-      // (the runner's show-everything flag) so a green run stays quiet — the
-      // assertion below is what fails; these numbers are for the post-mortem.
-      if (process.env.TEST_LOG === '1') {
-        console.log('1 doc:', one.length, 'bytes', breakdown(one));
-        console.log('10 docs:', many.length, 'bytes', breakdown(many));
-      }
-
-      // 10× the documents must not mean a materially larger card. The card
-      // conveys who the sender is, not what they have.
-      expect(many.length).toBeLessThan(one.length * 2);
+      // Every field is fixed-width, so "no growth" is exact equality.
+      expect((await many.ops.getContactCard()).length).toBe((await few.ops.getContactCard()).length);
     });
 
-    /**
-     * The bug Phil hit: open the invite screen, close it, open it again, and the
-     * size under the QR keeps climbing. Every getContactCard() runs
-     * generate_private_prekey, which rotates twice and leaves two permanent ops
-     * in our own prekey history — and we used to ship all of them, so each visit
-     * cost ~480 B forever whether or not anyone scanned.
-     */
-    /** Prekey ops keyhive holds for our own device — the set that used to grow. */
-    async function myPrekeyOpCount(ops: KeyhiveOps): Promise<number> {
-      const all = await ops.kh.allAgentEvents();
-      const myId = bytesToBase64((await ops.kh.individual).id.toBytes());
-      let n = 0;
-      (all.prekeySources as Map<any, any>).forEach((hashes: any[], src: any) => {
-        if (bytesToBase64(src) === myId) n = hashes.length;
-      });
-      return n;
-    }
-
     it('previewContactCard mints nothing, so staging a QR costs no prekey', async () => {
-      const { ops } = await createOps();
-      await ops.ensureUserGroup({ create: true });
-      await ops.enableSharing('doc');
+      const peer = await createOps();
+      await seedAccount(peer, 1);
 
-      const before = await myPrekeyOpCount(ops);
-      for (let i = 0; i < 5; i++) await ops.previewContactCard();
-      expect(await myPrekeyOpCount(ops)).toBe(before);
+      const before = await ownPrekeyOpCount(peer);
+      for (let i = 0; i < 5; i++) await peer.ops.previewContactCard();
+      expect(await ownPrekeyOpCount(peer)).toBe(before);
 
-      // A real exchange still mints — that is the point of the card.
-      await ops.getContactCard();
-      expect(await myPrekeyOpCount(ops)).toBeGreaterThan(before);
+      // A real exchange still mints — a key reserved for one contact is the point.
+      await peer.ops.getContactCard();
+      expect(await ownPrekeyOpCount(peer)).toBeGreaterThan(before);
     });
 
     it('the preview is close enough to the real payload to show as "~N"', async () => {
-      const { ops } = await createOps();
-      await ops.ensureUserGroup({ create: true });
-      await ops.enableSharing('doc');
+      const peer = await createOps();
+      await seedAccount(peer, 1);
 
-      const preview = (await ops.previewContactCard()).length;
-      const real = (await ops.getContactCard()).length;
-      // Under by roughly one 32-byte key rendered as decimal numbers (AddKeyOp vs
-      // RotateKeyOp), never wildly off — a bad estimate would mislead the user.
-      expect(real - preview).toBeGreaterThan(0);
+      const preview = (await peer.ops.previewContactCard()).length;
+      const real = (await peer.ops.getContactCard()).length;
+      // Never over, and under by at most one 32-byte key: the op the preview
+      // borrows is whichever existing one keyhive returns — an add-key op (one
+      // key) or a rotate-key op (two) — where a real card is always a rotate.
+      // A wildly-off estimate under the QR would mislead.
+      expect(real - preview).toBeGreaterThanOrEqual(0);
       expect(real - preview).toBeLessThan(200);
     });
 
-    it('does not grow when the invite screen is opened repeatedly', async () => {
-      const { ops } = await createOps();
-      await ops.ensureUserGroup({ create: true });
-      await ops.enableSharing('doc');
+    // Every real card leaves two permanent ops in our own prekey history. They
+    // used to ride along in the next card, so the size under the QR climbed by
+    // ~480 B per visit to the invite screen, exchange or not.
+    it('does not grow when cards are minted repeatedly', async () => {
+      const peer = await createOps();
+      await seedAccount(peer, 1);
 
-      const first = await groupEventBytes(ops);
-      for (let i = 0; i < 5; i++) await ops.getContactCard();
-      expect(await groupEventBytes(ops)).toBe(first);
+      const first = await groupEvents(peer);
+      for (let i = 0; i < 5; i++) await peer.ops.getContactCard();
+      expect((await groupEvents(peer)).sort()).toEqual(first.sort());
     });
 
     it('does not grow while a document is edited', async () => {
-      const { ops } = await createOps();
-      await ops.ensureUserGroup({ create: true });
-      const { khDocId } = await ops.enableSharing('doc');
-      const before = await groupEventBytes(ops);
+      const peer = await createOps();
+      const { khDocIds } = await seedAccount(peer, 1);
+      const before = await groupEvents(peer);
 
-      // Editing derives an application secret from the doc's existing PCS key; it
-      // mints a CGKA op only when has_pcs_key() is false (a membership change).
-      for (let i = 0; i < 20; i++) {
-        const doc = await ops.kh.getDocument(ops.khDocuments.get(khDocId)!.doc_id);
-        const ref = new ChangeId(crypto.getRandomValues(new Uint8Array(32)));
-        await ops.kh.tryEncryptArchive(doc!, ref, [], new TextEncoder().encode(`edit ${i}`));
-      }
-      expect(await groupEventBytes(ops)).toBe(before);
+      for (let i = 0; i < 20; i++) await encrypt(peer, khDocIds[0], `edit ${i}`);
+      expect((await groupEvents(peer)).sort()).toEqual(before.sort());
     });
 
-    /**
-     * The number under the QR is the whole preview envelope, not just
-     * `groupEvents` — so pin that too, or the assertions above could hold while
-     * the figure Phil actually reads still crept up via the `card` term.
-     * `getExistingContactCard()` returns an op already in our prekey state, and
-     * editing inserts no prekey ops, so it must come back byte-identical.
-     */
+    // The number under the QR is the whole preview envelope, not just
+    // groupEvents — so pin that too, or the assertions above could hold while
+    // the figure the user reads still crept up through the `card` term.
     it('shows an identical size across edits, envelope and all', async () => {
-      const { ops } = await createOps();
-      await ops.ensureUserGroup({ create: true });
-      const { khDocId } = await ops.enableSharing('doc');
-      const before = (await ops.previewContactCard()).length;
+      const peer = await createOps();
+      const { khDocIds } = await seedAccount(peer, 1);
+      const before = (await peer.ops.previewContactCard()).length;
 
       for (let i = 0; i < 20; i++) {
-        const doc = await ops.kh.getDocument(ops.khDocuments.get(khDocId)!.doc_id);
-        const ref = new ChangeId(crypto.getRandomValues(new Uint8Array(32)));
-        await ops.kh.tryEncryptArchive(doc!, ref, [], new TextEncoder().encode(`edit ${i}`));
-        // Re-read every iteration: a per-edit drift of a few bytes would average
-        // out to nothing if we only compared the first and last reading.
-        expect((await ops.previewContactCard()).length).toBe(before);
+        await encrypt(peer, khDocIds[0], `edit ${i}`);
+        // Re-read every iteration: a drift of a few bytes per edit would average
+        // out to nothing if only the first and last reading were compared.
+        expect((await peer.ops.previewContactCard()).length).toBe(before);
       }
     });
 
-    it('stays small for an established account', async () => {
-      const { ops } = await createOps();
-      await seedDocs(ops, 10);
-      expect((await ops.getContactCard()).length).toBeLessThan(32 * 1024);
+    it('for a single-device account is one group delegation and under 1 KB, however established', async () => {
+      const peer = await createOps();
+      await seedAccount(peer, 10);
+      const bundle = await peer.ops.getContactCard();
+      expect(JSON.parse(bundle).groupEvents).toHaveLength(1);
+      expect(bundle.length).toBeLessThan(1024);
     });
 
-    it('carries no CGKA ops (the receiver is not a member of our docs)', async () => {
-      const { ops } = await createOps();
-      await seedDocs(ops, 5);
-      const byVariant = breakdown(await ops.getContactCard());
+    it('carries no CGKA ops (the receiver is not a member of our documents)', async () => {
+      const peer = await createOps();
+      await seedAccount(peer, 5);
+      const bundled = await groupEvents(peer);
 
-      expect(byVariant.CgkaOperation).toBeUndefined();
-      // Guard the tag decoding itself: if a keyhive bump changes the bincode
-      // layout every event lands in `unknown` and the assertion above passes
-      // vacuously. A real bundle always carries the delegation defining our group.
-      expect(byVariant.Delegated?.count ?? 0).toBeGreaterThan(0);
+      // Classify by keyhive's own indices rather than by decoding frames, so a
+      // change of wire format cannot make this pass vacuously.
+      const all = await peer.kh.allAgentEvents();
+      const bytesByHash = new Map<string, string>();
+      all.events.forEach((bytes: Uint8Array, hash: Uint8Array) => bytesByHash.set(b64(hash), b64(bytes)));
+      const eventsIn = (sources: Map<Uint8Array, Uint8Array[]>) => {
+        const out = new Set<string>();
+        sources.forEach((hashes) => hashes.forEach((h) => { const e = bytesByHash.get(b64(h)); if (e) out.add(e); }));
+        return out;
+      };
+      const cgka = eventsIn(all.cgkaSources);
+      const membership = eventsIn(all.membershipSources);
+
+      expect(cgka.size).toBeGreaterThan(0); // the account really has CGKA history to leak
+      expect(bundled.filter((e) => cgka.has(e))).toEqual([]);
+      // A real bundle always carries the delegation that defines our group.
+      expect(bundled.filter((e) => membership.has(e)).length).toBeGreaterThan(0);
     });
 
-    /**
-     * The assertions above only prove the card got smaller — they cannot catch an
-     * over-trim. This proves the remaining events are still *sufficient*: the
-     * whole point of shipping groupEvents is that a receiver can name the
-     * sender's user-group as a share target, which goes through the same
-     * `addMember` the Sharing page calls.
-     */
-    it('still lets a receiver share a doc with the sender\'s user-group', async () => {
-      const { ops: opsA } = await createOps();
-      const { ops: opsB } = await createOps();
-      await seedDocs(opsA, 5); // A has history — the case that used to bloat the card
+    // keyhive >= 0.6 counts everyone who shares a document with us among the
+    // prekey sources it reports for us and for our group. Shipping those put
+    // our friends' device ids and prekey histories into a card we hand to
+    // strangers, and made it grow with every friend and each of their devices.
+    it('does not carry the devices of friends we share documents with', async () => {
+      const alice = await createOps();
+      await alice.ops.ensureUserGroup({ create: true });
+      const alone = await groupEvents(alice);
 
-      const aGroupId = JSON.parse(await opsA.getContactCard()).groupId as string;
-      const received = await opsB.receiveContactCard(await opsA.getContactCard());
-      expect(received.groupId).toBe(aGroupId);
+      const frank = await createOps();
+      const frankPhone = await createOps();
+      const { groupId: frankGroupId } = await linkDevices(frank, frankPhone);
+      const { khDocId } = await shareWithFriend(alice, frank, 'edit');
+      await encrypt(alice, khDocId, 'something for frank');
+      await shareWithFriend(frank, alice, 'edit'); // and a document shared the other way
+      await syncPeers(alice, frank); // alice now holds everything frank does
 
-      // B shares one of its own docs with A's *group* (never a bare individual).
-      const { khDocId: bDocId } = await opsB.enableSharing('b-doc');
-      await expect(opsB.addMember(aGroupId, bDocId, 'edit')).resolves.toBe(true);
+      const withFriend = await groupEvents(alice);
+      for (const id of [frank.agentId, frankPhone.agentId, frankGroupId]) {
+        expect(mentions(withFriend, id)).toBe(false);
+      }
+      expect(withFriend.sort()).toEqual(alone.sort());
+    });
 
-      // A's group really is a member of B's doc, with the role B granted.
-      const members = await opsB.getDocMembers(bDocId);
-      expect(members.map((m) => m.agentId)).toContain(aGroupId);
-      expect(members.find((m) => m.agentId === aGroupId)?.role).toBe('edit');
+    // The assertions above only prove the bundle is small — they cannot catch
+    // an over-trim. These two prove what is left is still SUFFICIENT.
+    it('still lets a receiver share a document with the sender\'s user-group', async () => {
+      const alice = await createOps();
+      const bob = await createOps();
+      await seedAccount(alice, 5); // history — the case that used to bloat the card
+
+      const aliceGroupId = (await alice.ops.getUserGroupId())!;
+      const received = await learnContact(bob, alice);
+      expect(received.groupId).toBe(aliceGroupId);
+
+      // Bob shares one of his own documents with Alice's GROUP (never a bare device).
+      const { khDocId } = await bob.ops.enableSharing('bob-doc');
+      await expect(bob.ops.addMember(aliceGroupId, khDocId, 'edit')).resolves.toBe(true);
+      expect(memberOf(await bob.ops.getDocMembers(khDocId), aliceGroupId)?.role).toBe('edit');
+
+      // …and it is usable, not just listed: Alice's device reads what Bob writes.
+      const message = await encrypt(bob, khDocId, 'from bob');
+      await pushVisibleEvents(bob, alice);
+      expect(await decrypt(alice, khDocId, message.bytes)).toBe('from bob');
+    });
+
+    it('carries our other devices\' prekeys, so a receiver can encrypt to a device it never met', async () => {
+      const laptop = await createOps();
+      const phone = await createOps();
+      const { groupId } = await linkDevices(laptop, phone);
+
+      const bob = await createOps();
+      await learnContact(bob, laptop); // bob only ever exchanges with the laptop
+      expect(await knowsDevice(bob, phone.agentId)).toBe(true);
+
+      const { khDocId } = await bob.ops.createKeyhiveDoc();
+      await bob.ops.addMember(groupId, khDocId, 'edit');
+      const message = await encrypt(bob, khDocId, 'for both devices');
+
+      await pushVisibleEvents(bob, phone);
+      expect(await decrypt(phone, khDocId, message.bytes)).toBe('for both devices');
     });
   });
 
-  describe('enableSharing', () => {
-    it('creates a keyhive document and returns khDocId', async () => {
+  describe('enableSharing / createKeyhiveDoc', () => {
+    it('enableSharing creates a keyhive document, registers it, and persists + syncs', async () => {
       const { ops, fx } = await createOps();
-      const result = await ops.enableSharing('automerge-doc-123');
-      expect(result.khDocId).toBeDefined();
-      expect(typeof result.khDocId).toBe('string');
-      expect(ops.khDocuments.has(result.khDocId)).toBe(true);
-      // enableSharing also mints the user-group and makes it doc admin, so it
-      // persists/syncs more than once now.
+      const { khDocId } = await ops.enableSharing('automerge-doc-123');
+      expect(typeof khDocId).toBe('string');
+      expect(ops.khDocuments.has(khDocId)).toBe(true);
       expect(fx.calls.persist.length).toBeGreaterThanOrEqual(1);
       expect(fx.calls.syncKeyhive.length).toBeGreaterThanOrEqual(1);
     });
+
+    // The create-doc flow mints the keyhive document first and uses its id bytes
+    // as the automerge document id, so the two ids are one value.
+    it('createKeyhiveDoc returns the document id as bytes and as base64', async () => {
+      const { ops, kh } = await createOps();
+      const { khDocId, docIdBytes } = await ops.createKeyhiveDoc();
+      expect(docIdBytes).toHaveLength(32);
+      expect(b64(docIdBytes)).toBe(khDocId);
+      expect(await kh.hasDocument(new DocumentId(docIdBytes))).toBe(true);
+      expect(ops.khDocuments.has(khDocId)).toBe(true);
+    });
+
+    it('enableSharing reuses the document createKeyhiveDoc made instead of minting a second', async () => {
+      const { ops, kh } = await createOps();
+      const { khDocId: created, docIdBytes } = await ops.createKeyhiveDoc();
+
+      const before = (await kh.reachableDocs()).length;
+      const { khDocId } = await ops.enableSharing('am-doc-1', docIdBytes);
+      expect(khDocId).toBe(created);
+      expect((await kh.reachableDocs()).length).toBe(before);
+    });
+
+    it('enableSharing falls back to a new document when the bytes name none it knows', async () => {
+      const { ops, kh } = await createOps();
+      const stranger = await createOps();
+      const foreignDoc = (await stranger.ops.createKeyhiveDoc()).docIdBytes; // a real id, unknown here
+      const garbage = crypto.getRandomValues(new Uint8Array(32)); // may not even be a valid id
+
+      for (const bytes of [foreignDoc, garbage]) {
+        const before = (await kh.reachableDocs()).length;
+        const { khDocId } = await ops.enableSharing('am-doc', bytes);
+        expect((await kh.reachableDocs()).length).toBe(before + 1);
+        expect(ops.khDocuments.has(khDocId)).toBe(true);
+        expect(khDocId).not.toBe(b64(bytes));
+      }
+    });
+
+    it('enableSharing without bytes creates a new document', async () => {
+      const { ops, kh } = await createOps();
+      const before = (await kh.reachableDocs()).length;
+      const { khDocId } = await ops.enableSharing('am-doc-1');
+      expect((await kh.reachableDocs()).length).toBe(before + 1);
+      expect(ops.khDocuments.has(khDocId)).toBe(true);
+    });
   });
 
-  describe('cross-peer access (shared-doc test harness)', () => {
-    it('claimant can encrypt after claiming (CGKA ownership works)', async () => {
-      const { ops: opsA } = await createOps();
-      const { ops: opsB } = await createOps();
-
-      const { khDocId } = await opsA.enableSharing('doc-1');
-      const invite = await grantPeerAccessViaTempSigner(opsA, khDocId, 'edit');
-      await claimViaArchive(opsA, opsB, invite.inviteKeyBytes);
-
-      // B can self-encrypt
-      const bReachable = await opsB.kh.reachableDocs();
-      expect(bReachable.length).toBeGreaterThan(0);
-      const docB = await opsB.kh.getDocument(bReachable[0].doc.doc_id);
-      const plaintext = new TextEncoder().encode('hello from B');
-      const ref = new ChangeId(crypto.getRandomValues(new Uint8Array(32)));
-      const encResult = await opsB.kh.tryEncryptArchive(docB!, ref, [], plaintext);
-      expect(encResult.encrypted_content()).toBeDefined();
-
-      // B can decrypt its own message
-      const docB2 = await opsB.kh.getDocument(bReachable[0].doc.doc_id);
-      const decrypted = await opsB.kh.tryDecrypt(docB2!, encResult.encrypted_content());
-      expect(new Uint8Array(decrypted)).toEqual(plaintext);
-    });
-
-    it('A encrypts → B decrypts after claim (cross-peer)', async () => {
-      const { ops: opsA, kh: khA } = await createOps();
-      const { ops: opsB, kh: khB } = await createOps();
-
-      const { khDocId } = await opsA.enableSharing('doc-1');
-      const invite = await grantPeerAccessViaTempSigner(opsA, khDocId, 'edit');
-      await claimViaArchive(opsA, opsB, invite.inviteKeyBytes, 'doc-1');
-
-      // Step 1: Sync B→A so A knows about B
-      const cardA = await khA.contactCard();
-      const indA_inB = await khB.receiveContactCard(cardA);
-      const bEventsForA: Map<Uint8Array, Uint8Array> = await khB.eventsForAgent(indA_inB.toAgent());
-      const bArr: Uint8Array[] = [];
-      bEventsForA.forEach((v: Uint8Array) => bArr.push(v));
-      await khA.ingestEventsBytes(bArr);
-
-      // Step 2: A encrypts
-      const docA = await khA.getDocument(opsA.khDocuments.values().next().value!.doc_id);
-      const plaintext = new TextEncoder().encode('hello from A after invite');
-      const ref = new ChangeId(crypto.getRandomValues(new Uint8Array(32)));
-      const encResult = await khA.tryEncryptArchive(docA!, ref, [], plaintext);
-
-      // Step 3: Sync A→B
-      const cardB = await khB.contactCard();
-      const indB_inA = await khA.receiveContactCard(cardB);
-      const aEventsForB: Map<Uint8Array, Uint8Array> = await khA.eventsForAgent(indB_inA.toAgent());
-      const aArr: Uint8Array[] = [];
-      aEventsForB.forEach((v: Uint8Array) => aArr.push(v));
-      await khB.ingestEventsBytes(aArr);
-
-      // Step 4: B decrypts
-      const bReachable = await khB.reachableDocs();
-      const docB = await khB.getDocument(bReachable[0].doc.doc_id);
-      const decrypted = await khB.tryDecrypt(docB!, encResult.encrypted_content());
-      expect(new Uint8Array(decrypted)).toEqual(plaintext);
-    });
-
-    it('A encrypts → serialize → deserialize → B decrypts (network adapter path)', async () => {
-      const { ops: opsA, kh: khA } = await createOps();
-      const { ops: opsB, kh: khB } = await createOps();
-
-      const { khDocId } = await opsA.enableSharing('doc-1');
-      const invite = await grantPeerAccessViaTempSigner(opsA, khDocId, 'edit');
-      await claimViaArchive(opsA, opsB, invite.inviteKeyBytes, 'doc-1');
-
-      // Sync B→A
-      const cardA = await khA.contactCard();
-      const indA_inB = await khB.receiveContactCard(cardA);
-      const bEventsForA: Map<Uint8Array, Uint8Array> = await khB.eventsForAgent(indA_inB.toAgent());
-      const bArr: Uint8Array[] = [];
-      bEventsForA.forEach((v: Uint8Array) => bArr.push(v));
-      await khA.ingestEventsBytes(bArr);
-
-      // A encrypts
-      const docA = await khA.getDocument(opsA.khDocuments.values().next().value!.doc_id);
-      const plaintext = new TextEncoder().encode('network adapter round-trip');
-      const ref = new ChangeId(crypto.getRandomValues(new Uint8Array(32)));
-      const result = await khA.tryEncrypt(docA!, ref, [], plaintext);
-
-      // Serialize like network adapter: [0x01 || encrypted.toBytes()]
-      const ENC_ENCRYPTED = 0x01;
-      const encBytes = result.encrypted_content().toBytes();
-      const wire = new Uint8Array(1 + encBytes.length);
-      wire[0] = ENC_ENCRYPTED;
-      wire.set(encBytes, 1);
-
-      // Sync A→B
-      const cardB = await khB.contactCard();
-      const indB_inA = await khA.receiveContactCard(cardB);
-      const aEventsForB: Map<Uint8Array, Uint8Array> = await khA.eventsForAgent(indB_inA.toAgent());
-      const aArr: Uint8Array[] = [];
-      aEventsForB.forEach((v: Uint8Array) => aArr.push(v));
-      await khB.ingestEventsBytes(aArr);
-
-      // Deserialize + decrypt
-      expect(wire[0]).toBe(ENC_ENCRYPTED);
-      const encrypted = (Encrypted as any).fromBytes(wire.slice(1));
-      const bReachable = await khB.reachableDocs();
-      const docB = await khB.getDocument(bReachable[0].doc.doc_id);
-      const decrypted = await khB.tryDecrypt(docB!, encrypted);
-      expect(new Uint8Array(decrypted)).toEqual(plaintext);
-    });
-
-    it('presence value round-trips cross-peer (encrypted ephemeral payload)', async () => {
-      // Mirrors the worker presence helpers (encryptPresenceValue / decryptPresenceValue
-      // in automerge-worker.ts): a JSON presence value is encrypted with the doc key,
-      // sent as bytes, then decrypted back to the identical value by another member.
-      const encryptPresenceValue = async (kh: Keyhive, doc: any, value: unknown): Promise<Uint8Array> => {
-        const bytes = new TextEncoder().encode(JSON.stringify(value ?? null));
-        const ref = new ChangeId(crypto.getRandomValues(new Uint8Array(32)));
-        const result = await kh.tryEncrypt(doc, ref, [], bytes);
-        return result.encrypted_content().toBytes();
-      };
-      const decryptPresenceValue = async (kh: Keyhive, doc: any, enc: Uint8Array): Promise<unknown> => {
-        const out = await kh.tryDecrypt(doc, (Encrypted as any).fromBytes(enc));
-        return JSON.parse(new TextDecoder().decode(out));
-      };
-
-      const { ops: opsA, kh: khA } = await createOps();
-      const { ops: opsB, kh: khB } = await createOps();
-
-      const { khDocId } = await opsA.enableSharing('doc-1');
-      const invite = await grantPeerAccessViaTempSigner(opsA, khDocId, 'edit');
-      await claimViaArchive(opsA, opsB, invite.inviteKeyBytes, 'doc-1');
-
-      // Sync B→A so A knows about B before encrypting.
-      const cardA = await khA.contactCard();
-      const indA_inB = await khB.receiveContactCard(cardA);
-      const bEventsForA: Map<Uint8Array, Uint8Array> = await khB.eventsForAgent(indA_inB.toAgent());
-      const bArr: Uint8Array[] = [];
-      bEventsForA.forEach((v: Uint8Array) => bArr.push(v));
-      await khA.ingestEventsBytes(bArr);
-
-      // A encrypts a presence value (a focused-field path, as broadcast by editors).
-      const docA = await khA.getDocument(opsA.khDocuments.values().next().value!.doc_id);
-      const presenceValue = { focusedField: ['events', 'uid-123', 'title'] };
-      const enc = await encryptPresenceValue(khA, docA!, presenceValue);
-
-      // Sync A→B so B has the key.
-      const cardB = await khB.contactCard();
-      const indB_inA = await khA.receiveContactCard(cardB);
-      const aEventsForB: Map<Uint8Array, Uint8Array> = await khA.eventsForAgent(indB_inA.toAgent());
-      const aArr: Uint8Array[] = [];
-      aEventsForB.forEach((v: Uint8Array) => aArr.push(v));
-      await khB.ingestEventsBytes(aArr);
-
-      // B decrypts and recovers the identical value.
-      const bReachable = await khB.reachableDocs();
-      const docB = await khB.getDocument(bReachable[0].doc.doc_id);
-      const recovered = await decryptPresenceValue(khB, docB!, enc);
-      expect(recovered).toEqual(presenceValue);
-    });
-
-    it('A encrypts before knowing about B → B cannot decrypt (production timing)', async () => {
-      const { ops: opsA, kh: khA } = await createOps();
-      const { ops: opsB, kh: khB } = await createOps();
-
-      const { khDocId } = await opsA.enableSharing('doc-1');
-      const invite = await grantPeerAccessViaTempSigner(opsA, khDocId, 'edit');
-      await claimViaArchive(opsA, opsB, invite.inviteKeyBytes, 'doc-1');
-
-      // A encrypts BEFORE any sync with B
-      const docA = await khA.getDocument(opsA.khDocuments.values().next().value!.doc_id);
-      const plaintext = new TextEncoder().encode('encrypted before sync');
-      const ref = new ChangeId(crypto.getRandomValues(new Uint8Array(32)));
-      const result = await khA.tryEncrypt(docA!, ref, [], plaintext);
-      const ENC_ENCRYPTED = 0x01;
-      const encBytes = result.encrypted_content().toBytes();
-      const wire = new Uint8Array(1 + encBytes.length);
-      wire[0] = ENC_ENCRYPTED;
-      wire.set(encBytes, 1);
-
-      // B tries to decrypt without A's CGKA events
-      const bReachable = await khB.reachableDocs();
-      const docB = await khB.getDocument(bReachable[0].doc.doc_id);
-      const encrypted = (Encrypted as any).fromBytes(wire.slice(1));
-      await expect(khB.tryDecrypt(docB!, encrypted)).rejects.toThrow();
-    });
-
-    it('A encrypts before sync → B still cannot decrypt even after sync (production bug)', async () => {
-      const { ops: opsA, kh: khA } = await createOps();
-      const { ops: opsB, kh: khB } = await createOps();
-
-      const { khDocId } = await opsA.enableSharing('doc-1');
-      const invite = await grantPeerAccessViaTempSigner(opsA, khDocId, 'edit');
-      await claimViaArchive(opsA, opsB, invite.inviteKeyBytes, 'doc-1');
-
-      // A encrypts before sync
-      const docA = await khA.getDocument(opsA.khDocuments.values().next().value!.doc_id);
-      const plaintext = new TextEncoder().encode('encrypted before sync');
-      const ref = new ChangeId(crypto.getRandomValues(new Uint8Array(32)));
-      const result = await khA.tryEncrypt(docA!, ref, [], plaintext);
-      const ENC_ENCRYPTED = 0x01;
-      const encBytes = result.encrypted_content().toBytes();
-      const wire = new Uint8Array(1 + encBytes.length);
-      wire[0] = ENC_ENCRYPTED;
-      wire.set(encBytes, 1);
-
-      // First attempt fails
-      const bReachable = await khB.reachableDocs();
-      const docB1 = await khB.getDocument(bReachable[0].doc.doc_id);
-      const encrypted1 = (Encrypted as any).fromBytes(wire.slice(1));
-      await expect(khB.tryDecrypt(docB1!, encrypted1)).rejects.toThrow('Key not found');
-
-      // Keyhive sync: B→A then A→B
-      const cardA = await khA.contactCard();
-      const indA_inB = await khB.receiveContactCard(cardA);
-      const bEventsForA: Map<Uint8Array, Uint8Array> = await khB.eventsForAgent(indA_inB.toAgent());
-      const bArr: Uint8Array[] = [];
-      bEventsForA.forEach((v: Uint8Array) => bArr.push(v));
-      await khA.ingestEventsBytes(bArr);
-
-      const cardB = await khB.contactCard();
-      const indB_inA = await khA.receiveContactCard(cardB);
-      const aEventsForB: Map<Uint8Array, Uint8Array> = await khA.eventsForAgent(indB_inA.toAgent());
-      const aArr: Uint8Array[] = [];
-      aEventsForB.forEach((v: Uint8Array) => aArr.push(v));
-      await khB.ingestEventsBytes(aArr);
-
-      // Retry — STILL FAILS because A's Update op was for a tree without B
-      const docB2 = await khB.getDocument(bReachable[0].doc.doc_id);
-      const encrypted2 = (Encrypted as any).fromBytes(wire.slice(1));
-      await expect(khB.tryDecrypt(docB2!, encrypted2)).rejects.toThrow('Key not found');
-    });
-
-    it('full production flow: old messages undecryptable, new messages work after resync', async () => {
-      const { ops: opsA, kh: khA } = await createOps();
-      const { ops: opsB, kh: khB } = await createOps();
-
-      const { khDocId } = await opsA.enableSharing('doc-1');
-      const invite = await grantPeerAccessViaTempSigner(opsA, khDocId, 'edit');
-      await claimViaArchive(opsA, opsB, invite.inviteKeyBytes, 'doc-1');
-
-      const ENC_ENCRYPTED = 0x01;
-      const khDocIdStr = opsA.khDocuments.values().next().value!.doc_id;
-
-      async function encryptOnA(text: string) {
-        const doc = await khA.getDocument(khDocIdStr);
-        const plain = new TextEncoder().encode(text);
-        const ref = new ChangeId(crypto.getRandomValues(new Uint8Array(32)));
-        const result = await khA.tryEncrypt(doc!, ref, [], plain);
-        const hasUpdate = !!result.update_op();
-        const encBytes = result.encrypted_content().toBytes();
-        const wire = new Uint8Array(1 + encBytes.length);
-        wire[0] = ENC_ENCRYPTED;
-        wire.set(encBytes, 1);
-        return { wire, hasUpdate };
-      }
-
-      async function decryptOnB(wire: Uint8Array): Promise<string> {
-        const bReachable = await khB.reachableDocs();
-        const doc = await khB.getDocument(bReachable[0].doc.doc_id);
-        const encrypted = (Encrypted as any).fromBytes(wire.slice(1));
-        const decrypted = await khB.tryDecrypt(doc!, encrypted);
-        return new TextDecoder().decode(new Uint8Array(decrypted));
-      }
-
-      // Step 1: A encrypts BEFORE keyhive sync
-      const msg1 = await encryptOnA('before-sync');
-      await expect(decryptOnB(msg1.wire)).rejects.toThrow();
-
-      // Step 2: Keyhive sync B→A
-      const cardA = await khA.contactCard();
-      const indA_inB = await khB.receiveContactCard(cardA);
-      const bEventsForA: Map<Uint8Array, Uint8Array> = await khB.eventsForAgent(indA_inB.toAgent());
-      const bArr: Uint8Array[] = [];
-      bEventsForA.forEach((v: Uint8Array) => bArr.push(v));
-      await khA.ingestEventsBytes(bArr);
-
-      // Step 3: A encrypts AFTER partial sync
-      const msg2 = await encryptOnA('after-partial-sync');
-
-      // Step 4: Complete keyhive sync A→B
-      const cardB = await khB.contactCard();
-      const indB_inA = await khA.receiveContactCard(cardB);
-      const aEventsForB: Map<Uint8Array, Uint8Array> = await khA.eventsForAgent(indB_inA.toAgent());
-      const aArr: Uint8Array[] = [];
-      aEventsForB.forEach((v: Uint8Array) => aArr.push(v));
-      await khB.ingestEventsBytes(aArr);
-
-      // Step 5: Old message is FOREVER undecryptable
-      await expect(decryptOnB(msg1.wire)).rejects.toThrow('Key not found');
-
-      // Step 6: msg2 after sync
-      if (msg2.hasUpdate) {
-        const aEvts2: Map<Uint8Array, Uint8Array> = await khA.eventsForAgent(indB_inA.toAgent());
-        const arr2: Uint8Array[] = [];
-        aEvts2.forEach((v: Uint8Array) => arr2.push(v));
-        await khB.ingestEventsBytes(arr2);
-      }
-      const msg2Text = await decryptOnB(msg2.wire);
-      expect(msg2Text).toBe('after-partial-sync');
-
-      // Step 7: A encrypts AFTER full sync — always works
-      const msg3 = await encryptOnA('after-full-sync');
-      if (msg3.hasUpdate) {
-        const aEvts3: Map<Uint8Array, Uint8Array> = await khA.eventsForAgent(indB_inA.toAgent());
-        const arr3: Uint8Array[] = [];
-        aEvts3.forEach((v: Uint8Array) => arr3.push(v));
-        await khB.ingestEventsBytes(arr3);
-      }
-      const msg3Text = await decryptOnB(msg3.wire);
-      expect(msg3Text).toBe('after-full-sync');
-    });
-
-    it('A encrypts AFTER sync → B CAN decrypt', async () => {
-      const { ops: opsA, kh: khA } = await createOps();
-      const { ops: opsB, kh: khB } = await createOps();
-
-      const { khDocId } = await opsA.enableSharing('doc-1');
-      const invite = await grantPeerAccessViaTempSigner(opsA, khDocId, 'edit');
-      await claimViaArchive(opsA, opsB, invite.inviteKeyBytes, 'doc-1');
-
-      // Keyhive sync: B→A then A→B
-      const cardA = await khA.contactCard();
-      const indA_inB = await khB.receiveContactCard(cardA);
-      const bEventsForA: Map<Uint8Array, Uint8Array> = await khB.eventsForAgent(indA_inB.toAgent());
-      const bArr: Uint8Array[] = [];
-      bEventsForA.forEach((v: Uint8Array) => bArr.push(v));
-      await khA.ingestEventsBytes(bArr);
-
-      const cardB = await khB.contactCard();
-      const indB_inA = await khA.receiveContactCard(cardB);
-      const aEventsForB: Map<Uint8Array, Uint8Array> = await khA.eventsForAgent(indB_inA.toAgent());
-      const aArr: Uint8Array[] = [];
-      aEventsForB.forEach((v: Uint8Array) => aArr.push(v));
-      await khB.ingestEventsBytes(aArr);
-
-      // NOW A encrypts — CGKA tree includes B
-      const docA = await khA.getDocument(opsA.khDocuments.values().next().value!.doc_id);
-      const plaintext = new TextEncoder().encode('encrypted AFTER sync');
-      const ref = new ChangeId(crypto.getRandomValues(new Uint8Array(32)));
-      const result = await khA.tryEncrypt(docA!, ref, [], plaintext);
-      const ENC_ENCRYPTED = 0x01;
-      const encBytes = result.encrypted_content().toBytes();
-      const wire = new Uint8Array(1 + encBytes.length);
-      wire[0] = ENC_ENCRYPTED;
-      wire.set(encBytes, 1);
-
-      // Sync A's new CGKA Update op to B
-      const aEventsForB2: Map<Uint8Array, Uint8Array> = await khA.eventsForAgent(indB_inA.toAgent());
-      const aArr2: Uint8Array[] = [];
-      aEventsForB2.forEach((v: Uint8Array) => aArr2.push(v));
-      await khB.ingestEventsBytes(aArr2);
-
-      // B decrypts
-      const bReachable = await khB.reachableDocs();
-      const docB = await khB.getDocument(bReachable[0].doc.doc_id);
-      const encrypted = (Encrypted as any).fromBytes(wire.slice(1));
-      const decrypted = await khB.tryDecrypt(docB!, encrypted);
-      expect(new TextDecoder().decode(new Uint8Array(decrypted))).toBe('encrypted AFTER sync');
-    });
-
-    it('B encrypts → A decrypts after claim (cross-peer reverse)', async () => {
-      const { ops: opsA, kh: khA } = await createOps();
-      const { ops: opsB, kh: khB } = await createOps();
-
-      const { khDocId } = await opsA.enableSharing('doc-1');
-      const invite = await grantPeerAccessViaTempSigner(opsA, khDocId, 'edit');
-      await claimViaArchive(opsA, opsB, invite.inviteKeyBytes, 'doc-1');
-
-      // B encrypts
-      const bReachable = await khB.reachableDocs();
-      const docB = await khB.getDocument(bReachable[0].doc.doc_id);
-      const plaintext = new TextEncoder().encode('hello from B after invite');
-      const ref = new ChangeId(crypto.getRandomValues(new Uint8Array(32)));
-      const encResult = await khB.tryEncryptArchive(docB!, ref, [], plaintext);
-
-      // Sync B→A
-      const cardA = await khA.contactCard();
-      const indA_inB = await khB.receiveContactCard(cardA);
-      const bEventsForA: Map<Uint8Array, Uint8Array> = await khB.eventsForAgent(indA_inB.toAgent());
-      const bArr: Uint8Array[] = [];
-      bEventsForA.forEach((v: Uint8Array) => bArr.push(v));
-      await khA.ingestEventsBytes(bArr);
-
-      // A decrypts
-      const docA = await khA.getDocument(opsA.khDocuments.values().next().value!.doc_id);
-      const decrypted = await khA.tryDecrypt(docA!, encResult.encrypted_content());
-      expect(new Uint8Array(decrypted)).toEqual(plaintext);
-    });
-
-    it('cross-peer encryption works after temp member revocation', async () => {
-      const { ops: opsA, kh: khA } = await createOps();
-      const { ops: opsB, kh: khB } = await createOps();
-
-      const { khDocId } = await opsA.enableSharing('doc-1');
-      const invite = await grantPeerAccessViaTempSigner(opsA, khDocId, 'edit');
-      await claimViaArchive(opsA, opsB, invite.inviteKeyBytes, 'doc-1');
-
-      // Sync: A ingests B's archive so A knows about B
-      const bArchive = await khB.toArchive();
-      await khA.ingestArchive(bArchive);
-      const bCard = await khB.contactCard();
-      const indB_inA = await khA.receiveContactCard(bCard);
-      const bEventsForA: Map<Uint8Array, Uint8Array> = await khB.eventsForAgent(indB_inA.toAgent());
-      const syncArr: Uint8Array[] = [];
-      bEventsForA.forEach((v: Uint8Array) => syncArr.push(v));
-      await khA.ingestEventsBytes(syncArr);
-
-      // A encrypts after claim + revocation
-      const docA = await khA.getDocument(opsA.khDocuments.values().next().value!.doc_id);
-      const plaintext = new TextEncoder().encode('post-revocation message');
-      const ref = new ChangeId(crypto.getRandomValues(new Uint8Array(32)));
-      const encResult = await khA.tryEncryptArchive(docA!, ref, [], plaintext);
-      expect(encResult.encrypted_content()).toBeDefined();
-
-      // B ingests A's events and decrypts
-      const aArchive = await khA.toArchive();
-      await khB.ingestArchive(aArchive);
-      const aCard = await khA.contactCard();
-      const indA_inB = await khB.receiveContactCard(aCard);
-      const aEventsForB: Map<Uint8Array, Uint8Array> = await khA.eventsForAgent(indA_inB.toAgent());
-      const arr: Uint8Array[] = [];
-      aEventsForB.forEach((v: Uint8Array) => arr.push(v));
-      await khB.ingestEventsBytes(arr);
-
-      const docB = await khB.getDocument(opsB.khDocuments.values().next().value!.doc_id);
-      const decrypted = await khB.tryDecrypt(docB!, encResult.encrypted_content());
-      expect(new Uint8Array(decrypted)).toEqual(plaintext);
-    });
-
-    /**
-     * Shared setup for the forcePcsUpdate / reload regression tests below:
-     * A shares a doc with B and both sides fully sync, so a plain
-     * encrypt-after-sync round-trips (the ':596' baseline).
-     */
-    async function setupSyncedPair() {
-      const { ops: opsA, kh: khA } = await createOps();
-      // B is created with an exposed signer so tests can rebuild him from an
-      // archive (Archive.tryToKeyhive needs the original signer).
-      const bSigner = Signer.memorySignerFromBytes(crypto.getRandomValues(new Uint8Array(32)));
-      const khB = await Keyhive.init(bSigner, CiphertextStore.newInMemory(), () => {});
-      const opsB = new KeyhiveOps(khB, bridge, noopSideEffects());
-
-      const { khDocId } = await opsA.enableSharing('doc-1');
-      const invite = await grantPeerAccessViaTempSigner(opsA, khDocId, 'edit');
-      await claimViaArchive(opsA, opsB, invite.inviteKeyBytes, 'doc-1');
-
-      const cardA = await khA.contactCard();
-      const indA_inB = await khB.receiveContactCard(cardA);
-      const bEventsForA: Map<Uint8Array, Uint8Array> = await khB.eventsForAgent(indA_inB.toAgent());
-      const bArr: Uint8Array[] = [];
-      bEventsForA.forEach((v: Uint8Array) => bArr.push(v));
-      await khA.ingestEventsBytes(bArr);
-
-      const cardB = await khB.contactCard();
-      const indB_inA = await khA.receiveContactCard(cardB);
-      const syncAtoB = async (kh: Keyhive = khB) => {
-        const evs: Map<Uint8Array, Uint8Array> = await khA.eventsForAgent(indB_inA.toAgent());
-        const arr: Uint8Array[] = [];
-        evs.forEach((v: Uint8Array) => arr.push(v));
-        await kh.ingestEventsBytes(arr);
-        return arr.length;
-      };
-      await syncAtoB();
-
-      const encrypt = async (text: string) => {
-        const docA = await khA.getDocument(opsA.khDocuments.values().next().value!.doc_id);
-        const ref = new ChangeId(crypto.getRandomValues(new Uint8Array(32)));
-        const result = await khA.tryEncrypt(docA!, ref, [], new TextEncoder().encode(text));
-        return result.encrypted_content();
-      };
-      const decryptOnB = async (encrypted: any, kh: Keyhive = khB) => {
-        const reachable = await kh.reachableDocs();
-        const docB = await kh.getDocument(reachable[0].doc.doc_id);
-        const out = await kh.tryDecrypt(docB!, encrypted);
-        return new TextDecoder().decode(new Uint8Array(out));
-      };
-      return { opsA, khA, opsB, khB, bSigner, syncAtoB, encrypt, decryptOnB };
+  // A document's authority starts at its root edges, and a root edge can only be
+  // minted at creation. These pin why mintDocument names the user-group there.
+  describe('document ownership (the user-group as co-root)', () => {
+    /** Two devices of one user, both admins of its group; `laptop` founded it. */
+    async function twoDevices() {
+      const laptop = await createOps();
+      const phone = await createOps();
+      const { groupId } = await linkDevices(laptop, phone);
+      return { laptop, phone, groupId };
     }
 
-    it('forcePcsUpdate mints a CGKA op WITHOUT emitting it (bridge nudge gap)', async () => {
-      // Characterization of the keyhive alpha.58 behavior that makes the npm
-      // bridge's membership nudge dangerous. The nudge calls forcePcsUpdate(doc)
-      // after our agent adds a member. Unlike the CGKA update minted inside
-      // tryEncrypt (emitted via the event listener,
-      // keyhive_core/src/keyhive.rs try_encrypt_content), the pcs_update op is
-      // NOT emitted to the event handler — so it is never persisted to /ops/
-      // storage, never triggers keyhive-repo's persist-archive-on-event hook,
-      // and (the binding also resolves void) its rotated leaf SECRET exists only
-      // in WASM memory. A worker reload after a nudge rotation restores an
-      // instance that cannot derive its own current epoch: every encrypt fails
-      // "SecretKey not found" and every peer decrypt "Key not found", forever.
-      // That is why drive no-ops the method (neutralizeForcePcsUpdate).
-      //
-      // If this test starts FAILING on a keyhive upgrade (the rotation now
-      // emits), the upstream gap is fixed: reconsider removing the no-op shadow.
-      const emitted: any[] = [];
-      const signer = Signer.memorySignerFromBytes(crypto.getRandomValues(new Uint8Array(32)));
-      const kh = await Keyhive.init(signer, CiphertextStore.newInMemory(), (e: any) => { emitted.push(e); });
-      const ops = new KeyhiveOps(kh, bridge, noopSideEffects());
-      const { khDocId } = await ops.enableSharing('doc-1');
-      const doc = ops.khDocuments.get(khDocId)!;
-      // A membership change blanks the CGKA root, so the next encrypt must mint
-      // a rotation — the emitting counterpart to forcePcsUpdate's silent one.
-      await grantPeerAccessViaTempSigner(ops, khDocId, 'edit');
+    const revokeDeviceFromDoc = (by: Peer, agentId: string, khDocId: string) =>
+      by.kh.revokeMember(identifierOf(agentId), true, MemberedId.document(docIdOf(khDocId)));
 
-      // Baseline: a tryEncrypt that mints a rotation DOES emit events.
-      const beforeEncrypt = emitted.length;
-      const ref = new ChangeId(crypto.getRandomValues(new Uint8Array(32)));
-      await kh.tryEncrypt(doc, ref, [], new TextEncoder().encode('mint'));
-      expect(emitted.length).toBeGreaterThan(beforeEncrypt);
+    it('createKeyhiveDoc makes the user-group a co-root: a direct member whose proof the document itself signed', async () => {
+      const peer = await createOps();
+      const { khDocId } = await peer.ops.createKeyhiveDoc();
+      const groupId = (await peer.ops.getUserGroupId())!;
+      const members = await directMembers(peer, khDocId);
 
-      // forcePcsUpdate rotates the CGKA (op count grows) yet emits NOTHING.
-      const opsBefore = Number((await kh.stats()).cgkaOperations);
-      const emittedBefore = emitted.length;
-      await kh.forcePcsUpdate(doc);
-      expect(Number((await kh.stats()).cgkaOperations)).toBe(opsBefore + 1);
-      expect(emitted.length).toBe(emittedBefore);
+      expect([...members.keys()].sort()).toEqual([peer.agentId, groupId].sort());
+      for (const id of [groupId, peer.agentId]) {
+        const cap = members.get(id);
+        expect(cap.can.toString()).toBe('Admin');
+        // A root edge: issued by the document's own key, not by a device.
+        expect(b64(cap.proof.verifyingKey)).toBe(khDocId);
+        expect(b64(cap.proof.delegation.issuer.toBytes())).toBe(khDocId);
+      }
     });
 
-    it('neutralized forcePcsUpdate keeps cross-peer decryption working (drive fix)', async () => {
-      // Drive's fix: shadow forcePcsUpdate with a no-op on the keyhive instance the
-      // bridge holds, so the membership nudge stops minting orphan rotation ops.
-      // Security outcome is unchanged: after an add, the next tryEncrypt mints the
-      // rotation itself via try_encrypt_content, which IS emitted and synced.
-      const { neutralizeForcePcsUpdate } = await import('./keyhive-repo');
-      const { khA, opsA, syncAtoB, encrypt, decryptOnB } = await setupSyncedPair();
+    it('the group keeps its access after another admin device revokes the creating device from the document', async () => {
+      const { laptop, phone, groupId } = await twoDevices();
+      const { khDocId } = await laptop.ops.createKeyhiveDoc();
+      await syncAsBridge(laptop, phone);
 
-      neutralizeForcePcsUpdate(khA);
-      const docA = await khA.getDocument(opsA.khDocuments.values().next().value!.doc_id);
-      await khA.forcePcsUpdate(docA!); // the nudge's call — now inert
+      // e.g. the laptop is lost and the phone strips it from the document.
+      expect(await revokeDeviceFromDoc(phone, laptop.agentId, khDocId)).toHaveLength(1);
 
-      const enc = await encrypt('after neutralized rotation');
-      await syncAtoB();
-      expect(await decryptOnB(enc)).toBe('after neutralized rotation');
+      expect([...(await directMembers(phone, khDocId)).keys()]).toEqual([groupId]);
+      expect(await phone.ops.getUserGroupAccess(khDocId)).toBe('Admin');
+      expect(await phone.ops.getMyAccess(khDocId)).toBe('Admin');
+      // The document is still usable, and the group's other devices still read it.
+      const message = await encrypt(phone, khDocId, 'still ours');
+      await syncPeers(laptop, phone);
+      expect(await laptop.ops.getUserGroupAccess(khDocId)).toBe('Admin');
+      expect(await decrypt(laptop, khDocId, message.bytes)).toBe('still ours');
     });
 
-    it('B reloads from archive → A encrypts fresh → B can decrypt (worker reload)', async () => {
-      // Models presence-liveness step 2b: bob's page reload rebuilds his worker
-      // from persisted keyhive state; alice re-encrypts fresh presence ciphertext
-      // (the engine re-flushes on his new session's snapshot); bob must decrypt.
-      // NOTE: the jest reload uses Archive.tryToKeyhive, which is more complete
-      // than the browser's archive+events+prekey-secrets persistence — a pass here
-      // exonerates the keyhive core, not necessarily the bridge storage layering.
-      const { khB, bSigner, syncAtoB, encrypt, decryptOnB } = await setupSyncedPair();
+    // The alternative mintDocument avoids: create alone, then delegate admin to
+    // the group. The group's delegation is then live only while the creating
+    // device has standing, and revoking that device takes the group with it.
+    it('contrast: a group that was only DELEGATED admin loses the document when the creating device is revoked', async () => {
+      const { laptop, phone, groupId } = await twoDevices();
+      const docId = await laptop.kh.generateDocument([], new ChangeId(new Uint8Array(32)), []);
+      const khDocId = b64(docId.toBytes());
+      await laptop.kh.addMember(identifierOf(groupId), MemberedId.document(docId), Power.admin());
+      await syncPeers(laptop, phone);
 
-      const enc1 = await encrypt('before B reload');
-      await syncAtoB();
-      expect(await decryptOnB(enc1)).toBe('before B reload');
+      const group = (await directMembers(phone, khDocId)).get(groupId);
+      expect(b64(group.proof.verifyingKey)).toBe(laptop.agentId); // delegated by a device, not a root edge
+      expect(await phone.ops.getUserGroupAccess(khDocId)).toBe('Admin');
 
-      // B "reloads": rebuild keyhive from its own archive with the same signer.
-      const bArchive = await khB.toArchive();
-      const khB2 = await bArchive.tryToKeyhive(CiphertextStore.newInMemory(), bSigner, () => {});
+      expect(await revokeDeviceFromDoc(phone, laptop.agentId, khDocId)).toHaveLength(1);
 
-      const enc2 = await encrypt('after B reload');
-      await syncAtoB(khB2);
-      expect(await decryptOnB(enc2, khB2)).toBe('after B reload');
-      expect(await decryptOnB(enc1, khB2)).toBe('before B reload');
+      expect((await directMembers(phone, khDocId)).size).toBe(0);
+      expect(await phone.ops.getUserGroupAccess(khDocId)).toBeNull();
+      expect(await phone.ops.getMyAccess(khDocId)).toBeNull();
+      await expect(encrypt(phone, khDocId, 'orphaned')).rejects.toThrow(/Group has no members/);
     });
   });
 
-  describe('accessForDoc cross-peer (insufficient access bug)', () => {
-    it('Bob can see Alice has access after claiming invite (using kh.id)', async () => {
-      const { ops: opsA, kh: khA } = await createOps();
-      const { ops: opsB, kh: khB } = await createOps();
+  describe('cross-peer encryption', () => {
+    /**
+     * Alice owns a document and Bob's device is a direct member of it — the
+     * shortest way to two devices in one key tree (see shareDocWithDevice).
+     */
+    async function sharedDoc(role = 'edit') {
+      const alice = await createOps();
+      const bob = await createOps();
+      const { khDocId } = await alice.ops.createKeyhiveDoc();
+      await shareDocWithDevice(alice, khDocId, bob, role);
+      return { alice, bob, khDocId };
+    }
 
-      // Alice enables sharing and generates admin invite for Bob
-      const { khDocId } = await opsA.enableSharing('doc-1');
-      const invite = await grantPeerAccessViaTempSigner(opsA, khDocId, 'admin');
-
-      // Bob claims the invite
-      await claimViaArchive(opsA, opsB, invite.inviteKeyBytes, 'doc-1');
-
-      // Keyhive sync: exchange contact cards and events (simulates relay sync)
-      // B→A
-      const cardA = await khA.contactCard();
-      const indA_inB = await khB.receiveContactCard(cardA);
-      const bEventsForA: Map<Uint8Array, Uint8Array> = await khB.eventsForAgent(indA_inB.toAgent());
-      const bArr: Uint8Array[] = [];
-      bEventsForA.forEach((v: Uint8Array) => bArr.push(v));
-      await khA.ingestEventsBytes(bArr);
-
-      // A→B
-      const cardB = await khB.contactCard();
-      const indB_inA = await khA.receiveContactCard(cardB);
-      const aEventsForB: Map<Uint8Array, Uint8Array> = await khA.eventsForAgent(indB_inA.toAgent());
-      const aArr: Uint8Array[] = [];
-      aEventsForB.forEach((v: Uint8Array) => aArr.push(v));
-      await khB.ingestEventsBytes(aArr);
-
-      // Bob checks Alice's access using kh.id (the keyhive identity)
-      const aliceIdentifier = new Identifier(khA.id.bytes);
-      const bReachable = await khB.reachableDocs();
-      expect(bReachable.length).toBeGreaterThan(0);
-      const docIdOnB = bReachable[0].doc.doc_id;
-      const aliceAccess = await khB.accessForDoc(aliceIdentifier, docIdOnB);
-
-      // Alice is the document owner — Bob should see her as having Admin access
-      expect(aliceAccess).toBeDefined();
-      expect(aliceAccess!.toString()).toBe('Admin');
+    it('the owner encrypts and the member decrypts', async () => {
+      const { alice, bob, khDocId } = await sharedDoc();
+      const message = await encrypt(alice, khDocId, 'hello from alice');
+      await syncPeers(alice, bob);
+      expect(await decrypt(bob, khDocId, message.bytes)).toBe('hello from alice');
     });
 
-    it('Bob can see Alice has access using verifying key identifier (network adapter path)', async () => {
-      const { ops: opsA, kh: khA } = await createOps();
-      const { ops: opsB, kh: khB } = await createOps();
+    it('the member encrypts and the owner decrypts', async () => {
+      const { alice, bob, khDocId } = await sharedDoc();
+      const message = await encrypt(bob, khDocId, 'hello from bob');
+      expect(await decrypt(bob, khDocId, message.bytes)).toBe('hello from bob'); // and reads its own
+      await syncPeers(alice, bob);
+      expect(await decrypt(alice, khDocId, message.bytes)).toBe('hello from bob');
+    });
 
-      // Alice enables sharing and generates admin invite for Bob
-      const { khDocId } = await opsA.enableSharing('doc-1');
-      const invite = await grantPeerAccessViaTempSigner(opsA, khDocId, 'admin');
+    it('ciphertext round-trips through its wire bytes inside a larger frame', async () => {
+      const { alice, bob, khDocId } = await sharedDoc();
+      const plaintext = crypto.getRandomValues(new Uint8Array(4096)); // binary, not just text
+      const result = await alice.kh.tryEncrypt(docIdOf(khDocId), new ChangeId(crypto.getRandomValues(new Uint8Array(32))), [], plaintext);
 
-      // Bob claims the invite
-      await claimViaArchive(opsA, opsB, invite.inviteKeyBytes, 'doc-1');
+      // What a transport does: a tag byte, then Encrypted.toBytes().
+      const encBytes = result.encryptedContent().toBytes();
+      const wire = new Uint8Array(1 + encBytes.length);
+      wire[0] = 0x01;
+      wire.set(encBytes, 1);
 
-      // Keyhive sync: exchange contact cards and events
-      const cardA = await khA.contactCard();
-      const indA_inB = await khB.receiveContactCard(cardA);
-      const bEventsForA: Map<Uint8Array, Uint8Array> = await khB.eventsForAgent(indA_inB.toAgent());
-      const bArr: Uint8Array[] = [];
-      bEventsForA.forEach((v: Uint8Array) => bArr.push(v));
-      await khA.ingestEventsBytes(bArr);
+      await syncPeers(alice, bob);
+      const decrypted = await bob.kh.tryDecrypt(docIdOf(khDocId), Encrypted.fromBytes(wire.slice(1)));
+      expect(Array.from(decrypted)).toEqual(Array.from(plaintext));
+    });
 
-      const cardB = await khB.contactCard();
-      const indB_inA = await khA.receiveContactCard(cardB);
-      const aEventsForB: Map<Uint8Array, Uint8Array> = await khA.eventsForAgent(indB_inA.toAgent());
-      const aArr: Uint8Array[] = [];
-      aEventsForB.forEach((v: Uint8Array) => aArr.push(v));
-      await khB.ingestEventsBytes(aArr);
+    // Mirrors the engine's presence crypto (engine-presence.ts): a JSON value,
+    // a fresh content ref, no predecessors, the document's key.
+    it('a presence-style JSON value round-trips between members', async () => {
+      const { alice, bob, khDocId } = await sharedDoc();
+      const value = { viewing: true, focusedField: ['events', 'uid-123', 'title'], userGroupId: 'abc=' };
 
-      // Simulate the network adapter's identifierForPeer:
-      // In production, the peer ID is base64(signer.verifyingKey) + "-suffix"
-      // keyhiveIdentifierFromPeerId extracts the verifying key and creates Identifier from it
-      // This may NOT match kh.id (the keyhive identity)
-      const aliceSigner = (khA as any).signer;
-      const aliceVerifyingKey = aliceSigner?.verifyingKey;
+      const fromAlice = await encrypt(alice, khDocId, JSON.stringify(value));
+      await syncPeers(alice, bob);
+      expect(JSON.parse(await decrypt(bob, khDocId, fromAlice.bytes))).toEqual(value);
 
-      // If we can access the verifying key, test with it
-      if (aliceVerifyingKey) {
-        const verifyingKeyIdentifier = new Identifier(aliceVerifyingKey);
-        const bReachable = await khB.reachableDocs();
-        const docIdOnB = bReachable[0].doc.doc_id;
-        const aliceAccessViaVK = await khB.accessForDoc(verifyingKeyIdentifier, docIdOnB);
+      // `null` is what a cleared channel broadcasts.
+      const cleared = await encrypt(bob, khDocId, JSON.stringify(null));
+      await syncPeers(alice, bob);
+      expect(JSON.parse(await decrypt(alice, khDocId, cleared.bytes))).toBeNull();
+    });
 
-        // This tests if the verifying key Identifier matches what accessForDoc expects
-        // In the bug scenario, this returns null even though Alice is the owner
-        expect(aliceAccessViaVK).toBeDefined();
-        expect(aliceAccessViaVK!.toString()).toBe('Admin');
-      }
+    it('three members all read each other', async () => {
+      const alice = await createOps();
+      const bob = await createOps();
+      const carol = await createOps();
+      const { khDocId } = await alice.ops.createKeyhiveDoc();
+      await shareDocWithDevice(alice, khDocId, bob, 'edit');
+      await shareDocWithDevice(alice, khDocId, carol, 'edit');
+      const peers = [alice, bob, carol];
+      // Bob and Carol never exchange cards: everything reaches them through Alice.
+      const syncAll = async () => {
+        for (let round = 0; round < 2; round++) for (const other of [bob, carol]) await syncPeers(alice, other);
+      };
+      await syncAll();
+      for (const peer of [bob, carol]) expect((await peer.kh.reachableDocs()).length).toBe(1);
 
-      // Also test with contact card ID (what peerContactCardIds stores)
-      const aliceContactCardId = cardA.id;
-      if (aliceContactCardId) {
-        const bReachable = await khB.reachableDocs();
-        const docIdOnB = bReachable[0].doc.doc_id;
-        const aliceAccessViaCC = await khB.accessForDoc(aliceContactCardId, docIdOnB);
-        expect(aliceAccessViaCC).toBeDefined();
-        expect(aliceAccessViaCC!.toString()).toBe('Admin');
+      for (const [i, writer] of peers.entries()) {
+        const message = await encrypt(writer, khDocId, `from peer ${i}`);
+        await syncAll();
+        for (const reader of peers) expect(await decrypt(reader, khDocId, message.bytes)).toBe(`from peer ${i}`);
       }
     });
 
-    it('Bob can see Alice has access WITHOUT prior keyhive sync', async () => {
-      const { ops: opsA, kh: khA } = await createOps();
-      const { ops: opsB, kh: khB } = await createOps();
+    it('a member added later can read what was written before it joined, across earlier key epochs', async () => {
+      const alice = await createOps();
+      const xavier = await createOps();
+      const { khDocId } = await alice.ops.createKeyhiveDoc();
 
-      // Alice enables sharing and generates admin invite for Bob
-      const { khDocId } = await opsA.enableSharing('doc-1');
-      const invite = await grantPeerAccessViaTempSigner(opsA, khDocId, 'admin');
+      const alone = await encrypt(alice, khDocId, 'written alone');
+      await shareDocWithDevice(alice, khDocId, xavier, 'edit');
+      const withXavier = await encrypt(alice, khDocId, 'written with xavier'); // a later epoch
+      expect(withXavier.newEpoch).toBe(true);
 
-      // Bob claims the invite (no keyhive sync yet — just archive claim)
-      await claimViaArchive(opsA, opsB, invite.inviteKeyBytes, 'doc-1');
-
-      // Bob checks Alice's access immediately (no contact card exchange)
-      const aliceIdentifier = new Identifier(khA.id.bytes);
-      const bReachable = await khB.reachableDocs();
-      expect(bReachable.length).toBeGreaterThan(0);
-      const docIdOnB = bReachable[0].doc.doc_id;
-      const aliceAccess = await khB.accessForDoc(aliceIdentifier, docIdOnB);
-
-      // Alice is the document owner — Bob should see her as having access
-      // even without explicit keyhive sync, since the archive contains the delegation chain
-      expect(aliceAccess).toBeDefined();
-      expect(aliceAccess!.toString()).toBe('Admin');
+      // Bob joins after both, and is handed nothing but the usual sync.
+      const bob = await createOps();
+      await shareDocWithDevice(alice, khDocId, bob, 'read');
+      expect(await decrypt(bob, khDocId, alone.bytes)).toBe('written alone');
+      expect(await decrypt(bob, khDocId, withXavier.bytes)).toBe('written with xavier');
     });
 
-    it('kh.id matches Identifier(signer.verifyingKey)', async () => {
-      // The network adapter derives Identifier from the peer ID (which is
-      // base64(signer.verifyingKey)). If kh.id != Identifier(verifyingKey),
-      // accessForDoc will fail because the delegation chain uses kh.id.
-      const seed = crypto.getRandomValues(new Uint8Array(32));
-      const signer = Signer.memorySignerFromBytes(seed);
-      const kh = await Keyhive.init(signer, CiphertextStore.newInMemory(), () => {});
+    // The window the engine's presence retry exists for: ciphertext is on the
+    // wire at once, the key material behind it follows with keyhive sync.
+    it('ciphertext from a key epoch the reader has not synced yet is "Key not found", then decrypts once it arrives', async () => {
+      const { alice, bob, khDocId } = await sharedDoc();
+      const message = await encrypt(alice, khDocId, 'first after the share');
+      expect(message.newEpoch).toBe(true); // adding Bob forced a rotation
 
-      const khIdBytes = kh.id.bytes;
-      const verifyingKeyBytes = signer.verifyingKey;
-      const vkIdentifier = new Identifier(verifyingKeyBytes);
+      await expect(decrypt(bob, khDocId, message.bytes)).rejects.toThrow('Key not found');
+      await syncPeers(alice, bob);
+      expect(await decrypt(bob, khDocId, message.bytes)).toBe('first after the share');
 
-
-      // If this fails, that's the root cause of the production bug
-      expect(Buffer.from(khIdBytes).equals(Buffer.from(verifyingKeyBytes))).toBe(true);
-
-      // Now test after archive reload
-      const archive = await kh.toArchive();
-      const kh2 = await archive.tryToKeyhive(CiphertextStore.newInMemory(), signer, () => {});
-      const kh2IdBytes = kh2.id.bytes;
-      expect(Buffer.from(kh2IdBytes).equals(Buffer.from(verifyingKeyBytes))).toBe(true);
-
-      // After reload with invite ingested
-      const ops = new KeyhiveOps(kh, bridge, noopSideEffects());
-      await ops.enableSharing('test-doc');
-      await grantPeerAccessViaTempSigner(ops, 
-        Array.from(ops.khDocuments.keys())[0],
-        'admin',
-      );
-      const archive2 = await kh.toArchive();
-      const kh3 = await archive2.tryToKeyhive(CiphertextStore.newInMemory(), signer, () => {});
-      const kh3IdBytes = kh3.id.bytes;
-      expect(Buffer.from(kh3IdBytes).equals(Buffer.from(verifyingKeyBytes))).toBe(true);
+      // Within an epoch nothing more has to travel.
+      const next = await encrypt(alice, khDocId, 'same epoch');
+      expect(next.newEpoch).toBe(false);
+      expect(await decrypt(bob, khDocId, next.bytes)).toBe('same epoch');
     });
 
-    it('Bob rejects Alice sync after archive reload (production bug)', async () => {
-      // Simulates the production scenario:
-      // 1. Alice creates doc, generates invite
-      // 2. Bob claims invite via archive
-      // 3. Alice reloads from archive (simulating server restart / new session)
-      // 4. Bob checks Alice's NEW identity's access — may fail if archive
-      //    reload changes Alice's Identifier
-      const aliceSeed = crypto.getRandomValues(new Uint8Array(32));
-      const aliceSigner = Signer.memorySignerFromBytes(aliceSeed);
-      const aliceStore = CiphertextStore.newInMemory();
-      const khAlice = await Keyhive.init(aliceSigner, aliceStore, () => {});
-      const fxA = noopSideEffects();
-      const opsA = new KeyhiveOps(khAlice, bridge, fxA);
+    // engine-presence.ts reads `updateOp()` as "this encrypt minted key material
+    // the peer does not have" and pushes a keyhive sync when it is set. Measured
+    // on 0.8.0, that is not what it reports: a member's FIRST encrypt always
+    // starts a new epoch (its leaf was placed by whoever added it) yet leaves
+    // updateOp() unset — and the owner's own post-share rotation leaves it unset
+    // now and then too. The emitted CGKA_OPERATION event is the reliable signal.
+    // If this starts failing because updateOp() is set, the engine's check is
+    // sufficient again; until then it under-fires.
+    it('a new key epoch is not always reported by updateOp()', async () => {
+      const { alice, bob, khDocId } = await sharedDoc();
+      const pcsKeyOf = (c: { bytes: Uint8Array }) => b64(Encrypted.fromBytes(c.bytes).pcsKeyHash);
+      // Bob holds the current key: he has read something encrypted under it.
+      const fromAlice = await encrypt(alice, khDocId, 'alice writes');
+      await syncPeers(alice, bob);
+      expect(await decrypt(bob, khDocId, fromAlice.bytes)).toBe('alice writes');
 
-      const { ops: opsB, kh: khB } = await createOps();
+      const fromBob = await encrypt(bob, khDocId, 'bob\'s first write');
 
-      // Alice enables sharing and generates admin invite
-      const { khDocId } = await opsA.enableSharing('doc-1');
-      const invite = await grantPeerAccessViaTempSigner(opsA, khDocId, 'admin');
+      expect(fromBob.newEpoch).toBe(true);
+      expect(pcsKeyOf(fromBob)).not.toBe(pcsKeyOf(fromAlice));
+      expect(fromBob.updateOp).toBe(false);
+      // …and the peer really does need that op before it can read the message.
+      await expect(decrypt(alice, khDocId, fromBob.bytes)).rejects.toThrow('Key not found');
+      await syncPeers(alice, bob);
+      expect(await decrypt(alice, khDocId, fromBob.bytes)).toBe('bob\'s first write');
 
-      // Bob claims the invite
-      await claimViaArchive(opsA, opsB, invite.inviteKeyBytes, 'doc-1');
-
-      // Alice's original identity
-      const aliceIdBefore = khAlice.id.bytes.slice();
-
-      // Alice saves and reloads from archive (simulates restart)
-      const aliceArchive = await khAlice.toArchive();
-      const aliceStore2 = CiphertextStore.newInMemory();
-      const khAlice2 = await aliceArchive.tryToKeyhive(aliceStore2, aliceSigner, () => {});
-      const aliceIdAfter = khAlice2.id.bytes;
-
-      // Check if identity changed after archive reload
-      const idMatch = aliceIdBefore.length === aliceIdAfter.length &&
-        aliceIdBefore.every((b: number, i: number) => b === aliceIdAfter[i]);
-
-      // Keyhive sync with Alice's NEW keyhive instance
-      const cardA2 = await khAlice2.contactCard();
-      const indA2_inB = await khB.receiveContactCard(cardA2);
-      const bEventsForA2: Map<Uint8Array, Uint8Array> = await khB.eventsForAgent(indA2_inB.toAgent());
-      const bArr: Uint8Array[] = [];
-      bEventsForA2.forEach((v: Uint8Array) => bArr.push(v));
-      await khAlice2.ingestEventsBytes(bArr);
-
-      const cardB = await khB.contactCard();
-      const indB_inA2 = await khAlice2.receiveContactCard(cardB);
-      const aEventsForB: Map<Uint8Array, Uint8Array> = await khAlice2.eventsForAgent(indB_inA2.toAgent());
-      const aArr: Uint8Array[] = [];
-      aEventsForB.forEach((v: Uint8Array) => aArr.push(v));
-      await khB.ingestEventsBytes(aArr);
-
-      // Bob checks Alice's (reloaded) identity's access
-      const aliceId2 = new Identifier(aliceIdAfter);
-      const bReachable = await khB.reachableDocs();
-      expect(bReachable.length).toBeGreaterThan(0);
-      const docIdOnB = bReachable[0].doc.doc_id;
-      const aliceAccess = await khB.accessForDoc(aliceId2, docIdOnB);
-
-
-      // This is the production bug: after archive reload, Alice's identity
-      // should still have Admin access from Bob's perspective
-      expect(aliceAccess).toBeDefined();
-      expect(aliceAccess!.toString()).toBe('Admin');
+      // Only the first: Bob's later writes stay in the epoch he started.
+      const second = await encrypt(bob, khDocId, 'bob again');
+      expect(second.newEpoch).toBe(false);
+      expect(await decrypt(alice, khDocId, second.bytes)).toBe('bob again');
     });
 
-    it('Bob checks access before contact card exchange (timing bug)', async () => {
-      // Production scenario: Bob claims invite, receives Alice's automerge sync
-      // BEFORE contact card exchange. The network adapter calls identifierForPeer
-      // which falls back to keyhiveIdentifierFromPeerId(alicePeerId).
-      const { ops: opsA, kh: khA } = await createOps();
-      const { ops: opsB, kh: khB } = await createOps();
+    // A rekey that arrives from a peer updates the tree, and the next local
+    // operation must be able to use it whichever operation that is. (An encrypt
+    // straight after a remote rekey, with no decrypt in between, used to trap.)
+    it('a member whose first operation after a remote rekey is an encrypt succeeds, and the owner reads it', async () => {
+      const { alice, bob, khDocId } = await sharedDoc();
+      const rekey = await encrypt(alice, khDocId, 'rotates the key');
+      expect(rekey.newEpoch).toBe(true);
+      await syncPeers(alice, bob); // Bob ingests the rekey and decrypts nothing
 
-      const { khDocId } = await opsA.enableSharing('doc-1');
-      const invite = await grantPeerAccessViaTempSigner(opsA, khDocId, 'admin');
-      await claimViaArchive(opsA, opsB, invite.inviteKeyBytes, 'doc-1');
-
-      // NO contact card exchange — Bob checks access immediately
-      // using Identifier derived from Alice's verifying key (like identifierForPeer would)
-      const aliceIdentifier = new Identifier(khA.id.bytes);
-
-      const bReachable = await khB.reachableDocs();
-      expect(bReachable.length).toBeGreaterThan(0);
-      const docIdOnB = bReachable[0].doc.doc_id;
-
-      const aliceAccess = await khB.accessForDoc(aliceIdentifier, docIdOnB);
-
-      expect(aliceAccess).toBeDefined();
-      expect(aliceAccess!.toString()).toBe('Admin');
+      const fromBob = await encrypt(bob, khDocId, 'bob writes first');
+      await syncPeers(alice, bob);
+      expect(await decrypt(alice, khDocId, fromBob.bytes)).toBe('bob writes first');
+      expect(await decrypt(bob, khDocId, rekey.bytes)).toBe('rotates the key');
     });
 
-    it('Bob checks access with DocumentId from khDocuments vs reachableDocs', async () => {
-      // Test if the DocumentId cached in khDocuments matches what
-      // accessForDoc expects (type/value match)
-      const { ops: opsA, kh: khA } = await createOps();
-      const { ops: opsB, kh: khB } = await createOps();
+    it('a revoked member cannot read what is written afterwards; the remaining members can', async () => {
+      const { alice, bob, khDocId } = await sharedDoc();
+      const carol = await createOps();
+      await shareDocWithDevice(alice, khDocId, carol, 'edit');
+      const before = await encrypt(alice, khDocId, 'while carol was a member');
+      for (const peer of [bob, carol]) await syncPeers(alice, peer);
+      expect(await decrypt(carol, khDocId, before.bytes)).toBe('while carol was a member');
 
-      const { khDocId } = await opsA.enableSharing('doc-1');
-      const invite = await grantPeerAccessViaTempSigner(opsA, khDocId, 'admin');
-      const claimResult = await claimViaArchive(opsA, opsB, invite.inviteKeyBytes, 'doc-1');
+      await alice.kh.revokeMember(carol.kh.id.toIdentifier(), true, MemberedId.document(docIdOf(khDocId)));
+      const after = await encrypt(alice, khDocId, 'after carol left');
+      expect(after.newEpoch).toBe(true);
+      for (const peer of [bob, carol]) await syncPeers(alice, peer); // carol is handed everything alice has
 
-      // Get the DocumentId from khDocuments (cached by enableSharing/claiming)
-      const docFromKhDocuments = opsB.khDocuments.get(claimResult.khDocId);
-      expect(docFromKhDocuments).toBeDefined();
-      const docMapDocId = docFromKhDocuments.doc_id;
+      expect(await decrypt(bob, khDocId, after.bytes)).toBe('after carol left');
+      await expect(decrypt(carol, khDocId, after.bytes)).rejects.toThrow('Key not found');
+      expect(await rawAccess(carol, carol.agentId, khDocId)).toBeUndefined();
+      // Revocation is not retroactive: what she could read, she still can.
+      expect(await decrypt(carol, khDocId, before.bytes)).toBe('while carol was a member');
 
-      // Get the DocumentId from reachableDocs
-      const bReachable = await khB.reachableDocs();
-      const reachableDocId = bReachable[0].doc.doc_id;
-
-      const docMapBytes = (docMapDocId as any).toBytes ? (docMapDocId as any).toBytes() : docMapDocId;
-      const reachableBytes = (reachableDocId as any).toBytes ? (reachableDocId as any).toBytes() : reachableDocId;
-
-      // Check access using both DocumentId sources
-      const aliceId = new Identifier(khA.id.bytes);
-      const accessViaDocMap = await khB.accessForDoc(aliceId, docMapDocId);
-      const accessViaReachable = await khB.accessForDoc(aliceId, reachableDocId);
-
-
-      expect(accessViaDocMap).toBeDefined();
-      expect(accessViaReachable).toBeDefined();
+      // Bob's reply goes to the remaining members only.
+      const reply = await encrypt(bob, khDocId, 'bob replies');
+      for (const peer of [bob, carol]) await syncPeers(alice, peer);
+      expect(await decrypt(alice, khDocId, reply.bytes)).toBe('bob replies');
+      await expect(decrypt(carol, khDocId, reply.bytes)).rejects.toThrow('Key not found');
     });
 
-    it('accessForDoc fails with wrong Identifier (simulates identifierForPeer mismatch)', async () => {
-      // Simulates the production bug: identifierForPeer returns an Identifier
-      // that doesn't match what's in the delegation chain. This happens when
-      // keyhiveIdentifierFromPeerId(peerId) produces a different Identifier
-      // than the one used in the delegation chain (e.g., WebCrypto signer
-      // where verifyingKey != keyhive identity after archive reload).
-      const { ops: opsA, kh: khA } = await createOps();
-      const { ops: opsB, kh: khB } = await createOps();
+    describe('across a reload', () => {
+      it('a clean reload (same signer, fully saved state) keeps every key, old and new', async () => {
+        const { alice, bob, khDocId } = await sharedDoc();
+        const fromAlice = await encrypt(alice, khDocId, 'before the reload');
+        await syncPeers(alice, bob);
+        const fromBob = await encrypt(bob, khDocId, 'bob, before the reload');
+        await syncPeers(alice, bob);
 
-      const { khDocId } = await opsA.enableSharing('doc-1');
-      const invite = await grantPeerAccessViaTempSigner(opsA, khDocId, 'admin');
-      await claimViaArchive(opsA, opsB, invite.inviteKeyBytes, 'doc-1');
+        const bob2 = await reload(bob);
+        expect(bob2.agentId).toBe(bob.agentId);
+        expect(await decrypt(bob2, khDocId, fromAlice.bytes)).toBe('before the reload');
+        expect(await decrypt(bob2, khDocId, fromBob.bytes)).toBe('bob, before the reload');
 
-      const bReachable = await khB.reachableDocs();
-      const docIdOnB = bReachable[0].doc.doc_id;
-
-      // Correct identifier — works
-      const correctId = new Identifier(khA.id.bytes);
-      const correctAccess = await khB.accessForDoc(correctId, docIdOnB);
-      expect(correctAccess).toBeDefined();
-      expect(correctAccess!.toString()).toBe('Admin');
-
-      // Wrong identifier (a valid but unrelated signer's key) — simulates identifierForPeer mismatch
-      const unrelatedSigner = Signer.memorySignerFromBytes(crypto.getRandomValues(new Uint8Array(32)));
-      const wrongId = new Identifier(unrelatedSigner.verifyingKey);
-      const wrongAccess = await khB.accessForDoc(wrongId, docIdOnB);
-      // This returns null — exactly the production bug behavior
-      expect(wrongAccess).toBeUndefined();
-    });
-
-    it('Sharing panel shows access but accessForDoc returns null (production mismatch)', async () => {
-      // The user reports the Sharing & Permissions panel correctly shows
-      // HrqeCwxo... (Alice) has admin access, but the network adapter's
-      // accessForDoc returns null. This could mean docMemberCapabilities
-      // sees the member but accessForDoc doesn't.
-      const { ops: opsA, kh: khA } = await createOps();
-      const { ops: opsB, kh: khB } = await createOps();
-
-      const { khDocId } = await opsA.enableSharing('doc-1');
-      const invite = await grantPeerAccessViaTempSigner(opsA, khDocId, 'admin');
-      await claimViaArchive(opsA, opsB, invite.inviteKeyBytes, 'doc-1');
-
-      // Keyhive sync
-      const cardA = await khA.contactCard();
-      const indA_inB = await khB.receiveContactCard(cardA);
-      const bEventsForA: Map<Uint8Array, Uint8Array> = await khB.eventsForAgent(indA_inB.toAgent());
-      const bArr: Uint8Array[] = [];
-      bEventsForA.forEach((v: Uint8Array) => bArr.push(v));
-      await khA.ingestEventsBytes(bArr);
-
-      const cardB = await khB.contactCard();
-      const indB_inA = await khA.receiveContactCard(cardB);
-      const aEventsForB: Map<Uint8Array, Uint8Array> = await khA.eventsForAgent(indB_inA.toAgent());
-      const aArr: Uint8Array[] = [];
-      aEventsForB.forEach((v: Uint8Array) => aArr.push(v));
-      await khB.ingestEventsBytes(aArr);
-
-      // Bob's perspective: check docMemberCapabilities (what Sharing panel uses)
-      const bReachable = await khB.reachableDocs();
-      const docIdOnB = bReachable[0].doc.doc_id;
-      const members = await khB.docMemberCapabilities(docIdOnB);
-
-      // Check if Alice appears in members
-      const aliceMember = members.find((m: any) => {
-        const idBytes = m.who.id?.toBytes ? m.who.id.toBytes() : null;
-        if (!idBytes) return false;
-        return Buffer.from(idBytes).equals(Buffer.from(khA.id.bytes));
+        const afterReload = await encrypt(alice, khDocId, 'after the reload');
+        await syncPeers(alice, bob2);
+        expect(await decrypt(bob2, khDocId, afterReload.bytes)).toBe('after the reload');
+        const reply = await encrypt(bob2, khDocId, 'bob, after the reload');
+        await syncPeers(alice, bob2);
+        expect(await decrypt(alice, khDocId, reply.bytes)).toBe('bob, after the reload');
       });
 
-      // Also check accessForDoc
-      const aliceId = new Identifier(khA.id.bytes);
-      const access = await khB.accessForDoc(aliceId, docIdOnB);
+      // The restart keyhive-repo.ts's archive save makes rare, and what happens
+      // when it occurs anyway. The bridge writes every emitted event to storage
+      // at once but the archive (which holds the leaf secrets) only now and
+      // then — so a restart can find a rotation's OP on disk and the SECRET
+      // behind it gone. Under alpha.58 that wedged the instance for good
+      // ("SecretKey not found" on every encrypt). keyhive >= 0.6 rotates again
+      // when it cannot derive the current secret, so the instance heals on its
+      // next encrypt; the app still saves the archive shortly after each event
+      // because the lost epoch itself stays unreadable (next test).
+      it.each([
+        ['a member', 'bob'],
+        ['the owner', 'alice'],
+      ] as const)('%s reloaded from a STALE archive heals on its next encrypt', async (_label, who) => {
+        const { alice, bob, khDocId } = await sharedDoc();
+        const restarted = who === 'bob' ? bob : alice;
+        const other = who === 'bob' ? alice : bob;
 
+        // What is on disk: an archive and prekey secrets from BEFORE the encrypt…
+        const staleArchive = (await restarted.kh.toArchive()).toBytes();
+        const stalePrekeys = await restarted.kh.exportPrekeySecrets();
+        const mark = restarted.emitted.length;
+        const lost = await encrypt(restarted, khDocId, 'minted a rotation');
+        expect(lost.newEpoch).toBe(true);
+        // …plus the events emitted since, which include that rotation's op.
+        const eventsSince = restarted.emitted.slice(mark);
+        expect(eventsSince.length).toBeGreaterThan(0);
+        await syncPeers(alice, bob);
+        expect(await decrypt(other, khDocId, lost.bytes)).toBe('minted a rotation');
 
-      // Both should agree: if members shows Alice, accessForDoc should too
-      if (aliceMember) {
-        expect(access).toBeDefined();
+        const back = await reload(restarted, { archive: staleArchive, prekeySecrets: stalePrekeys, events: eventsSince });
+        expect(back.agentId).toBe(restarted.agentId);
+
+        // It cannot derive the epoch it minted, so it starts another — no throw.
+        const healed = await encrypt(back, khDocId, 'after the stale reload');
+        expect(healed.newEpoch).toBe(true);
+        await syncPeers(back, other);
+        expect(await decrypt(other, khDocId, healed.bytes)).toBe('after the stale reload');
+
+        // And it reads the peer again.
+        const reply = await encrypt(other, khDocId, 'welcome back');
+        await syncPeers(back, other);
+        expect(await decrypt(back, khDocId, reply.bytes)).toBe('welcome back');
+      });
+
+      // The whole cost of the stale reload above: one's own ciphertext from the
+      // lost epoch. Fine for presence (re-broadcast on every change); document
+      // content does not go through this path.
+      it('a member reloaded from a stale archive loses only its own ciphertext from the lost epoch', async () => {
+        const { alice, bob, khDocId } = await sharedDoc();
+        const staleArchive = (await bob.kh.toArchive()).toBytes();
+        const stalePrekeys = await bob.kh.exportPrekeySecrets();
+        const mark = bob.emitted.length;
+        const lost = await encrypt(bob, khDocId, 'from the lost epoch');
+        await syncPeers(alice, bob);
+
+        const bob2 = await reload(bob, { archive: staleArchive, prekeySecrets: stalePrekeys, events: bob.emitted.slice(mark) });
+        await expect(decrypt(bob2, khDocId, lost.bytes)).rejects.toThrow('Key not found');
+        // Alice, who was never restarted, still reads it.
+        expect(await decrypt(alice, khDocId, lost.bytes)).toBe('from the lost epoch');
+      });
+    });
+  });
+
+  // khAccessCheck (keyhive-repo.ts) decides whether a peer is told a document
+  // exists: it rebuilds an Identifier from the verifying key in the peer's id
+  // and asks accessForDoc. A wrong answer here is a document that silently
+  // never syncs, or one announced to someone with no right to it.
+  describe('accessForDoc (the share gate\'s inputs)', () => {
+    it('a device\'s keyhive id is its signer\'s verifying key, before and after a reload', async () => {
+      const peer = await createOps();
+      expect(b64(peer.kh.id.toBytes())).toBe(b64(peer.signer.verifyingKey));
+      expect(b64(peer.kh.whoami.toBytes())).toBe(b64(peer.signer.verifyingKey));
+
+      await peer.ops.createKeyhiveDoc();
+      const again = await reload(peer);
+      expect(b64(again.kh.id.toBytes())).toBe(b64(peer.signer.verifyingKey));
+    });
+
+    it('an Identifier built from the verifying key sees the same access as kh.id, in both directions', async () => {
+      const alice = await createOps();
+      const bob = await createOps();
+      const { khDocId } = await alice.ops.createKeyhiveDoc();
+      await shareDocWithDevice(alice, khDocId, bob, 'read');
+      const docId = docIdOf(khDocId);
+      const power = async (kh: Peer['kh'], id: Identifier) => (await kh.accessForDoc(id, docId))?.toString();
+
+      // Bob's gate, asked about Alice.
+      expect(await power(bob.kh, alice.kh.id.toIdentifier())).toBe('Admin');
+      expect(await power(bob.kh, new Identifier(alice.signer.verifyingKey))).toBe('Admin');
+      // Alice's gate, asked about Bob.
+      expect(await power(alice.kh, bob.kh.id.toIdentifier())).toBe('Read');
+      expect(await power(alice.kh, new Identifier(bob.signer.verifyingKey))).toBe('Read');
+    });
+
+    // Sharing is with a friend's GROUP, but the gate is asked about a DEVICE.
+    // If keyhive did not follow the group, the granter would drop all sync to
+    // the friend and the friend would never see the document.
+    it('resolves a device\'s access through its user-group, on the granter\'s side and the friend\'s', async () => {
+      const alice = await createOps();
+      const bob = await createOps();
+      const { khDocId, friendGroupId } = await shareWithFriend(alice, bob, 'edit');
+
+      expect(await rawAccess(alice, bob.agentId, khDocId)).toBe('Edit');
+      expect(await rawAccess(alice, friendGroupId, khDocId)).toBe('Edit');
+      expect(await rawAccess(bob, bob.agentId, khDocId)).toBe('Edit');
+      expect(await rawAccess(bob, alice.agentId, khDocId)).toBe('Admin');
+    });
+
+    it('reports no access for an identifier that was never granted any', async () => {
+      const alice = await createOps();
+      const bob = await createOps();
+      const { khDocId } = await shareWithFriend(alice, bob, 'edit');
+      const stranger = await createOps();
+
+      for (const peer of [alice, bob]) {
+        expect(await peer.kh.accessForDoc(new Identifier(stranger.signer.verifyingKey), docIdOf(khDocId))).toBeUndefined();
       }
+      // Knowing the stranger's card changes nothing.
+      await exchangeCards(alice, stranger);
+      expect(await rawAccess(alice, stranger.agentId, khDocId)).toBeUndefined();
+    });
+
+    it('access survives a same-signer reload, on both sides of the gate', async () => {
+      const alice = await createOps();
+      const bob = await createOps();
+      const { khDocId, friendGroupId } = await shareWithFriend(alice, bob, 'edit');
+
+      // The granter restarts: its gate still admits the friend's device.
+      const alice2 = await reload(alice);
+      expect(await rawAccess(alice2, bob.agentId, khDocId)).toBe('Edit');
+      expect(await rawAccess(alice2, friendGroupId, khDocId)).toBe('Edit');
+      expect(await alice2.ops.getMyAccess(khDocId)).toBe('Admin');
+      expect(await alice2.ops.getUserGroupAccess(khDocId)).toBe('Admin');
+
+      // The friend still recognises the restarted granter after another sync.
+      await syncAsBridge(alice2, bob);
+      expect(await rawAccess(bob, alice2.agentId, khDocId)).toBe('Admin');
+
+      // And the friend's own restart keeps what it was granted.
+      const bob2 = await reload(bob);
+      expect(await bob2.ops.getMyAccess(khDocId)).toBe('Edit');
+      expect(await rawAccess(bob2, alice.agentId, khDocId)).toBe('Admin');
+    });
+
+    // Power is attenuated along a chain: a member can pass on no more than the
+    // weakest link above it. Without that, admin of a nested group would read as
+    // admin of every document any outer group can merely read.
+    it('attenuates through nested groups: doc ─Read→ group ─Admin→ group ─Admin→ device is Read', async () => {
+      const alice = await createOps();
+      const carol = await createOps();
+      await exchangeCards(alice, carol);
+      const docId = await alice.kh.generateDocument([], new ChangeId(new Uint8Array(32)), []);
+      const khDocId = b64(docId.toBytes());
+      const outer = await alice.kh.generateGroup([]);
+      const inner = await alice.kh.generateGroup([]);
+      await alice.kh.addMember(outer.toIdentifier(), MemberedId.document(docId), Power.read());
+      await alice.kh.addMember(inner.toIdentifier(), MemberedId.group(outer), Power.admin());
+      await alice.kh.addMember(carol.kh.id.toIdentifier(), MemberedId.group(inner), Power.admin());
+
+      expect(await rawAccess(alice, carol.agentId, khDocId)).toBe('Read');
+      expect(await rawAccess(alice, b64(inner.toBytes()), khDocId)).toBe('Read');
+      // transitiveMembers() — what KeyhiveOps reads its own power from — agrees.
+      const transitive = await (await alice.kh.getDocument(docId))!.transitiveMembers();
+      const carolEntry = transitive.find((m: any) => b64(m.who.id.toBytes()) === carol.agentId);
+      expect(carolEntry?.can.toString()).toBe('Read');
+
+      // And Carol's own keyhive reaches the same answer once it has the ops.
+      await syncPeers(alice, carol);
+      expect(await rawAccess(carol, carol.agentId, khDocId)).toBe('Read');
     });
   });
 
-  describe('getDocMembers', () => {
-    it('lists members with correct roles', async () => {
-      const { ops: opsA } = await createOps();
-      const { khDocId } = await opsA.enableSharing('doc-1');
+  describe('getDocMembers / getKnownFriends', () => {
+    it('marks the user-group as "me" with its devices, and hides the device the group covers', async () => {
+      const { ops, agentId } = await createOps();
+      const { khDocId } = await ops.enableSharing('doc');
+      const groupId = (await ops.getUserGroupId())!;
 
-      const members = await opsA.getDocMembers(khDocId);
-      expect(members.length).toBeGreaterThan(0);
-      // Owner should be admin
-      const me = members.find(m => m.isMe);
-      expect(me).toBeDefined();
-      expect(me!.role).toBe('admin');
+      const members = await ops.getDocMembers(khDocId);
+      // The creating device is a root member too, but the group stands in for it.
+      expect(members).toHaveLength(1);
+      expect(members[0]).toMatchObject({ agentId: groupId, type: 'group', role: 'admin', isMe: true, deviceIds: [agentId] });
+    });
+
+    it('lists a friend\'s group as a group with all of its devices', async () => {
+      const alice = await createOps();
+      const bob = await createOps();
+      const bobPhone = await createOps();
+      await linkDevices(bob, bobPhone);
+      const { khDocId, friendGroupId } = await shareWithFriend(alice, bob, 'edit');
+
+      const friend = memberOf(await alice.ops.getDocMembers(khDocId), friendGroupId);
+      expect(friend).toMatchObject({ type: 'group', role: 'edit', isMe: false });
+      // Alice never met Bob's phone: it reached her inside Bob's bundle.
+      expect([...(friend as any).deviceIds].sort()).toEqual([bob.agentId, bobPhone.agentId].sort());
+    });
+
+    it('hides a device that is also a direct member when its group is present', async () => {
+      const alice = await createOps();
+      const bob = await createOps();
+      const { khDocId, friendGroupId } = await shareWithFriend(alice, bob, 'edit');
+      // Not something the app does (sharing is group-only), but older documents
+      // and other clients can leave a device granted directly as well.
+      await alice.kh.addMember(identifierOf(bob.agentId), MemberedId.document(docIdOf(khDocId)), Power.read());
+      expect((await directMembers(alice, khDocId)).has(bob.agentId)).toBe(true);
+
+      const members = await alice.ops.getDocMembers(khDocId);
+      expect(memberOf(members, bob.agentId)).toBeUndefined();
+      expect(memberOf(members, friendGroupId)?.role).toBe('edit');
+    });
+
+    it('lists a directly-granted device as an individual when no group covers it', async () => {
+      const alice = await createOps();
+      const bob = await createOps();
+      const { khDocId } = await alice.ops.createKeyhiveDoc();
+      await shareDocWithDevice(alice, khDocId, bob, 'read');
+
+      const entry = memberOf(await alice.ops.getDocMembers(khDocId), bob.agentId);
+      expect(entry).toMatchObject({ type: 'individual', role: 'read', isMe: false });
+    });
+
+    // The window where a document's membership has synced but the ops of one
+    // member group have not: the id is in doc.members() yet is neither a group
+    // nor an individual this keyhive knows. Sharing is group-only, so it is
+    // shown as a group with no devices rather than dropped or called a device.
+    it('reports a member that is neither a known group nor a known individual as a group with no devices', async () => {
+      const alice = await createOps();
+      const bob = await createOps();
+      const carol = await createOps();
+      const { khDocId, friendGroupId: bobGroupId } = await shareWithFriend(alice, bob, 'edit');
+      // Alice then adds Carol's group; Bob has not heard about it yet.
+      const { friendGroupId: carolGroupId } = await shareWithFriend(alice, carol, 'read', khDocId);
+      expect(memberOf(await bob.ops.getDocMembers(khDocId), carolGroupId)).toBeUndefined();
+
+      // Bob receives everything Alice has EXCEPT the ops that define Carol's
+      // group and Carol's device.
+      const all = await alice.kh.allAgentEvents();
+      const withheld = new Set<string>();
+      all.membershipSources.forEach((hashes: Uint8Array[], source: Uint8Array) => {
+        if (b64(source) === carolGroupId) hashes.forEach((h) => withheld.add(b64(h)));
+      });
+      all.prekeySources.forEach((hashes: Uint8Array[], source: Uint8Array) => {
+        if (b64(source) === carol.agentId) hashes.forEach((h) => withheld.add(b64(h)));
+      });
+      expect(withheld.size).toBeGreaterThan(0);
+      const delivered: Uint8Array[] = [];
+      all.events.forEach((bytes: Uint8Array, hash: Uint8Array) => { if (!withheld.has(b64(hash))) delivered.push(bytes); });
+      await bob.kh.ingestEventsBytes(delivered);
+
+      expect(await knowsGroup(bob, carolGroupId)).toBe(false);
+      expect(await knowsDevice(bob, carol.agentId)).toBe(false);
+      const members = await bob.ops.getDocMembers(khDocId);
+      expect(memberOf(members, carolGroupId)).toMatchObject({ type: 'group', role: 'read', isMe: false, deviceIds: [] });
+      // The members it does know are unaffected.
+      expect(memberOf(members, bobGroupId)).toMatchObject({ type: 'group', role: 'edit', isMe: true, deviceIds: [bob.agentId] });
+      // An id it cannot resolve is not offered as someone to share with.
+      expect(memberOf(await bob.ops.getKnownFriends(), carolGroupId)).toBeUndefined();
+
+      // Once the rest arrives the same entry fills in.
+      await syncPeers(alice, bob);
+      expect(memberOf(await bob.ops.getDocMembers(khDocId), carolGroupId))
+        .toMatchObject({ type: 'group', role: 'read', deviceIds: [carol.agentId] });
+    });
+
+    it('does not list a relay-only grant: it can carry the ciphertext but not read it', async () => {
+      const alice = await createOps();
+      const bob = await createOps();
+      const { khDocId, friendGroupId } = await shareWithFriend(alice, bob, 'relay' as any);
+
+      expect(await rawAccess(alice, friendGroupId, khDocId)).toBe('Relay');
+      expect(memberOf(await alice.ops.getDocMembers(khDocId), friendGroupId)).toBeUndefined();
+      expect(memberOf(await alice.ops.getKnownFriends(), friendGroupId)).toBeUndefined();
+    });
+
+    it('getKnownFriends lists the friend group a document is shared with — not our own group, not that document\'s members', async () => {
+      const alice = await createOps();
+      const bob = await createOps();
+      const { khDocId, friendGroupId } = await shareWithFriend(alice, bob, 'edit');
+      const aliceGroupId = (await alice.ops.getUserGroupId())!;
+
+      const friends = await alice.ops.getKnownFriends();
+      expect(friends.map((f) => f.agentId)).toEqual([friendGroupId]);
+      expect(friends[0]).toMatchObject({ type: 'group', role: 'edit', isMe: false });
+      // From Bob's side the friend is Alice's group.
+      expect((await bob.ops.getKnownFriends()).map((f) => f.agentId)).toEqual([aliceGroupId]);
+
+      // The "add people" picker for a document excludes who is already on it.
+      expect(await alice.ops.getKnownFriends(khDocId)).toEqual([]);
+      const { khDocId: other } = await alice.ops.createKeyhiveDoc();
+      expect((await alice.ops.getKnownFriends(other)).map((f) => f.agentId)).toEqual([friendGroupId]);
+    });
+
+    it('getKnownFriends lists a stored friend who is on no document yet as their user-group', async () => {
+      const alice = await createOps();
+      const bob = await createOps();
+      const bobGroupId = (await bob.ops.ensureUserGroup({ create: true }))!;
+      await befriend(alice, bob);
+      const aliceGroupId = (await alice.ops.ensureUserGroup({ create: true }))!;
+
+      // The friend list (DriveSettings) stores user-group ids; our own is skipped.
+      const friends = await alice.ops.getKnownFriends(undefined, [bobGroupId, aliceGroupId]);
+      expect(friends).toHaveLength(1);
+      expect(friends[0]).toMatchObject({ agentId: bobGroupId, type: 'group', isMe: false, deviceIds: [] });
+      expect(friends[0].role).toBeUndefined();
     });
   });
 
-  describe('getMyAccess', () => {
-    it('returns Admin for document owner', async () => {
+  describe('getMyAccess / getUserGroupAccess', () => {
+    it('are Admin for the document owner, through the device and through the group', async () => {
       const { ops } = await createOps();
       const { khDocId } = await ops.enableSharing('doc-1');
-      const access = await ops.getMyAccess(khDocId);
-      expect(access).toBe('Admin');
+      expect(await ops.getMyAccess(khDocId)).toBe('Admin');
+      expect(await ops.getUserGroupAccess(khDocId)).toBe('Admin');
+    });
+
+    it('report the role a friend granted', async () => {
+      const alice = await createOps();
+      const bob = await createOps();
+      const { khDocId } = await shareWithFriend(alice, bob, 'read');
+      expect(await bob.ops.getMyAccess(khDocId)).toBe('Read');
+      expect(await bob.ops.getUserGroupAccess(khDocId)).toBe('Read');
+    });
+
+    // Relay power lets a peer hold and forward ciphertext. It is not access to
+    // the document, and a document must not appear on the home page because of it.
+    it('are null for a relay-only grant, and the document stays off the home set', async () => {
+      const alice = await createOps();
+      const bob = await createOps();
+      const { khDocId } = await shareWithFriend(alice, bob, 'relay' as any);
+      expect(await rawAccess(bob, bob.agentId, khDocId)).toBe('Relay'); // keyhive does report the grant
+
+      expect(await bob.ops.getMyAccess(khDocId)).toBeNull();
+      expect(await bob.ops.getUserGroupAccess(khDocId)).toBeNull();
+      const { accessibleKhIds, reachableKhIds } = await bob.ops.enumerateUserDocs();
+      expect(reachableKhIds).toContain(khDocId);
+      expect(accessibleKhIds).not.toContain(khDocId);
+
+      // And it really cannot read: no key reaches a relay.
+      const message = await encrypt(alice, khDocId, 'not for relays');
+      await syncPeers(alice, bob);
+      await expect(decrypt(bob, khDocId, message.bytes)).rejects.toThrow('Key not found');
+    });
+
+    it('getUserGroupAccess is null without a user-group', async () => {
+      const alice = await createOps();
+      const bob = await createOps();
+      const { khDocId } = await alice.ops.createKeyhiveDoc();
+      await shareDocWithDevice(alice, khDocId, bob, 'edit'); // bob has device access but no group
+      expect(await bob.ops.getMyAccess(khDocId)).toBe('Edit');
+      expect(await bob.ops.getUserGroupAccess(khDocId)).toBeNull();
     });
   });
 
   describe('registerSharingGroup', () => {
-    it('restores document into khDocuments map', async () => {
-      const { ops } = await createOps();
-      const { khDocId } = await ops.enableSharing('doc-1');
+    it('restores a document into khDocuments after a restart, and leaves an unknown one unregistered', async () => {
+      const peer = await createOps();
+      const { khDocId } = await peer.ops.enableSharing('doc-1');
 
-      // Clear the map to simulate a reload
-      ops.khDocuments.clear();
-      expect(ops.khDocuments.has(khDocId)).toBe(false);
+      // khDocuments is in-memory: a restarted KeyhiveOps starts with none.
+      const restarted = await reload(peer);
+      expect(restarted.ops.khDocuments.has(khDocId)).toBe(false);
+      await expect(restarted.ops.revokeMember('anyone', khDocId)).rejects.toThrow('Document not found');
 
-      await ops.registerSharingGroup(khDocId);
-      expect(ops.khDocuments.has(khDocId)).toBe(true);
-    });
-  });
+      expect(await restarted.ops.registerSharingGroup(khDocId)).toBe(true);
+      expect(restarted.ops.khDocuments.has(khDocId)).toBe(true);
 
-  describe('multiple peers sharing a document', () => {
-    it('both claimants see the document', async () => {
-      const { ops: opsA } = await createOps();
-      const { ops: opsB } = await createOps();
-      const { ops: opsC } = await createOps();
-
-      const { khDocId } = await opsA.enableSharing('doc-1');
-      const inviteB = await grantPeerAccessViaTempSigner(opsA, khDocId, 'edit');
-      const inviteC = await grantPeerAccessViaTempSigner(opsA, khDocId, 'edit');
-
-      await claimViaArchive(opsA, opsB, inviteB.inviteKeyBytes);
-      await claimViaArchive(opsA, opsC, inviteC.inviteKeyBytes);
-
-      const bDocs = await opsB.kh.reachableDocs();
-      const cDocs = await opsC.kh.reachableDocs();
-      expect(bDocs.length).toBeGreaterThan(0);
-      expect(cDocs.length).toBeGreaterThan(0);
+      const stranger = await createOps();
+      const { khDocId: foreign } = await stranger.ops.createKeyhiveDoc();
+      expect(await restarted.ops.registerSharingGroup(foreign)).toBe(true);
+      expect(restarted.ops.khDocuments.has(foreign)).toBe(false);
     });
   });
 
   describe('device linking', () => {
-    /**
-     * Simulate the device-linking flow: bidirectional contact card exchange
-     * + full archive sync, so both keyhive instances know about each other.
-     */
-    async function linkDevices(khA: any, khB: any) {
-      // Bidirectional contact card exchange
-      const cardA = await khA.contactCard();
-      const cardB = await khB.contactCard();
-      const individualAonB = await khB.receiveContactCard(cardA);
-      const individualBonA = await khA.receiveContactCard(cardB);
+    // The handshake has two legs and the UI must tell them apart: the new device
+    // shows a return link (linked=false), the original shows "Linking complete".
+    it('linkDevice reports linked=false on the new device until the original adds it, then linked=true on the original', async () => {
+      const original = await createOps();
+      const added = await createOps();
 
-      // Grant B access to all of A's documents (and vice-versa)
-      const aDocs = await khA.reachableDocs();
-      for (const item of aDocs) {
-        await khA.addMember(individualBonA.toAgent(), item.doc.toMembered(), item.access, []);
-      }
-      const bDocs = await khB.reachableDocs();
-      for (const item of bDocs) {
-        await khB.addMember(individualAonB.toAgent(), item.doc.toMembered(), item.access, []);
-      }
+      const { groupId, firstLeg, secondLeg } = await linkDevices(original, added);
 
-      // Full archive sync so both sides have the complete picture
-      const archiveA = await khA.toArchive();
-      const archiveB = await khB.toArchive();
-      await khB.ingestArchive(archiveA);
-      await khA.ingestArchive(archiveB);
+      // Leg 1: the new device has only adopted the id — it is not a member yet.
+      expect(firstLeg).toEqual({ userGroupId: groupId, linked: false });
+      // Leg 2: the original (admin) added it.
+      expect(secondLeg).toEqual({ userGroupId: groupId, linked: true });
+      expect(await added.ops.getUserGroupId()).toBe(groupId);
 
-      // Event sync
-      const bEventsForA: Map<Uint8Array, Uint8Array> = await khB.eventsForAgent(individualBonA.toAgent());
-      const bArr: Uint8Array[] = [];
-      bEventsForA.forEach((v: Uint8Array) => bArr.push(v));
-      await khA.ingestEventsBytes(bArr);
-
-      const aEventsForB: Map<Uint8Array, Uint8Array> = await khA.eventsForAgent(individualAonB.toAgent());
-      const aArr: Uint8Array[] = [];
-      aEventsForB.forEach((v: Uint8Array) => aArr.push(v));
-      await khB.ingestEventsBytes(aArr);
-
-      return { individualAonB, individualBonA };
-    }
-
-    it('after linking, both devices see the same documents with the same access', async () => {
-      const { ops: opsA, kh: khA } = await createOps();
-      const { ops: opsB, kh: khB } = await createOps();
-
-      // Device A creates two documents before linking
-      const doc1 = await opsA.enableSharing('automerge-doc-1');
-      const doc2 = await opsA.enableSharing('automerge-doc-2');
-
-      // Link devices (bidirectional contact card exchange + sync)
-      await linkDevices(khA, khB);
-
-      // Both devices should see the same set of reachable documents
-      const aDocs = await khA.reachableDocs();
-      const bDocs = await khB.reachableDocs();
-      expect(aDocs.length).toBe(bDocs.length);
-
-      // Both should have the same access level on every document
-      const aId = new Identifier(khA.id.bytes);
-      const bId = new Identifier(khB.id.bytes);
-      for (const aDoc of aDocs) {
-        const docId = aDoc.doc.doc_id;
-        const aAccess = await khA.accessForDoc(aId, docId);
-        const bAccess = await khB.accessForDoc(bId, docId);
-        expect(aAccess).not.toBeNull();
-        expect(bAccess).not.toBeNull();
-        expect(bAccess!.toString()).toBe(aAccess!.toString());
-      }
+      const devices = await original.ops.listGroupDevices();
+      expect(deviceOf(devices, added.agentId)).toMatchObject({ role: 'admin', isMe: false });
+      // The new device sees its own membership once the group ops reach it.
+      expect(deviceOf(await added.ops.listGroupDevices(), added.agentId)).toMatchObject({ role: 'admin', isMe: true });
     });
 
-    it('document created after linking is also visible to both devices', async () => {
-      const { ops: opsA, kh: khA } = await createOps();
-      const { ops: opsB, kh: khB } = await createOps();
+    it('the new device adopts the group without waiting when the bundle carried it', async () => {
+      const original = await createOps();
+      const added = await createOps();
+      const groupId = (await original.ops.ensureUserGroup({ create: true }))!;
+      await learnContact(added, original);
 
-      // Link first
-      await linkDevices(khA, khB);
+      // linkDevice polls (3 s a round) for a group it cannot resolve. The bundle
+      // carries the group's ops precisely so the first leg does not sit there.
+      const started = Date.now();
+      await added.ops.linkDevice(original.agentId, groupId);
+      expect(Date.now() - started).toBeLessThan(1500);
+      expect(await knowsGroup(added, groupId)).toBe(true);
+    });
 
-      // Then device A creates a document and grants B access
-      await opsA.enableSharing('automerge-doc-1');
-      const cardB = await khB.contactCard();
-      const individualBonA = await khA.receiveContactCard(cardB);
-      const aDocs2 = await khA.reachableDocs();
-      for (const item of aDocs2) {
-        const bId = new Identifier(individualBonA.id.toBytes());
-        const existing = await khA.accessForDoc(bId, item.doc.doc_id);
-        if (!existing) {
-          await khA.addMember(individualBonA.toAgent(), item.doc.toMembered(), item.access, []);
+    it('a peer with no group on either side: the first to link creates one and adds the other', async () => {
+      const first = await createOps();
+      const second = await createOps();
+      await learnContact(first, second);
+
+      const result = await first.ops.linkDevice(second.agentId, null);
+      expect(result.linked).toBe(true);
+      expect(result.userGroupId).toBe(await first.ops.getUserGroupId());
+      expect((await first.ops.listGroupDevices()).map((d) => d.agentId).sort()).toEqual([first.agentId, second.agentId].sort());
+    });
+
+    it('two devices that each already have a group converge on one id, and its owner adds the other', async () => {
+      const one = await createOps();
+      const two = await createOps();
+      const groupOne = (await one.ops.ensureUserGroup({ create: true }))!;
+      const groupTwo = (await two.ops.ensureUserGroup({ create: true }))!;
+      await befriend(one, two);
+
+      const resultOne = await one.ops.linkDevice(two.agentId, groupTwo);
+      const resultTwo = await two.ops.linkDevice(one.agentId, groupOne);
+
+      // The smaller id wins on both sides, whichever order they link in.
+      const canonical = groupOne < groupTwo ? groupOne : groupTwo;
+      expect(resultOne.userGroupId).toBe(canonical);
+      expect(resultTwo.userGroupId).toBe(canonical);
+      const owner = canonical === groupOne ? one : two;
+      const joiner = owner === one ? two : one;
+      expect((owner === one ? resultOne : resultTwo).linked).toBe(true);
+      expect(deviceOf(await owner.ops.listGroupDevices(), joiner.agentId)?.role).toBe('admin');
+    });
+
+    it('after linking, both devices see the same documents with the same access — made before, after, and by the new device', async () => {
+      const laptop = await createOps();
+      const phone = await createOps();
+      const { khDocId: before } = await laptop.ops.createKeyhiveDoc();
+      await linkDevices(laptop, phone);
+      const { khDocId: after } = await laptop.ops.createKeyhiveDoc();
+      const { khDocId: byPhone } = await phone.ops.createKeyhiveDoc();
+      await syncAsBridge(laptop, phone);
+
+      for (const device of [laptop, phone]) {
+        const { accessibleKhIds } = await device.ops.enumerateUserDocs();
+        expect([...accessibleKhIds].sort()).toEqual([before, after, byPhone].sort());
+        for (const khDocId of [before, after, byPhone]) {
+          expect(await device.ops.getUserGroupAccess(khDocId)).toBe('Admin');
+          expect(await device.ops.getMyAccess(khDocId)).toBe('Admin');
         }
       }
-
-      // Re-sync so B learns about the new doc
-      const archiveA = await khA.toArchive();
-      await khB.ingestArchive(archiveA);
-
-      const cardA = await khA.contactCard();
-      const indA_inB = await khB.receiveContactCard(cardA);
-      const aEvts: Map<Uint8Array, Uint8Array> = await khA.eventsForAgent(indA_inB.toAgent());
-      const arr: Uint8Array[] = [];
-      aEvts.forEach((v: Uint8Array) => arr.push(v));
-      await khB.ingestEventsBytes(arr);
-
-      // Both devices should see it with the same access
-      const aDocs = await khA.reachableDocs();
-      const bDocs = await khB.reachableDocs();
-      expect(aDocs.length).toBe(1);
-      expect(bDocs.length).toBe(1);
-
-      const aId = new Identifier(khA.id.bytes);
-      const bId = new Identifier(khB.id.bytes);
-      const aAccess = await khA.accessForDoc(aId, aDocs[0].doc.doc_id);
-      const bAccess = await khB.accessForDoc(bId, bDocs[0].doc.doc_id);
-      expect(bAccess!.toString()).toBe(aAccess!.toString());
     });
 
-    it('linked device can encrypt and the other can decrypt', async () => {
-      const { ops: opsA, kh: khA } = await createOps();
-      const { ops: opsB, kh: khB } = await createOps();
+    // Membership through the group is not enough on its own: the document's key
+    // tree has to take the new device in, or it could list a document it cannot open.
+    it('a linked device reads a document from before the link, and the two devices read each other', async () => {
+      const laptop = await createOps();
+      const phone = await createOps();
+      const { khDocId } = await laptop.ops.createKeyhiveDoc();
+      const old = await encrypt(laptop, khDocId, 'written before the phone existed');
+      await linkDevices(laptop, phone);
 
-      await opsA.enableSharing('automerge-doc-1');
-      const { individualAonB } = await linkDevices(khA, khB);
+      const cgkaMembers = await (await laptop.kh.getDocument(docIdOf(khDocId)))!.cgkaMembers();
+      expect(cgkaMembers.map((id: Identifier) => b64(id.toBytes())).sort()).toEqual([laptop.agentId, phone.agentId].sort());
+      expect(await decrypt(phone, khDocId, old.bytes)).toBe('written before the phone existed');
 
-      // B encrypts on a doc it gained access to via linking
-      const bDocs = await khB.reachableDocs();
-      expect(bDocs.length).toBe(1);
-      const docB = await khB.getDocument(bDocs[0].doc.doc_id);
-      const plaintext = new TextEncoder().encode('written on device B');
-      const ref = new ChangeId(crypto.getRandomValues(new Uint8Array(32)));
-      const enc = await khB.tryEncryptArchive(docB!, ref, [], plaintext);
+      const fromLaptop = await encrypt(laptop, khDocId, 'laptop, after the link');
+      await syncAsBridge(laptop, phone);
+      expect(await decrypt(phone, khDocId, fromLaptop.bytes)).toBe('laptop, after the link');
 
-      // Sync B's CGKA ops to A
-      const bEvts: Map<Uint8Array, Uint8Array> = await khB.eventsForAgent(individualAonB.toAgent());
-      const arr: Uint8Array[] = [];
-      bEvts.forEach((v: Uint8Array) => arr.push(v));
-      await khA.ingestEventsBytes(arr);
-
-      // A decrypts
-      const docA = await khA.getDocument(opsA.khDocuments.values().next().value!.doc_id);
-      const decrypted = await khA.tryDecrypt(docA!, enc.encrypted_content());
-      expect(new Uint8Array(decrypted)).toEqual(plaintext);
-    });
-
-    // The device-link handshake has two legs and the UI must tell them apart:
-    // the new device shows a return link (linked=false) and the original device
-    // shows "Linking complete" once both devices are in the group (linked=true).
-    it('linkDevice reports linked=true on the original device once both devices are in the group', async () => {
-      const { ops: opsA } = await createOps();
-      const { ops: opsB } = await createOps();
-
-      // A is the original device and owns the user-group.
-      const groupId = await opsA.ensureUserGroup({ create: true });
-      expect(groupId).not.toBeNull();
-
-      // A learns B's identity, as it would from opening B's return link.
-      const { agentId: bAgentId } = await opsA.receiveContactCard(await opsB.getContactCard());
-
-      const result = await opsA.linkDevice(bAgentId, groupId);
-      expect(result.linked).toBe(true);
-
-      // B is now a real member of the user-group (not just adopted the id).
-      const devices = await opsA.listGroupDevices();
-      expect(devices.some((d) => d.agentId === bAgentId && !d.isMe)).toBe(true);
-    });
-
-    it('linkDevice reports linked=false on the new device before the original device finishes', async () => {
-      const { ops: opsA, kh: khA } = await createOps();
-      const { ops: opsB, kh: khB } = await createOps();
-
-      // A owns the group; B will adopt its id on the first leg.
-      const groupId = await opsA.ensureUserGroup({ create: true });
-
-      // Sync A's keyhive state into B so the adopted group resolves immediately
-      // (otherwise ensureUserGroup's waitForSync would poll).
-      await khB.ingestArchive(await khA.toArchive());
-
-      // B learns A's identity, as it would from opening A's link.
-      const { agentId: aAgentId } = await opsB.receiveContactCard(await opsA.getContactCard());
-
-      const result = await opsB.linkDevice(aAgentId, groupId);
-      // B has only adopted the group id; the original device hasn't added it yet,
-      // so the handshake is not complete and the UI shows a return link.
-      expect(result.linked).toBe(false);
+      const fromPhone = await encrypt(phone, khDocId, 'phone');
+      await syncAsBridge(laptop, phone);
+      expect(await decrypt(laptop, khDocId, fromPhone.bytes)).toBe('phone');
     });
   });
 
-  describe('direct add member (no invite link)', () => {
-    /**
-     * Simulate createKeyhiveDoc: generate a keyhive document (no co-parents)
-     * and use its doc_id bytes as the "automerge document ID". This mirrors
-     * what the worker does: createKeyhiveDoc() → setNextDocId → create2().
-     */
-    async function createDocForSharing(ops: KeyhiveOps): Promise<{ automergeDocIdBytes: Uint8Array; khDocId: string }> {
-      const { docIdBytes, khDocId } = await ops.createKeyhiveDoc();
-      return { automergeDocIdBytes: docIdBytes, khDocId };
-    }
+  describe('sharing with a friend (addMember / changeRole / revokeMember)', () => {
+    it('addMember fires forceResyncAllPeers once, after syncKeyhive', async () => {
+      const alice = await createOps();
+      const bob = await createOps();
+      const bobGroupId = (await bob.ops.ensureUserGroup({ create: true }))!;
+      await befriend(alice, bob);
+      const { khDocId } = await alice.ops.createKeyhiveDoc();
+      const mark = alice.fx.order.length;
 
-    /**
-     * Simulate the "add friend then add member" flow with idFactory:
-     * 1. Alice creates a document (idFactory makes automerge docId = keyhive docId)
-     * 2. Alice enables sharing (reuses the existing keyhive doc)
-     * 3. Alice and Bob exchange contact cards (add friend)
-     * 4. Alice adds Bob as a member via addMember (not invite link)
-     * 5. Alice syncs keyhive to Bob (archive + events)
-     */
-    async function addFriendAndMember(opts: {
-      opsA: KeyhiveOps; khA: any;
-      opsB: KeyhiveOps; khB: any;
-      automergeDocId: string;
-      automergeDocIdBytes: Uint8Array;
-      role?: string;
-    }) {
-      const { opsA, khA, opsB, khB, automergeDocId, automergeDocIdBytes, role = 'edit' } = opts;
+      await alice.ops.addMember(bobGroupId, khDocId, 'edit');
 
-      // Alice enables sharing — pass existing doc bytes so it reuses the
-      // keyhive doc created by the idFactory instead of generating a duplicate.
-      const { khDocId } = await opsA.enableSharing(automergeDocId, automergeDocIdBytes);
-
-      // Bob mints his personal user-group (its id travels with a friend link);
-      // sharing is group-only, so Alice shares with that group.
-      const bobGroupId = await opsB.ensureUserGroup({ create: true });
-
-      // Bidirectional contact card exchange (add friend)
-      const cardA = await khA.contactCard();
-      const cardB = await khB.contactCard();
-      await khA.receiveContactCard(cardB);
-      await khB.receiveContactCard(cardA);
-
-      // Alice ingests Bob's archive so Bob's group ops resolve in her keyhive,
-      // then adds Bob's group as a member via the direct addMember path.
-      await khA.ingestArchive(await khB.toArchive());
-      await opsA.addMember(bobGroupId!, khDocId, role);
-
-      // Sync keyhive state from Alice → Bob (simulates network sync)
-      const archiveA = await khA.toArchive();
-      await khB.ingestArchive(archiveA);
-
-      const indAonB = await khB.receiveContactCard(cardA);
-      const aEventsForB: Map<Uint8Array, Uint8Array> = await khA.eventsForAgent(indAonB.toAgent());
-      const arr: Uint8Array[] = [];
-      aEventsForB.forEach((v: Uint8Array) => arr.push(v));
-      await khB.ingestEventsBytes(arr);
-
-      return { khDocId, bobGroupId };
-    }
-
-    it('addMember calls forceResyncAllPeers to trigger doc sync to the new member', async () => {
-      const { ops: opsA, kh: khA, fx: fxA } = await createOps();
-      const { ops: opsB, kh: khB } = await createOps();
-
-      const { automergeDocIdBytes } = await createDocForSharing(opsA);
-      const resyncCountBefore = fxA.calls.forceResyncAllPeers.length;
-
-      await addFriendAndMember({
-        opsA, khA, opsB, khB,
-        automergeDocId: 'am-doc-1',
-        automergeDocIdBytes,
-      });
-
-      // forceResyncAllPeers triggers automerge-repo to re-sync with all peers.
-      // This is safe because the network adapter drops doc messages while
-      // keyhiveSynced=false — keyhive handshake completes first, then
-      // encrypted doc data flows. Without this call, Bob wouldn't receive
-      // the doc until Alice makes an edit.
-      expect(fxA.calls.forceResyncAllPeers.length).toBe(resyncCountBefore + 1);
+      // forceResyncAllPeers makes the repo re-evaluate who may see the document;
+      // without it the friend gets nothing until the next edit. The membership
+      // ops have to be on their way first, or the re-evaluation announces a
+      // document the friend's keyhive cannot yet place.
+      const fired = alice.fx.order.slice(mark);
+      expect(fired.filter((name) => name === 'forceResyncAllPeers')).toHaveLength(1);
+      expect(fired.lastIndexOf('syncKeyhive')).toBeGreaterThanOrEqual(0);
+      expect(fired.indexOf('forceResyncAllPeers')).toBeGreaterThan(fired.lastIndexOf('syncKeyhive'));
+      expect(fired).toContain('persist');
     });
 
-    it('addMember calls syncKeyhive before forceResyncAllPeers (keyhive handshake first)', async () => {
-      // The order matters: syncKeyhive delivers membership ops so the peer's
-      // keyhive can process them. forceResyncAllPeers then triggers automerge-repo
-      // to re-sync, which starts with a keyhive handshake (non-doc messages).
-      // Once the handshake confirms (keyhiveSynced=true), encrypted doc data flows.
-      // If forceResyncAllPeers ran first, the re-sync would try to send doc data
-      // before the peer has CGKA keys — but the network adapter drops those messages.
-      const { ops: opsA, kh: khA, fx: fxA } = await createOps();
-      const { ops: opsB, kh: khB } = await createOps();
+    // Sharing with a GROUP reaches a DEVICE only if the bridge's per-agent sync
+    // sends that device the document's ops and key material. (Under alpha.58 it
+    // did not: "ShareKey not found", and the friend's Share panel never showed
+    // the friend.)
+    it('a shared document reaches the friend\'s device over per-agent sync, and both sides read each other', async () => {
+      const alice = await createOps();
+      const bob = await createOps();
+      const { khDocId } = await shareWithFriend(alice, bob, 'edit'); // ends with syncAsBridge
 
-      const { automergeDocIdBytes } = await createDocForSharing(opsA);
+      expect((await bob.kh.reachableDocs()).map((s: any) => b64(s.doc.docId.toBytes()))).toEqual([khDocId]);
+      expect(await bob.ops.getMyAccess(khDocId)).toBe('Edit');
 
-      // Track call order
-      const callOrder: string[] = [];
-      const origSync = fxA.syncKeyhive;
-      const origResync = fxA.forceResyncAllPeers;
-      fxA.syncKeyhive = () => { callOrder.push('syncKeyhive'); origSync(); };
-      fxA.forceResyncAllPeers = () => { callOrder.push('forceResyncAllPeers'); origResync(); };
+      const fromAlice = await encrypt(alice, khDocId, 'shared with bob\'s group');
+      await syncAsBridge(alice, bob);
+      expect(await decrypt(bob, khDocId, fromAlice.bytes)).toBe('shared with bob\'s group');
 
-      await addFriendAndMember({
-        opsA, khA, opsB, khB,
-        automergeDocId: 'am-doc-order',
-        automergeDocIdBytes,
-      });
-
-      const syncIdx = callOrder.indexOf('syncKeyhive');
-      const resyncIdx = callOrder.indexOf('forceResyncAllPeers');
-      expect(syncIdx).toBeGreaterThanOrEqual(0);
-      expect(resyncIdx).toBeGreaterThan(syncIdx);
+      const fromBob = await encrypt(bob, khDocId, 'bob edits');
+      await syncAsBridge(alice, bob);
+      expect(await decrypt(alice, khDocId, fromBob.bytes)).toBe('bob edits');
     });
 
-    it('after sync, Bob can discover the document via reachableDocs', async () => {
-      const { ops: opsA, kh: khA } = await createOps();
-      const { ops: opsB, kh: khB } = await createOps();
+    it('the friend sees their own group in the member list, as "me", next to the owner\'s', async () => {
+      const alice = await createOps();
+      const bob = await createOps();
+      const { khDocId, friendGroupId } = await shareWithFriend(alice, bob, 'edit');
+      const aliceGroupId = (await alice.ops.getUserGroupId())!;
 
-      const { automergeDocIdBytes } = await createDocForSharing(opsA);
-      await addFriendAndMember({
-        opsA, khA, opsB, khB,
-        automergeDocId: 'am-doc-1',
-        automergeDocIdBytes,
-      });
-
-      const bDocs = await khB.reachableDocs();
-      expect(bDocs.length).toBeGreaterThan(0);
+      const onBob = await bob.ops.getDocMembers(khDocId);
+      expect(memberOf(onBob, friendGroupId)).toMatchObject({ type: 'group', role: 'edit', isMe: true, deviceIds: [bob.agentId] });
+      expect(memberOf(onBob, aliceGroupId)).toMatchObject({ type: 'group', role: 'admin', isMe: false, deviceIds: [alice.agentId] });
+      // And the owner's panel shows the same two entries.
+      const onAlice = await alice.ops.getDocMembers(khDocId);
+      expect(onAlice.map((m) => [m.agentId, m.role]).sort()).toEqual(onBob.map((m) => [m.agentId, m.role]).sort());
     });
 
-    it('Bob sees his own group in the member list, not just Alice', async () => {
-      const { ops: opsA, kh: khA } = await createOps();
-      const { ops: opsB, kh: khB } = await createOps();
+    // open-doc turns an automerge document id back into the keyhive DocumentId
+    // with the same bytes; the friend must find the document that way.
+    it('the friend finds the keyhive document from the id bytes alone and can register it', async () => {
+      const alice = await createOps();
+      const bob = await createOps();
+      const { khDocId, docIdBytes } = await alice.ops.createKeyhiveDoc();
+      await shareWithFriend(alice, bob, 'edit', khDocId);
 
-      const { automergeDocIdBytes } = await createDocForSharing(opsA);
-      const { khDocId, bobGroupId } = await addFriendAndMember({
-        opsA, khA, opsB, khB,
-        automergeDocId: 'am-doc-members',
-        automergeDocIdBytes,
-      });
-
-      // Alice's panel is correct; Bob's panel should show the same members:
-      // Alice (admin) AND Bob's own group (the share target).
-      const membersOnBob = await opsB.getDocMembers(khDocId);
-      const ids = membersOnBob.map((m) => m.agentId);
-      expect(ids).toContain(bobGroupId);
-    });
-
-    // KNOWN BUG (it.failing): when a doc is shared with Bob's GROUP, a member
-    // cannot decrypt it after the real per-agent network sync. The network
-    // adapter's getEventHashesForAgent (utilities.ts) sends, per peer, only
-    // eventsForAgent(individual) + that individual's keyOps() — which does NOT
-    // carry the doc-level CGKA key material a group member needs. Result in the
-    // app: "EncryptError/DecryptError: ShareKey not found" and Bob's Share panel
-    // shows only Alice, never himself. (A full-archive sync works — see the
-    // passing tests above — so this is a sync-completeness gap, not core logic.)
-    // This test PASSES while the bug exists and will FAIL (alerting us) once the
-    // per-agent sync is fixed to include the needed group/doc key ops.
-    it.failing('group-shared doc: a group member can decrypt after faithful per-agent sync', async () => {
-      const { ops: opsA, kh: khA } = await createOps();
-      const { ops: opsB, kh: khB } = await createOps();
-
-      const { khDocId } = await opsA.enableSharing('am-doc-sharekey');
-      const bobGroupId = await opsB.ensureUserGroup({ create: true });
-
-      const cardA = await khA.contactCard();
-      const cardB = await khB.contactCard();
-      const indBonA = await khA.receiveContactCard(cardB);
-      await khB.receiveContactCard(cardA);
-
-      // Alice obtains Bob's group ops (she can share).
-      await khA.ingestArchive(await khB.toArchive());
-      await opsA.addMember(bobGroupId!, khDocId, 'edit');
-
-      // Faithful per-agent wire payload Alice → Bob (events + individual keyOps only).
-      const collect = async (kh: any, agents: any[]) => {
-        const byHash = new Map<string, Uint8Array>();
-        for (const agent of agents) {
-          const ev: Map<Uint8Array, Uint8Array> = await kh.eventsForAgent(agent);
-          ev.forEach((v, k) => byHash.set(k.toString(), v));
-          const ko: Map<Uint8Array, Uint8Array> = await agent.keyOps();
-          ko.forEach((v, k) => byHash.set(k.toString(), v));
-        }
-        return [...byHash.values()];
-      };
-      const aliceAgent = (await khA.individual).toAgent();
-      const payload = await collect(khA, [aliceAgent, indBonA.toAgent()]);
-      await khB.ingestEventsBytes(payload);
-
-      // Alice encrypts; Bob must be able to decrypt (needs the doc's ShareKey).
-      const docA = opsA.khDocuments.get(khDocId);
-      const plaintext = new TextEncoder().encode('shared with bob group');
-      const ref = new ChangeId(crypto.getRandomValues(new Uint8Array(32)));
-      const enc = await khA.tryEncryptArchive(docA!, ref, [], plaintext);
-
-      const docB = await khB.getDocument(docA.doc_id);
-      expect(docB).toBeDefined();
-      const decrypted = await khB.tryDecrypt(docB!, enc.encrypted_content());
-      expect(new Uint8Array(decrypted)).toEqual(plaintext);
-    });
-
-    it('Alice grants Bob (individual) access via his group — the sync access-gate sees it', async () => {
-      // peerHasAnyAccess / peerHasWriteAccess gate sync on Alice's side using
-      // keyhive.accessForDoc(bobIndividualId, doc). If that returns null because
-      // Alice's keyhive does not resolve Bob's individual's access THROUGH his
-      // group, Alice silently drops ALL sync to Bob — Bob sees Alice but never
-      // himself. Verify accessForDoc resolves transitively on the GRANTER side.
-      const { ops: opsA, kh: khA } = await createOps();
-      const { ops: opsB, kh: khB } = await createOps();
-
-      const { automergeDocIdBytes } = await createDocForSharing(opsA);
-      await addFriendAndMember({
-        opsA, khA, opsB, khB,
-        automergeDocId: 'am-doc-gate',
-        automergeDocIdBytes,
-      });
-
-      const bobIndividualId = new Identifier((await khB.individual).id.toBytes());
-      const khDocIdObj = new DocumentId(automergeDocIdBytes);
-      const access = await khA.accessForDoc(bobIndividualId, khDocIdObj);
-      expect(access).toBeDefined();
-      expect(access).not.toBeNull();
-    });
-
-    it('per-agent sync delivers the group delegation so Bob sees his group as a member', async () => {
-      const { ops: opsA, kh: khA } = await createOps();
-      const { ops: opsB, kh: khB } = await createOps();
-
-      const { khDocId } = await opsA.enableSharing('am-doc-repro');
-      const bobGroupId = await opsB.ensureUserGroup({ create: true });
-
-      // Card exchange (add friend, both directions).
-      const cardA = await khA.contactCard();
-      const cardB = await khB.contactCard();
-      const indBonA = await khA.receiveContactCard(cardB);
-      await khB.receiveContactCard(cardA);
-
-      // Alice obtains Bob's group ops (the bug report confirms Alice CAN share,
-      // so by this point her keyhive resolves Bob's group).
-      await khA.ingestArchive(await khB.toArchive());
-      await opsA.addMember(bobGroupId!, khDocId, 'edit');
-
-      // Faithful per-agent sync — exactly what the network adapter transfers:
-      // the union of eventsForAgent(self) and eventsForAgent(remote individual),
-      // NOT a full archive. This is the real wire payload Bob receives.
-      const aliceAgent = (await khA.individual).toAgent();
-      const bobAgentOnAlice = indBonA.toAgent();
-      const evMap = new Map<string, Uint8Array>();
-      for (const agent of [aliceAgent, bobAgentOnAlice]) {
-        const ev: Map<Uint8Array, Uint8Array> = await khA.eventsForAgent(agent);
-        ev.forEach((v, k) => evMap.set(k.toString(), v));
-      }
-      await khB.ingestEventsBytes([...evMap.values()]);
-
-      const membersOnBob = await opsB.getDocMembers(khDocId);
-      expect(membersOnBob.map((m) => m.agentId)).toContain(bobGroupId);
-    });
-
-    it('per-agent sync delivers Bob group ops to Alice so she can share with the group', async () => {
-      const { ops: opsA, kh: khA } = await createOps();
-      const { ops: opsB, kh: khB } = await createOps();
-
-      const { khDocId } = await opsA.enableSharing('am-doc-probe');
-      const bobGroupId = await opsB.ensureUserGroup({ create: true });
-
-      const cardA = await khA.contactCard();
-      const cardB = await khB.contactCard();
-      await khA.receiveContactCard(cardB);
-      const indAonB = await khB.receiveContactCard(cardA);
-
-      // Bob → Alice per-agent sync (union of eventsForAgent), NO full archive.
-      const bobAgent = (await khB.individual).toAgent();
-      const aliceAgentOnBob = indAonB.toAgent();
-      const evMap = new Map<string, Uint8Array>();
-      for (const agent of [bobAgent, aliceAgentOnBob]) {
-        const ev: Map<Uint8Array, Uint8Array> = await khB.eventsForAgent(agent);
-        ev.forEach((v, k) => evMap.set(k.toString(), v));
-      }
-      await khA.ingestEventsBytes([...evMap.values()]);
-
-      // Can Alice now resolve + share with Bob's group?
-      await opsA.addMember(bobGroupId!, khDocId, 'edit');
-      const members = await opsA.getDocMembers(khDocId);
-      expect(members.map((m) => m.agentId)).toContain(bobGroupId);
-    });
-
-    it('enableSharing reuses existing keyhive doc from createKeyhiveDoc', async () => {
-      const { ops, kh } = await createOps();
-
-      // createKeyhiveDoc creates the keyhive doc
-      const { automergeDocIdBytes } = await createDocForSharing(ops);
-
-      // enableSharing should find the existing doc, not create a new one
-      const docsBefore = await kh.reachableDocs();
-      const { khDocId } = await ops.enableSharing('am-doc-1', automergeDocIdBytes);
-      const docsAfter = await kh.reachableDocs();
-
-      // Should not have created an additional document
-      expect(docsAfter.length).toBe(docsBefore.length);
-
-      // khDocuments should contain the doc
-      expect(ops.khDocuments.has(khDocId)).toBe(true);
-    });
-
-    it('enableSharing falls back to creating a new doc when bytes do not match', async () => {
-      const { ops, kh } = await createOps();
-
-      // Pass random bytes that don't correspond to any keyhive document
-      // (simulates a doc with an unknown keyhive ID)
-      const fakeBytes = crypto.getRandomValues(new Uint8Array(32));
-      const docsBefore = await kh.reachableDocs();
-      const { khDocId } = await ops.enableSharing('am-doc-1', fakeBytes);
-      const docsAfter = await kh.reachableDocs();
-
-      // Should have created a new document
-      expect(docsAfter.length).toBe(docsBefore.length + 1);
-      expect(ops.khDocuments.has(khDocId)).toBe(true);
-    });
-
-    it('enableSharing without existingDocIdBytes creates a new doc (legacy path)', async () => {
-      const { ops, kh } = await createOps();
-
-      const docsBefore = await kh.reachableDocs();
-      const { khDocId } = await ops.enableSharing('am-doc-1');
-      const docsAfter = await kh.reachableDocs();
-
-      expect(docsAfter.length).toBe(docsBefore.length + 1);
-      expect(ops.khDocuments.has(khDocId)).toBe(true);
-    });
-
-    it('Bob can find the keyhive doc from automerge docId when IDs match', async () => {
-      // This is the fix: when the idFactory is used, automerge docId bytes =
-      // keyhive doc_id bytes. Bob can look up the keyhive doc directly.
-      const { ops: opsA, kh: khA } = await createOps();
-      const { ops: opsB, kh: khB } = await createOps();
-
-      const { automergeDocIdBytes } = await createDocForSharing(opsA);
-      await addFriendAndMember({
-        opsA, khA, opsB, khB,
-        automergeDocId: 'am-doc-1',
-        automergeDocIdBytes,
-      });
-
-      // Bob's keyhive knows about the document (via reachableDocs)
-      const bDocs = await khB.reachableDocs();
-      expect(bDocs.length).toBeGreaterThan(0);
-
-      // Bob can look up the keyhive doc using the automerge doc ID bytes
-      // (this is what the open-doc handler does via docIdFromAutomergeUrl)
-      const khDocId = new DocumentId(automergeDocIdBytes);
-      const doc = await khB.getDocument(khDocId);
+      const doc = await bob.kh.getDocument(new DocumentId(docIdBytes));
       expect(doc).toBeDefined();
+      expect(b64(doc!.docId.toBytes())).toBe(khDocId);
+      await bob.ops.registerSharingGroup(khDocId);
+      expect(bob.ops.khDocuments.has(khDocId)).toBe(true);
+    });
 
-      // Bob can now register the mapping and access the document
-      const khDocIdB64 = bytesToBase64(doc!.id.toBytes());
-      opsB.khDocuments.set(khDocIdB64, doc);
-      expect(opsB.khDocuments.size).toBe(1);
+    // A group never syncs to a non-member, so the contact bundle is the ONLY
+    // way a sharer learns a friend's group. If receiveContactCard stopped
+    // ingesting it, this is the error the Sharing page would show.
+    it('addMember rejects a group this keyhive has not learned', async () => {
+      const alice = await createOps();
+      const bob = await createOps();
+      const bobGroupId = (await bob.ops.ensureUserGroup({ create: true }))!;
+      const { khDocId } = await alice.ops.createKeyhiveDoc();
+      // Cards and a full per-agent sync, but no bundle.
+      await exchangeCards(alice, bob);
+      await syncAsBridge(alice, bob);
+      expect(await knowsGroup(alice, bobGroupId)).toBe(false);
 
-      // And check access
-      const bobId = new Identifier(khB.id.bytes);
-      const access = await khB.accessForDoc(bobId, doc!.doc_id);
-      expect(access).toBeDefined();
-      expect(access!.toString()).toBe('Edit');
+      await expect(alice.ops.addMember(bobGroupId, khDocId, 'edit')).rejects.toThrow('Agent not found');
+
+      await learnContact(alice, bob);
+      await expect(alice.ops.addMember(bobGroupId, khDocId, 'edit')).resolves.toBe(true);
+    });
+
+    it('addMember rejects a bare device id: sharing is group-only', async () => {
+      const alice = await createOps();
+      const bob = await createOps();
+      await befriend(alice, bob);
+      const { khDocId } = await alice.ops.createKeyhiveDoc();
+
+      await expect(alice.ops.addMember(bob.agentId, khDocId, 'read')).rejects.toThrow('Agent not found');
+      expect(await rawAccess(alice, bob.agentId, khDocId)).toBeUndefined();
+    });
+
+    it('addMember rejects an unknown document and an unknown role without changing anything', async () => {
+      const alice = await createOps();
+      const bob = await createOps();
+      const bobGroupId = (await bob.ops.ensureUserGroup({ create: true }))!;
+      await befriend(alice, bob);
+      const { khDocId } = await alice.ops.createKeyhiveDoc();
+
+      await expect(alice.ops.addMember(bobGroupId, 'not-a-doc', 'read')).rejects.toThrow('Document not found');
+      await expect(alice.ops.addMember(bobGroupId, khDocId, 'owner')).rejects.toThrow('Invalid role: owner');
+      expect(await rawAccess(alice, bobGroupId, khDocId)).toBeUndefined();
+    });
+
+    it('changeRole moves a friend\'s group down and up, and the friend\'s device follows', async () => {
+      const alice = await createOps();
+      const bob = await createOps();
+      const { khDocId, friendGroupId } = await shareWithFriend(alice, bob, 'edit');
+      const mark = alice.fx.order.length;
+
+      await alice.ops.changeRole(friendGroupId, khDocId, 'read');
+      expect(alice.fx.order.slice(mark)).toEqual(['persist', 'syncKeyhive', 'forceResyncAllPeers']);
+      expect(memberOf(await alice.ops.getDocMembers(khDocId), friendGroupId)?.role).toBe('read');
+      await syncAsBridge(alice, bob);
+      expect(await bob.ops.getMyAccess(khDocId)).toBe('Read');
+
+      await alice.ops.changeRole(friendGroupId, khDocId, 'admin');
+      await syncAsBridge(alice, bob);
+      expect(await bob.ops.getMyAccess(khDocId)).toBe('Admin');
+    });
+
+    it('revokeMember removes a friend\'s group; their device loses access and cannot read what is written afterwards', async () => {
+      const alice = await createOps();
+      const bob = await createOps();
+      const { khDocId, friendGroupId } = await shareWithFriend(alice, bob, 'edit');
+      const before = await encrypt(alice, khDocId, 'while shared');
+      await syncAsBridge(alice, bob);
+      expect(await decrypt(bob, khDocId, before.bytes)).toBe('while shared');
+      const mark = alice.fx.order.length;
+
+      await alice.ops.revokeMember(friendGroupId, khDocId);
+      // The resync is what tells the revoked friend at all.
+      expect(alice.fx.order.slice(mark)).toEqual(['persist', 'syncKeyhive', 'forceResyncAllPeers']);
+      expect(memberOf(await alice.ops.getDocMembers(khDocId), friendGroupId)).toBeUndefined();
+
+      const after = await encrypt(alice, khDocId, 'after the revoke');
+      await syncPeers(alice, bob); // even handed everything
+      expect(await bob.ops.getMyAccess(khDocId)).toBeNull();
+      expect(await bob.ops.getUserGroupAccess(khDocId)).toBeNull();
+      await expect(decrypt(bob, khDocId, after.bytes)).rejects.toThrow('Key not found');
+
+      // Nothing left to revoke or change.
+      await expect(alice.ops.revokeMember(friendGroupId, khDocId)).rejects.toThrow('Member not found in document');
+      await expect(alice.ops.changeRole(friendGroupId, khDocId, 'read')).rejects.toThrow('Member not found in document');
+    });
+
+    // keyhive refuses a grant above the granter's own power. changeRole is a
+    // revoke followed by an add, and the revoke is not undone if the add is
+    // refused — so the refusal has to come BEFORE anything is revoked.
+    describe('an editor cannot hand out admin', () => {
+      /** Alice owns a doc; Bob's group edits it, Carol's group reads it; Bob knows Carol. */
+      async function editorSetup() {
+        const alice = await createOps();
+        const bob = await createOps();
+        const carol = await createOps();
+        const { khDocId, friendGroupId: bobGroupId } = await shareWithFriend(alice, bob, 'edit');
+        const { friendGroupId: carolGroupId } = await shareWithFriend(alice, carol, 'read', khDocId);
+        await syncAsBridge(alice, bob);
+        await bob.ops.registerSharingGroup(khDocId);
+        const roles = async (peer: Peer) =>
+          (await peer.ops.getDocMembers(khDocId)).map((m) => `${m.agentId}:${m.role}`).sort();
+        return { alice, bob, carol, khDocId, bobGroupId, carolGroupId, roles };
+      }
+
+      it('addMember at admin is refused and the membership is unchanged', async () => {
+        const { bob, khDocId, carolGroupId, roles } = await editorSetup();
+        expect(await bob.ops.getMyAccess(khDocId)).toBe('Edit');
+        const before = await roles(bob);
+        const mark = bob.fx.order.length;
+
+        await expect(bob.ops.addMember(carolGroupId, khDocId, 'admin')).rejects.toThrow(/cannot grant Admin: holds only Edit/);
+
+        expect(await roles(bob)).toEqual(before);
+        expect(await rawAccess(bob, carolGroupId, khDocId)).toBe('Read');
+        // Nothing changed, so nothing is announced.
+        expect(bob.fx.order.slice(mark)).not.toContain('forceResyncAllPeers');
+      });
+
+      it('changeRole upward is refused with the app\'s message, and the membership is unchanged', async () => {
+        const { bob, khDocId, carolGroupId, roles } = await editorSetup();
+        const before = await roles(bob);
+        const mark = bob.fx.order.length;
+
+        await expect(bob.ops.changeRole(carolGroupId, khDocId, 'admin')).rejects.toThrow('You need Admin access yourself to grant it.');
+
+        expect(await roles(bob)).toEqual(before);
+        expect(bob.fx.order.slice(mark)).toEqual([]);
+      });
+
+      // The case the check-first ordering exists for: a grant the editor DID
+      // issue is one it can revoke, so an unchecked changeRole would revoke it
+      // and then fail to re-add — leaving the member worse off than before.
+      it('changeRole upward leaves a grant the editor itself issued in place', async () => {
+        const { alice, bob, khDocId, carolGroupId } = await editorSetup();
+        await bob.ops.addMember(carolGroupId, khDocId, 'edit'); // within Bob's power
+        expect(await rawAccess(bob, carolGroupId, khDocId)).toBe('Edit');
+
+        await expect(bob.ops.changeRole(carolGroupId, khDocId, 'admin')).rejects.toThrow('You need Admin access yourself to grant it.');
+        await expect(bob.ops.changeRole(carolGroupId, khDocId, 'owner')).rejects.toThrow('Invalid role: owner');
+
+        expect(await rawAccess(bob, carolGroupId, khDocId)).toBe('Edit');
+        await syncAsBridge(alice, bob);
+        expect(memberOf(await alice.ops.getDocMembers(khDocId), carolGroupId)?.role).toBe('edit');
+      });
     });
   });
 
   // ── User-group (a "user" = a keyhive Group of device Individuals) ──────────
   describe('user group', () => {
-    /** A learns about B by receiving B's contact card; returns B's agentId. */
-    async function learnAgent(learner: KeyhiveOps, subject: KeyhiveOps): Promise<string> {
-      const card = await subject.getContactCard();
-      const { agentId } = await learner.receiveContactCard(card);
-      return agentId;
-    }
-
-    it('ensureUserGroup({create}) mints and persists a group; getUserGroupId returns it', async () => {
-      const { ops, fx } = await createOps();
+    it('ensureUserGroup({create}) mints and persists a group once; getUserGroupId returns it', async () => {
+      const { ops, fx, kh } = await createOps();
       expect(await ops.getUserGroupId()).toBeNull();
+      expect(await ops.ensureUserGroup()).toBeNull(); // not asked to create
+
       const id = await ops.ensureUserGroup({ create: true });
       expect(id).toBeTruthy();
       expect(await ops.getUserGroupId()).toBe(id);
-      // idempotent: a second create returns the same id, doesn't mint a new group
-      const again = await ops.ensureUserGroup({ create: true });
-      expect(again).toBe(id);
+      expect(await kh.hasGroup(groupIdOf(id!))).toBe(true);
       expect(fx.calls.persist.length).toBeGreaterThan(0);
+
+      // Idempotent: a second create returns the same id rather than a new group.
+      expect(await ops.ensureUserGroup({ create: true })).toBe(id);
+      expect(Number((await kh.stats()).groups)).toBe(1);
     });
 
-    it('addDeviceToGroup adds a device and listGroupDevices lists self + the device', async () => {
-      const { ops: a } = await createOps();
-      const { ops: b } = await createOps();
-      await a.ensureUserGroup({ create: true });
-      const bAgentId = await learnAgent(a, b);
+    it('creating the group makes it an admin of documents this device already owns', async () => {
+      const peer = await createOps();
+      // A document from before the group existed (an older install).
+      const docId = await peer.kh.generateDocument([], new ChangeId(new Uint8Array(32)), []);
+      const khDocId = b64(docId.toBytes());
 
-      await a.addDeviceToGroup(bAgentId);
-      const devices = await a.listGroupDevices();
-      const ids = devices.map((d) => d.agentId);
-      const me = (await a.getIdentity()).agentId;
-      expect(ids).toContain(me);
-      expect(ids).toContain(bAgentId);
-      expect(devices.find((d) => d.agentId === me)?.isMe).toBe(true);
-
-      // idempotent — adding again does not duplicate
-      await a.addDeviceToGroup(bAgentId);
-      const devices2 = await a.listGroupDevices();
-      expect(devices2.filter((d) => d.agentId === bAgentId)).toHaveLength(1);
+      const groupId = (await peer.ops.ensureUserGroup({ create: true }))!;
+      const members = await directMembers(peer, khDocId);
+      expect(members.get(groupId)?.can.toString()).toBe('Admin');
+      // Delegated by the device, not a root edge — the weaker form (see the
+      // co-root tests), and all that can be done after creation.
+      expect(b64(members.get(groupId).proof.verifyingKey)).toBe(peer.agentId);
+      expect(await peer.ops.getUserGroupAccess(khDocId)).toBe('Admin');
     });
 
-    it('listGroupDevices reports normalized MemberRole (read/edit/admin), never a raw Access string', async () => {
-      const { ops: a } = await createOps();
-      const { ops: b } = await createOps();
-      await a.ensureUserGroup({ create: true });
-      const bAgentId = await learnAgent(a, b);
-      await a.addDeviceToGroup(bAgentId); // added as admin
+    it('addDeviceToGroup adds a device once; listGroupDevices lists self first, then it', async () => {
+      const a = await createOps();
+      const b = await createOps();
+      await a.ops.ensureUserGroup({ create: true });
+      await learnContact(a, b);
 
-      const devices = await a.listGroupDevices();
-      const me = (await a.getIdentity()).agentId;
-      for (const d of devices) {
-        expect(['read', 'edit', 'admin']).toContain(d.role); // normalized, lowercase — no 'owner'/'Admin'
+      await a.ops.addDeviceToGroup(b.agentId);
+      await a.ops.addDeviceToGroup(b.agentId); // idempotent
+      const devices = await a.ops.listGroupDevices();
+      expect(devices.map((d) => d.agentId)).toEqual([a.agentId, b.agentId]);
+      expect(devices.map((d) => d.isMe)).toEqual([true, false]);
+    });
+
+    it('addDeviceToGroup refuses a device whose contact card has not arrived', async () => {
+      const a = await createOps();
+      const b = await createOps();
+      await a.ops.ensureUserGroup({ create: true });
+
+      // keyhive needs the device's prekeys to bring it into the group's key agreement.
+      await expect(a.ops.addDeviceToGroup(b.agentId)).rejects.toThrow(/contact card not yet synced/);
+      expect(await a.ops.listGroupDevices()).toHaveLength(1);
+    });
+
+    it('addDeviceToGroup and changeDeviceRole need a group', async () => {
+      const a = await createOps();
+      const b = await createOps();
+      await learnContact(a, b);
+      await expect(a.ops.addDeviceToGroup(b.agentId)).rejects.toThrow('User group not available');
+      await expect(a.ops.changeDeviceRole(b.agentId, 'read')).rejects.toThrow('User group not available');
+    });
+
+    it('listGroupDevices reports normalized roles (read/edit/admin), never a raw Power string', async () => {
+      const a = await createOps();
+      const b = await createOps();
+      await linkDevices(a, b);
+      await a.ops.changeDeviceRole(b.agentId, 'edit');
+
+      const devices = await a.ops.listGroupDevices();
+      expect(deviceOf(devices, a.agentId)?.role).toBe('admin');
+      expect(deviceOf(devices, b.agentId)?.role).toBe('edit');
+    });
+
+    it('listGroupDevices returns just self, with no access, when there is no group', async () => {
+      const { ops, agentId } = await createOps();
+      // No group means no membership to read — report that, do not guess 'admin'.
+      expect(await ops.listGroupDevices()).toEqual([{ agentId, role: null, isMe: true, isFounder: false }]);
+    });
+
+    it('changeDeviceRole demotes a device and resyncs peers so it learns its new access', async () => {
+      const a = await createOps();
+      const b = await createOps();
+      await linkDevices(a, b);
+      const mark = a.fx.order.length;
+
+      await a.ops.changeDeviceRole(b.agentId, 'read');
+
+      expect(deviceOf(await a.ops.listGroupDevices(), b.agentId)?.role).toBe('read');
+      expect(a.fx.order.slice(mark)).toEqual(['persist', 'syncKeyhive', 'forceResyncAllPeers']);
+    });
+
+    it('changeDeviceRole round-trips an ordinary linked device: demote, then re-promote', async () => {
+      const a = await createOps();
+      const b = await createOps();
+      await linkDevices(a, b);
+
+      await a.ops.changeDeviceRole(b.agentId, 'read');
+      expect(deviceOf(await a.ops.listGroupDevices(), b.agentId)?.role).toBe('read');
+      await a.ops.changeDeviceRole(b.agentId, 'admin');
+      expect(deviceOf(await a.ops.listGroupDevices(), b.agentId)?.role).toBe('admin');
+
+      // The device itself ends up where the admin put it.
+      await syncAsBridge(a, b);
+      expect(deviceOf(await b.ops.listGroupDevices(), b.agentId)).toMatchObject({ role: 'admin', isMe: true });
+    });
+
+    it('changeDeviceRole rejects a device that is not in the group, and an unknown role before revoking anything', async () => {
+      const a = await createOps();
+      const b = await createOps();
+      const stranger = await createOps();
+      await linkDevices(a, b);
+      await learnContact(a, stranger); // known, but not in the group
+
+      await expect(a.ops.changeDeviceRole(stranger.agentId, 'read')).rejects.toThrow(/not found in group/);
+      // The change is revoke + re-add; a role that cannot be re-added must stop it first.
+      await expect(a.ops.changeDeviceRole(b.agentId, 'owner')).rejects.toThrow('Invalid role: owner');
+      expect(deviceOf(await a.ops.listGroupDevices(), b.agentId)?.role).toBe('admin');
+    });
+
+    it('removeDeviceFromGroup removes an ordinary linked device', async () => {
+      const a = await createOps();
+      const b = await createOps();
+      await linkDevices(a, b);
+      const mark = a.fx.order.length;
+
+      await a.ops.removeDeviceFromGroup(b.agentId);
+
+      expect((await a.ops.listGroupDevices()).map((d) => d.agentId)).toEqual([a.agentId]);
+      expect(a.fx.order.slice(mark)).toEqual(['persist', 'syncKeyhive']);
+      // Removing it again is a no-op, not an error.
+      await expect(a.ops.removeDeviceFromGroup(b.agentId)).resolves.toBeUndefined();
+    });
+
+    // An admin's self-revocation SUCCEEDS in keyhive, after which it holds no
+    // standing to re-add itself: the device has locked itself out for good.
+    it('refuses to change or remove the current device', async () => {
+      const a = await createOps();
+      const b = await createOps();
+      await linkDevices(a, b);
+
+      for (const device of [a, b]) {
+        await expect(device.ops.changeDeviceRole(device.agentId, 'read')).rejects.toThrow(/Cannot change access for this device/);
+        await expect(device.ops.removeDeviceFromGroup(device.agentId)).rejects.toThrow(/Cannot remove this device/);
       }
-      expect(devices.find((d) => d.agentId === me)?.role).toBe('admin'); // self is admin, not synthetic 'owner'
-      expect(devices.find((d) => d.agentId === bAgentId)?.role).toBe('admin'); // device added as admin
+      expect((await a.ops.listGroupDevices()).map((d) => d.role)).toEqual(['admin', 'admin']);
     });
 
-    it('changeDeviceRole demotes a device in the user-group (revoke + re-add) and resyncs peers', async () => {
-      const { ops: a, fx } = await createOps();
-      const { ops: b } = await createOps();
-      await a.ensureUserGroup({ create: true });
-      const bAgentId = await learnAgent(a, b);
-      await a.addDeviceToGroup(bAgentId); // admin by default
-      expect((await a.listGroupDevices()).find((d) => d.agentId === bAgentId)?.role).toBe('admin');
+    describe('the founder, and the chain of links below it', () => {
+      /**
+       * founder ─links→ middle ─links→ leaf: three devices of one user, each
+       * linked from the one before, all admins, all fully synced.
+       */
+      async function chainOfThree() {
+        const founder = await createOps();
+        const middle = await createOps();
+        const leaf = await createOps();
+        const { groupId } = await linkDevices(founder, middle);
+        await linkDevices(middle, leaf);
+        const all = [founder, middle, leaf];
+        const syncAll = async () => {
+          for (let round = 0; round < 2; round++) {
+            await syncPeers(founder, middle);
+            await syncPeers(middle, leaf);
+            await syncPeers(founder, leaf);
+          }
+        };
+        await syncAll();
+        return { founder, middle, leaf, groupId, all, syncAll };
+      }
 
-      const resyncsBefore = fx.calls.forceResyncAllPeers.length;
-      await a.changeDeviceRole(bAgentId, 'read');
+      it('listGroupDevices marks the founder and only it, and reports who linked each device', async () => {
+        const { founder, middle, leaf, groupId, all } = await chainOfThree();
 
-      const devices = await a.listGroupDevices();
-      expect(devices.find((d) => d.agentId === bAgentId)?.role).toBe('read');
-      // Same propagation contract as doc-level changeRole so the demoted device learns its new access.
-      expect(fx.calls.forceResyncAllPeers.length).toBeGreaterThan(resyncsBefore);
+        // Every device reaches the same picture.
+        for (const viewer of all) {
+          const devices = await viewer.ops.listGroupDevices();
+          expect(devices[0].agentId).toBe(viewer.agentId); // self first, whatever members() order is
+          expect(devices.map((d) => d.role)).toEqual(['admin', 'admin', 'admin']);
+          expect(devices.filter((d) => d.isFounder).map((d) => d.agentId)).toEqual([founder.agentId]);
+          // The founder's edge was issued by the group's own key; the others by
+          // the device that linked them.
+          expect(deviceOf(devices, founder.agentId)?.issuerAgentId).toBe(groupId);
+          expect(deviceOf(devices, middle.agentId)?.issuerAgentId).toBe(founder.agentId);
+          expect(deviceOf(devices, leaf.agentId)?.issuerAgentId).toBe(middle.agentId);
+        }
+      });
+
+      // members() reports ONE capability per member. When a peer admin has also
+      // delegated to the founder, that can be the one it reports — a founder
+      // that looks like an ordinary linked device. Being wrong here offers the
+      // user the one tap that destroys the group.
+      it('still marks the founder after a peer admin re-delegated it', async () => {
+        const { founder, middle, groupId, all, syncAll } = await chainOfThree();
+        await middle.kh.addMember(founder.kh.id.toIdentifier(), MemberedId.group(groupIdOf(groupId)), Power.admin());
+        await syncAll();
+
+        for (const viewer of all) {
+          const devices = await viewer.ops.listGroupDevices();
+          expect(devices.filter((d) => d.isFounder).map((d) => d.agentId)).toEqual([founder.agentId]);
+        }
+        await expect(middle.ops.removeDeviceFromGroup(founder.agentId)).rejects.toThrow(/created this user group/);
+      });
+
+      it('removeDeviceFromGroup and changeDeviceRole refuse the founder, from any other device', async () => {
+        const { founder, middle, leaf, all } = await chainOfThree();
+
+        for (const device of [middle, leaf]) {
+          await expect(device.ops.removeDeviceFromGroup(founder.agentId))
+            .rejects.toThrow('Cannot remove the device that created this user group');
+          await expect(device.ops.changeDeviceRole(founder.agentId, 'read'))
+            .rejects.toThrow('Cannot change access for the device that created this user group');
+        }
+        for (const viewer of all) {
+          expect((await viewer.ops.listGroupDevices()).map((d) => d.role)).toEqual(['admin', 'admin', 'admin']);
+        }
+      });
+
+      // What the guard above prevents. keyhive allows it, and there is no undo.
+      it('contrast: revoking the founder with raw keyhive leaves the group with no members, for everyone', async () => {
+        const { founder, middle, groupId, syncAll, all } = await chainOfThree();
+        const group = MemberedId.group(groupIdOf(groupId));
+
+        expect(await middle.kh.revokeMember(founder.kh.id.toIdentifier(), true, group)).toHaveLength(1);
+        await syncAll();
+
+        for (const viewer of all) {
+          expect(await (await viewer.kh.getGroup(groupIdOf(groupId)))!.members()).toHaveLength(0);
+        }
+        // Nobody can repair it — not even the device that did it.
+        await expect(middle.kh.addMember(founder.kh.id.toIdentifier(), group, Power.admin()))
+          .rejects.toThrow(/no standing over the resource/);
+      });
+
+      it('refuses to remove or demote a device upstream of the caller — the one it was linked from', async () => {
+        const { middle, leaf, all } = await chainOfThree();
+
+        await expect(leaf.ops.removeDeviceFromGroup(middle.agentId))
+          .rejects.toThrow('Cannot remove the device this one was linked from');
+        await expect(leaf.ops.changeDeviceRole(middle.agentId, 'read'))
+          .rejects.toThrow('Cannot change access for the device this one was linked from');
+
+        for (const viewer of all) {
+          expect((await viewer.ops.listGroupDevices()).map((d) => d.role)).toEqual(['admin', 'admin', 'admin']);
+        }
+      });
+
+      // Going DOWN the chain is allowed, and must not take the rest with it:
+      // removing a lost phone cannot drop the tablet that was linked from it.
+      it('removing a device keeps the devices it had linked, re-issued by the remover', async () => {
+        const { founder, middle, leaf, syncAll } = await chainOfThree();
+
+        await founder.ops.removeDeviceFromGroup(middle.agentId);
+        await syncAll();
+
+        for (const viewer of [founder, leaf]) {
+          const devices = await viewer.ops.listGroupDevices();
+          expect(devices.map((d) => d.agentId).sort()).toEqual([founder.agentId, leaf.agentId].sort());
+          expect(deviceOf(devices, leaf.agentId)).toMatchObject({ role: 'admin', issuerAgentId: founder.agentId });
+        }
+        // The removed device sees itself out.
+        expect(deviceOf(await middle.ops.listGroupDevices(), middle.agentId)).toMatchObject({ role: null, isMe: true });
+      });
     });
 
-    it('changeDeviceRole round-trips a device (demote then re-promote) via the member handle', async () => {
-      // Regression: the re-add half must NOT call kh.getAgent(Identifier) — that
-      // throws "Identifier not found" for devices whose Individual isn't globally
-      // retrievable (the current/active device, rendezvous-linked devices), and it
-      // ran only after revokeMember already applied, so the change looked like it
-      // worked yet surfaced an error. Reusing the group member handle for both
-      // revoke and re-add fixes it; exercise re-add to BOTH read and admin here.
-      const { ops: a } = await createOps();
-      const { ops: b } = await createOps();
-      await a.ensureUserGroup({ create: true });
-      const bAgentId = await learnAgent(a, b);
-      await a.addDeviceToGroup(bAgentId);
-
-      await a.changeDeviceRole(bAgentId, 'read');
-      expect((await a.listGroupDevices()).find((d) => d.agentId === bAgentId)?.role).toBe('read');
-      await a.changeDeviceRole(bAgentId, 'admin');
-      expect((await a.listGroupDevices()).find((d) => d.agentId === bAgentId)?.role).toBe('admin');
-    });
-
-    it('changeDeviceRole rejects an unknown device', async () => {
-      const { ops: a } = await createOps();
-      const { ops: b } = await createOps();
-      await a.ensureUserGroup({ create: true });
-      const bAgentId = await learnAgent(a, b); // known but not in the group
-      await expect(a.changeDeviceRole(bAgentId, 'read')).rejects.toThrow(/not found in group/);
-    });
-
-    it('listGroupDevices returns just self when there is no group', async () => {
-      const { ops } = await createOps();
-      const devices = await ops.listGroupDevices();
-      expect(devices).toHaveLength(1);
-      expect(devices[0].isMe).toBe(true);
-      expect(devices[0].agentId).toBe((await ops.getIdentity()).agentId);
-      // No group means no membership to read — report that, don't guess 'admin'.
-      expect(devices[0].role).toBeNull();
-      expect(devices[0].isFounder).toBe(false);
-    });
-
-    it('listGroupDevices marks the founding device, and only it', async () => {
-      const { ops: a } = await createOps();
-      const { ops: b } = await createOps();
-      await a.ensureUserGroup({ create: true });
-      const aAgentId = (await a.getIdentity()).agentId;
-      const bAgentId = await learnAgent(a, b);
-      await a.addDeviceToGroup(bAgentId);
-
-      const devices = await a.listGroupDevices();
-      // The founder's delegation is the group's root delegation — signed by the
-      // ephemeral key that became the group id — so keyhive has no proof to revoke
-      // it with and its admin access is permanent.
-      expect(devices.find((d) => d.agentId === aAgentId)?.isFounder).toBe(true);
-      expect(devices.find((d) => d.agentId === bAgentId)?.isFounder).toBe(false);
-      // B was delegated by A, which is what decides who may manage B.
-      expect(devices.find((d) => d.agentId === bAgentId)?.issuerAgentId).toBe(aAgentId);
-      // Self is always first, so the "This device" row doesn't move between renders
-      // (members() is a HashMap walk, so the order is otherwise arbitrary).
-      expect(devices[0].isMe).toBe(true);
-    });
-
-    it('refuses to change or remove the current device (self-revocation empties the group)', async () => {
-      const { ops } = await createOps();
-      await ops.ensureUserGroup({ create: true });
-      const me = (await ops.getIdentity()).agentId;
-      // Self-revocation is the one case keyhive lets an admin revoke its own
-      // delegation: the root delegation goes, members becomes empty, and the
-      // follow-up addMember then fails with NoProof — nobody can administer the
-      // group afterwards. Refuse at the ops layer, not just in the sheet.
-      await expect(ops.changeDeviceRole(me, 'read')).rejects.toThrow(/Cannot change access for this device/);
-      await expect(ops.removeDeviceFromGroup(me)).rejects.toThrow(/Cannot remove this device/);
-      expect(await ops.listGroupDevices()).toHaveLength(1);
-    });
-
-    /**
-     * The regression this whole change exists for. The filter was `isIndividual()`,
-     * which is false for the current device on EVERY path — keyhive resolves self to
-     * Agent::Active, including when rehydrating a delegation a peer issued *to us* —
-     * so our own row was always dropped and re-added with a hard-coded 'admin'. A
-     * demoted device saw itself as an admin and was offered manage actions keyhive
-     * then refused.
-     */
+    // The filter used to be "is an Individual", which is false for the current
+    // device on every path, so its own row was dropped and re-added with a
+    // hard-coded 'admin'. A demoted device saw itself as an admin and was
+    // offered manage actions keyhive then refused.
     it('a device demoted by a peer admin reports its OWN row as read, not admin', async () => {
-      const { ops: a, kh: khA } = await createOps();
-      const { ops: b, kh: khB } = await createOps();
+      const a = await createOps();
+      const b = await createOps();
+      await linkDevices(a, b);
+      expect(deviceOf(await b.ops.listGroupDevices(), b.agentId)?.role).toBe('admin');
 
-      // Order is load-bearing: ingestArchive carries A's individuals but NOT A's own
-      // Individual (that lives in archive.active.individual), so the root delegation
-      // naming A fails with UnknownAgent and parks in pending_events. Learning A's
-      // contact card and then ingesting its events retries those pending ops, at
-      // which point the group materializes on B.
-      const syncAtoB = async () => {
-        await khB.ingestArchive(new Archive((await khA.toArchive()).toBytes()));
-        const indAonB = await khB.receiveContactCard(await khA.contactCard());
-        const evts: Map<Uint8Array, Uint8Array> = await khA.eventsForAgent(indAonB.toAgent());
-        const arr: Uint8Array[] = [];
-        evts.forEach((v: Uint8Array) => arr.push(v));
-        await khB.ingestEventsBytes(arr);
-      };
+      await a.ops.changeDeviceRole(b.agentId, 'read');
+      await syncAsBridge(a, b);
 
-      const aGroupId = await a.ensureUserGroup({ create: true });
-      const aAgentId = (await a.getIdentity()).agentId;
-      const bAgentId = await learnAgent(a, b);
-      await a.addDeviceToGroup(bAgentId); // as admin
-
-      // B joins the same group. No waitForSync: fx.syncKeyhive() is a no-op here, so
-      // polling for ops we already hold would just burn the timeout.
-      await syncAtoB();
-      await b.ensureUserGroup({ adoptGroupId: aGroupId! });
-      expect(await b.getUserGroupId()).toBe(aGroupId);
-
-      const before = await b.listGroupDevices();
-      expect(before.find((d) => d.isMe)?.agentId).toBe(bAgentId);
-      expect(before.find((d) => d.isMe)?.role).toBe('admin');
-
-      // A demotes B, and the revocation + new read delegation reach B. They cannot
-      // half-arrive: the new delegation references the revocation, so receive_delegation
-      // rejects it with MissingDependency until the revocation is in.
-      await a.changeDeviceRole(bAgentId, 'read');
-      await syncAtoB();
-
-      const after = await b.listGroupDevices();
+      const after = await b.ops.listGroupDevices();
       expect(after.filter((d) => d.isMe)).toHaveLength(1); // no synthetic duplicate row
-      expect(after.find((d) => d.isMe)?.agentId).toBe(bAgentId);
-      expect(after.find((d) => d.isMe)?.role).toBe('read'); // ← read 'admin' before the fix
-      expect(after.find((d) => d.isMe)?.isFounder).toBe(false);
-      // A is untouched, and reads as the founder from B's side too.
-      expect(after.find((d) => d.agentId === aAgentId)?.role).toBe('admin');
-      expect(after.find((d) => d.agentId === aAgentId)?.isFounder).toBe(true);
+      expect(deviceOf(after, b.agentId)).toMatchObject({ role: 'read', isMe: true, isFounder: false });
+      // The demoting device is untouched and reads as the founder from here too.
+      expect(deviceOf(after, a.agentId)).toMatchObject({ role: 'admin', isFounder: true });
     });
 
-    it('a device removed from the group reports no access for itself', async () => {
-      const { ops: a, kh: khA } = await createOps();
-      const { ops: b, kh: khB } = await createOps();
+    it('a device removed from the group keeps its row, reporting no access', async () => {
+      const a = await createOps();
+      const b = await createOps();
+      await linkDevices(a, b);
 
-      const syncAtoB = async () => {
-        await khB.ingestArchive(new Archive((await khA.toArchive()).toBytes()));
-        const indAonB = await khB.receiveContactCard(await khA.contactCard());
-        const evts: Map<Uint8Array, Uint8Array> = await khA.eventsForAgent(indAonB.toAgent());
-        const arr: Uint8Array[] = [];
-        evts.forEach((v: Uint8Array) => arr.push(v));
-        await khB.ingestEventsBytes(arr);
-      };
+      await a.ops.removeDeviceFromGroup(b.agentId);
+      await syncAsBridge(a, b);
 
-      const aGroupId = await a.ensureUserGroup({ create: true });
-      const bAgentId = await learnAgent(a, b);
-      await a.addDeviceToGroup(bAgentId);
-      await syncAtoB();
-      await b.ensureUserGroup({ adoptGroupId: aGroupId! });
-
-      await a.removeDeviceFromGroup(bAgentId);
-      await syncAtoB();
-
-      const after = await b.listGroupDevices();
-      const self = after.find((d) => d.isMe);
-      // Keep the row — dropping it would trip DeviceList's "No linked devices."
-      // empty state — but report no access rather than a synthetic admin.
-      expect(self).toBeDefined();
-      expect(self?.role).toBeNull();
-      expect(self?.isFounder).toBe(false);
+      // Dropping the row would trip DeviceList's "No linked devices." empty
+      // state; inventing a role would offer actions it cannot perform.
+      const self = deviceOf(await b.ops.listGroupDevices(), b.agentId);
+      expect(self).toMatchObject({ role: null, isMe: true, isFounder: false });
     });
 
-    it('addMember resolves a group id to the Group (doc member is a group)', async () => {
-      const { ops } = await createOps();
-      const groupId = await ops.ensureUserGroup({ create: true });
-      const { khDocId } = await ops.enableSharing('doc-group');
+    it('a device removed from the group loses the user\'s documents and cannot read what is written afterwards', async () => {
+      const laptop = await createOps();
+      const phone = await createOps();
+      const { khDocId } = await laptop.ops.createKeyhiveDoc();
+      await linkDevices(laptop, phone);
+      const before = await encrypt(laptop, khDocId, 'while linked');
+      await syncAsBridge(laptop, phone);
+      expect(await decrypt(phone, khDocId, before.bytes)).toBe('while linked');
 
-      await ops.addMember(groupId!, khDocId, 'read');
-      const members = await ops.getDocMembers(khDocId);
-      const groupMember = members.find((m) => m.agentId === groupId);
-      expect(groupMember).toBeDefined();
-      expect(groupMember!.type).toBe('group');
+      await laptop.ops.removeDeviceFromGroup(phone.agentId);
+      const after = await encrypt(laptop, khDocId, 'after the phone was removed');
+      expect(after.newEpoch).toBe(true);
+      await syncPeers(laptop, phone); // even handed everything
+
+      expect(await phone.ops.getMyAccess(khDocId)).toBeNull();
+      await expect(decrypt(phone, khDocId, after.bytes)).rejects.toThrow('Key not found');
     });
 
-    it('getDocMembers marks the user-group as "me", reports its devices, and hides grouped devices', async () => {
-      const { ops } = await createOps();
-      const groupId = await ops.ensureUserGroup({ create: true });
-      // enableSharing makes the user-group an admin co-owner; the creating device
-      // is both a root doc member and a member of its own user-group.
-      const { khDocId } = await ops.enableSharing('doc-grouped-devices');
-      const myAgentId = (await ops.getIdentity()).agentId;
+    // A dangling user-group: the id survived in the KV store but keyhive lost
+    // the group (storage reset or migrated). Reported at startup; nothing here
+    // may throw, or the app cannot even reach the screen that explains it.
+    it('a dangling user-group id is detected, and documents can still be created without it', async () => {
+      const peer = await createOps();
+      expect(await peer.ops.findDanglingUserGroup()).toBeNull(); // fresh install: nothing to dangle
+      await peer.ops.ensureUserGroup({ create: true });
+      expect(await peer.ops.findDanglingUserGroup()).toBeNull(); // a healthy group
 
-      const members = await ops.getDocMembers(khDocId);
+      const orphan = await createOps();
+      const stranger = await createOps();
+      const foreignGroupId = (await stranger.ops.ensureUserGroup({ create: true }))!;
+      await orphan.fx.setUserGroupId(foreignGroupId);
+      expect(await orphan.ops.findDanglingUserGroup()).toBe(foreignGroupId);
 
-      const groupMember = members.find((m) => m.agentId === groupId);
-      expect(groupMember).toBeDefined();
-      expect(groupMember!.type).toBe('group');
-      expect(groupMember!.isMe).toBe(true); // own user-group reads as "you"
-      // The group reports its device members (here: just the creating device).
-      if (groupMember!.type === 'group') {
-        expect(groupMember!.deviceIds).toContain(myAgentId);
-      }
-
-      // The current device is covered by its own user-group, so getDocMembers
-      // filters it out — only the group stands in for it.
-      const deviceMember = members.find((m) => m.type === 'individual' && m.agentId === myAgentId);
-      expect(deviceMember).toBeUndefined();
-    });
-
-    it('a group can co-own a doc as admin; the creating device cannot be revoked (keyhive constraint)', async () => {
-      // The user-group CAN be added as an admin co-owner of a document. But the
-      // CREATING device gets a root delegation (proof: None) that roots the
-      // document's authority, and keyhive only accepts a revocation of a root
-      // delegation if it is signed by the DOCUMENT's own key — which no device
-      // holds. So a device's attempt to revoke its own root membership silently
-      // no-ops. Net: "remove the device as admin" is not achievable for a doc
-      // the device created. This test documents that constraint.
-      const { ops, kh } = await createOps();
-      const groupId = await ops.ensureUserGroup({ create: true });
-      const group = await kh.getGroup(GroupId.fromBytes(base64ToBytes(groupId!)));
-      expect(group).toBeDefined();
-
-      const ref = new ChangeId(new Uint8Array(32));
-      const doc = await kh.generateDocument([], ref, []);
-
-      const admin = Access.tryFromString('admin')!;
-      await kh.addMember(group!.toAgent(), doc.toMembered(), admin, []);
-
-      const me = await kh.individual;
-      const myIdB64 = bytesToBase64(me.id.toBytes());
-      const before = await kh.docMemberCapabilities(doc.doc_id);
-      const deviceMember = before.find((m: any) => bytesToBase64(m.who.id.toBytes()) === myIdB64);
-      expect(deviceMember).toBeDefined();
-      // Attempt to revoke the creating device — silently ignored (root delegation).
-      await kh.revokeMember(deviceMember!.who, true, doc.toMembered());
-
-      const members = await kh.docMemberCapabilities(doc.doc_id);
-      const ids = members.map((m: any) => bytesToBase64(m.who.id.toBytes()));
-      // The group IS an admin co-owner...
-      expect(ids).toContain(groupId);
-      // ...but the creating device remains (cannot be revoked).
-      expect(ids).toContain(myIdB64);
-
-      // The group grants its members access too: the device has Admin and the
-      // doc still encrypts/decrypts.
-      const access = await kh.accessForDoc(new Identifier(me.id.toBytes()), doc.doc_id);
-      expect(access?.toString()).toBe('Admin');
-      const pt = new TextEncoder().encode('group co-owned doc');
-      const eref = new ChangeId(crypto.getRandomValues(new Uint8Array(32)));
-      const enc = await kh.tryEncryptArchive(doc, eref, [], pt);
-      const dec = await kh.tryDecrypt(doc, enc.encrypted_content());
-      expect(new Uint8Array(dec)).toEqual(pt);
-    });
-
-    it('addMember rejects a bare individual id (sharing is group-only)', async () => {
-      const { ops: a } = await createOps();
-      const { ops: b } = await createOps();
-      const bAgentId = await learnAgent(a, b);
-      const { khDocId } = await a.enableSharing('doc-indiv');
-
-      await expect(a.addMember(bAgentId, khDocId, 'read')).rejects.toThrow('Agent not found');
-    });
-
-    it('linkDevice: admin adds the peer; a groupless peer adopts the group id', async () => {
-      const { ops: a } = await createOps();
-      const { ops: b } = await createOps();
-      const aGroupId = await a.ensureUserGroup({ create: true });
-      const aAgentId = (await a.getIdentity()).agentId;
-      const bAgentId = await learnAgent(a, b);
-
-      // A is the admin: linking B (peer has no group) adds B to A's group.
-      await a.linkDevice(bAgentId, null);
-      expect((await a.listGroupDevices()).map((d) => d.agentId)).toContain(bAgentId);
-
-      // B adopts A's group id. Give B the group ops so waitForSync resolves immediately.
-      await b.kh.ingestArchive(new Archive((await a.kh.toArchive()).toBytes()));
-      await learnAgent(b, a);
-      const res = await b.linkDevice(aAgentId, aGroupId);
-      expect(res.userGroupId).toBe(aGroupId);
-      expect(await b.getUserGroupId()).toBe(aGroupId);
-    });
-
-    it('getKnownFriends lists a stored contact as their user-group', async () => {
-      const { ops: a } = await createOps();
-      // A stored contact is identified by its user-group id (sharing is group-only).
-      const groupId = bytesToBase64(crypto.getRandomValues(new Uint8Array(32)));
-
-      const contacts = await a.getKnownFriends(undefined, [groupId]);
-      const entry = contacts.find((c) => c.agentId === groupId);
-      expect(entry).toBeDefined();
-      expect(entry!.type).toBe('group'); // a contact is the user-group; its agentId is the share target
+      const { khDocId } = await orphan.ops.createKeyhiveDoc();
+      expect(await orphan.ops.getMyAccess(khDocId)).toBe('Admin');
+      expect(await orphan.ops.getUserGroupAccess(khDocId)).toBeNull();
+      expect(await orphan.ops.listGroupDevices()).toEqual([{ agentId: orphan.agentId, role: null, isMe: true, isFounder: false }]);
+      // The bundle carries no group rather than one the receiver could never resolve.
+      expect(JSON.parse(await orphan.ops.getContactCard())).not.toHaveProperty('groupId');
     });
   });
 
-  // The home page is driven by user-group access: a doc shows iff the personal
-  // user-group has at least read access, and "delete" revokes the user-group.
-  // We deliberately check the GROUP (not the device) so that revoke actually
-  // removes a self-created doc — the creating device's root delegation is
-  // permanent in keyhive and can never be revoked.
+  // The home page is driven by user-group access: a document shows iff the
+  // personal user-group has at least read access, and "delete" (archive)
+  // revokes the user-group. The GROUP, not the device, because the creating
+  // device keeps its own root edge on a document whatever happens to the group.
   describe('home-page user-group access', () => {
-    it('V1: the user-group is admin of a doc it created (group-access query works)', async () => {
-      const { ops, kh, fx } = await createOps();
-      const { khDocId } = await ops.enableSharing('doc-1'); // mints user-group, makes it admin
-      const userGroupId = await fx.getUserGroupId();
-      expect(userGroupId).toBeTruthy();
-
-      const groupIdentifier = new Identifier(base64ToBytes(userGroupId!));
-      const docIdObj = new DocumentId(base64ToBytes(khDocId));
-      const access = await kh.accessForDoc(groupIdentifier, docIdObj);
-      expect(access).toBeDefined();
-      expect(access!.toString()).toBe('Admin');
+    it('the user-group is admin of a document it created', async () => {
+      const peer = await createOps();
+      const { khDocId } = await peer.ops.enableSharing('doc-1');
+      const groupId = (await peer.ops.getUserGroupId())!;
+      expect(await rawAccess(peer, groupId, khDocId)).toBe('Admin');
     });
 
-    it('V2: revoking the user-group removes its access (device root delegation persists)', async () => {
-      const { ops, kh, fx } = await createOps();
-      const { khDocId } = await ops.enableSharing('doc-1');
-      const userGroupId = await fx.getUserGroupId();
-      const groupIdentifier = new Identifier(base64ToBytes(userGroupId!));
-      const docIdObj = new DocumentId(base64ToBytes(khDocId));
+    it('revoking the user-group removes ITS access while the creating device keeps its root edge', async () => {
+      const peer = await createOps();
+      const { khDocId } = await peer.ops.enableSharing('doc-1');
+      const groupId = (await peer.ops.getUserGroupId())!;
 
-      // Group starts as admin.
-      expect((await kh.accessForDoc(groupIdentifier, docIdObj))?.toString()).toBe('Admin');
+      await peer.kh.revokeMember(identifierOf(groupId), true, MemberedId.document(docIdOf(khDocId)));
 
-      // Revoke the user-group from the doc.
-      const doc = await kh.getDocument(docIdObj);
-      expect(doc).toBeDefined();
-      const groupBytes = base64ToBytes(userGroupId!);
-      const members = await kh.docMemberCapabilities(doc!.doc_id);
-      const groupMember = members.find((m: any) => {
-        const b: Uint8Array = m.who.id.toBytes();
-        return b.length === groupBytes.length && b.every((x: number, i: number) => x === groupBytes[i]);
-      });
-      expect(groupMember).toBeDefined();
-      await kh.revokeMember(groupMember!.who, true, doc!.toMembered());
-
-      // Group access is gone — so the doc would drop off the home list.
-      const afterGroup = await kh.accessForDoc(groupIdentifier, docIdObj);
-      expect(afterGroup == null).toBe(true);
-
-      // ...but the creating device still reaches the doc via its permanent root
-      // delegation. This is exactly why we filter by group access, not device.
-      const myIdentifier = new Identifier(kh.id.bytes);
-      const afterDevice = await kh.accessForDoc(myIdentifier, docIdObj);
-      expect(afterDevice?.toString()).toBe('Admin');
+      // Gone for the group — so the document would drop off the home list…
+      expect(await rawAccess(peer, groupId, khDocId)).toBeUndefined();
+      // …but not for the device. This is why the home page asks about the group.
+      expect(await rawAccess(peer, peer.agentId, khDocId)).toBe('Admin');
     });
 
-    it('enumerateUserDocs lists a doc the user-group can access', async () => {
+    it('enumerateUserDocs lists a document the user-group can access', async () => {
       const { ops } = await createOps();
       const { khDocId } = await ops.enableSharing('doc-1');
       const { accessibleKhIds, reachableKhIds } = await ops.enumerateUserDocs();
-      expect(accessibleKhIds).toContain(khDocId);
-      expect(reachableKhIds).toContain(khDocId);
+      expect(accessibleKhIds).toEqual([khDocId]);
+      expect(reachableKhIds).toEqual([khDocId]);
     });
 
-    it('revokeMyAccess revokes the user-group so the doc is no longer accessible (but still reachable)', async () => {
-      const { ops } = await createOps();
+    it('enumerateUserDocs calls nothing accessible without a user-group', async () => {
+      const alice = await createOps();
+      const bob = await createOps();
+      const { khDocId } = await alice.ops.createKeyhiveDoc();
+      await shareDocWithDevice(alice, khDocId, bob, 'edit');
+
+      const { accessibleKhIds, reachableKhIds } = await bob.ops.enumerateUserDocs();
+      expect(reachableKhIds).toEqual([khDocId]);
+      expect(accessibleKhIds).toEqual([]);
+    });
+
+    it('revokeMyAccess on a document we created: off the home set, still reachable, the device keeps its edge', async () => {
+      const { ops, fx } = await createOps();
       const { khDocId } = await ops.enableSharing('doc-1');
-      expect(await ops.getUserGroupAccess(khDocId)).toBe('Admin');
+      const mark = fx.order.length;
 
-      await ops.revokeMyAccess(khDocId);
+      const result = await ops.revokeMyAccess(khDocId);
 
-      // The home page filters by user-group access, so the doc now drops off the list...
+      expect(result.status).toBe('revoked');
+      expect(result.grantSigs).toHaveLength(1); // the pre-revoke baseline: the co-root grant
       expect(await ops.getUserGroupAccess(khDocId)).toBeNull();
       const { accessibleKhIds, reachableKhIds } = await ops.enumerateUserDocs();
       expect(accessibleKhIds).not.toContain(khDocId);
-      // ...even though the creating device's permanent root delegation keeps it reachable.
+      // Reachable-but-not-accessible is how reconcile tells "revoked" (prune)
+      // from "not synced yet" (keep).
       expect(reachableKhIds).toContain(khDocId);
+      expect(await ops.getMyAccess(khDocId)).toBe('Admin');
+      expect(await ops.getUserGroupGrantSigs(khDocId)).toEqual([]);
+      // The revocation has to reach the user's other devices.
+      expect(fx.order.slice(mark)).toEqual(['persist', 'syncKeyhive', 'forceResyncAllPeers']);
     });
 
-    it('keyhive doc id ↔ automerge doc id round-trips (worker home-list conversion)', async () => {
+    it('revokeMyAccess reports not-found for a document keyhive does not know', async () => {
+      const { ops } = await createOps();
+      await ops.ensureUserGroup({ create: true });
+      const stranger = await createOps();
+      const { khDocId: foreign } = await stranger.ops.createKeyhiveDoc();
+
+      expect(await ops.revokeMyAccess(foreign)).toEqual({ status: 'not-found', grantSigs: [] });
+    });
+
+    it('the keyhive doc id and the automerge doc id are the same bytes (the worker\'s home-list conversion)', async () => {
       const repo = (await import('@automerge/automerge-repo')) as any;
       // The worker's conversion: keyhive doc-id bytes → automerge doc id string.
-      const amDocIdFromBytes = (b: Uint8Array): string =>
-        repo.parseAutomergeUrl(repo.stringifyAutomergeUrl(b)).documentId;
-      const docBytes = crypto.getRandomValues(new Uint8Array(16)); // automerge doc id = 16-byte UUID
-      const amDocId = amDocIdFromBytes(docBytes);
-      // The automerge doc id decodes back to exactly these bytes — and those bytes ARE
-      // the keyhive DocumentId (the bridge's docIdFromAutomergeUrl returns
-      // parseAutomergeUrl(url).binaryDocumentId), so the worker's id mapping is lossless.
+      const amDocIdFromBytes = (bytes: Uint8Array): string =>
+        repo.parseAutomergeUrl(repo.stringifyAutomergeUrl(bytes)).documentId;
+      const { ops } = await createOps();
+      const { docIdBytes } = await ops.createKeyhiveDoc();
+
+      const amDocId = amDocIdFromBytes(docIdBytes);
+      // …and back, as khDocIdFromAm does: the mapping is lossless.
       const back: Uint8Array = repo.parseAutomergeUrl(`automerge:${amDocId}`).binaryDocumentId;
-      expect(Array.from(back)).toEqual(Array.from(docBytes));
+      expect(Array.from(back)).toEqual(Array.from(docIdBytes));
     });
 
-    // Guards the GROUP-based cross-device enumeration path: device A assigns the
-    // shared user-group as admin of a new doc (assignGroupAsAdmin), and device B —
-    // a member of that same user-group — must enumerate it via getUserGroupAccess /
-    // enumerateUserDocs. The existing cross-device tests share individual→individual,
-    // so this transitive (B ∈ group → group admins doc) path was never exercised.
-    // NOTE: this passes once B's keyhive HAS A's ops; in production the gap is that
-    // those ops never reach an offline B (stateless relay, no store-and-forward peer).
-    it('doc created on device A after linking is enumerable on device B via the user-group', async () => {
-      const { ops: opsA, kh: khA } = await createOps();
-      const { ops: opsB, kh: khB } = await createOps();
+    // The cross-device path: device A makes a document owned by the shared
+    // user-group; device B, a member of that group, must enumerate it.
+    it('a document created on one device after linking is on the other device\'s home set', async () => {
+      const laptop = await createOps();
+      const phone = await createOps();
+      const { groupId } = await linkDevices(laptop, phone);
+      expect(await phone.ops.getUserGroupId()).toBe(groupId);
 
-      const syncAtoB = async () => {
-        await khB.ingestArchive(new Archive((await khA.toArchive()).toBytes()));
-        const indAonB = await khB.receiveContactCard(await khA.contactCard());
-        const evts: Map<Uint8Array, Uint8Array> = await khA.eventsForAgent(indAonB.toAgent());
-        const arr: Uint8Array[] = [];
-        evts.forEach((v: Uint8Array) => arr.push(v));
-        await khB.ingestEventsBytes(arr);
-      };
+      const { khDocId } = await laptop.ops.enableSharing('am-doc-after-link');
+      await syncAsBridge(laptop, phone);
 
-      // --- Link B into A's user-group (same user, two devices) ---
-      const aGroupId = await opsA.ensureUserGroup({ create: true });
-      const aAgentId = (await opsA.getIdentity()).agentId;
-      const bAgentId = (await opsA.receiveContactCard(await opsB.getContactCard())).agentId;
-      await opsA.linkDevice(bAgentId, null); // A (admin) adds B to its group
-
-      await syncAtoB(); // B learns A's group ops
-      await opsB.receiveContactCard(await opsA.getContactCard());
-      await opsB.linkDevice(aAgentId, aGroupId); // B adopts A's group id
-      expect(await opsB.getUserGroupId()).toBe(aGroupId);
-
-      // --- A creates a NEW doc AFTER linking (shared with the user-group) ---
-      const { khDocId } = await opsA.enableSharing('am-doc-after-link');
-
-      // --- Sync A's new ops to B (as periodic keyhive sync would) ---
-      await syncAtoB();
-
-      // --- B must now see the doc through the shared user-group ---
-      expect(await opsB.getUserGroupAccess(khDocId)).toBe('Admin');
-      const { accessibleKhIds } = await opsB.enumerateUserDocs();
-      expect(accessibleKhIds).toContain(khDocId);
+      expect(await phone.ops.getUserGroupAccess(khDocId)).toBe('Admin');
+      expect((await phone.ops.enumerateUserDocs()).accessibleKhIds).toContain(khDocId);
     });
 
-    // ── home-page "archive" of a contact-shared doc ─────────────────────────
-    // B's device revokes its own user-group's grant, which was issued by A's
-    // device. B is not the issuer, not a doc admin, and not in the grant's proof
-    // lineage — the revoke goes through keyhive's transitive-membership fallback
-    // (B ∈ B-group with access ≥ the grant). Guards that fallback plus the two
-    // resurrection channels the app exercises: continued sync from A (who never
-    // saw the revocation) and an archive reload.
+    // ── Archiving a document a friend shared ───────────────────────────────
+    // keyhive lets a member revoke only what it has standing over. An admin
+    // grant can be handed back; a read or edit grant cannot, and the app hides
+    // the document with a local tombstone instead. Either way the caller gets
+    // the outcome and the pre-revoke grant signatures, which are how a later
+    // RE-share is told apart from the grant that was archived.
+    describe('archiving a document a friend shared (revokeMyAccess)', () => {
+      it('an admin grant is revoked: access gone, and it stays gone across sync-back and a reload', async () => {
+        const alice = await createOps();
+        const bob = await createOps();
+        const { khDocId, friendGroupId } = await shareWithFriend(alice, bob, 'admin');
+        expect(await bob.ops.getUserGroupAccess(khDocId)).toBe('Admin');
+        const baseline = await bob.ops.getUserGroupGrantSigs(khDocId);
+        expect(baseline).toHaveLength(1);
+        const mark = bob.fx.order.length;
 
-    // Two-peer harness for the contact-share scenario. B is built from a known
-    // seed so its keyhive can be rebuilt from an archive ("reload").
-    async function createContactShare() {
-      const { ops: opsA, kh: khA } = await createOps();
-      const seedB = crypto.getRandomValues(new Uint8Array(32));
-      const khB = await Keyhive.init(Signer.memorySignerFromBytes(seedB), CiphertextStore.newInMemory(), () => {});
-      const opsB = new KeyhiveOps(khB, bridge, noopSideEffects());
+        const result = await bob.ops.revokeMyAccess(khDocId);
 
-      // Give `to` everything `from` has (archive + identity events), as the
-      // app's contact exchange + periodic keyhive sync would.
-      const syncAll = async (khFrom: any, khTo: any) => {
-        await khTo.ingestArchive(new Archive((await khFrom.toArchive()).toBytes()));
-        const ind = await khTo.receiveContactCard(await khFrom.contactCard());
-        const evts: Map<Uint8Array, Uint8Array> = await khFrom.eventsForAgent(ind.toAgent());
-        const arr: Uint8Array[] = [];
-        evts.forEach((v: Uint8Array) => arr.push(v));
-        await khTo.ingestEventsBytes(arr);
-      };
+        expect(result).toEqual({ status: 'revoked', grantSigs: baseline });
+        expect(bob.fx.order.slice(mark)).toEqual(['persist', 'syncKeyhive', 'forceResyncAllPeers']);
+        expect(await bob.ops.getUserGroupAccess(khDocId)).toBeNull();
+        expect(await bob.ops.getMyAccess(khDocId)).toBeNull();
+        expect((await bob.ops.enumerateUserDocs()).accessibleKhIds).not.toContain(khDocId);
 
-      const bGroupId = (await opsB.ensureUserGroup({ create: true }))!;
-      expect(bGroupId).toBeTruthy();
+        // Alice has not seen the revocation and keeps sending what she has:
+        // that must not resurrect the grant. Then she learns of it herself.
+        await pushVisibleEvents(alice, bob);
+        expect(await bob.ops.getUserGroupAccess(khDocId)).toBeNull();
+        await syncPeers(alice, bob);
+        expect(await bob.ops.getUserGroupAccess(khDocId)).toBeNull();
+        expect(await rawAccess(alice, friendGroupId, khDocId)).toBeUndefined();
+        expect(memberOf(await alice.ops.getDocMembers(khDocId), friendGroupId)).toBeUndefined();
 
-      // A learns B's identity + group (contact exchange), then shares a doc to
-      // B's user-group with edit access. Like the real app, the doc carries CGKA
-      // state: A encrypts content before and after the share.
-      await syncAll(khB, khA);
-      const { khDocId } = await opsA.enableSharing('contact-shared-doc');
-      const docOnA = await khA.getDocument(new DocumentId(base64ToBytes(khDocId)));
-      await khA.tryEncrypt(docOnA!, new ChangeId(crypto.getRandomValues(new Uint8Array(32))), [], new TextEncoder().encode('before share'));
-      await opsA.addMember(bGroupId, khDocId, 'edit');
-      await khA.tryEncrypt(docOnA!, new ChangeId(crypto.getRandomValues(new Uint8Array(32))), [], new TextEncoder().encode('after share'));
+        // And it is durable.
+        const bob2 = await reload(bob);
+        expect(await bob2.ops.getUserGroupAccess(khDocId)).toBeNull();
+        expect((await bob2.ops.enumerateUserDocs()).accessibleKhIds).not.toContain(khDocId);
+      });
 
-      // B learns the doc + the grant.
-      await syncAll(khA, khB);
-      expect(await opsB.getUserGroupAccess(khDocId)).toBe('Edit');
+      it.each(['edit', 'read'] as const)('an %s grant cannot be handed back: no-authority, access remains, baseline returned', async (role) => {
+        const alice = await createOps();
+        const bob = await createOps();
+        const { khDocId } = await shareWithFriend(alice, bob, role);
+        const granted = await bob.ops.getUserGroupAccess(khDocId);
+        const baseline = await bob.ops.getUserGroupGrantSigs(khDocId);
+        expect(baseline).toHaveLength(1);
+        const mark = bob.fx.order.length;
 
-      return { opsA, khA, opsB, khB, seedB, bGroupId, khDocId, syncAll };
-    }
+        const result = await bob.ops.revokeMyAccess(khDocId);
 
-    it('revokeMyAccess revokes a contact-shared grant; the revocation survives sync-back and reload', async () => {
-      const { opsA: _opsA, khA, opsB, khB, seedB, bGroupId, khDocId, syncAll } = await createContactShare();
+        expect(result).toEqual({ status: 'no-authority', grantSigs: baseline });
+        // Nothing changed in keyhive, so there is nothing to push to peers.
+        expect(bob.fx.order.slice(mark)).not.toContain('forceResyncAllPeers');
+        expect(await bob.ops.getUserGroupAccess(khDocId)).toBe(granted);
+        expect(await bob.ops.getUserGroupGrantSigs(khDocId)).toEqual(baseline);
+        // Still a member as far as the owner is concerned.
+        await syncPeers(alice, bob);
+        expect(await alice.ops.getDocMembers(khDocId)).toHaveLength(2);
+      });
 
-      const res = await opsB.revokeMyAccess(khDocId);
-      expect(res.status).toBe('revoked');
-      // The baseline was captured before the revoke: A's single grant.
-      expect(res.grantSigs).toHaveLength(1);
+      it('a re-share after a revoke is a grant whose signature is not in the baseline', async () => {
+        const alice = await createOps();
+        const bob = await createOps();
+        const { khDocId, friendGroupId } = await shareWithFriend(alice, bob, 'admin');
+        const { grantSigs: baseline } = await bob.ops.revokeMyAccess(khDocId);
+        await syncPeers(alice, bob);
 
-      expect(await opsB.getUserGroupAccess(khDocId)).toBeNull();
-      const { accessibleKhIds } = await opsB.enumerateUserDocs();
-      expect(accessibleKhIds).not.toContain(khDocId);
+        // Alice shares it with Bob again — the very same grant as before.
+        await alice.ops.addMember(friendGroupId, khDocId, 'admin');
+        await syncAsBridge(alice, bob);
 
-      // A never saw the revocation and keeps syncing its state to B — that must
-      // not resurrect B's access (ops are monotonic).
-      await syncAll(khA, khB);
-      expect(await opsB.getUserGroupAccess(khDocId)).toBeNull();
+        expect(await bob.ops.getUserGroupAccess(khDocId)).toBe('Admin');
+        const after = await bob.ops.getUserGroupGrantSigs(khDocId);
+        expect(after).toHaveLength(1);
+        expect(baseline).not.toContain(after[0]); // ← what un-hides the archived document
+      });
 
-      // Reload: rebuild B's keyhive from its own persisted archive — the
-      // revocation must be durable.
-      const archB = new Archive((await khB.toArchive()).toBytes());
-      const khB2 = await archB.tryToKeyhive(CiphertextStore.newInMemory(), Signer.memorySignerFromBytes(seedB), () => {});
-      const accessAfterReload = await khB2.accessForDoc(
-        new Identifier(base64ToBytes(bGroupId)),
-        new DocumentId(base64ToBytes(khDocId)),
-      );
-      expect(accessAfterReload == null).toBe(true);
-    });
+      // The tombstoned (no-authority) case keys off the same signal, so it must
+      // not fire when nothing was re-shared and must fire when something was.
+      it('while a grant stands, repeating it is not a re-share; changing its role is', async () => {
+        const alice = await createOps();
+        const bob = await createOps();
+        const { khDocId, friendGroupId } = await shareWithFriend(alice, bob, 'edit');
+        const { grantSigs: baseline } = await bob.ops.revokeMyAccess(khDocId); // no-authority
 
-    it('revokeMyAccess reports no-authority + the grant baseline when the revoke fails; a re-share mints a new signature', async () => {
-      const { opsA, khA, opsB, khB, bGroupId, khDocId, syncAll } = await createContactShare();
+        await alice.ops.addMember(friendGroupId, khDocId, 'edit'); // an identical grant
+        await syncAsBridge(alice, bob);
+        expect(await bob.ops.getUserGroupGrantSigs(khDocId)).toEqual(baseline);
 
-      const baseline = await opsB.getUserGroupGrantSigs(khDocId);
-      expect(baseline).toHaveLength(1);
-
-      // Simulate the real-world failure modes (partial CGKA state, WASM rekey
-      // trap) by making the revoke throw. Own-property assignment shadows the
-      // wasm prototype method (same trick as neutralizeForcePcsUpdate).
-      (khB as any).revokeMember = async () => { throw new Error('NoProof (simulated)'); };
-      const res = await opsB.revokeMyAccess(khDocId);
-      expect(res.status).toBe('no-authority');
-      expect(res.grantSigs).toEqual(baseline);
-      // Access survives — this is exactly the case the archive tombstone hides.
-      expect(await opsB.getUserGroupAccess(khDocId)).toBe('Edit');
-
-      // Re-adding the SAME grant is a keyhive no-op (identical op, deduped) —
-      // no new signature, so it must NOT read as a re-share.
-      await opsA.addMember(bGroupId, khDocId, 'edit');
-      await syncAll(khA, khB);
-      expect(await opsB.getUserGroupGrantSigs(khDocId)).toEqual(baseline);
-
-      // A deliberate re-share reaches B as a fresh delegation (the app's only
-      // paths — change the member's role, or revoke + re-add — both mint one).
-      // Its NEW signature is the un-archive trigger reconcileHomeDocs keys off.
-      await opsA.changeRole(bGroupId, khDocId, 'admin');
-      await syncAll(khA, khB);
-      const after = await opsB.getUserGroupGrantSigs(khDocId);
-      expect(after.length).toBeGreaterThan(0);
-      expect(after.some(s => !baseline.includes(s))).toBe(true);
+        await alice.ops.changeRole(friendGroupId, khDocId, 'admin'); // a deliberate re-share
+        await syncAsBridge(alice, bob);
+        const after = await bob.ops.getUserGroupGrantSigs(khDocId);
+        expect(after).toHaveLength(1);
+        expect(baseline).not.toContain(after[0]);
+      });
     });
   });
 });

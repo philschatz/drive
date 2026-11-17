@@ -83,6 +83,12 @@ export interface BackupResult {
   imported: number;
   skipped: string[];
   reload: boolean;
+  /**
+   * Friends the snapshot carried that were NOT restored, because it was made
+   * on another keyhive generation and their ids no longer name anyone (see
+   * BackupPayload.keyhive). 0 for a same-generation snapshot or a full restore.
+   */
+  skippedFriends: number;
 }
 
 export type ParsedBackup =

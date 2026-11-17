@@ -217,6 +217,32 @@ describe('BackupSettings', () => {
     click.mockRestore();
   });
 
+  it('warns before restoring a pre-reset snapshot that its friends cannot come back', async () => {
+    // The engine drops friends keyed by pre-reset group ids. The restore
+    // reloads the page, so the only place to say so is the confirmation.
+    captureFileInput();
+    render(<BackupSettings />);
+    fireEvent.click(screen.getByTestId('backup-import'));
+    selectFile(capturedInputs[0], JSON.stringify({
+      format: 'drive-backup', version: 1, kind: 'snapshot', exportedAt: 'x', docs: [],
+      settings: { friends: { ['A'.repeat(43) + '=']: 'Alice' } },   // no `keyhive` tag = pre-reset
+    }));
+    const sheet = await screen.findByTestId('confirm-backup-snapshot-import');
+    expect(sheet.textContent).toMatch(/friends list\s+can't be restored/);
+  });
+
+  it('says nothing about friends for a snapshot from this keyhive generation', async () => {
+    captureFileInput();
+    render(<BackupSettings />);
+    fireEvent.click(screen.getByTestId('backup-import'));
+    selectFile(capturedInputs[0], JSON.stringify({
+      format: 'drive-backup', version: 1, kind: 'snapshot', exportedAt: 'x', docs: [], keyhive: 2,
+      settings: { friends: { ['A'.repeat(43) + '=']: 'Alice' } },
+    }));
+    await screen.findByTestId('confirm-backup-snapshot-import');
+    expect(screen.queryByTestId('backup-import-stale-friends')).toBeNull();
+  });
+
   it('confirms the full export (it contains keys) before exporting', async () => {
     render(<BackupSettings />);
     fireEvent.click(screen.getByTestId('backup-export-full'));

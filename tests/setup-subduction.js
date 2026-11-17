@@ -1,4 +1,4 @@
-// automerge-repo (subduction.37) builds Subduction internally and no longer
+// automerge-repo (the 2.6.0-subduction line) builds Subduction internally and no longer
 // exposes setSubductionModule(). The Subduction WASM is initialized as a side
 // effect of importing the non-`/slim` entry of @automerge/automerge-subduction
 // (which the jest moduleNameMapper points at the node CJS build). The `/slim`

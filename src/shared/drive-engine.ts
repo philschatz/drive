@@ -26,7 +26,7 @@ import {
   type QueryCacheEntry,
 } from './storage-keys';
 import { createKeyhiveRepo } from './keyhive-repo';
-import { KeyhiveResetRequiredError } from './keyhive-format';
+import { KeyhiveResetRequiredError, KEYHIVE_STORAGE_GENERATION } from './keyhive-format';
 import { buildBackupDocEntry } from './legacy-backup';
 import { EngineRecovery } from './engine-recovery';
 import { RELAY_PEER_ID } from './relay-identity';
@@ -125,6 +125,7 @@ export class EngineCore {
   protected Automerge: any = null;
   protected PresenceClass: any = null;
   protected amDocIdFromBytes: ((bytes: Uint8Array) => string) | null = null;
+  protected khDocIdFromAm: ((docId: string) => any) | null = null;
   protected setNextDocId: ((bytes: Uint8Array) => void) | null = null;
 
   /**
@@ -252,16 +253,14 @@ export class EngineCore {
   // ── keyhive doc-id helpers ─────────────────────────────────────────────────
   /** Derive the keyhive doc-ID (base64) from an automerge doc-ID. */
   protected resolveKhDocId(automergeDocId: string): string {
-    const khDocIdObj = this.bridge.docIdFromAutomergeUrl(`automerge:${automergeDocId}` as any);
-    return bytesToBase64(khDocIdObj.toBytes());
+    return bytesToBase64(this.khDocIdFromAm!(automergeDocId).toBytes());
   }
 
   /** Resolve the keyhive Document for an automerge doc-ID, or null if not available yet. */
   protected async getKhDoc(automergeDocId: string): Promise<any | null> {
-    if (!this.khOps || !this.bridge) return null;
+    if (!this.khOps || !this.khDocIdFromAm) return null;
     try {
-      const khDocId = this.bridge.docIdFromAutomergeUrl(`automerge:${automergeDocId}` as any);
-      return await this.khOps.kh.getDocument(khDocId);
+      return await this.khOps.kh.getDocument(this.khDocIdFromAm(automergeDocId));
     } catch (err) {
       log.warn('getKhDoc failed:', errMsg(err));
       return null;
@@ -371,6 +370,9 @@ export class EngineCore {
       version: 1,
       kind: want.has('full') ? 'full' : 'snapshot',
       exportedAt: new Date().toISOString(),
+      // The ids in this file (user groups, documents) belong to this keyhive
+      // generation; an import on another one must not trust them.
+      keyhive: KEYHIVE_STORAGE_GENERATION,
     };
 
     if (want.has('full')) {
@@ -477,9 +479,21 @@ export class EngineCore {
       }
     }
 
-    if (payload.settings) await this.importSettings(payload.settings);
+    // A snapshot from another keyhive generation (a pre-reset backup carries no
+    // tag at all) names user groups and documents that no longer exist. Its
+    // device names are still good — a reset keeps the device key they are keyed
+    // by — but its friends and archive tombstones are dropped, not restored.
+    const sameGeneration = (payload.keyhive ?? 1) === KEYHIVE_STORAGE_GENERATION;
+    let skippedFriends = 0;
+    if (payload.settings) {
+      if (!sameGeneration) skippedFriends = Object.keys(payload.settings.friends ?? {}).length;
+      await this.importSettings(sameGeneration
+        ? payload.settings
+        : { deviceNames: payload.settings.deviceNames });
+    }
+    if (skippedFriends) log.info(`import-backup: ${skippedFriends} friend(s) not restored (backup predates the keyhive reset)`);
 
-    return { imported, skipped, reload: true };
+    return { imported, skipped, reload: true, skippedFriends };
   }
 
   /**
@@ -556,7 +570,7 @@ export class EngineCore {
     this.presenceSurface.clearAll();
     this.settingsSurface.resetDriveSettings();
 
-    return { imported: 0, skipped: [], reload: true };
+    return { imported: 0, skipped: [], reload: true, skippedFriends: 0 };
   }
 
   // ── "New changes since last viewed" ────────────────────────────────────────
@@ -1070,12 +1084,9 @@ export class EngineCore {
       const kh = await createKeyhiveRepo({
         storage: this.host.storage,
         networkAdapter: this.host.network.networkAdapter,
-        // Fixed suffix ⇒ all tabs of a device share one peerId, and the relay's
-        // duplicate-join rejection means only ONE tab is connected at a time.
-        // Per-tab suffixes (`drive.<nonce>`) are NOT allowed: a sibling tab's
-        // first presence encrypt on a shared doc hits a keyhive WASM panic
-        // (beekem new_app_secret_for pcs_key_ops lookup — "unreachable
-        // executed") that kills its worker. See keyhive-cgka-presence-panic.
+        // A label only: the bridge appends a per-boot random component, so the
+        // peerId is `<device key>-drive-<random>` (see peer-id.ts). One engine
+        // per device is enforced above this, by the tab-leader Web Lock.
         peerIdSuffix: 'drive',
         serialize: true,
         withShareConfig: true,
@@ -1108,6 +1119,7 @@ export class EngineCore {
       this.Automerge = kh.Automerge;
       this.PresenceClass = kh.Presence;
       this.amDocIdFromBytes = kh.amDocIdFromBytes;
+      this.khDocIdFromAm = kh.khDocIdFromAm;
       this.setNextDocId = kh.setNextDocId;
 
       // Creating or adopting the user group changes what this device announces
@@ -1297,12 +1309,11 @@ export class EngineCore {
         emit({ type: 'open-doc-progress', id: msg.id, pct, message });
       await this.respond(msg.id, async () => {
         this.settingsSurface.pinnedDocs.add(msg.docId);
-        if (this.khOps && this.bridge && this.khIntegration) {
+        if (this.khOps && this.khDocIdFromAm && this.khIntegration) {
           try {
-            const khDocId = this.bridge.docIdFromAutomergeUrl(`automerge:${msg.docId}` as any);
-            const doc = await this.khOps.kh.getDocument(khDocId);
+            const doc = await this.khOps.kh.getDocument(this.khDocIdFromAm(msg.docId));
             if (doc) {
-              const khDocIdB64 = bytesToBase64(doc.id.toBytes());
+              const khDocIdB64 = bytesToBase64(doc.docId.toBytes());
               this.khOps.khDocuments.set(khDocIdB64, doc);
             }
           } catch (err) {

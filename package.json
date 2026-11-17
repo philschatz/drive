@@ -27,26 +27,26 @@
     "slides": "mkdir -p dist/slides && cp docs/*.png docs/*.gif dist/slides/ && marp --no-stdin --theme docs/slides-theme.css docs/slides.md -o dist/slides/index.html"
   },
   "engines": {
-    "node": ">=22.x"
+    "node": ">=22.13"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@automerge/automerge": "3.3.0-fragments.1",
-    "@automerge/automerge-repo": "^2.6.0-subduction.37",
-    "@automerge/automerge-repo-keyhive": "0.3.0-alpha.sub.7",
-    "@automerge/automerge-repo-network-messagechannel": "^2.6.0-subduction.37",
-    "@automerge/automerge-repo-network-websocket": "^2.6.0-subduction.37",
-    "@automerge/automerge-repo-storage-indexeddb": "^2.6.0-subduction.37",
-    "@automerge/automerge-repo-storage-nodefs": "^2.6.0-subduction.37",
-    "@automerge/automerge-subduction": "^0.16.0",
+    "@automerge/automerge": "3.3.2",
+    "@automerge/automerge-repo": "2.6.0-subduction.49",
+    "@automerge/automerge-repo-keyhive": "0.8.0-alpha.1",
+    "@automerge/automerge-repo-network-messagechannel": "2.6.0-subduction.49",
+    "@automerge/automerge-repo-network-websocket": "2.6.0-subduction.49",
+    "@automerge/automerge-repo-storage-indexeddb": "2.6.0-subduction.49",
+    "@automerge/automerge-repo-storage-nodefs": "2.6.0-subduction.49",
+    "@automerge/automerge-subduction": "0.20.1",
     "@codemirror/autocomplete": "^6.20.0",
     "@codemirror/language": "^6.12.2",
     "@codemirror/state": "^6.5.4",
     "@codemirror/view": "^6.39.15",
     "@glideapps/glide-data-grid": "^6.0.3",
-    "@keyhive/keyhive": "https://github.com/philschatz/keyhive/releases/download/drive-83a62cf/keyhive-drive-83a62cf.tgz",
+    "@keyhive/keyhive": "0.8.0",
     "@material/web": "^2.5.0",
     "@preact/signals": "^2.8.1",
     "@radix-ui/react-checkbox": "^1.3.3",
@@ -96,6 +96,7 @@
   "devDependencies": {
     "@lhci/cli": "^0.15.1",
     "@marp-team/marp-cli": "^4.5.0",
+    "@noble/curves": "1.9.7",
     "@playwright/test": "^1.61.1",
     "@preact/preset-vite": "^2.10.5",
     "@testing-library/preact": "^3.2.4",
@@ -124,7 +125,7 @@
   },
   "overrides": {
     "@automerge/automerge-repo-keyhive": {
-      "@keyhive/keyhive": "https://github.com/philschatz/keyhive/releases/download/drive-83a62cf/keyhive-drive-83a62cf.tgz"
+      "@keyhive/keyhive": "$@keyhive/keyhive"
     }
   }
 }

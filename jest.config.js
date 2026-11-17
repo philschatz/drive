@@ -29,21 +29,24 @@ module.exports = {
       testPathIgnorePatterns: ['\\.test\\.tsx$', '/clipboard\\.test\\.ts$'],
       transform: {
         '^.+\\.ts$': ['ts-jest', { diagnostics: false }],
-        '^(?!.*(?:setup|teardown)\\.js).+\\.js$': ['ts-jest', { useESM: false, diagnostics: false }],
+        // ESM .js → CJS (ts-jest), with `import.meta.url` resolved first — see the
+        // transform's header for why automerge-repo needs that.
+        '^(?!.*(?:setup|teardown)\\.js).+\\.js$': '<rootDir>/tests/support/esm-node-modules-transform.js',
       },
       transformIgnorePatterns: [
-        // uuid@14 (pulled in by automerge-repo subduction.37) ships ESM only,
-        // so it must be transformed to CJS for the node/jest environment.
-        'node_modules/(?!(@automerge/|@keyhive/|uuid/))',
+        // ESM-only packages that must be transformed to CJS for node/jest:
+        // uuid@14 (pulled in by automerge-repo), the automerge packages
+        // themselves — including the real keyhive bridge, which the tests load
+        // unshimmed — and @noble/hashes, which the bridge nests.
+        // (@keyhive/keyhive needs nothing: it ships a CJS build that jest
+        // resolves directly.)
+        'node_modules/(?!(@automerge/|@noble/|uuid/))',
       ],
       moduleNameMapper: {
         '^@automerge/automerge/slim$': '<rootDir>/node_modules/@automerge/automerge/dist/cjs/fullfat_node.cjs',
         '^@automerge/automerge/slim/next$': '<rootDir>/node_modules/@automerge/automerge/dist/cjs/fullfat_node.cjs',
         '^@automerge/automerge-repo/slim$': '<rootDir>/node_modules/@automerge/automerge-repo/dist/entrypoints/slim.js',
         '^@automerge/automerge-subduction$': '<rootDir>/node_modules/@automerge/automerge-subduction/dist/cjs/node.cjs',
-        '^@automerge/automerge-repo-keyhive$': '<rootDir>/tests/repo-keyhive-shim.js',
-        '^@keyhive/keyhive/slim$': '<rootDir>/tests/keyhive-shim.js',
-        '^@keyhive/keyhive/keyhive_wasm\\.base64\\.js$': '<rootDir>/tests/keyhive-base64-shim.js',
       },
     },
     // UI component tests (jsdom environment)

@@ -28,6 +28,7 @@ import { showToast, showError } from '@/components/ui/toast';
 import { useConfirm } from '../../common/ConfirmSheet';
 import { exportBackup, importBackup, deleteAllData, exportLegacyBackup, getPreResetInfo } from '../../worker-api';
 import { parseBackup, type BackupTier } from '../../../../shared/backup';
+import { KEYHIVE_STORAGE_GENERATION } from '../../../../shared/keyhive-format';
 import { SettingsGroup, SettingsProse } from '../SettingsGroup';
 import { downloadBackupFile } from '../backup-download';
 
@@ -110,7 +111,22 @@ export function BackupSettings() {
             })
           : await confirm({
               title: 'Restore documents & settings?',
-              body: <p>Recreates your documents and merges your settings. This device's identity is kept; on a fresh device a new user group is created.</p>,
+              body: (
+                <>
+                  <p>Recreates your documents and merges your settings. This device's identity is kept; on a fresh device a new user group is created.</p>
+                  {/* A backup from before a keyhive reset names friends by ids
+                      that no longer exist; the engine drops them. Say so BEFORE
+                      the restore — it reloads the page, so nothing shown after
+                      it would be seen. */}
+                  {(parsed.payload.keyhive ?? 1) !== KEYHIVE_STORAGE_GENERATION
+                    && Object.keys(parsed.payload.settings?.friends ?? {}).length > 0 && (
+                    <p className="mt-2" data-testid="backup-import-stale-friends">
+                      This backup is from before this device was reset, so its friends list
+                      can't be restored. Add your friends again afterwards.
+                    </p>
+                  )}
+                </>
+              ),
               confirmLabel: 'Restore',
               confirmIcon: 'restore',
               'data-testid': 'confirm-backup-snapshot-import',

@@ -2,18 +2,27 @@
  * Shared keyhive-enabled Automerge Repo construction.
  *
  * Factors out the near-identical init that used to be duplicated in the browser
- * worker (automerge-worker.ts) and the CalDAV server (caldav-keyhive.ts):
- * subduction WASM init, keyhive WASM init, initializeAutomergeRepoKeyhive, the
- * Repo (with optional shareConfig/idFactory), linkRepo, and the KeyhiveOps
- * side-effects. The caller injects the storage adapter, the network adapter, the
- * peerId suffix, and how the user-group id persists.
+ * worker (automerge-worker.ts) and the CalDAV server (caldav-keyhive.ts): the
+ * storage-format guard, subduction WASM init, the keyhive bridge (which builds
+ * the hive AND the Repo together, wiring the hive's network adapter and peerId
+ * into it), the share gate, and the KeyhiveOps side-effects. The caller injects
+ * the storage adapter, the network adapter, the peerId label, and how the
+ * user-group id persists.
  *
  * The keyhive bridge is imported dynamically and cast to `any`: its
  * `export * from "@keyhive/keyhive/slim"` re-export doesn't resolve under the
  * backend tsconfig's moduleResolution, but every value is present at runtime.
+ *
+ * This is the app's ONLY import of the bridge, and it uses the bridge's
+ * network-adapter ("legacy") path: keyhive state syncs over the same
+ * automerge-repo NetworkAdapter as documents — here, the relay/WebRTC adapter.
+ * (The bridge's default path syncs through a subduction server instead, which
+ * this app does not have.)
  */
 import { KeyhiveOps } from './keyhive-ops';
 import { RELAY_PEER_ID } from './relay-identity';
+import { agentIdOfPeerId } from './peer-id';
+import { ensureKeyhiveStorageUsable } from './keyhive-format';
 import { createLogger } from './logger';
 
 const log = createLogger('keyhive');
@@ -21,14 +30,14 @@ const log = createLogger('keyhive');
 export interface CreateKeyhiveRepoOptions {
   /** automerge-repo StorageAdapter (IndexedDB in the browser, NodeFS in Node). */
   storage: any;
-  /** automerge-repo NetworkAdapter (already wrapped for WebRTC in the browser). */
+  /** automerge-repo NetworkAdapter (already wrapped for WebRTC in the browser).
+   * Required even for a local-only caller, which passes an adapter that never
+   * connects: the bridge wraps whatever it is given. */
   networkAdapter: any;
-  /** peerId suffix — a FIXED per-service instance id ('drive', 'caldav-server'),
-   * NOT identity (identity is the verifying key; the wire strips the suffix).
-   * Never make it per-tab/per-instance (`drive.<nonce>`): sibling workers of one
-   * device panic keyhive WASM on their first presence encrypt (beekem
-   * new_app_secret_for), and the relay's duplicate-join rejection is what keeps
-   * extra tabs offline under a fixed suffix. */
+  /** A readability label for the peerId ('drive', 'caldav-server') — NOT
+   * identity (that is the verifying key in front of it) and NOT unique: the
+   * bridge appends its own random component per boot, so the peerId is
+   * `<key>-<label>-<random>` (see peer-id.ts). */
   peerIdSuffix: string;
   /** Read the persisted personal user-group id (base64), or null if none. */
   getUserGroupId: () => Promise<string | null>;
@@ -48,6 +57,12 @@ export interface CreateKeyhiveRepoOptions {
   withShareConfig?: boolean;
   /** Called before the bridge fires a share-config change (worker reconciles the home list). */
   onBeforeShareConfigChanged?: () => void;
+  /**
+   * How long (ms) the bridge waits after a keyhive membership change before
+   * telling the repo to re-evaluate who may see which document. Defaults to the
+   * bridge's 2000. Lower it only under test.
+   */
+  shareConfigDebounceMs?: number;
   /**
    * Debug hook: invoked with the method name just before every keyhive WASM call
    * runs, then with `null` once it succeeds. Only wired when debug mode is on. Used
@@ -77,40 +92,10 @@ export interface KeyhiveRepo {
   Presence: any;
   /** Convert keyhive doc-id bytes (== automerge BinaryDocumentId) → automerge doc id string. */
   amDocIdFromBytes: (bytes: Uint8Array) => string;
+  /** The inverse: an automerge doc id string → the keyhive DocumentId with the same bytes. */
+  khDocIdFromAm: (docId: string) => any;
   /** Slot a pre-generated keyhive doc-id for the next repo.create2() (create-doc flow). */
   setNextDocId: (bytes: Uint8Array) => void;
-}
-
-/**
- * Shadow `forcePcsUpdate` on a keyhive WASM instance with a no-op.
- *
- * The npm bridge's membership nudge calls `this.keyhive.forcePcsUpdate(doc)` after
- * our agent adds a member. Under the pinned keyhive (alpha.58) that rotation is
- * invisible outside the WASM: `Document::pcs_update` does NOT emit the op via the
- * event listener (unlike the update minted inside `try_encrypt_content`), and the
- * binding resolves `void` (so the bridge's `saveLeafSecret(undefined)` persists an
- * empty blob instead of the rotated leaf secret — a version skew; newer keyhive
- * returns the secret). The op itself still syncs (peer delivery is state-derived),
- * but the un-emitted rotation bypasses the persist-archive-on-event hook below,
- * leaving its new leaf SECRET in WASM memory only. A worker reload then restores
- * an instance that can no longer derive its own current epoch: every encrypt
- * fails "SecretKey not found" and every peer ciphertext "Key not found", forever
- * — the cross-browser presence outage.
- *
- * No-op'ing it is safe AND preserves the nudge's goal: after an add,
- * `has_pcs_key()` is false, so the very next `tryEncrypt` (the nudge's own
- * `_lastAddMember` edit, or the next presence flush) mints the rotation via
- * `try_encrypt_content` — which IS emitted, so it reaches storage, sync, AND the
- * archive-persist hook.
- *
- * Own-property assignment shadows the wasm prototype method, so the bridge's own
- * reference hits the no-op too (the serializing Proxy below only wraps drive's
- * handle). Remove this once keyhive emits pcs_update ops — the characterization
- * test in keyhive-ops.test.ts ("forcePcsUpdate mints a CGKA op WITHOUT emitting
- * it") starts failing when that day comes.
- */
-export function neutralizeForcePcsUpdate(kh: any): void {
-  kh.forcePcsUpdate = async () => {};
 }
 
 /**
@@ -150,107 +135,117 @@ function makeSerializeKeyhive(
 }
 
 export async function createKeyhiveRepo(opts: CreateKeyhiveRepoOptions): Promise<KeyhiveRepo> {
+  // FIRST, before anything is handed the storage: refuse keyhive state written
+  // by an older version. The bridge's boot path on such state either throws or
+  // saves a fresh empty keyhive over it (see keyhive-format.ts). Throws
+  // KeyhiveResetRequiredError, which the engine turns into the reset screen.
+  await ensureKeyhiveStorageUsable(opts.storage);
+
   // Importing the non-`/slim` automerge-subduction entry initializes the subduction
   // WASM as a side effect (the `/slim` entry the Repo uses shares the instance).
-  // Must run before new Repo().
+  // Must run before new Repo() — which the bridge calls, below.
   await import('@automerge/automerge-subduction');
   const repoModule: any = await import('@automerge/automerge-repo');
   const Repo = repoModule.Repo;
   const Presence = repoModule.Presence;
   const stringifyAutomergeUrl = repoModule.stringifyAutomergeUrl;
   const parseAutomergeUrl = repoModule.parseAutomergeUrl;
-  // Keyhive doc-id bytes are the automerge BinaryDocumentId; stringify+parse is the
-  // build-portable inverse of docIdFromAutomergeUrl.
+  // Keyhive doc-id bytes are the automerge BinaryDocumentId, so the two ids
+  // convert through the automerge url codec in either direction.
   const amDocIdFromBytes = (bytes: Uint8Array) =>
     parseAutomergeUrl(stringifyAutomergeUrl(bytes)).documentId;
 
   const Automerge = await import('@automerge/automerge');
   const bridge: any = await import('@automerge/automerge-repo-keyhive');
   bridge.initKeyhiveWasm();
+  // The bridge has its own levelled logger, which writes straight to console.
+  // Its info and debug lines are a per-event, per-message firehose, so they are
+  // on only when ours is at debug; warnings and errors follow our level.
+  bridge.setKeyhiveLogLevel(
+    log.enabled('debug') ? 'debug' : log.enabled('warn') ? 'warn' : log.enabled('error') ? 'error' : 'silent');
+  const khDocIdFromAm = (docId: string) =>
+    new bridge.DocumentId(parseAutomergeUrl(`automerge:${docId}`).binaryDocumentId);
 
-  const integration = await bridge.initializeAutomergeRepoKeyhive({
-    storage: opts.storage,
-    peerIdSuffix: opts.peerIdSuffix,
-    networkAdapter: opts.networkAdapter,
-    onlyShareWithHardcodedServerPeerId: false,
-    periodicallyRequestSync: true,
-    automaticArchiveIngestion: true,
-    cachingMode: 'none',
-    syncRequestInterval: opts.syncRequestInterval ?? 2000,
-  });
-
-  // The bridge's membership nudge would call this on the instance it holds —
-  // see neutralizeForcePcsUpdate's doc comment for why that must never happen
-  // under the pinned keyhive version.
-  neutralizeForcePcsUpdate(integration.keyhive);
+  // The hive, once the bridge has built it. The share gate below is handed to
+  // the Repo — which the bridge constructs — before this exists, so it reads
+  // the binding late.
+  let hive: any = null;
 
   /**
    * Run a keyhive WASM operation on the bridge's shared serialization queue. ALL
-   * keyhive access (blob encryption, signing, sync) goes through this single
+   * keyhive access (signing, sync, the share gate) goes through this single
    * PromiseQueue; calling keyhive concurrently/reentrantly traps the WASM. Never
    * nest these calls (serial queue → deadlock).
    */
   const runOnKeyhiveQueue = <T,>(fn: () => Promise<T>): Promise<T> => {
-    const queue = (integration as any)?.networkAdapter?.keyhiveQueue;
+    const queue = hive?.networkAdapter?.keyhiveQueue;
     return queue ? queue.run(fn) : fn();
   };
   const serializeKeyhive = makeSerializeKeyhive(runOnKeyhiveQueue, opts.onKeyhiveCall);
 
-  // Slot for pre-generated keyhive doc IDs. enableSharing creates the keyhive doc
-  // first, sets nextDocIdBytes, then create2() consumes it so the automerge doc ID
-  // == keyhive doc ID.
+  // Slot for pre-generated keyhive doc IDs. The create-doc flow mints the keyhive
+  // doc first, sets nextDocIdBytes, then create2() consumes it so the automerge
+  // doc ID == keyhive doc ID. This replaces the bridge's own idFactory, which
+  // would mint a fresh group + document per create.
   let nextDocIdBytes: Uint8Array | null = null;
   const setNextDocId = (bytes: Uint8Array) => { nextDocIdBytes = bytes; };
+  const idFactory = async () => {
+    if (!nextDocIdBytes) throw new Error('nextDocIdBytes not set before create2');
+    const bytes = nextDocIdBytes;
+    nextDocIdBytes = null;
+    return bytes;
+  };
 
   // shareConfig gates which docs are announced to which peers based on keyhive
   // membership. A doc a peer has no keyhive access to is not announced/shared.
   const khAccessCheck = async (peerId: string, docId: string | undefined): Promise<boolean> => {
-    if (!docId) return false;
+    if (!docId || !hive) return false;
     // The relay is a router, not a keyhive member — never announce docs to it.
     if (peerId === RELAY_PEER_ID) return false;
     try {
-      // peerId is "<base64 verifying key>-<suffix>"; recover the Identifier.
-      const keyB64 = bridge.verifyingKeyPeerIdWithoutSuffix(peerId as any);
-      const keyBytes = Uint8Array.from(atob(keyB64), (c) => c.charCodeAt(0));
+      // The peer's device is the verifying key in front of its peerId.
+      const keyBytes = Uint8Array.from(atob(agentIdOfPeerId(peerId)), (c) => c.charCodeAt(0));
       const identifier = new bridge.Identifier(keyBytes);
       // shareConfig is consulted off the keyhive queue (during sync-message handling),
-      // so serialize this keyhive access too.
+      // so serialize this keyhive access too. accessForDoc follows group
+      // membership, so a device is admitted through its user's group.
       const access = await runOnKeyhiveQueue(() =>
-        integration.bestAccessForDoc(identifier, `automerge:${docId}` as any));
+        hive.accessForDoc(identifier, `automerge:${docId}` as any));
       return access !== undefined;
     } catch {
       return false;
     }
   };
 
-  const repoConfig: any = {
-    // Local-only callers (e.g. the CLI's read commands) pass no networkAdapter;
-    // build the repo with an empty network so nothing ever dials the relay.
-    network: opts.networkAdapter ? [integration.networkAdapter] : [],
+  // The bridge builds the hive and the Repo together: it injects the hive's
+  // network adapter (ours, wrapped so its traffic is signed and verified) and
+  // peerId into the config it hands `createRepo`, then links the two so keyhive
+  // membership changes reach `repo.shareConfigChanged()`.
+  const built = await bridge.initializeLegacyAutomergeRepoKeyhive({
     storage: opts.storage,
-    peerId: integration.peerId,
-    idFactory: async () => {
-      if (!nextDocIdBytes) throw new Error('nextDocIdBytes not set before create2');
-      const bytes = nextDocIdBytes;
-      nextDocIdBytes = null;
-      return bytes;
+    peerIdSuffix: opts.peerIdSuffix,
+    networkAdapter: opts.networkAdapter,
+    // The relay is a stateless router with no keyhive identity, so there is no
+    // sync server to register: peers sync keyhive state with each other.
+    syncServer: 'none',
+    onlyShareWithSyncServer: false,
+    periodicallyRequestSync: true,
+    automaticArchiveIngestion: true,
+    cachingMode: 'none',
+    syncRequestInterval: opts.syncRequestInterval ?? 2000,
+    ...(opts.shareConfigDebounceMs !== undefined ? { shareConfigDebounceMs: opts.shareConfigDebounceMs } : {}),
+    ...(opts.onBeforeShareConfigChanged ? { onBeforeShareConfigChanged: opts.onBeforeShareConfigChanged } : {}),
+    repo: {
+      storage: opts.storage,
+      ...(opts.withShareConfig
+        ? { shareConfig: { announce: khAccessCheck, access: khAccessCheck as (peer: string, doc: string) => Promise<boolean> } }
+        : {}),
     },
-  };
-  if (opts.withShareConfig) {
-    repoConfig.shareConfig = {
-      announce: khAccessCheck,
-      access: khAccessCheck as (peer: string, doc: string) => Promise<boolean>,
-    };
-  }
-  const repo = new Repo(repoConfig);
-
-  // Only pass a share-config callback when the caller wants one (CalDAV links the
-  // repo with no options, exactly as before).
-  if (opts.onBeforeShareConfigChanged) {
-    integration.linkRepo(repo, { onBeforeShareConfigChanged: opts.onBeforeShareConfigChanged });
-  } else {
-    integration.linkRepo(repo);
-  }
+    createRepo: (config: any) => new Repo({ ...config, idFactory }),
+  });
+  hive = built.hive;
+  const repo = built.repo;
+  const integration = hive;
 
   // Serialize ALL keyhive access through the bridge's shared queue when requested.
   const khForOps = opts.serialize ? serializeKeyhive(integration.keyhive) : integration.keyhive;
@@ -265,19 +260,22 @@ export async function createKeyhiveRepo(opts: CreateKeyhiveRepoOptions): Promise
     setUserGroupId: opts.setUserGroupId,
   });
 
-  // Persist the full keyhive archive (debounced) after every keyhive event.
+  // Save the full keyhive archive (debounced) after every keyhive event.
   //
-  // Under the pinned keyhive (alpha.58) a locally-minted CGKA update op — e.g.
-  // the leaf rotation minted by the first tryEncrypt after a membership change —
-  // keeps its new leaf SECRET in WASM memory only: the op itself is emitted,
-  // persisted, and synced, but the secret is not (newer keyhive returns it for
-  // the bridge's saveLeafSecret pipeline; alpha.58 returns void). The archive
-  // snapshot is the only place that secret survives, and without this hook it is
-  // only written on explicit KeyhiveOps actions (membership, contacts) — never
-  // after an encrypt-minted rotation. A worker reload in that window restores an
-  // instance that HAS every op but can no longer derive any epoch at-or-after
-  // its own rotation, so every peer ciphertext fails with "Key not found"
-  // forever (the cross-browser presence outage; presence-liveness step 2b).
+  // The bridge writes each event to storage as it is emitted, and the prekey
+  // secrets on each prekey rotation — but a key rotation's LEAF SECRET lives
+  // only in the archive, which the bridge saves at boot and at compaction. An
+  // encrypt can mint a rotation at any time (after a membership change, on a
+  // member's first write, after two concurrent epochs merge), and a restart
+  // before the next archive save loses that secret.
+  //
+  // That no longer wedges the instance, as it did under keyhive alpha.58: it
+  // recovers by rotating again on its next encrypt (pinned by the stale-archive
+  // test in keyhive-ops.test.ts). But the lost epoch stays unreadable to it —
+  // including every peer's presence currently on the wire, until those peers
+  // notice the new epoch and re-encrypt (see flushPresenceOutbox). Saving the
+  // archive about a second after each event makes that the exception: without
+  // it, every reload of a device that has written anything loses an epoch.
   {
     const emitter = (integration as any).emitter;
     let timer: any = null;
@@ -302,11 +300,12 @@ export async function createKeyhiveRepo(opts: CreateKeyhiveRepoOptions): Promise
     emitter?.on?.('update', () => {
       if (timer) return;
       timer = setTimeout(() => { timer = null; void persistArchive(); }, 1000);
+      if (typeof timer?.unref === 'function') timer.unref();
     });
   }
 
   return {
     repo, khOps, integration, bridge,
-    Automerge, Presence, amDocIdFromBytes, setNextDocId,
+    Automerge, Presence, amDocIdFromBytes, khDocIdFromAm, setNextDocId,
   };
 }

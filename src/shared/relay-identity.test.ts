@@ -38,11 +38,11 @@ describe('RELAY_PEER_ID', () => {
     expect(() => atob('relay')).toThrow();
   });
 
-  it('is NOT the keyhive public identity (so the relay cannot gain public access)', () => {
-    const relayBytes = decode(RELAY_PEER_ID.split('-')[0]);
-    const publicBytes = Identifier.publicId().toBytes();
-
-    expect(Array.from(relayBytes)).not.toEqual(Array.from(publicBytes));
+  it('the old all-zero id is rejected by this keyhive (why the id changed)', () => {
+    // A small-order point. keyhive >= 0.6 refuses it, and the bridge builds an
+    // Identifier for every connected peer inside one loop with no per-peer
+    // catch — so with the relay on this id, keyhive sync stopped at the relay.
+    expect(() => new Identifier(new Uint8Array(32))).toThrow();
   });
 });
 

@@ -16,8 +16,7 @@
     "rootDir": "./src",
     "baseUrl": ".",
     "paths": {
-      "@keyhive/keyhive/slim": ["node_modules/@keyhive/keyhive/pkg-slim/index"],
-      "@keyhive/keyhive/keyhive_wasm.base64.js": ["node_modules/@keyhive/keyhive/pkg-slim/keyhive_wasm_bg.wasm.base64"],
+      "@keyhive/keyhive/slim": ["node_modules/@keyhive/keyhive/dist/index"],
       "@automerge/automerge-repo/slim": ["node_modules/@automerge/automerge-repo/dist/entrypoints/slim"]
     }
   },

@@ -114,14 +114,16 @@ export function EnginePresence<C extends EngineCtor>(Base: C):
     private async encryptPresenceValue(doc: any, value: unknown): Promise<PresenceCiphertext> {
       const bytes = new TextEncoder().encode(JSON.stringify(value ?? null));
       const ref = new this.bridge.ChangeId(crypto.getRandomValues(new Uint8Array(32)));
-      const result = await this.khOps!.kh.tryEncrypt(doc, ref, [], bytes);
-      // `update_op()` is defined only when this encrypt rotated the CGKA epoch —
+      // No predecessor refs: a presence value stands alone, and keyhive requires
+      // any predecessor to be content this keyhive has itself written or read.
+      const result = await this.khOps!.kh.tryEncrypt(doc.docId, ref, [], bytes);
+      // `updateOp()` is defined only when this encrypt rotated the CGKA epoch —
       // i.e. only then did it mint key material the peer does not have yet. See
       // flushPresenceOut for why the caller has to know.
-      return { enc: result.encrypted_content().toBytes(), rotated: !!result.update_op() };
+      return { enc: result.encryptedContent().toBytes(), rotated: !!result.updateOp() };
     }
     private async decryptPresenceValue(doc: any, enc: Uint8Array): Promise<unknown> {
-      const decrypted = await this.khOps!.kh.tryDecrypt(doc, this.bridge.Encrypted.fromBytes(enc));
+      const decrypted = await this.khOps!.kh.tryDecrypt(doc.docId, this.bridge.Encrypted.fromBytes(enc));
       return JSON.parse(new TextDecoder().decode(decrypted));
     }
     private async encryptPresenceValueOrNull(doc: any, value: unknown): Promise<PresenceCiphertext | null> {

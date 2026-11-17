@@ -10,6 +10,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { NodeFSStorageAdapter } from '@automerge/automerge-repo-storage-nodefs';
+import { initKeyhiveWasm } from '@automerge/automerge-repo-keyhive';
+import { Keyhive, Signer, CiphertextStore } from '@keyhive/keyhive/slim';
 import {
   inspectKeyhiveStorage, markKeyhiveFormat, ensureKeyhiveStorageUsable, resetKeyhiveState,
   KeyhiveResetRequiredError, KEYHIVE_STORAGE_GENERATION, KEYHIVE_FORMAT_MARKER_KEY,
@@ -225,5 +227,32 @@ describe('on a real NodeFS adapter (the CLI and CalDAV hosts)', () => {
     await expect(ensureKeyhiveStorageUsable(storage)).resolves.toBeUndefined();
     // A second adapter over the same directory (a process restart) agrees.
     expect(await inspectKeyhiveStorage(new NodeFSStorageAdapter(dir) as any)).toEqual({ kind: 'current', marked: true });
+  });
+});
+
+describe('against the keyhive this build ships', () => {
+  // The detector recognises current-generation state by the archive's magic
+  // bytes. That is an assumption about keyhive's format — so check it against
+  // an archive the real library just produced, not a hand-written constant. If
+  // a keyhive upgrade changes the header, this fails and the generation (and
+  // the detector) need attention before any real profile is opened.
+  initKeyhiveWasm();
+
+  it('an archive it writes is recognised as current', async () => {
+    const kh = await Keyhive.init(Signer.generateMemory(), CiphertextStore.newInMemory(), () => {});
+    const archive: Uint8Array = (await kh.toArchive()).toBytes();
+    expect(Buffer.from(archive.subarray(0, 4)).toString('latin1')).toBe('KHIV');
+
+    const storage = makeMemStorage();
+    await storage.save(ARCHIVE('real'), archive);
+    expect(await inspectKeyhiveStorage(storage)).toEqual({ kind: 'current', marked: false });
+    await expect(ensureKeyhiveStorageUsable(storage)).resolves.toBeUndefined();
+  });
+
+  it('cannot load the captured old-format archive (why the guard exists)', async () => {
+    const old = loadLegacyFixture().full.storage.find((c) => c.key[0] === 'keyhive-db' && c.key[1] === '/archives/')!;
+    const { Archive } = await import('@keyhive/keyhive/slim');
+    const signer = Signer.generateMemory();
+    await expect((async () => new Archive(old.data).tryToKeyhive(CiphertextStore.newInMemory(), signer, () => {}))()).rejects.toBeDefined();
   });
 });

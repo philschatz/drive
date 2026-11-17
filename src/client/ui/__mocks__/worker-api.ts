@@ -290,7 +290,7 @@ export function queryDoc(docId: string, filter: string): Promise<any> {
 export function createDoc(): Promise<{ docId: string }> { return Promise.resolve({ docId: 'doc-mock' }); }
 export function archiveDoc(): Promise<{ status: string }> { return Promise.resolve({ status: 'ok' }); }
 export function exportBackup(): Promise<any> { return Promise.resolve({ format: 'drive-backup', version: 1, kind: 'snapshot', exportedAt: new Date().toISOString(), docs: [], settings: {} }); }
-export function importBackup(): Promise<any> { return Promise.resolve({ imported: 0, skipped: [], reload: true }); }
+export function importBackup(): Promise<any> { return Promise.resolve({ imported: 0, skipped: [], reload: true, skippedFriends: 0 }); }
 // Keyhive-format reset: a healthy engine by default (no reset pending, none past).
 export function getResetRequired(): null { return null; }
 export function useResetRequired(): null { return null; }

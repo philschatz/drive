@@ -28,15 +28,20 @@ export interface DeviceEntry {
   role: DeviceRole;
   isMe: boolean;
   /**
-   * Holds the group's *root* delegation — the device that created the user-group.
-   * Its delegation has no proof to revoke it with, so keyhive refuses to demote or
-   * remove it (`RevokeMemberError::NoProof`); the UI must not offer those actions.
+   * Holds a *root* edge on the group — the device that created the user-group.
+   * Every other device's membership descends from it, and a delegation is live
+   * only while its issuer has standing: revoking a founder leaves the group with
+   * no members at all, for everyone. keyhive itself allows that, so
+   * KeyhiveOps.assertManageable refuses it and the UI must not offer to demote
+   * or remove a founder.
    */
   isFounder: boolean;
   /**
-   * agentId that issued this device's delegation. You can only revoke a delegation
-   * you issued (or one descended from it), so this is what decides whether *this*
-   * device may manage that one. Absent when there is no membership to read.
+   * agentId that issued this device's delegation — the device that linked it
+   * (for a founder, the group's own key). The UI lets a device manage the ones it
+   * linked. Independently, KeyhiveOps refuses to revoke a device that *this*
+   * device's own link descends from, since that would revoke this device too.
+   * Absent when there is no membership to read.
    */
   issuerAgentId?: string;
 }

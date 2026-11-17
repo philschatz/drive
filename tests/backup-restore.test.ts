@@ -11,6 +11,7 @@
 import { DriveEngine } from '../src/shared/drive-engine';
 import { KEYS, CACHE_PREFIX } from '../src/shared/storage-keys';
 import { serializeBackup, parseBackup, type BackupPayload } from '../src/shared/backup';
+import { KEYHIVE_STORAGE_GENERATION } from '../src/shared/keyhive-format';
 
 const ID = 'A'.repeat(43) + '=';   // valid keyhive user-group id
 const ID2 = 'B'.repeat(43) + '=';
@@ -153,7 +154,16 @@ function makeEngine(opts: HarnessOpts = {}) {
   };
 }
 
+/** A snapshot exported by THIS build (tagged with its keyhive generation). */
 function snapshot(partial: Partial<BackupPayload>): BackupPayload {
+  return {
+    format: 'drive-backup', version: 1, kind: 'snapshot', exportedAt: new Date().toISOString(),
+    keyhive: KEYHIVE_STORAGE_GENERATION, ...partial,
+  };
+}
+
+/** A snapshot from before the keyhive reset: no generation tag at all. */
+function preResetSnapshot(partial: Partial<BackupPayload>): BackupPayload {
   return { format: 'drive-backup', version: 1, kind: 'snapshot', exportedAt: new Date().toISOString(), ...partial };
 }
 
@@ -368,6 +378,59 @@ describe('settings import', () => {
   });
 });
 
+describe('a snapshot from another keyhive generation', () => {
+  // A keyhive reset re-mints every user group and every document, so the ids a
+  // pre-reset backup's friends and archive tombstones are keyed by name nothing
+  // any more. Restoring them is worse than dropping them: a stale friend id is
+  // offered in the share picker and named in the relay watch list, forever.
+  const FRIENDS = { [ID]: 'Alice', [ID2]: 'Bob' };
+
+  it('exports are tagged with this build\'s generation', async () => {
+    const { engine, kv, docHandles } = makeEngine({ sharedSettings: true });
+    kv.set(KEYS.docIds, [{ id: DOC, type: 'Calendar', name: 'Trip' }]);
+    docHandles.set(DOC, docHandle({ '@type': 'Calendar', name: 'Trip', events: {} }, DOC));
+    const payload = await engine.exportBackup(['docs', 'settings']);
+    expect(payload.keyhive).toBe(KEYHIVE_STORAGE_GENERATION);
+    expect((parseBackup(serializeBackup(payload)) as any).payload.keyhive).toBe(KEYHIVE_STORAGE_GENERATION);
+  });
+
+  it('restores documents and device names, but not friends or archive tombstones', async () => {
+    const { engine, settingsState } = makeEngine({ userGroupId: ID, sharedSettings: true });
+    const result = await engine.importBackup(preResetSnapshot({
+      docs: [{ doc: { '@type': 'Calendar', name: 'Trip', events: {} }, metadata: { type: 'Calendar', name: 'Trip' } }],
+      settings: {
+        friends: FRIENDS,
+        deviceNames: { [ID2]: 'Laptop' },
+        archivedDocIds: { [DOC]: { grantSigs: ['sig'] } },
+      },
+    }));
+
+    expect(result.imported).toBe(1);
+    expect(result.skippedFriends).toBe(2);
+    expect(settingsState().friends).toEqual({});
+    expect(settingsState().archivedDocIds).toEqual({});
+    // Device names are keyed by the device's own key, which a reset keeps.
+    expect(settingsState().deviceNames[ID2]).toBe('Laptop');
+  });
+
+  it('a snapshot tagged with this generation restores everything', async () => {
+    const { engine, settingsState } = makeEngine({ userGroupId: ID, sharedSettings: true });
+    const result = await engine.importBackup(snapshot({
+      settings: { friends: FRIENDS, archivedDocIds: { [DOC]: { grantSigs: ['sig'] } } },
+    }));
+    expect(result.skippedFriends).toBe(0);
+    expect(settingsState().friends).toEqual(FRIENDS);
+    expect(settingsState().archivedDocIds[DOC]).toEqual({ grantSigs: ['sig'] });
+  });
+
+  it('a snapshot tagged with an OLDER generation is treated like an untagged one', async () => {
+    const { engine, settingsState } = makeEngine({ userGroupId: ID, sharedSettings: true });
+    const result = await engine.importBackup({ ...preResetSnapshot({ settings: { friends: FRIENDS } }), keyhive: 1 });
+    expect(result.skippedFriends).toBe(2);
+    expect(settingsState().friends).toEqual({});
+  });
+});
+
 describe('full restore (wipe & rewrite)', () => {
   it('replaces storage + kv wholesale, clears cache and in-memory state', async () => {
     const source = makeEngine({ sharedSettings: true });
@@ -385,7 +448,7 @@ describe('full restore (wipe & rewrite)', () => {
     target.storage.store.set('old-chunk', new Uint8Array([9]));
 
     const result = await target.engine.importBackup(payload);
-    expect(result).toEqual({ imported: 0, skipped: [], reload: true });
+    expect(result).toEqual({ imported: 0, skipped: [], reload: true, skippedFriends: 0 });
 
     expect(target.kv.get(KEYS.docIds)).toEqual([{ id: DOC, type: 'TaskList', name: 'Chores' }]);
     expect(target.kv.get('settings:debug-enable')).toBe(true);

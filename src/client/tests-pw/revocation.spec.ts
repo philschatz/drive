@@ -93,14 +93,23 @@ test('granting edit access lets a friend read the doc; revoking cuts them off', 
 });
 
 /**
- * Archive a doc I was granted: bob revokes his own access. bob's doc disappears
- * and access drops, while alice retains hers.
+ * Archive a doc I was granted — the home page's "remove this from my list".
+ *
+ * keyhive lets a member revoke only what it has standing over, and only an
+ * ADMIN of a doc has that: a reader or editor cannot revoke anything, its own
+ * grant included. So what archiving does depends on the role that was shared:
+ *
+ *  - admin grant → bob really revokes his user-group; his access is gone.
+ *  - edit grant  → keyhive is not changed at all; the doc is hidden by a local
+ *    tombstone and bob's access is still there (alice can still see him, and
+ *    re-sharing is detected against the tombstone's baseline).
+ *
+ * Either way the doc leaves bob's list and the owner is untouched.
  */
-test('archiving a doc drops my access but leaves the owner intact', async () => {
+test('archiving a doc shared as admin revokes my access and leaves the owner intact', async () => {
   const { alice, bob } = pair;
-  const docId = await shareNewDoc(pair, 'edit');
+  const docId = await shareNewDoc(pair, 'admin');
 
-  // Precondition: bob has the doc.
   await waitFor(
     () => bob.call('getDocList'),
     (list) => list.some((e) => e.id === docId),
@@ -108,7 +117,8 @@ test('archiving a doc drops my access but leaves the owner intact', async () => 
   );
 
   // bob removes himself (revokes his own user-group from the doc).
-  await bob.call('archiveDoc', docId);
+  const { status } = await bob.call('archiveDoc', docId);
+  expect(status).toBe('revoked');
 
   // bob no longer has the doc in his list, and his access is gone.
   await waitFor(
@@ -125,4 +135,38 @@ test('archiving a doc drops my access but leaves the owner intact', async () => 
   // alice still owns/accesses the doc (queryDoc returns jq output as an array).
   expect(await alice.call('getMyAccess', docId)).not.toBeNull();
   expect((await alice.call('queryDoc', docId, '.name')).result).toContain('Shared list');
+});
+
+test('archiving a doc shared as edit hides it locally: an editor has no standing to revoke', async () => {
+  const { alice, bob, bobGroup } = pair;
+  const docId = await shareNewDoc(pair, 'edit');
+
+  await waitFor(
+    () => bob.call('getDocList'),
+    (list) => list.some((e) => e.id === docId),
+    { label: 'doc present before archive' }
+  );
+
+  const { status } = await bob.call('archiveDoc', docId);
+  expect(status).toBe('no-authority');
+
+  // Hidden from bob's list…
+  await waitFor(
+    () => bob.call('getDocList'),
+    (list) => !list.some((e) => e.id === docId),
+    { label: 'doc removed from bob list' }
+  );
+
+  // …and it STAYS hidden. That is a negative, so anchor the quiet period to
+  // observed sync latency: once a different doc has round-tripped alice → bob,
+  // the reconcile that could have put the archived one back has had its chance.
+  const controlId = await shareNewDoc(pair, 'edit', { '@type': 'TaskList', name: 'Control', tasks: {} });
+  await waitForDocName(bob, controlId, 'Control');
+  expect((await bob.call('getDocList')).some((e) => e.id === docId)).toBe(false);
+
+  // Nothing changed in keyhive: bob can still open it, and alice still lists him.
+  expect((await bob.call('getMyAccess', docId))?.toLowerCase()).toBe('edit');
+  const members = (await alice.call('getDocMembers', docId)).members;
+  expect(members.some((m) => m.agentId === bobGroup)).toBe(true);
+  expect(await alice.call('getMyAccess', docId)).not.toBeNull();
 });
