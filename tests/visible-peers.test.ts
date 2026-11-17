@@ -1,7 +1,7 @@
 /**
  * Regression: the stateless relay must never appear in the user-facing peer list.
  *
- * RELAY_PEER_ID's all-zero bytes decode to a valid keyhive Identifier, so the
+ * RELAY_PEER_ID decodes to a valid keyhive Identifier (see relay-identity.ts), so the
  * keyhive network adapter registers the relay as a peer-candidate and it lands in
  * `repo.peers` alongside real devices (see relay-identity.ts). `visiblePeerIds`
  * is the choke point that keeps it out of the counts/dots emitted to the UI, so a

@@ -7,15 +7,26 @@
  * (`keyhiveIdentifierFromPeerId` → `atob(peerId.split('-')[0])` → `new Identifier`).
  *
  * That requires the peerId to be valid base64 decoding to exactly 32 bytes that
- * form a valid curve point. The previous id (`relay-<rand>`) decoded as
- * `atob('relay')`, which throws (invalid base64) and aborted the keyhive sync.
+ * form a curve point keyhive accepts. Two earlier ids failed that:
+ *   - `relay-<rand>` decoded as `atob('relay')`, which throws (invalid base64);
+ *   - 32 zero bytes is a SMALL-ORDER point, which keyhive >= 0.6 rejects in
+ *     `new Identifier`. The bridge derives an Identifier from every connected
+ *     peer inside one un-guarded loop, so a rejected relay id aborts keyhive
+ *     sync to every peer after it.
  *
- * The all-zero identifier (base64 of 32 zero bytes) satisfies all of that: it
- * decodes to a valid 32-byte Identifier, it is NOT `Identifier.publicId()`
- * (so it can't trigger keyhive's public-access path), and no agent holds it
- * (so `bestAccessForDoc` returns undefined → the relay is never sent documents).
+ * So the id is a nothing-up-my-sleeve prime-order point:
+ *   SHA-256(RELAY_PEER_ID_LABEL || counter byte), first hash that decodes as a
+ *   curve point (counter 1), multiplied by the cofactor 8.
+ * Nobody knows its discrete log, so nobody can sign as the relay; it is not any
+ * agent's key, so `accessForDoc` returns undefined and the relay is never sent
+ * documents. relay-identity.test.ts recomputes the derivation.
+ *
+ * Changing this value is a wire change: relay and clients must agree on it (a
+ * client only recognises the relay — and keeps it out of peer lists and the
+ * share gate — by this exact string). Deploy the relay first.
  */
-export const RELAY_PEER_ID = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=';
+export const RELAY_PEER_ID_LABEL = 'automerge-drive/relay-peer-id/v1';
+export const RELAY_PEER_ID = 's5wZayFg34B25mCcL0EwAMS1+y17j7hVTMH37RzTRLg=';
 
 /**
  * The hosted production relay. Used by the browser worker (over `wss:`) and as the

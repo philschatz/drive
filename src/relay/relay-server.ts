@@ -1,5 +1,6 @@
 import http from 'http';
 import { WebSocketRelay, createRelayWebSocketServer } from './relay';
+import { RELAY_PEER_ID } from '../shared/relay-identity';
 import { createLogger } from '../shared/logger';
 
 const log = createLogger('relay');
@@ -19,9 +20,13 @@ process.on('unhandledRejection', (reason) => {
 // Plain HTTP server: answers non-WebSocket requests with a liveness response so
 // Heroku's router (which probes the dyno over HTTP) sees a healthy process. All
 // real traffic arrives as WebSocket upgrades, handled below.
+//
+// The response names the relay's peer id: clients recognise the relay only by
+// that exact string, so after a deploy `curl <relay url>` is how to confirm the
+// running relay and the frontend agree on it (see relay-identity.ts).
 const server = http.createServer((_req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain' });
-  res.end('relay ok\n');
+  res.end(`relay ok\nrelay-peer-id ${RELAY_PEER_ID}\n`);
 });
 
 const wss = createRelayWebSocketServer();

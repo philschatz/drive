@@ -12,9 +12,11 @@
  * RELAY_PEER_ID must therefore decode to a valid 32-byte ed25519 Identifier.
  */
 
+import { createHash } from 'node:crypto';
+import { ed25519 } from '@noble/curves/ed25519';
 import { initKeyhiveWasm } from '@automerge/automerge-repo-keyhive';
 import { Identifier } from '@keyhive/keyhive/slim';
-import { RELAY_PEER_ID, isRelayWatchFrame, buildRelayWatchFrame } from './relay-identity';
+import { RELAY_PEER_ID, RELAY_PEER_ID_LABEL, isRelayWatchFrame, buildRelayWatchFrame } from './relay-identity';
 
 initKeyhiveWasm();
 
@@ -41,6 +43,39 @@ describe('RELAY_PEER_ID', () => {
     const publicBytes = Identifier.publicId().toBytes();
 
     expect(Array.from(relayBytes)).not.toEqual(Array.from(publicBytes));
+  });
+});
+
+describe('RELAY_PEER_ID derivation', () => {
+  const Point = ed25519.ExtendedPoint;
+
+  it('is a prime-order point — keyhive >= 0.6 rejects small-order identifiers', () => {
+    // The previous id (32 zero bytes) is one of the eight small-order points.
+    // Newer keyhive throws on it in `new Identifier`, and the bridge derives an
+    // Identifier from EVERY connected peer inside one un-guarded loop, so a
+    // rejected relay id aborts keyhive sync to all the peers after it.
+    const point = Point.fromHex(decode(RELAY_PEER_ID));
+    expect(point.isSmallOrder()).toBe(false);
+    expect(point.isTorsionFree()).toBe(true);
+  });
+
+  it('is the documented nothing-up-my-sleeve derivation (nobody holds its key)', () => {
+    // SHA-256(label || counter) -> first hash that decodes as a curve point ->
+    // multiply by the cofactor. The discrete log of the result is unknown, so
+    // no one can sign as the relay.
+    let derived: Uint8Array | null = null;
+    for (let ctr = 0; ctr < 256 && !derived; ctr++) {
+      const h = createHash('sha256').update(RELAY_PEER_ID_LABEL).update(Uint8Array.of(ctr)).digest();
+      try { derived = Point.fromHex(Uint8Array.from(h)).multiplyUnsafe(8n).toRawBytes(); }
+      catch { /* not a point — next counter */ }
+    }
+    expect(derived).not.toBeNull();
+    expect(Buffer.from(derived!).toString('base64')).toBe(RELAY_PEER_ID);
+  });
+
+  it('survives the peerId suffix split (base64 with no "-")', () => {
+    expect(RELAY_PEER_ID).not.toContain('-');
+    expect(decode(RELAY_PEER_ID).length).toBe(32);
   });
 });
 

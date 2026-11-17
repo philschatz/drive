@@ -102,7 +102,7 @@ export function headsEqual(a: string[] | undefined, b: string[]): boolean {
  * Peers to surface as connected devices/contacts in the UI (counts + dots).
  *
  * The stateless relay completes the automerge-repo handshake with a real peerId
- * (RELAY_PEER_ID, whose all-zero bytes decode to a valid keyhive Identifier — see
+ * (RELAY_PEER_ID, which decodes to a valid keyhive Identifier nobody holds — see
  * relay-identity.ts), so keyhive's network adapter registers it as a peer-candidate
  * and it lands in `repo.peers` like any device. It is a message router, not a
  * device or contact, so it must be excluded from user-facing peer counts and dots.

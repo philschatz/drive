@@ -15,9 +15,9 @@ import { Encoder, decode } from 'cbor-x';
 import { makeWebRTCRelayAdapter } from '../src/shared/webrtc-relay-adapter';
 import { MAX_MESSAGE_BYTES } from '../src/shared/webrtc-chunk';
 import { WRTC_SIGNAL } from '../src/shared/webrtc-signal';
+import { RELAY_PEER_ID as RELAY_ID } from '../src/shared/relay-identity';
 
 const cbor = new Encoder({ tagUint8Array: false, useRecords: false });
-const RELAY_ID = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=';
 
 /** Minimal stand-in for automerge-repo's NetworkAdapter base (just needs emit). */
 class FakeBase extends EventEmitter {
