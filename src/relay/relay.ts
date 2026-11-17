@@ -73,11 +73,19 @@ function clientIp(request?: IncomingMessage): string | undefined {
  *    peers only. There is no relay-wide broadcast.
  *
  * The relay never interprets message content: the `data` field is treated as
- * opaque bytes and logged only by size. That is a property of this code, not of
- * the bytes. Document sync messages are NOT encrypted on the wire — the keyhive
- * bridge signs only its own `keyhive-*` messages and passes everything else
- * through untouched (verified by capturing a sync message and reading the
- * document text out of it). Presence values are encrypted, by the app itself.
+ * opaque bytes and logged only by size. With a current client that is also a
+ * property of the bytes: after discovery, everything two devices exchange
+ * travels in the secure channel (src/shared/secure-channel.ts) — each message
+ * sealed for the one device it is addressed to, under a key the two devices
+ * agree between themselves. What the relay can see is who is connected, who is
+ * introduced to whom (it does the introducing), and the size and timing of
+ * frames between them; not message types, document ids, keyhive operations or
+ * contents. tests/e2ee-transit.test.ts records what this class receives and
+ * holds it to that.
+ *
+ * (A client from before the secure channel sends document sync as plain
+ * Automerge messages. The relay still routes them; current clients ignore
+ * them, and send such a client nothing but handshake frames it cannot answer.)
  *
  * ── Discovery privacy: current limits, and the planned HMAC-token fix ──────
  *
@@ -90,13 +98,13 @@ function clientIp(request?: IncomingMessage): string | undefined {
  * gain a live connection, the target's online status, and (via the automatic
  * WebRTC upgrade's ICE exchange) potentially its public IP.
  *
- * What ELSE an introduced impostor could obtain is an open question, not a
- * guarantee. Keyhive's own sync messages are signed and verified against the
- * sender's peerId, and a document is only announced to a peerId whose key has
- * keyhive access to it — but document sync itself is neither encrypted nor
- * signed (see above), and peerIds are self-asserted. This comment used to say
- * an impostor "reads nothing"; that rested on document encryption the current
- * bridge path does not do, and has not been re-analysed since.
+ * That is all an introduced impostor gains. To the relay a peerId is still
+ * self-asserted, but to a client it no longer is: the secure channel announces
+ * a peer to the layers above only after it has signed a fresh key exchange
+ * with the device key its peerId names. Something introduced under a member's
+ * peerId without that key is sent handshake frames and nothing else — no
+ * document, no keyhive state, no presence
+ * (tests/e2ee-access.test.ts, "under a member's peerId").
  *
  * The agreed fix is daily HMAC rendezvous tokens, deferred until DriveSettings
  * is something every device reliably has:

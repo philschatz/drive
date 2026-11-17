@@ -1141,6 +1141,11 @@ export class EngineCore {
       // with. Its discovery state is per-socket, so a fresh socket starts
       // undeclared — and an undeclared device is invisible to everyone.
       this.host.network.onSocketOpen?.(() => {
+        // A new socket: every peer is introduced afresh, and one that left
+        // while the old socket was down is never reported gone. Sessions made
+        // over the old one end here, before the declaration that brings the
+        // peers back.
+        kh.channel.resetAll();
         this.rendezvousSurface.lastRelayWatch = null;
         void this.rendezvousSurface.refreshRelayWatch();
       });

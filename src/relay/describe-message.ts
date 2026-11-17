@@ -140,13 +140,28 @@ function stringifyValue(value: unknown): string {
   }
 }
 
-// Format a message payload according to its type. keyhive-* payloads (found
-// inside the signed envelope) are CBOR. `ephemeral` is CBOR too, and `sync` /
-// `change` are raw Automerge sync messages: the keyhive bridge signs only its
-// own keyhive-* messages and passes every other message through untouched, so
-// document content crosses the relay unencrypted.
+// Format a message payload according to its type.
+//
+// A current client sends one kind of message: `secure-channel` — a handshake
+// frame, or a message sealed for the one device it is addressed to
+// (src/shared/secure-channel.ts). The relay can tell the two apart and report a
+// size, and that is all it can tell.
+//
+// The other cases describe what a client from before the secure channel sends,
+// which the relay still routes and current clients ignore: keyhive-* payloads
+// (found inside the signed envelope) are CBOR, `ephemeral` is CBOR too, and
+// `sync` / `change` are raw Automerge sync messages — on those clients the
+// keyhive bridge signed only its own keyhive-* messages and passed everything
+// else through untouched, so their document content crosses the relay
+// unencrypted.
 function describePayload(type: string, payload: Uint8Array): string {
   switch (type) {
+    case 'secure-channel': {
+      // Byte 0 is the frame version, byte 1 its kind (1 = hello, 2 = sealed).
+      if (payload[1] === 1) return `[secure channel handshake, ${payload.length} bytes]`;
+      if (payload[1] === 2) return `[sealed for the recipient, ${payload.length} bytes]`;
+      return `[secure channel frame of an unknown kind, ${payload.length} bytes]`;
+    }
     case 'ephemeral': {
       // The broadcast payload (e.g. presence state) is CBOR-encoded.
       return `ephemeral=${stringifyValue(decode(payload))}`;
@@ -206,7 +221,8 @@ function describePayloadSafely(type: string, payload: Uint8Array): string {
  * `signed` is a keyhive signed frame over the real payload. We peel both layers
  * (see extractSignedPayload) and format the payload per message type; the signer
  * and the optional contact card are noted, not decoded. Every other message
- * (document sync, ephemeral) is not enveloped at all and is described directly.
+ * (a secure-channel frame; on an old client, document sync and ephemeral) is
+ * not enveloped that way and is described directly.
  */
 function describeMessageData(type: string, data: unknown): string {
   if (!isBytes(data)) return describeData(data);

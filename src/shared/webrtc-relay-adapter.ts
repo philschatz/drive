@@ -2,9 +2,11 @@
  * WebRTCRelayAdapter — a transport-multiplexing automerge-repo NetworkAdapter.
  *
  * This wraps the existing relay WebSocket adapter and is the SINGLE adapter
- * handed to the keyhive integration, so keyhive's end-to-end encryption and
- * access control are completely unchanged — from the repo/keyhive's point of
- * view there is one adapter, the same peerIds, and the same `Message`s.
+ * under everything else: the secure channel (secure-channel.ts) wraps it, and
+ * the keyhive integration wraps that. So which route a peer's traffic takes is
+ * invisible above — to the channel, keyhive and the repo there is one adapter,
+ * the same peerIds, and the same `Message`s — and what travels on either route
+ * is already sealed for the peer it is addressed to.
  *
  * Underneath, for each peer it opportunistically negotiates a direct WebRTC
  * data channel (via the relay for signaling + public STUN for NAT traversal):

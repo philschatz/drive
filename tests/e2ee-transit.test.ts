@@ -9,9 +9,12 @@
  *
  * The failure output lists each frame that leaked: its type, who sent it to
  * whom, its size, and the bytes around the marker.
+ *
+ * Before the secure channel (src/shared/secure-channel.ts) this failed: the
+ * `sync` frame carrying the change held the marker verbatim.
  */
 import {
-  startRecordingRelay, startPeer, befriend, createSharedDoc, openDoc, findLeaks,
+  startRecordingRelay, startPeer, befriend, createSharedDoc, openDoc, findLeaks, waitFor,
   type RecordingRelay, type HarnessPeer,
 } from './support/two-peer-harness';
 
@@ -53,5 +56,28 @@ describe('document content in transit', () => {
     expect(relay.frames.some((f) => f.from === alice.peerId && f.targetId === bob.peerId)).toBe(true);
 
     expect(findLeaks(relay.frames, MARKER, alice.kr.Automerge, nameOf)).toEqual([]);
+  });
+
+  it('shows the relay nothing but who is talking to whom', async () => {
+    await befriend(alice, bob);
+    const { docId, handle: alicesCopy } = await createSharedDoc(alice, bob, { note: 'first' });
+    const bobsCopy = await openDoc(bob, docId);
+    bobsCopy.change((d: any) => { d.fromBob = MARKER; });
+    await waitFor(() => alicesCopy.doc().fromBob === MARKER, 'alice to have bob\'s change');
+
+    // Besides the relay's own protocol (join, and the discovery declaration),
+    // every frame is a sealed one: no message type, document id or keyhive
+    // operation is visible, in either direction.
+    const types = new Set(relay.frames.map((f) => f.type));
+    expect([...types].sort()).toEqual(['join', 'secure-channel', 'watch']);
+    const sealed = relay.frames.filter((f) => f.type === 'secure-channel');
+    expect(sealed.some((f) => f.from === alice.peerId)).toBe(true);
+    expect(sealed.some((f) => f.from === bob.peerId)).toBe(true);
+    for (const frame of sealed) {
+      const bytes = Buffer.from(frame.bytes);
+      expect(bytes.includes(docId)).toBe(false);
+      expect(bytes.includes('keyhive-')).toBe(false);
+    }
+    expect(findLeaks(relay.frames, MARKER, alice.kr.Automerge)).toEqual([]);
   });
 });

@@ -102,6 +102,10 @@ export async function startRecordingRelay(): Promise<RecordingRelay> {
     frames,
     close: async () => {
       for (const client of wss.clients) client.terminate();
+      // Let the sockets finish closing: the relay logs each departure, and a
+      // log line after the test has ended is a Jest error.
+      const deadline = Date.now() + 2_000;
+      while (wss.clients.size > 0 && Date.now() < deadline) await sleep(10);
       wss.close();
       await new Promise<void>((resolve) => server.close(() => resolve()));
     },
@@ -123,12 +127,23 @@ export interface HarnessPeer {
   watch(knownGroupIds: string[]): void;
   /** PeerIds the Repo currently lists as connected, minus the relay itself. */
   connectedPeerIds(): string[];
+  /** Cut this peer's relay socket; the adapter reconnects on its own, as after a network blip. */
+  dropSocket(): void;
   close(): Promise<void>;
 }
 
-export async function startPeer(name: string, relayUrl: string): Promise<HarnessPeer> {
-  const storage = makeMemStorage();
-  let userGroupId: string | null = null;
+export interface StartPeerOptions {
+  /**
+   * Boot from an earlier peer's storage and user group — the same device after
+   * a reload. It returns under a new peerId (the bridge mints one per boot)
+   * with the same device key.
+   */
+  reloadOf?: HarnessPeer;
+}
+
+export async function startPeer(name: string, relayUrl: string, opts: StartPeerOptions = {}): Promise<HarnessPeer> {
+  const storage = opts.reloadOf?.storage ?? makeMemStorage();
+  let userGroupId: string | null = opts.reloadOf?.groupId ?? null;
 
   // The CLI's adapter stack (src/cli/cli.ts), minus the WebRTC bridge.
   const ws: any = new WebSocketClientAdapter(relayUrl, 200);
@@ -142,32 +157,50 @@ export async function startPeer(name: string, relayUrl: string): Promise<Harness
     onWebRTCSignal: (frame) => adapter.handleSignal(frame),
   });
 
+  // What the engine does on every socket (re)open: the relay's discovery state
+  // is per socket, so the declaration is sent again, and sessions made over the
+  // previous socket end (the relay re-introduces the peers).
+  let kr: KeyhiveRepo | null = null;
+  let declared: ReturnType<typeof buildRelayWatchFrame> | null = null;
+  const origOnOpen = ws.onOpen;
+  ws.onOpen = () => {
+    origOnOpen();
+    kr?.channel.resetAll();
+    if (declared) sendOverlayFrame(declared);
+  };
+
   // The options the engine passes (src/shared/drive-engine.ts), with the two
   // waits shortened so a test does not sit through production's 2 s rounds.
-  const kr = await createKeyhiveRepo({
+  kr = await createKeyhiveRepo({
     storage,
     networkAdapter: adapter,
     peerIdSuffix: 'drive',
     getUserGroupId: async () => userGroupId,
     setUserGroupId: async (id) => { userGroupId = id; },
-    serialize: true,
-    withShareConfig: true,
     syncRequestInterval: 150,
     shareConfigDebounceMs: 50,
+    serialize: true,
+    withShareConfig: true,
+    channelTimings: { helloRetryMs: 200, helloRetryMaxMs: 1_000, gapMs: 500 },
   });
-  const groupId = await kr.khOps.ensureUserGroup({ create: true });
+  const booted = kr;
+  const groupId = await booted.khOps.ensureUserGroup({ create: true });
   if (!groupId) throw new Error(`${name}: no user group`);
   await adapter.whenReady();
 
   return {
     name,
-    kr,
-    peerId: kr.repo.peerId,
+    kr: booted,
+    peerId: booted.repo.peerId,
     storage,
     groupId,
-    watch: (knownGroupIds) => sendOverlayFrame(buildRelayWatchFrame(groupId, knownGroupIds)),
-    connectedPeerIds: () => (kr.repo.peers as string[]).filter((id) => id !== RELAY_PEER_ID),
-    close: () => kr.close(),
+    watch: (knownGroupIds) => {
+      declared = buildRelayWatchFrame(groupId, knownGroupIds);
+      sendOverlayFrame(declared);
+    },
+    connectedPeerIds: () => (booted.repo.peers as string[]).filter((id) => id !== RELAY_PEER_ID),
+    dropSocket: () => ws.socket?.close(),
+    close: () => booted.close(),
   };
 }
 
@@ -191,19 +224,31 @@ export async function befriend(a: HarnessPeer, b: HarnessPeer): Promise<void> {
 }
 
 /**
- * `owner` creates a keyhive-backed document and shares it with `friend`'s user
- * group — the engine's `createKeyhiveDocHandle` followed by the Sharing page's
- * `addMember`. Returns the automerge document id.
+ * `owner` creates a keyhive-backed document, shared with nobody yet — the
+ * engine's `createKeyhiveDocHandle`.
  */
-export async function createSharedDoc(
-  owner: HarnessPeer, friend: HarnessPeer, content: Record<string, unknown>, role: MemberRole = 'edit',
+export async function createDoc(
+  owner: HarnessPeer, content: Record<string, unknown>,
 ): Promise<{ docId: string; khDocId: string; handle: any }> {
   const { khDocId, docIdBytes } = await owner.kr.khOps.createKeyhiveDoc();
   owner.kr.setNextDocId(docIdBytes);
   const handle = await owner.kr.repo.create2(content);
   await owner.kr.khOps.enableSharing(handle.documentId, docIdBytes);
-  await owner.kr.khOps.addMember(friend.groupId, khDocId, role);
   return { docId: handle.documentId, khDocId, handle };
+}
+
+/** `owner` shares a document with `friend`'s user group — the Sharing page's `addMember`. */
+export async function shareDoc(owner: HarnessPeer, friend: HarnessPeer, khDocId: string, role: MemberRole = 'edit'): Promise<void> {
+  await owner.kr.khOps.addMember(friend.groupId, khDocId, role);
+}
+
+/** {@link createDoc} then {@link shareDoc}. Returns the automerge document id. */
+export async function createSharedDoc(
+  owner: HarnessPeer, friend: HarnessPeer, content: Record<string, unknown>, role: MemberRole = 'edit',
+): Promise<{ docId: string; khDocId: string; handle: any }> {
+  const doc = await createDoc(owner, content);
+  await shareDoc(owner, friend, doc.khDocId, role);
+  return doc;
 }
 
 /**

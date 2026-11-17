@@ -130,10 +130,22 @@ describe('describing what a message carries', () => {
     expect(line(records)).toContain('+(signer)');
   });
 
-  it('describes a document sync message as what it is: an unencrypted Automerge message', () => {
-    // The keyhive bridge signs only its own keyhive-* messages; document sync
-    // goes through untouched. The log must not call it encrypted — it used to,
-    // for a wire format the app stopped using.
+  it('describes a secure-channel frame by kind and size, and nothing more', () => {
+    const records = capture();
+    setLogLevel('debug');
+    const sealed = Uint8Array.from([1, 2, ...new Array(40).fill(7)]);
+    logMessage('→', 'abcdefghijkl-drive', { type: 'secure-channel', senderId: 'a-drive', targetId: 'b-drive', data: sealed });
+    expect(line(records)).toContain('data=[sealed for the recipient, 42 bytes]');
+    const hello = Uint8Array.from([1, 1, ...new Array(194).fill(7)]);
+    logMessage('→', 'abcdefghijkl-drive', { type: 'secure-channel', senderId: 'a-drive', targetId: 'b-drive', data: hello });
+    expect(String(records[1].args[0])).toContain('data=[secure channel handshake, 196 bytes]');
+  });
+
+  it('describes an old client\'s document sync message as what it is: an unencrypted Automerge message', () => {
+    // Before the secure channel, the keyhive bridge signed only its own
+    // keyhive-* messages and document sync went through untouched. The relay
+    // still routes such a client's messages; the log must not call them
+    // encrypted — it used to, for a wire format the app had stopped using.
     const records = capture();
     setLogLevel('debug');
     const [, syncMessage] = Automerge.generateSyncMessage(Automerge.from({ title: 'x' }), Automerge.initSyncState());
