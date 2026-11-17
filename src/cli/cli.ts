@@ -42,7 +42,7 @@ import { parseRendezvousToken } from '../shared/rendezvous-url';
 import { DriveEngine, type DriveEngineInstance, type WatchUpdate } from '../shared/drive-engine';
 import { relativeTime } from '../shared/relative-time';
 import { NodeKVStore } from './node-kvstore';
-import { ensureKeyhiveNodeShim, initSubductionNode } from './keyhive-node-shim';
+import { initSubductionNode } from './keyhive-node-shim';
 import { KEYS } from '../shared/storage-keys';
 import type { EngineHost, EngineNetwork } from '../shared/engine-host';
 import type { WorkerToMain } from '../shared/worker-protocol';
@@ -180,9 +180,8 @@ async function startEngine(
 ): Promise<{ engine: DriveEngineInstance; kv: NodeKVStore; wsAdapter: any; stopBridge: (() => void) | null }> {
   const dataDir = resolveDataDir(opts);
 
-  // Patch the keyhive slim build + initialize the subduction WASM for Node, both
-  // before the bridge is imported / the Repo is created (in engine.init).
-  ensureKeyhiveNodeShim();
+  // Initialize the subduction WASM for Node before the Repo is created (in
+  // engine.init).
   await initSubductionNode();
 
   fs.mkdirSync(dataDir, { recursive: true });

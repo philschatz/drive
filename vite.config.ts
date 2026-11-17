@@ -38,7 +38,7 @@ function automergeWasmPlugin(): Plugin {
         return `
           import wasmUrl from "./automerge_wasm_bg.wasm?url";
           import init from "./automerge_wasm.js";
-          await init(wasmUrl);
+          await init({ module_or_path: wasmUrl });
           export * from "./automerge_wasm.js";
         `;
       }
@@ -46,13 +46,7 @@ function automergeWasmPlugin(): Plugin {
   };
 }
 
-// The keyhive npm package uses wasm-bindgen's ESM integration:
-//   import * as wasm from "./keyhive_wasm_bg.wasm";
-// This requires the bundler to wire WASM imports from the bg.js glue code,
-// which vite-plugin-wasm doesn't handle correctly in web workers.
-// Instead, we fetch the WASM binary and instantiate it manually with the
-// proper import object from the bg.js glue code.
-// automerge-repo (subduction.37) defines Repo methods named `import(...)` and
+// automerge-repo (the 2.6.0-subduction line) defines Repo methods named `import(...)` and
 // `export(...)` — reserved words. vite's dev import-analysis (es-module-lexer)
 // misparses the `import(` method definition as a dynamic import and corrupts the
 // module ("Unexpected token '('"), which crashes the worker. Rewrite the method
@@ -76,52 +70,6 @@ const automergeRepoReservedMethodOptimizePlugin = {
     return out === code ? null : { code: out, map: null };
   },
 };
-
-function keyhiveWasmPlugin(): Plugin {
-  return {
-    name: 'keyhive-wasm',
-    transform(code, id) {
-      // @automerge/automerge-repo-keyhive's blob-interceptor (used only by the
-      // Rust/subduction-blob transport, which the drive does not use) statically
-      // imports symmetricEncrypt/symmetricDecrypt from @keyhive/keyhive/slim.
-      // The drive's pinned keyhive build doesn't export those, so the static
-      // import would fail to bundle. They are never called on the standard
-      // KeyhiveNetworkAdapter path, so append throwing stubs to satisfy the
-      // bundler. (Remove once the keyhive build exports these natively.)
-      if (id.includes('@keyhive/keyhive/pkg-slim/index') && !/export\s+(?:function|const)\s+symmetricEncrypt/.test(code)) {
-        return {
-          code: code +
-            '\nexport function symmetricEncrypt(){throw new Error("symmetricEncrypt unavailable in this keyhive build (Rust blob-interceptor path unused)");}' +
-            '\nexport function symmetricDecrypt(){throw new Error("symmetricDecrypt unavailable in this keyhive build (Rust blob-interceptor path unused)");}\n',
-          map: null,
-        };
-      }
-      return null;
-    },
-    load(id) {
-      if (id.includes('@keyhive/keyhive/pkg/') && id.endsWith('keyhive_wasm.js')) {
-        return `
-          import wasmUrl from "./keyhive_wasm_bg.wasm?url";
-          import * as bg from "./keyhive_wasm_bg.js";
-          const imports = { "./keyhive_wasm_bg.js": bg };
-          const wasmResponse = await fetch(wasmUrl);
-          const { instance } = await WebAssembly.instantiateStreaming(wasmResponse, imports);
-          bg.__wbg_set_wasm(instance.exports);
-          instance.exports.__wbindgen_start();
-          export {
-            Access, Agent, Archive, CannotParseEd25519SigningKey, CannotParseIdentifier,
-            Capability, CgkaOperation, ChangeId, CiphertextStore, ContactCard, Delegation,
-            DocContentRefs, Document, DocumentId, Encrypted, EncryptedContentWithUpdate,
-            Event, GenerateWebCryptoError, Group, GroupId, History, Identifier, Individual,
-            IndividualId, Invocation, Keyhive, Membered, Membership, Peer, Revocation,
-            ShareKey, Signed, SignedCgkaOperation, SignedDelegation, SignedInvocation,
-            SignedRevocation, Signer, Stats, Summary, setPanicHook
-          } from "./keyhive_wasm_bg.js";
-        `;
-      }
-    },
-  };
-}
 
 // Resolve @automerge/automerge-subduction to its "web" entrypoint which
 // initializes WASM from a base64-encoded string via initSync().
@@ -171,7 +119,6 @@ export default defineConfig(async () => {
     relayPlugin(),
     radixPreactPatchPlugin(),
     automergeWasmPlugin(),
-    keyhiveWasmPlugin(),
     versionJsonPlugin(),
     VitePWA({
       registerType: 'autoUpdate',
@@ -222,7 +169,7 @@ export default defineConfig(async () => {
   },
   worker: {
     format: 'es' as const,
-    plugins: () => [wasm(), keyhiveWasmPlugin()],
+    plugins: () => [wasm()],
   },
   resolve: {
     alias: {
@@ -260,7 +207,7 @@ export default defineConfig(async () => {
     // pre-bundled chunk and OOMs the Chromium renderer during dev-mode testing.
     //
     exclude: ['@automerge/automerge', '@automerge/automerge-subduction', '@keyhive/keyhive'],
-    // automerge-repo (subduction.37) names Repo methods `import(...)`/`export(...)`
+    // automerge-repo (2.6.0-subduction line) names Repo methods `import(...)`/`export(...)`
     // (reserved words); without rewriting them, vite's dev import-analysis misparses
     // `import(` as a dynamic import and corrupts the pre-bundled chunk. Fix it during
     // pre-bundling so automerge-repo stays optimized (keeping its CJS deps like

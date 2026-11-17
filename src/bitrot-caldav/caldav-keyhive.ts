@@ -15,7 +15,7 @@ import { WebSocketClientAdapter } from '@automerge/automerge-repo-network-websoc
 import { NodeFSStorageAdapter } from '@automerge/automerge-repo-storage-nodefs';
 import { KeyhiveOps } from '../shared/keyhive-ops';
 import { createKeyhiveRepo } from '../shared/keyhive-repo';
-import { ensureKeyhiveNodeShim, initSubductionNode } from '../cli/keyhive-node-shim';
+import { initSubductionNode } from '../cli/keyhive-node-shim';
 import { createLogger } from '../shared/logger';
 
 const log = createLogger('caldav-keyhive');
@@ -34,9 +34,7 @@ export async function initCaldavKeyhive(
   dataDir: string,
   wsUrl: string,
 ): Promise<CaldavKeyhive> {
-  // Patch the keyhive slim build + initialize subduction WASM for Node, both
-  // before the bridge is imported / the Repo is created.
-  ensureKeyhiveNodeShim();
+  // Initialize the subduction WASM for Node before the Repo is created.
   await initSubductionNode();
 
   const storageAdapter = new NodeFSStorageAdapter(dataDir);
