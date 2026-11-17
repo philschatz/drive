@@ -11,6 +11,7 @@ import { createDavRoutes } from './routes/dav';
 import { createAdminRoutes } from './routes/admin';
 import { initCaldavKeyhive, type CaldavKeyhive } from './caldav-keyhive';
 import { createLogger } from '../shared/logger';
+import { KeyhiveResetRequiredError } from '../shared/keyhive-format';
 
 const log = createLogger('caldav');
 const khLog = createLogger('caldav-keyhive');
@@ -110,6 +111,20 @@ if (!process.env.JEST_WORKER_ID) {
         resolveRepo!(caldavKeyhive.repo);
         khLog.info('repo ready');
       } catch (err) {
+        if (err instanceof KeyhiveResetRequiredError) {
+          // The keyhive state on disk predates this build's keyhive
+          // (src/shared/keyhive-format.ts). Do NOT fall back to a plain repo
+          // below: it would serve whatever stale calendar data is on disk as if
+          // it were live. This bridge only holds replicas, so the remedy is a
+          // fresh directory and a new invite.
+          const khDataDir = path.join(dataDir, 'caldav-keyhive');
+          khLog.error(
+            `The keyhive data in ${khDataDir} was written by an older version and this one cannot read it ` +
+            `(${err.reason}). Nothing was changed. To continue: stop this server, move ${khDataDir} aside, ` +
+            `start it again, and re-invite it to each calendar.`,
+          );
+          process.exit(78); // sysexits EX_CONFIG — fails the same way on every restart
+        }
         khLog.error('failed to initialize:', err);
         const storageAdapter = new NodeFSStorageAdapter(dataDir);
         resolveRepo!(new Repo({

@@ -157,6 +157,13 @@ function resolveDataDir(opts: CliOpts): string {
 }
 
 /**
+ * Exit status when the stored keyhive state needs a reset (sysexits EX_CONFIG).
+ * Distinct from 1 so a supervisor can tell "will fail the same way every time"
+ * from a crash worth restarting.
+ */
+const EXIT_RESET_REQUIRED = 78;
+
+/**
  * Build the node EngineHost and initialize the engine. Diagnostics go to stderr
  * so command output on stdout stays clean.
  *
@@ -246,6 +253,7 @@ async function startEngine(
       case 'kh-error': log.error('keyhive error:', event.message); return;
       case 'error': log.error('error:', event.message); return;
       case 'data-warning': log.warn('warning:', event.message); return;
+      case 'reset-required': return; // reported with the remedy, right after init()
       case 'peer-connected':
       case 'peer-disconnected': log.info(`peers: ${event.peerCount}`); return;
       case 'p2p-status': log.info(`p2p ${event.peerId} → ${event.transport}`); return;
@@ -259,6 +267,20 @@ async function startEngine(
   const host: EngineHost = { storage, kv, network, emit };
   const engine = new DriveEngine(host);
   await engine.init();
+
+  if (engine.resetRequired) {
+    // The keyhive state on disk predates this build's keyhive and cannot be
+    // read (src/shared/keyhive-format.ts). Nothing was booted or changed. There
+    // is deliberately no flag to wipe it: this peer only holds replicas, so the
+    // remedy is a fresh data dir — and a wipe switch in a service unit would
+    // fire on every restart.
+    log.error(
+      `The keyhive data in ${secureDir} was written by an older version and this one cannot read it ` +
+      `(${engine.resetRequired.reason}). Nothing was changed. To continue: stop the service, move ` +
+      `${dataDir} aside, and run \`accept-invite\` again with a new link from a device that has been reset.`,
+    );
+    process.exit(EXIT_RESET_REQUIRED);
+  }
   return { engine, kv, wsAdapter, stopBridge };
 }
 
