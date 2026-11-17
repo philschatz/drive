@@ -12,7 +12,7 @@
  */
 import type { EngineCore } from './drive-engine';
 import type { MainToWorker } from './worker-protocol';
-import { errMsg } from './keyhive-ops';
+import { errMsg, bytesToBase64 } from './keyhive-ops';
 import { createLogger } from './logger';
 import { newestPeerPerAgent } from './peer-id';
 
@@ -20,10 +20,11 @@ const log = createLogger('engine');
 
 export type EngineCtor = new (...args: any[]) => EngineCore;
 
-/** One encrypted presence channel, plus whether encrypting it rotated the CGKA. */
+/** One encrypted presence channel, plus the key epoch it was encrypted under. */
 export interface PresenceCiphertext {
   enc: Uint8Array;
-  rotated: boolean;
+  /** See {@link presenceEpochOf}. */
+  epoch: string;
 }
 
 /** Live presence for one doc (replaces the six DocEntry fields the core used to carry). */
@@ -32,7 +33,14 @@ export interface PresenceEntry {
   doc: any;                                  // the keyhive Document presence encrypts against
   desired: Record<string, unknown>;          // current broadcast state (what we want the peers to see)
   send: () => Promise<boolean>;              // snapshot flusher (decrypt + emit update-presence)
-  retry: any;                                // setInterval while out/in-bound sync isn't quiescent
+  /** What is currently on the wire for each channel (see flushPresenceOutbox). */
+  outbox: PresenceOutbox;
+  /** A fresh peer has sent us no channels at all: ask it to re-send (see schedulePresenceRetry). */
+  needAnnounce: boolean;
+  /** Timer for the next retry round, or null when none is pending. */
+  retry: any;
+  /** Consecutive failed retry rounds — the index into PRESENCE_RETRY_DELAYS_MS. */
+  retryAttempt: number;
   liveness: any;                             // setInterval re-checking freshness between events
 }
 
@@ -63,6 +71,176 @@ export function freshPresencePeerIds(
   }
   return fresh;
 }
+
+// ── Presence crypto (pure helpers) ───────────────────────────────────────────
+
+const PRESENCE_REF_DOMAIN = 'automerge-drive/presence-content-ref/v1';
+
+/**
+ * The keyhive content ref a device encrypts one presence channel under: the
+ * same 32 bytes every time, for that device and that channel.
+ *
+ * keyhive remembers a key for every content ref a peer writes or reads, and
+ * keeps them in its archive. A fresh random ref per message — what this used to
+ * do — grows the archive by ~65 bytes per presence message, on the sender and
+ * on every receiver, without end (presence re-encrypts on every heartbeat and
+ * caret move). With one ref per channel there is one remembered key per channel.
+ *
+ * Reusing a ref means many plaintexts share a key. That is safe with keyhive's
+ * cipher, whose nonce is derived from the content: different plaintexts give
+ * unrelated ciphertexts (measured — no shared keystream). It is deterministic,
+ * though, so equal plaintexts would give equal ciphertexts; {@link
+ * sealPresenceValue} salts every plaintext for that reason. Both properties are
+ * pinned in tests/presence-crypto.test.ts.
+ *
+ * Per device as well as per channel, so no two senders ever share a ref.
+ */
+export async function presenceContentRef(agentId: Uint8Array, channel: string): Promise<Uint8Array> {
+  const domain = new TextEncoder().encode(PRESENCE_REF_DOMAIN);
+  const name = new TextEncoder().encode(channel);
+  const input = new Uint8Array(domain.length + 1 + agentId.length + 1 + name.length);
+  input.set(domain, 0);
+  input.set(agentId, domain.length + 1);
+  input.set(name, domain.length + 1 + agentId.length + 1);
+  return new Uint8Array(await crypto.subtle.digest('SHA-256', input));
+}
+
+/**
+ * A presence value as the bytes to encrypt: `{ s: <random salt>, v: <value> }`.
+ * The salt exists only to make every plaintext unique (see presenceContentRef).
+ */
+export function sealPresenceValue(value: unknown): Uint8Array {
+  const salt = crypto.getRandomValues(new Uint8Array(12));
+  let s = '';
+  for (const b of salt) s += String.fromCharCode(b);
+  return new TextEncoder().encode(JSON.stringify({ s: btoa(s), v: value ?? null }));
+}
+
+/**
+ * The key epoch a `tryEncrypt` result was written under: the hash of the
+ * document key its ciphertext names. Two results with the same value were
+ * encrypted under the same key; a different value means the peers may need key
+ * material they do not have yet.
+ *
+ * This, not `updateOp()`, is what says "new epoch". `updateOp()` is set only
+ * when the encrypt itself minted a rotation op that keyhive returns to the
+ * caller — and a member's first encrypt on a document starts a new epoch
+ * without it (measured; tests/presence-crypto.test.ts).
+ */
+export function presenceEpochOf(result: any): string {
+  const hash: Uint8Array = result.encryptedContent().pcsKeyHash;
+  let s = '';
+  for (const b of hash) s += String.fromCharCode(b);
+  return btoa(s);
+}
+
+/** The value inside decrypted presence bytes (the inverse of sealPresenceValue). */
+export function openPresenceValue(bytes: Uint8Array): unknown {
+  return JSON.parse(new TextDecoder().decode(bytes)).v;
+}
+
+/** What a device currently has on the wire for one document's presence. */
+export interface PresenceOutbox {
+  /** Per channel: the JSON of the value last encrypted, its ciphertext, and its key epoch. */
+  sent: Map<string, { json: string; enc: Uint8Array; epoch: string }>;
+  /** The key epoch of the most recent encrypt, or null before the first. */
+  epoch: string | null;
+}
+
+export function newPresenceOutbox(): PresenceOutbox {
+  return { sent: new Map(), epoch: null };
+}
+
+/**
+ * Put `desired` on the wire, encrypting as little as possible.
+ *
+ * A channel whose value is unchanged is NOT encrypted again: the ciphertext it
+ * already has is sent again (or, with `resend: false`, left alone). Only a
+ * changed value, or a channel whose last encrypt failed, is encrypted.
+ *
+ * This is not an optimisation; it is what makes presence converge. Under
+ * keyhive >= 0.6 an encrypt made before the peer's latest key operation has
+ * arrived starts a NEW key epoch — every time, on both sides, for as long as
+ * they keep encrypting concurrently — and a new epoch's ciphertext cannot be
+ * read until the operation behind it arrives by keyhive sync, well after the
+ * ciphertext itself. Each such ciphertext IS readable once that happens. So
+ * re-encrypting an unchanged value to "help" a peer that cannot read us does
+ * the opposite: it replaces bytes the peer is about to be able to read with
+ * bytes from a newer epoch it cannot, and two peers doing it in step stay one
+ * epoch behind each other for good (measured; pinned in
+ * tests/presence-crypto.test.ts). The same bytes, sent again, are always safe.
+ *
+ * When an encrypt does start a new epoch, every other channel is moved to it
+ * in the same call (one extra pass), so a channel that never changes does not
+ * stay readable under a key the document has rotated away from.
+ *
+ * The one case where unchanged values ARE encrypted again: keyhive reports a
+ * current key (`io.currentEpoch`) that is not the one our bytes are under.
+ * That means a peer started a new epoch by itself and we have it — typically a
+ * device that restarted, lost the secret for the previous epoch and recovered
+ * by rotating; it can no longer read what we have out. Encrypting under a key
+ * keyhive already holds does not rotate, so this cannot feed the loop above.
+ * (After a merge of concurrent epochs keyhive reports NO current key, and we
+ * leave things alone: there, any encrypt would rotate.)
+ */
+export async function flushPresenceOutbox(
+  outbox: PresenceOutbox,
+  desired: Record<string, unknown>,
+  io: {
+    /** Encrypt one channel's value; null if it could not be encrypted. */
+    encrypt(channel: string, value: unknown): Promise<PresenceCiphertext | null>;
+    broadcast(channel: string, enc: Uint8Array): void;
+    /** The key epoch keyhive could encrypt under right now WITHOUT rotating, or null if there is none. */
+    currentEpoch?(): Promise<string | null>;
+  },
+  opts: { resend?: boolean } = {},
+): Promise<{ allOk: boolean; newEpoch: boolean }> {
+  const resend = opts.resend ?? true;
+  let allOk = true;
+  let newEpoch = false;
+  const current = io.currentEpoch ? await io.currentEpoch() : null;
+  // A peer moved the document to an epoch we hold: what we have out is stale.
+  const moved = current !== null && outbox.epoch !== null && current !== outbox.epoch;
+  // Two passes at most: the second only re-encrypts channels left behind by an
+  // epoch change in the first.
+  for (let pass = 0; pass < 2; pass++) {
+    let changedEpoch = false;
+    for (const [channel, value] of Object.entries(desired)) {
+      const json = JSON.stringify(value ?? null);
+      const have = outbox.sent.get(channel);
+      const stale = moved && pass === 0;
+      if (have && !stale && have.json === json && have.epoch === outbox.epoch) {
+        if (resend && pass === 0) io.broadcast(channel, have.enc);
+        continue;
+      }
+      const out = await io.encrypt(channel, value);
+      if (!out) {
+        outbox.sent.delete(channel);
+        allOk = false;
+        continue;
+      }
+      if (out.epoch !== outbox.epoch) {
+        outbox.epoch = out.epoch;
+        changedEpoch = true;
+        newEpoch = true;
+      }
+      outbox.sent.set(channel, { json, enc: out.enc, epoch: out.epoch });
+      io.broadcast(channel, out.enc);
+    }
+    if (!changedEpoch) break;
+  }
+  // Forget channels that are no longer part of the state.
+  for (const channel of [...outbox.sent.keys()]) if (!(channel in desired)) outbox.sent.delete(channel);
+  return { allOk, newEpoch };
+}
+
+/**
+ * How long to wait before each retry round while a peer's presence cannot be
+ * read (or ours could not be encrypted). Short at first — the usual cause is
+ * key material that is a keyhive sync round away — then backing off. The last
+ * value repeats.
+ */
+const PRESENCE_RETRY_DELAYS_MS = [400, 800, 1500, 3000, 5000];
 
 /**
  * The peers to SHOW: fresh ones, collapsed to one peerId per device.
@@ -111,23 +289,22 @@ export function EnginePresence<C extends EngineCtor>(Base: C):
     protected presenceSurface: EnginePresenceSurface = this as any;
 
     // ── Presence crypto ────────────────────────────────────────────────────
-    private async encryptPresenceValue(doc: any, value: unknown): Promise<PresenceCiphertext> {
-      const bytes = new TextEncoder().encode(JSON.stringify(value ?? null));
-      const ref = new this.bridge.ChangeId(crypto.getRandomValues(new Uint8Array(32)));
+    private async encryptPresenceValue(doc: any, channel: string, value: unknown): Promise<PresenceCiphertext> {
+      const kh = this.khOps!.kh;
+      const ref = new this.bridge.ChangeId(await presenceContentRef(kh.id.toBytes(), channel));
       // No predecessor refs: a presence value stands alone, and keyhive requires
       // any predecessor to be content this keyhive has itself written or read.
-      const result = await this.khOps!.kh.tryEncrypt(doc.docId, ref, [], bytes);
-      // `updateOp()` is defined only when this encrypt rotated the CGKA epoch —
-      // i.e. only then did it mint key material the peer does not have yet. See
-      // flushPresenceOut for why the caller has to know.
-      return { enc: result.encryptedContent().toBytes(), rotated: !!result.updateOp() };
+      const result = await kh.tryEncrypt(doc.docId, ref, [], sealPresenceValue(value));
+      // The epoch tells flushPresenceOut whether this ciphertext is under a key
+      // the peers may not have yet.
+      return { enc: result.encryptedContent().toBytes(), epoch: presenceEpochOf(result) };
     }
     private async decryptPresenceValue(doc: any, enc: Uint8Array): Promise<unknown> {
       const decrypted = await this.khOps!.kh.tryDecrypt(doc.docId, this.bridge.Encrypted.fromBytes(enc));
-      return JSON.parse(new TextDecoder().decode(decrypted));
+      return openPresenceValue(decrypted);
     }
-    private async encryptPresenceValueOrNull(doc: any, value: unknown): Promise<PresenceCiphertext | null> {
-      try { return await this.encryptPresenceValue(doc, value); }
+    private async encryptPresenceValueOrNull(doc: any, channel: string, value: unknown): Promise<PresenceCiphertext | null> {
+      try { return await this.encryptPresenceValue(doc, channel, value); }
       catch (err) {
         // Swallowing this silently hid a wedged CGKA ("SecretKey not found" after
         // a reload lost an in-memory leaf secret) for a long time — keep it loud.
@@ -135,49 +312,71 @@ export function EnginePresence<C extends EngineCtor>(Base: C):
         return null;
       }
     }
-    private async flushPresenceOut(entry: PresenceEntry): Promise<boolean> {
+    /**
+     * Put the entry's desired state on the wire (see flushPresenceOutbox for
+     * what is and is not encrypted). `resend: false` sends nothing for channels
+     * that are already out — used by the retry, which only has to make up for
+     * an encrypt that failed.
+     */
+    private async flushPresenceOut(entry: PresenceEntry, opts: { resend?: boolean } = {}): Promise<boolean> {
       if (!entry.presence || !entry.doc || !entry.desired) return true;
-      let allOk = true;
-      let rotated = false;
-      for (const [k, v] of Object.entries(entry.desired)) {
-        const out = await this.encryptPresenceValueOrNull(entry.doc, v);
-        if (out) {
-          entry.presence.broadcast(k, out.enc);
-          if (out.rotated) rotated = true;
-        } else allOk = false;
-      }
-      // A rotation minted key material the peer needs in order to read what we just
-      // sent — and the cyphertext is ALREADY on the wire, because presence.broadcast
-      // goes out immediately while keyhive holds the new op behind a 1s debounce
-      // before syncing it (the `syncTimeout` in the library's keyhive.ts). So the
-      // peer reliably receives bytes it cannot decrypt for about a second and logs
-      // "Key not found". That alone would heal, but every retry round re-encrypts,
-      // so the replacement cyphertext arrives just as early as the last one and the
-      // peer can flap indefinitely — one epoch behind, forever. Pushing the material
-      // here makes it race the cyphertext instead of trailing it.
-      if (rotated) this.khIntegration?.networkAdapter?.syncKeyhive?.();
+      const { allOk, newEpoch } = await flushPresenceOutbox(entry.outbox, entry.desired, {
+        encrypt: (channel, value) => this.encryptPresenceValueOrNull(entry.doc, channel, value),
+        broadcast: (channel, enc) => entry.presence.broadcast(channel, enc),
+        currentEpoch: async () => {
+          try {
+            const hash: Uint8Array | undefined = await this.khOps!.kh.tryPcsKeyHash(entry.doc.docId);
+            return hash ? bytesToBase64(hash) : null;
+          } catch { return null; }
+        },
+      }, opts);
+      // A new key epoch (including our very first send) means the peers need a
+      // key operation before they can read what we just sent — and the
+      // cyphertext is ALREADY on the wire, because presence.broadcast goes out
+      // immediately while the bridge holds a new op behind a 1s debounce before
+      // syncing it. Pushing the sync now makes the key race the cyphertext
+      // instead of trailing it by a second.
+      if (newEpoch) this.khIntegration?.networkAdapter?.syncKeyhive?.();
       return allOk;
     }
+
+    /**
+     * Keep trying until every fresh peer's presence is readable and all of ours
+     * is out. A round never re-encrypts what is already on the wire (see
+     * flushPresenceOutbox for why that would make things worse); it:
+     *
+     *  - asks keyhive to sync, since the usual reason a peer cannot be read is
+     *    that the operation carrying its key has not arrived yet;
+     *  - encrypts any channel of ours whose encrypt failed;
+     *  - tries the peers' cyphertext again — the same bytes decrypt once the
+     *    key is here;
+     *  - if a peer has sent no channels at all, or still cannot be read after
+     *    a couple of rounds, announces us. The peer answers by sending its
+     *    channels again — re-encrypted only if the document's key has moved to
+     *    an epoch it holds, which is the case when we are a device that lost a
+     *    secret in a restart and recovered by rotating.
+     *
+     * The delay is jittered so two peers that started failing at the same
+     * moment do not keep acting at the same moment.
+     */
     private schedulePresenceRetry(entry: PresenceEntry): void {
       if (entry.retry) return;
-      entry.retry = setInterval(async () => {
-        if (!entry.presence) { clearInterval(entry.retry); entry.retry = null; return; }
-        const outOk = await this.flushPresenceOut(entry);
-        const inOk = entry.send ? await entry.send() : true;
-        if (outOk && inOk) {
-          clearInterval(entry.retry);
-          entry.retry = null;
-          return;
-        }
-        // Still failing to decrypt a peer (typical after a reload: the rehydrated
-        // keyhive lacks the epoch secrets for the peer's cyphertext). Two levers,
-        // both needed: force a keyhive sync round so the missing key material can
-        // arrive, and re-announce ourselves — peers respond to a snapshot by
-        // re-flushing freshly-encrypted channels (see the 'snapshot' handler) —
-        // so each retry round has new material to try until decryption succeeds.
+      const base = PRESENCE_RETRY_DELAYS_MS[Math.min(entry.retryAttempt, PRESENCE_RETRY_DELAYS_MS.length - 1)];
+      const delay = base * (0.75 + Math.random() * 0.5);
+      const timer: any = setTimeout(async () => {
+        entry.retry = null;
+        if (!entry.presence) return;
+        entry.retryAttempt++;
         this.khIntegration?.networkAdapter?.syncKeyhive?.();
-        (entry.presence as any)?.broadcastLocalState?.();
-      }, 5000);
+        const outOk = await this.flushPresenceOut(entry, { resend: false });
+        // send() schedules the next round itself when a peer is still unreadable.
+        const inOk = entry.send ? await entry.send() : true;
+        if (outOk && inOk) { entry.retryAttempt = 0; return; }
+        if (entry.needAnnounce || entry.retryAttempt >= 2) (entry.presence as any)?.broadcastLocalState?.();
+        this.schedulePresenceRetry(entry);
+      }, delay);
+      if (typeof timer?.unref === 'function') timer.unref();
+      entry.retry = timer;
     }
 
     /** Drop any pending presence-setup retry (and its buffered early state). */
@@ -192,7 +391,7 @@ export function EnginePresence<C extends EngineCtor>(Base: C):
     teardown(docId: string): void {
       const entry = this.presenceByDoc.get(docId);
       if (!entry?.presence) return;
-      if (entry.retry) { clearInterval(entry.retry); entry.retry = null; }
+      if (entry.retry) { clearTimeout(entry.retry); entry.retry = null; }
       if (entry.liveness) { clearInterval(entry.liveness); entry.liveness = null; }
       entry.presence.stop();
       this.presenceByDoc.delete(docId);
@@ -252,9 +451,13 @@ export function EnginePresence<C extends EngineCtor>(Base: C):
         const fresh = visiblePresencePeerIds(lastSeen, Date.now());
         const peers: Record<string, any> = {};
         let allOk = true;
+        let needAnnounce = false;
         for (const [peerId, st] of Object.entries<any>(raw)) {
           if (!fresh.has(peerId)) continue; // stale or superseded — hide and skip decrypt work
           const value: Record<string, unknown> = {};
+          // Nothing received from this peer yet (only its heartbeat): no key
+          // would help — it has to send its channels again.
+          if (Object.keys(st?.value ?? {}).length === 0) needAnnounce = true;
           for (const [ch, enc] of Object.entries<any>(st?.value ?? {})) {
             try { value[ch] = await this.decryptPresenceValue(doc, enc as Uint8Array); }
             catch (err) {
@@ -269,25 +472,22 @@ export function EnginePresence<C extends EngineCtor>(Base: C):
           peers[peerId] = { peerId, ...st, value };
         }
         lastEmittedFresh = fresh;
+        entry.needAnnounce = needAnnounce;
         this.emit({ type: 'update-presence', docId, peers });
         if (!allOk) this.schedulePresenceRetry(entry);
         return allOk;
       };
-      const entry: PresenceEntry = { presence, doc, desired, send: sendPresence, retry: null, liveness: null };
+      const entry: PresenceEntry = { presence, doc, desired, send: sendPresence, outbox: newPresenceOutbox(), needAnnounce: false, retry: null, retryAttempt: 0, liveness: null };
       this.presenceByDoc.set(docId, entry);
       presence.on('update', (e: any) => { lastSeen.set(e.peerId, Date.now()); void sendPresence(); });
       presence.on('snapshot', (e: any) => {
         lastSeen.set(e.peerId, Date.now());
         // A snapshot is an announce: the sender either just started (its
-        // Presence.start broadcast, possibly after a tab reload) or is stuck
-        // unable to decrypt us and is asking for fresh material (see
-        // schedulePresenceRetry). Respond by re-encrypting and re-sending our
-        // channels: a freshly-started peer needs them because the library only
-        // re-announces to peerIds it has forgotten (and with pruning disabled it
-        // never forgets), and a stuck peer needs fresh cyphertext because each
-        // encrypt creates new keyhive ops whose sync delivers the key material
-        // it is missing. Flushes go out as updates, never snapshots, so two
-        // peers can't ping-pong announces.
+        // Presence.start broadcast, possibly after a reload) or has none of our
+        // channels and is asking for them (see schedulePresenceRetry). Respond
+        // by sending our channels again — the SAME cyphertext, not a fresh
+        // encrypt (see flushPresenceOutbox). They go out as updates, never
+        // snapshots, so two peers can't ping-pong announces.
         void this.flushPresenceOut(entry);
         void sendPresence();
       });

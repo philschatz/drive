@@ -100,14 +100,12 @@ export async function newPeer(browser: Browser, name: string): Promise<Peer> {
  * our own `viewing: true` on both pages each round — the same re-set pattern
  * the presence spec relies on — until the dots render.
  *
- * The re-sets must NOT be faster than the keyhive sync debounce: every
- * re-broadcast re-encrypts, and while the peers disagree on the CGKA epoch
- * each encrypt mints NEW key material that the library holds ~1s before
- * syncing (the `syncTimeout` in keyhive.ts — see flushPresenceOut's rotation
- * comment). A loop that re-encrypts inside that debounce window keeps every
- * round one epoch ahead of what the peer can decrypt, forever. 3s puts a full
- * sync + the worker's own 5s retry re-announce between rotations, so a fresh
- * epoch lands before the next broadcast.
+ * Re-setting an unchanged `viewing: true` is cheap and cannot disturb the key
+ * state: the engine sends the cyphertext it already has for an unchanged value
+ * rather than encrypting again (see flushPresenceOutbox in engine-presence.ts).
+ * It used to re-encrypt every time, which under keyhive >= 0.6 starts a new key
+ * epoch whenever the peers are not yet in step — and two peers doing that in
+ * step never converged.
  */
 export async function bothSeeEachOther(a: Page, b: Page, timeout = 90_000): Promise<void> {
   const docId = /#\/(?:d|source)\/([^/?]+)/.exec(a.url())?.[1]
