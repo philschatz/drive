@@ -42,6 +42,15 @@ export const KEYS = {
    * would bloat keyhive on every change.
    */
   lastViewedHeads: 'data:last-viewed-heads',
+  /**
+   * Written once by the keyhive-format reset (keyhive-format.ts): what the home
+   * list, the settings value and the user-group id were *before* the reset
+   * cleared them. The old documents' storage chunks are left on disk, and this
+   * is the only record of which ids they are — it is what lets the pre-upgrade
+   * documents still be exported after the reset. Absent on a profile that never
+   * needed one.
+   */
+  preResetState: 'data:pre-reset-state',
 } as const;
 
 /**
