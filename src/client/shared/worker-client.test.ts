@@ -33,6 +33,64 @@ function ready(client: WorkerClient, worker: FakeWorker) {
   client.route({ type: 'kh-ready' } as WorkerToMain);
 }
 
+describe('WorkerClient: reset-required (old-format keyhive state)', () => {
+  it('opens the request gate but fails the keyhive gate', async () => {
+    // The engine is up enough to answer — it serves the reset screen's two
+    // requests and errors the rest — but keyhive never booted. So plain requests
+    // must flow (workerReady resolves) while keyhive-gated ones must not wait.
+    const worker = new FakeWorker();
+    const client = new WorkerClient(worker);
+    client.route({ type: 'reset-required', reason: 'archive-format', docCount: 3 } as WorkerToMain);
+
+    await expect(client.workerReady).resolves.toBeUndefined();
+    await expect(client.keyhiveReady).rejects.toThrow(/reset/i);
+    expect(client.getResetRequired()).toEqual({ reason: 'archive-format', docCount: 3 });
+    // Not a crash and not a banner: the reset screen is the whole UI for this.
+    expect(client.getWorkerError()).toBeNull();
+    expect(client.isDead()).toBe(false);
+  });
+
+  it('notifies listeners, including one that subscribes after the message arrived', () => {
+    const worker = new FakeWorker();
+    const client = new WorkerClient(worker);
+    const early: any[] = [];
+    client.onResetRequired((info) => early.push(info));
+    client.route({ type: 'reset-required', reason: 'no-archive', docCount: 0 } as WorkerToMain);
+    expect(early).toEqual([{ reason: 'no-archive', docCount: 0 }]);
+
+    // The app shell mounts after the worker has already reported in.
+    const late: any[] = [];
+    const off = client.onResetRequired((info) => late.push(info));
+    expect(late).toEqual([{ reason: 'no-archive', docCount: 0 }]);
+    off();
+  });
+
+  it('is null until the engine says so', () => {
+    const client = new WorkerClient(new FakeWorker());
+    expect(client.getResetRequired()).toBeNull();
+    const seen: any[] = [];
+    client.onResetRequired((info) => seen.push(info));
+    expect(seen).toEqual([]);
+  });
+
+  it('does not put a timeout on the storage-wide export', async () => {
+    jest.useFakeTimers();
+    try {
+      const worker = new FakeWorker();
+      const client = new WorkerClient(worker, { requestTimeoutMs: 50 });
+      client.route({ type: 'reset-required', reason: 'archive-format', docCount: 3 } as WorkerToMain);
+      const p = client.request('export-legacy-backup', {});
+      await Promise.resolve(); await Promise.resolve();
+      jest.advanceTimersByTime(10_000);
+      const id = worker.sentOfType('export-legacy-backup')[0].id;
+      client.route({ type: 'result', id, result: { payload: {}, unreadable: [] } } as WorkerToMain);
+      await expect(p).resolves.toEqual({ payload: {}, unreadable: [] });
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+});
+
 describe('WorkerClient lifecycle', () => {
   it('routes ready/kh-ready to resolve the gates and captures peerId', async () => {
     const worker = new FakeWorker();

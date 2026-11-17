@@ -2,12 +2,17 @@
  * Data Backup — tiered export/import of documents, settings, and (full tier)
  * identity keys.
  *
- * Layout: two exports + one import + the danger zone.
+ * Layout: two exports (+ one more on a device that went through a keyhive reset)
+ * + one import + the danger zone.
  *   - "Export documents & settings" → `exportBackup(['docs','settings'])` — a
  *     snapshot of every document's current state + the DriveSettings surface.
  *   - "Export full device backup" → `exportBackup(['full'])` — every kv pair and
  *     automerge/keyhive chunk, i.e. a device-migration backup that includes the
  *     identity keys. Confirmed first because it contains keys.
+ *   - "Export pre-upgrade documents" → `exportLegacyBackup()`, shown only on a
+ *     device a keyhive-format reset left old documents on (see
+ *     src/shared/keyhive-format.ts). They are no longer in the document list but
+ *     their data is still on disk; this is the way to get them out.
  *   - "Import backup" → a file input that auto-detects the tier (snapshot / full),
  *     confirms the matching restore, and reloads.
  *   - "Delete all data" — the full local-data erase (formerly its own Danger Zone
@@ -18,26 +23,41 @@
  * gesture, and a permanently-mounted hidden `<input type="file">` would be a
  * stray focusable node sitting in a list.
  */
+import { useEffect, useState } from 'preact/hooks';
 import { showToast, showError } from '@/components/ui/toast';
 import { useConfirm } from '../../common/ConfirmSheet';
-import { exportBackup, importBackup, deleteAllData } from '../../worker-api';
-import { parseBackup, serializeBackup, type BackupTier } from '../../../../shared/backup';
+import { exportBackup, importBackup, deleteAllData, exportLegacyBackup, getPreResetInfo } from '../../worker-api';
+import { parseBackup, type BackupTier } from '../../../../shared/backup';
 import { SettingsGroup, SettingsProse } from '../SettingsGroup';
+import { downloadBackupFile } from '../backup-download';
 
 export function BackupSettings() {
   const { confirm, confirmSheet } = useConfirm();
 
+  // Documents a keyhive-format reset left on disk (null = this device never had one).
+  const [preReset, setPreReset] = useState<{ docCount: number } | null>(null);
+  useEffect(() => {
+    let live = true;
+    getPreResetInfo().then((info) => { if (live) setPreReset(info); }).catch(() => { /* row stays hidden */ });
+    return () => { live = false; };
+  }, []);
+
   const doExport = async (tiers: BackupTier[], label: string): Promise<void> => {
-    const payload = await exportBackup(tiers);
-    const text = serializeBackup(payload);
-    const blob = new Blob([text], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `drive-${label}-${new Date().toISOString().slice(0, 10)}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
+    downloadBackupFile(await exportBackup(tiers), label);
     showToast('Backup exported.');
+  };
+
+  const handleExportPreUpgrade = async () => {
+    try {
+      const { payload, unreadable } = await exportLegacyBackup();
+      downloadBackupFile(payload, 'pre-upgrade-backup');
+      const n = payload.docs?.length ?? 0;
+      const saved = `Saved ${n} document${n === 1 ? '' : 's'}.`;
+      if (unreadable.length) showError(`${saved} ${unreadable.length} could not be read: ${unreadable.join(', ')}`);
+      else showToast(saved);
+    } catch (err: any) {
+      showError('Export failed: ' + err.message);
+    }
   };
 
   const handleExportSnapshot = async () => {
@@ -148,6 +168,15 @@ export function BackupSettings() {
           <div slot="headline">Export full device backup</div>
           <div slot="supporting-text">Everything, including your identity keys — for moving devices</div>
         </md-list-item>
+        {preReset && preReset.docCount > 0 && (
+          <md-list-item type="button" data-testid="backup-export-pre-upgrade" onClick={handleExportPreUpgrade}>
+            <md-icon slot="start">history</md-icon>
+            <div slot="headline">Export pre-upgrade documents</div>
+            <div slot="supporting-text">
+              {preReset.docCount} document{preReset.docCount === 1 ? '' : 's'} from before this device was reset
+            </div>
+          </md-list-item>
+        )}
       </SettingsGroup>
 
       <SettingsGroup label="Import">

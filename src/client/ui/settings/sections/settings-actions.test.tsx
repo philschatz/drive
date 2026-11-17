@@ -15,6 +15,8 @@ let mockEnableSettingsSync: jest.Mock;
 let mockDeleteAllData: jest.Mock;
 let mockExportBackup: jest.Mock;
 let mockImportBackup: jest.Mock;
+let mockExportLegacyBackup: jest.Mock;
+let mockPreResetInfo: { docCount: number; resetAt: string } | null;
 let mockIdentity: { deviceId: string; userGroupId: string | null };
 let mockShowToast: jest.Mock;
 let mockShowError: jest.Mock;
@@ -26,6 +28,8 @@ jest.mock('../../worker-api', () => ({
   deleteAllData: (...args: any[]) => mockDeleteAllData(...args),
   exportBackup: (...args: any[]) => mockExportBackup(...args),
   importBackup: (...args: any[]) => mockImportBackup(...args),
+  exportLegacyBackup: (...args: any[]) => mockExportLegacyBackup(...args),
+  getPreResetInfo: () => Promise.resolve(mockPreResetInfo),
 }));
 
 jest.mock('../../common/keyhive-api', () => ({
@@ -69,6 +73,11 @@ beforeEach(() => {
   mockExportBackup = jest.fn(() =>
     Promise.resolve({ format: 'drive-backup', version: 1, kind: 'snapshot', exportedAt: 'x' }));
   mockImportBackup = jest.fn(() => Promise.resolve({ imported: 0, skipped: [], reload: false }));
+  mockExportLegacyBackup = jest.fn(() => Promise.resolve({
+    payload: { format: 'drive-backup', version: 1, kind: 'snapshot', exportedAt: 'x', docs: [{}, {}] },
+    unreadable: [],
+  }));
+  mockPreResetInfo = null;
   mockIdentity = { deviceId: 'device-1', userGroupId: 'group-1' };
   mockShowToast = jest.fn();
   mockShowError = jest.fn();
@@ -148,6 +157,34 @@ describe('BackupSettings danger zone', () => {
     const row = screen.getByTestId('danger-delete-all');
     expect([...row.children].filter(el =>
       (el as HTMLElement).style.color === 'var(--md-sys-color-error)')).toHaveLength(2);
+  });
+});
+
+describe('BackupSettings pre-upgrade export', () => {
+  it('is absent on a device that never went through a keyhive reset', async () => {
+    render(<BackupSettings />);
+    // Let the pre-reset probe settle before asserting absence.
+    await waitFor(() => expect(screen.getByTestId('backup-export-snapshot')).toBeDefined());
+    await Promise.resolve();
+    expect(screen.queryByTestId('backup-export-pre-upgrade')).toBeNull();
+  });
+
+  it('offers the documents a reset left on disk, and downloads them', async () => {
+    mockPreResetInfo = { docCount: 2, resetAt: '2026-11-16T00:00:00.000Z' };
+    const click = jest.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    (URL as any).createObjectURL = jest.fn(() => 'blob:x');
+    (URL as any).revokeObjectURL = jest.fn();
+    render(<BackupSettings />);
+
+    const row = await screen.findByTestId('backup-export-pre-upgrade');
+    expect(row.textContent).toMatch(/2 documents from before this device was reset/);
+    fireEvent.click(row);
+
+    await waitFor(() => expect(click).toHaveBeenCalled());
+    expect(mockExportLegacyBackup).toHaveBeenCalledTimes(1);
+    expect(mockExportBackup).not.toHaveBeenCalled();
+    expect(mockShowToast).toHaveBeenCalledWith('Saved 2 documents.');
+    click.mockRestore();
   });
 });
 

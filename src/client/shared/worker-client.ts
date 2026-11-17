@@ -48,7 +48,18 @@ interface PendingEntry {
  * engine-side timeout (e.g. the 120 s rendezvous wait) and would be wrongly
  * aborted by the generic request timeout backstop. Excluded from it.
  */
-const NO_TIMEOUT_TYPES = new Set<string>(['kh-rdv-receive', 'kh-rdv-link-join']);
+const NO_TIMEOUT_TYPES = new Set<string>([
+  'kh-rdv-receive', 'kh-rdv-link-join',
+  // Reads every document on the device straight from storage.
+  'export-legacy-backup',
+]);
+
+/** What the engine reported when it found old-format keyhive state. */
+export interface ResetRequiredInfo {
+  reason: string;
+  /** Documents on this device (all still readable from storage). */
+  docCount: number;
+}
 
 export interface WorkerClientOptions {
   /**
@@ -99,6 +110,9 @@ export class WorkerClient {
   private workerDead = false;
   private fatalError: string | null = null;
   private errorListeners = new Set<(message: string) => void>();
+  // Set when the engine reports old-format keyhive state (see route()).
+  private resetRequired: ResetRequiredInfo | null = null;
+  private resetRequiredListeners = new Set<(info: ResetRequiredInfo) => void>();
   // Debug mode only: the most-recent keyhive (Rust/WASM) call name, sent by the
   // worker's error handler ('kh-trace') just before it reports a crash. Appended to
   // the crash/data-warning banner so the trapping call is named even in production.
@@ -138,6 +152,18 @@ export class WorkerClient {
     this.errorListeners.add(fn);
     if (this.fatalError) fn(this.fatalError); // replay for late subscribers
     return () => { this.errorListeners.delete(fn); };
+  }
+
+  /** Non-null once the engine has reported old-format keyhive state. */
+  getResetRequired(): ResetRequiredInfo | null { return this.resetRequired; }
+  /**
+   * Called when the engine reports old-format keyhive state — immediately, if
+   * it already has (the app shell mounts after the worker reported in).
+   */
+  onResetRequired(fn: (info: ResetRequiredInfo) => void): () => void {
+    this.resetRequiredListeners.add(fn);
+    if (this.resetRequired) fn(this.resetRequired);
+    return () => { this.resetRequiredListeners.delete(fn); };
   }
 
   private notifyError(message: string): void {
@@ -199,6 +225,21 @@ export class WorkerClient {
         log.error('Keyhive init failed:', msg.message);
         this.rejectKeyhiveReady(new Error(msg.message));
         return true;
+      case 'reset-required': {
+        // The saved keyhive state is from an older version the engine cannot
+        // read. It booted neither keyhive nor the repo, but it IS answering: it
+        // serves the reset screen's requests and errors everything else. So open
+        // the request gate, fail the keyhive gate (nothing keyhive-gated may sit
+        // waiting), and tell the app — which swaps in the reset screen. No
+        // banner: this is not a crash.
+        const info = { reason: msg.reason, docCount: msg.docCount };
+        log.warn('Keyhive state needs a reset:', msg.reason);
+        this.resetRequired = info;
+        this.resolveRepoReady();
+        this.rejectKeyhiveReady(new Error('This device needs a reset: its saved sharing keys are from an older version.'));
+        for (const fn of this.resetRequiredListeners) fn(info);
+        return true;
+      }
       case 'error':
         // Fatal worker-init error (e.g. a dangling user-group). Settle the gates
         // so request()-gated UI stops hanging and surface a banner.

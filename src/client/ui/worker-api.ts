@@ -21,11 +21,12 @@ import { setDeviceNamesDispatch, applyDeviceNamesFromWorker } from './device-nam
 import { generateDefaultDeviceName } from './lib/device-name';
 import type { ArchiveDocResult } from '../../shared/keyhive-types';
 import { startWebRTCBridge } from './webrtc-bridge';
-import { WorkerClient } from '../shared/worker-client';
+import { WorkerClient, type ResetRequiredInfo } from '../shared/worker-client';
 import { makeWorkerTransport, type TabRole } from './tab-transport';
 export type { TabRole };
 import type { RichTextOp, RichTextSpan } from '../../shared/rich-text-ops';
 import type { BackupTier, BackupPayload, BackupResult } from '../../shared/backup';
+import type { LegacyBackupResult, PreResetInfo } from '../../shared/engine-recovery';
 import { createLogger } from '../../shared/logger';
 import { coalesce, type Coalescer } from '../../shared/coalesce';
 import type { VersionChange } from '../../shared/version-changes';
@@ -149,6 +150,50 @@ export function exportBackup(tiers: BackupTier[]): Promise<BackupPayload> {
  */
 export function importBackup(payload: BackupPayload): Promise<BackupResult> {
   return request('import-backup', { payload });
+}
+
+// ── Keyhive-format reset ────────────────────────────────────────────────────
+// The engine refuses to boot keyhive on state written by an older version (see
+// src/shared/keyhive-format.ts) and reports `reset-required` instead. These are
+// the only things that work while it is in that state.
+
+/** Non-null once the engine has reported old-format keyhive state. */
+export function getResetRequired(): ResetRequiredInfo | null { return client.getResetRequired(); }
+
+/** Live `getResetRequired()` — the app shell swaps in the reset screen on it. */
+export function useResetRequired(): ResetRequiredInfo | null {
+  const [info, setInfo] = useState<ResetRequiredInfo | null>(() => client.getResetRequired());
+  useEffect(() => client.onResetRequired(setInfo), []);
+  return info;
+}
+
+/**
+ * Documents + settings as a snapshot backup, read straight from storage without
+ * keyhive. Before a reset: everything on this device. After one: the
+ * pre-upgrade documents the reset left on disk (rejects if there are none).
+ */
+export function exportLegacyBackup(): Promise<LegacyBackupResult> {
+  return request('export-legacy-backup');
+}
+
+/** What a past reset left behind on this device, or null if it never had one. */
+export function getPreResetInfo(): Promise<PreResetInfo | null> {
+  return request('get-pre-reset-info');
+}
+
+/**
+ * Remove the old-format keyhive state, then reload every tab onto the fresh
+ * boot. Documents and the device key stay on disk. Lands on the Backup screen,
+ * where the import is.
+ */
+export async function resetKeyhive(): Promise<void> {
+  await request('reset-keyhive');
+  // The engine cleared the stored copy; this is the synchronous mirror main.tsx
+  // reads at startup, which would otherwise reopen a document that is gone.
+  settingSetSync('last-opened-doc', null);
+  window.location.hash = '#/settings/backup';
+  transport.broadcastWiped(); // sibling tabs (including the engine's owner) reload too
+  window.location.reload();
 }
 
 // Functions that the worker provides its own copy of. Callers pass the real ref;

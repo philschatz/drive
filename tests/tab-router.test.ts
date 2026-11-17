@@ -307,6 +307,18 @@ describe('client lifecycle', () => {
     expect(replay.filter((m) => m.type === 'ws-status')).toHaveLength(1);
   });
 
+  it('replays reset-required, so a tab that joins a blocked engine shows the reset screen too', () => {
+    const h = track(harness());
+    // The engine reports old-format keyhive state once, at init. A second tab
+    // must not sit on a blank shell waiting for a `ready` that will never come.
+    h.w.emit({ type: 'reset-required', reason: 'archive-format', docCount: 3 } as any);
+
+    join(h, 'late');
+    expect(h.b.ofKind('welcome')[0].replay).toEqual(expect.arrayContaining([
+      { type: 'reset-required', reason: 'archive-format', docCount: 3 },
+    ]));
+  });
+
   it('replays the newest peer list, not a stale disconnect', () => {
     const h = track(harness());
     // connect → disconnect → connect. These are two message *types* carrying the same

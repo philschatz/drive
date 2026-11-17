@@ -53,7 +53,7 @@ const BY_DOC_SUB = new Set(['update-presence', 'update-validation']);
  * until the next transition, because the worker only emits these on change.
  */
 const STICKY = new Set([
-  'ready', 'kh-ready', 'kh-error', 'error', 'data-warning',
+  'ready', 'kh-ready', 'kh-error', 'error', 'data-warning', 'reset-required',
   'ws-status', 'peer-connected', 'peer-disconnected',
   'doc-list-updated', 'unseen-changes-updated',
   'friend-names-updated', 'device-names-updated',

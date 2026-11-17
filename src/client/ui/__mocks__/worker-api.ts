@@ -291,6 +291,12 @@ export function createDoc(): Promise<{ docId: string }> { return Promise.resolve
 export function archiveDoc(): Promise<{ status: string }> { return Promise.resolve({ status: 'ok' }); }
 export function exportBackup(): Promise<any> { return Promise.resolve({ format: 'drive-backup', version: 1, kind: 'snapshot', exportedAt: new Date().toISOString(), docs: [], settings: {} }); }
 export function importBackup(): Promise<any> { return Promise.resolve({ imported: 0, skipped: [], reload: true }); }
+// Keyhive-format reset: a healthy engine by default (no reset pending, none past).
+export function getResetRequired(): null { return null; }
+export function useResetRequired(): null { return null; }
+export function exportLegacyBackup(): Promise<any> { return Promise.reject(new Error('Nothing to export: this device has no pre-upgrade documents.')); }
+export function getPreResetInfo(): Promise<null> { return Promise.resolve(null); }
+export function resetKeyhive(): Promise<void> { return Promise.resolve(); }
 
 // Version history + per-version operations. Seedable rather than hard-coded to
 // `[]`, so the surfaces built on them (the source inspector's changes sheet) are
