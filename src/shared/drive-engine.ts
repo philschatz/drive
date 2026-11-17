@@ -353,6 +353,25 @@ export class EngineCore {
   }
 
   /**
+   * Apply one change to a document: the single write path behind the UI's
+   * `update-doc` and in-process callers (`changeDoc`, the CLI's Timeline
+   * feeder). DriveSettings edits are ENFORCED: the proposed result is validated
+   * on a clone and rejected (thrown) rather than stored, which also covers
+   * hand-edits made through the source inspector. Other doc types keep the
+   * advisory validation (pushValidation).
+   */
+  protected async applyDocChange(docId: string, applyFn: (d: any) => void, handle?: any): Promise<any> {
+    const h = handle ?? await this.getOrLoadHandle(docId);
+    if (h.doc?.()?.['@type'] === DRIVE_SETTINGS_TYPE) {
+      this.settingsSurface.assertValidSettingsChange(h, applyFn);
+    }
+    h.change(applyFn);
+    await this.pushToSubscriptions(docId);
+    if (this.settingsSurface.driveSettingsHandle === h) this.settingsSurface.refreshFromSettingsDoc();
+    return h;
+  }
+
+  /**
    * Best-effort save of loaded docs to the durable store, so an imminent page
    * unload never loses the last in-memory edits (the Repo's debounce may not
    * have flushed them yet). Returns the number of docs saved. `docId` limits
@@ -1460,16 +1479,7 @@ export class EngineCore {
           const fn = new Function('return ' + msg.fnSource)();
           fn(d, ...argVals);
         };
-        // DriveSettings edits are ENFORCED: validate the proposed result on a clone
-        // and reject (throw) rather than store an invalid document. This covers
-        // hand-edits made through the universal source inspector. Other doc types
-        // keep the advisory validation (pushValidation) they had before.
-        if (handle.doc?.()?.['@type'] === DRIVE_SETTINGS_TYPE) {
-          this.settingsSurface.assertValidSettingsChange(handle, applyFn);
-        }
-        handle.change(applyFn);
-        await this.pushToSubscriptions(msg.docId);
-        if (this.settingsSurface.driveSettingsHandle === handle) this.settingsSurface.refreshFromSettingsDoc();
+        await this.applyDocChange(msg.docId, applyFn, handle);
       }, '[engine] update-doc failed:');
       return;
     }

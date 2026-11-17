@@ -47,6 +47,15 @@ export interface StartWatchingOptions {
   reenumerateEveryMs?: number;
 }
 
+/** What an in-process change function gets besides the document. */
+export interface ChangeHelpers {
+  /** Store a string as an Automerge ImmutableString: one scalar, no per-character ops. */
+  immutableString(s: string): unknown;
+}
+
+/** How long `changeDoc` waits for its change to reach storage. */
+const CHANGE_FLUSH_MS = 10_000;
+
 /**
  * The surface the CORE (base class) calls up into this module plus this
  * mixin's external API (the CLI's doc reads + watcher). Set in a field
@@ -62,6 +71,7 @@ export interface EngineWatchSurface {
   enumerateAccessibleDocIds(): Promise<string[]>;
   getDocMeta(docId: string): Promise<WatchUpdate>;
   getDocJson(docId: string, version?: number): Promise<any>;
+  changeDoc(docId: string, fn: (d: any, helpers: ChangeHelpers) => void): Promise<void>;
   startWatching(opts: StartWatchingOptions, onUpdate?: (u: WatchUpdate) => void): Promise<void>;
   stopWatching(): void;
 }
@@ -154,6 +164,33 @@ export function EngineWatch<C extends EngineWatchCtor>(Base: C):
       const afterHeads = index.heads[to];
       const patches = this.Automerge.diff(doc, beforeHeads, afterHeads);
       return { from, to, patches, beforeHeads, afterHeads };
+    }
+
+    /**
+     * One change to a document from inside this process (the CLI's Timeline
+     * feeder), through the same path as the UI's `update-doc`, then flushed:
+     * `Repo.flush` writes both the local copy and the encrypted commit store
+     * peers sync from (the engine's own flushStorage only writes the former).
+     * The flush is bounded; a change not yet flushed still syncs and saves.
+     */
+    async changeDoc(docId: string, fn: (d: any, helpers: ChangeHelpers) => void): Promise<void> {
+      const A = this.Automerge;
+      const helpers: ChangeHelpers = { immutableString: (s: string) => new A.ImmutableString(s) };
+      await this.applyDocChange(docId, (d: any) => fn(d, helpers));
+      const repo = this.automergeRepo;
+      if (repo?.flush) {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await Promise.race([
+            repo.flush([docId]),
+            new Promise(resolve => { timer = setTimeout(resolve, CHANGE_FLUSH_MS); }),
+          ]);
+        } catch (err) {
+          log.warn(`changeDoc flush failed ${docId}:`, errMsg(err));
+        } finally {
+          if (timer) clearTimeout(timer);
+        }
+      }
     }
 
     emitWatchUpdate(docId: string): void {
