@@ -36,6 +36,22 @@ describe('buildHistoryIndex', () => {
     expect(patches.map(p => p.path[0])).toHaveLength(1);
   });
 
+  it('reads change metadata without decoding ops, and agrees with the decoding path', () => {
+    let a = A.from<any>({ story: 'x'.repeat(2000) }, { actor: 'aaaa' });
+    let b = A.clone(a, { actor: 'bbbb' });
+    a = A.change(a, (d: any) => { d.story = 'y'.repeat(2000); });
+    b = A.change(b, (d: any) => { d.other = 1; });
+    const merged = A.change(A.merge(a, b), (d: any) => { d.after = true; });
+
+    const decodeChange = jest.fn(A.decodeChange);
+    const fast = buildHistoryIndex({ ...(A as any), decodeChange }, merged);
+    expect(decodeChange).not.toHaveBeenCalled();
+
+    const { getChangesMetaSince: _omit, ...withoutMeta } = A as any;
+    const slow = buildHistoryIndex(withoutMeta, merged);
+    expect(fast).toEqual(slow);
+  });
+
   it('an empty document has no versions', () => {
     const idx = buildHistoryIndex(A as any, A.init());
     expect(idx.heads).toEqual([]);

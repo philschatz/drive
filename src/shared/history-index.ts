@@ -22,10 +22,20 @@ export interface HistoryIndex {
   heads: string[][];
 }
 
+interface ChangeMeta { hash: string; deps: string[]; time: number }
+
 export interface HistoryAutomerge {
   getAllChanges(doc: any): Uint8Array[];
-  decodeChange(change: Uint8Array): { hash: string; deps: string[]; time: number };
+  decodeChange(change: Uint8Array): ChangeMeta;
   getHeads(doc: any): string[];
+  /**
+   * Change metadata without the ops, in the same order as `getAllChanges`.
+   * Optional because the Automerge test stub lacks it. Prefer it: `decodeChange`
+   * materialises every op, so a document holding long text (a diary's stories,
+   * a timeline's thumbnails) spent seconds per change rebuilding this index —
+   * 4.6 s against 22 ms for 1,000 entries of ~1,200 characters.
+   */
+  getChangesMetaSince?(doc: any, since: string[]): ChangeMeta[];
 }
 
 export const headsKeyOf = (heads: string[]): string => [...heads].sort().join(',');
@@ -34,8 +44,10 @@ export function buildHistoryIndex(A: HistoryAutomerge, doc: any): HistoryIndex {
   const times: number[] = [];
   const heads: string[][] = [];
   const current = new Set<string>();
-  for (const bytes of A.getAllChanges(doc)) {
-    const c = A.decodeChange(bytes);
+  const metas: Iterable<ChangeMeta> = A.getChangesMetaSince
+    ? A.getChangesMetaSince(doc, [])
+    : A.getAllChanges(doc).map(bytes => A.decodeChange(bytes));
+  for (const c of metas) {
     for (const d of c.deps) current.delete(d);
     current.add(c.hash);
     heads.push([...current].sort());

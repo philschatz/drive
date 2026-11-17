@@ -533,3 +533,33 @@ describe('undo cursor tracking', () => {
     expect(target).toBe(2);
   });
 });
+
+// ── ImmutableString ──────────────────────────────────────────────────────────
+
+describe('ImmutableString values', () => {
+  const thumb = (s: string) => new Automerge.ImmutableString(s);
+
+  it('a restore keeps a deleted ImmutableString a scalar, not a { val } map', () => {
+    let doc = Automerge.from<any>({ thumbs: {} });
+    doc = Automerge.change(doc, (d: any) => { d.thumbs.a = thumb('AAAA'); });
+    const withThumb = Automerge.getHeads(doc);
+    doc = Automerge.change(doc, (d: any) => { delete d.thumbs.a; });
+    doc = restoreToHeads(doc, withThumb);
+    expect(Automerge.isImmutableString(doc.thumbs.a)).toBe(true);
+    expect(String(doc.thumbs.a)).toBe('AAAA');
+  });
+
+  it('a restore that changes nothing makes no change', () => {
+    let doc = Automerge.from<any>({ thumbs: {} });
+    doc = Automerge.change(doc, (d: any) => { d.thumbs.a = thumb('AAAA'); });
+    const heads = Automerge.getHeads(doc);
+    const after = restoreToHeads(doc, heads);
+    expect(Automerge.getHeads(after)).toEqual(heads);
+  });
+
+  it('toPlain copies an ImmutableString as one', () => {
+    const copy = toPlain(thumb('BBBB'));
+    expect(Automerge.isImmutableString(copy)).toBe(true);
+    expect(copy.val).toBe('BBBB');
+  });
+});
