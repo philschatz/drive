@@ -1,11 +1,11 @@
 /**
  * Cross-tab wire envelope.
  *
- * Exactly one engine may exist per device: the keyhive archive is a single fixed
- * IndexedDB key written as a whole-state snapshot, and CGKA leaf secrets live only
- * in WASM memory plus that snapshot — so two engines silently destroy each other's
- * key material (see keyhive-repo.ts's persistArchive comment). Rather than run one
- * worker per tab, the tab that wins the `drive-tab-leader` Web Lock owns the single
+ * Exactly one engine may exist per device: an engine is one keyhive instance of
+ * the device's identity, writing that identity's whole state to one storage, and
+ * presence / version pinning / the WebRTC bridge are one-per-device by design
+ * (see ui/multi-tab.ts for the full reasoning). Rather than run one worker per
+ * tab, the tab that wins the `drive-tab-leader` Web Lock owns the single
  * dedicated Worker and every other tab RPCs to it over a `BroadcastChannel`.
  *
  * This module is only the envelope vocabulary — `ui/tab-router.ts` implements the

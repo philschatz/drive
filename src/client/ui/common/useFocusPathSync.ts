@@ -12,7 +12,7 @@ import { useEffect, useRef } from 'preact/hooks';
  * free for real navigation (sheet switches, the sharing screen).
  *
  * Only a *visible* tab broadcasts. All tabs of a device share one presence state
- * (one peerId, one Presence object), so `focusedField` is a single slot they would
+ * (one engine, so one Presence object), so `focusedField` is a single slot they would
  * otherwise fight over — a background tab's stale path would flicker into every
  * peer's view. The visible tab owns it, and re-asserts on becoming visible.
  */

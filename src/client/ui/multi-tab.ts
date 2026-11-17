@@ -1,12 +1,21 @@
 /**
  * Tab leadership via the Web Locks API.
  *
- * Only one engine may exist per device — all tabs share one peerId
- * (`<agentId>-drive`), so the relay rejects a second socket, and two keyhive
- * instances of one identity destroy each other's CGKA key material. The lock elects
- * the tab that owns that engine: the leader boots the Worker and routes for everyone
- * else (ui/tab-transport.ts), so extra tabs edit and sync normally rather than
- * sitting idle behind a warning.
+ * Only one engine may exist per device, and this lock is the ONLY thing that
+ * enforces it. (It used to have a backstop: every tab shared one fixed peerId, so
+ * the relay refused a second socket. The keyhive bridge now mints a new peerId
+ * per engine boot, so two engines would both connect — and pair with each other.)
+ *
+ * Why one: an engine is one keyhive instance of this device's identity. Two of
+ * them each hold key material the other lacks and each write the device's whole
+ * keyhive state to the same storage; and presence, version pinning and the
+ * WebRTC bridge are all one-per-device by design. Current keyhive recovers from
+ * a lost key by rotating, so a second instance is no longer certain to corrupt
+ * the first — but running two is not a supported or tested mode.
+ *
+ * The lock elects the tab that owns the engine: the leader boots the Worker and
+ * routes for everyone else (ui/tab-transport.ts), so extra tabs edit and sync
+ * normally rather than sitting idle behind a warning.
  *
  * The first tab acquires an exclusive lock and holds it for its lifetime; any
  * other tab's request stays pending → that tab is *secondary*. When the leader
@@ -16,6 +25,10 @@
  * tab dies, so two engines are never live at once — the property the whole design
  * rests on.
  */
+import { createLogger } from '../../shared/logger';
+
+const log = createLogger('tab');
+
 const LOCK_NAME = 'drive-tab-leader';
 
 /**
@@ -24,8 +37,13 @@ const LOCK_NAME = 'drive-tab-leader';
  * once this tab holds the lock (it's the leader). Returns a cleanup function.
  */
 export function watchTabLeadership(onChange: (isSecondary: boolean) => void): () => void {
-  // No Web Locks (old browser / non-secure context) — assume a sole tab.
+  // No Web Locks (old browser / non-secure context, e.g. plain http on a LAN
+  // address) — assume a sole tab. Nothing else stops a second tab from booting a
+  // second engine here, so say so once rather than fail silently.
   if (typeof navigator === 'undefined' || !navigator.locks?.request) {
+    if (typeof navigator !== 'undefined') {
+      log.warn('Web Locks are unavailable: opening this app in a second tab will start a second engine on the same data');
+    }
     onChange(false);
     return () => {};
   }
