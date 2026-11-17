@@ -40,6 +40,9 @@ const ARCHIVES = '/archives/';
 const ARCHIVE_MAGIC = [0x4b, 0x48, 0x49, 0x56];
 
 /** The slice of automerge-repo's StorageAdapter this module needs. */
+/** automerge-repo's subduction stores: without a blob interceptor, and with one (subduction/storage.ts). */
+const SYNC_STORE_PREFIXES = ['subduction', 'subduction-interceptor'];
+
 export interface KeyhiveFormatStorage {
   load(key: string[]): Promise<Uint8Array | undefined>;
   save(key: string[], data: Uint8Array): Promise<void>;
@@ -214,5 +217,13 @@ export async function resetKeyhiveState(
   }
 
   await storage.removeRange([KEYHIVE_DB]);
+  // The Repo's sync stores go with the keys. The encrypted one
+  // (subduction-interceptor) holds commits sealed under keys that have just been
+  // deleted: nothing can read them again, and a document that still found them
+  // there would wait on them forever. The plain one (subduction) was written by
+  // builds from before documents were encrypted for sync and is never read by
+  // this one. Neither is what a backup or the reset screen's export reads —
+  // that is each document's own chunks, under its id, which stay.
+  for (const prefix of SYNC_STORE_PREFIXES) await storage.removeRange([prefix]);
   await markKeyhiveFormat(storage);
 }

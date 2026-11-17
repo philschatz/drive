@@ -13,30 +13,49 @@
  * `export * from "@keyhive/keyhive/slim"` re-export doesn't resolve under the
  * backend tsconfig's moduleResolution, but every value is present at runtime.
  *
- * This is the app's ONLY import of the bridge, and it uses the bridge's
- * network-adapter ("legacy") path: keyhive state syncs over the same
- * automerge-repo NetworkAdapter as documents — here, the relay/WebRTC adapter.
- * (The bridge's default path syncs through a subduction server instead, which
- * this app does not have.)
+ * This is the app's ONLY import of the bridge. What travels between two
+ * devices, from the bottom up:
  *
- * What protects a document in transit. The bridge signs its own `keyhive-*`
- * messages and nothing else: document sync is plain Automerge, and a peerId is
- * whatever a socket says it is. So the adapter the bridge is handed is not the
- * raw relay/WebRTC adapter but the secure channel over it (secure-channel.ts):
- * a peer is announced to the bridge and the Repo only after proving it holds
- * the device key in its peerId, and every message to and from it — document
- * sync, presence, keyhive's own sync — is sealed for that one device. WHICH
- * peers a document goes to is still the share gate below, asking keyhive; the
- * channel is what makes that gate's answer be about a real device, and keeps
- * the relay out of the contents.
+ * - **The secure channel** (secure-channel.ts) over the relay/WebRTC adapter the
+ *   caller hands in. A peer exists above it only once it has proved the device
+ *   key in its peerId, and every message is sealed for that one device. The
+ *   relay sees who is introduced to whom, and sizes and timing; nothing else.
+ *   Both of the following ride it.
+ * - **Keyhive's own state** (membership, keys) uses the bridge's network-adapter
+ *   ("legacy") path: signed `keyhive-*` messages. The adapter the bridge is
+ *   given is the channel, narrowed to exactly those (keyhive-only-adapter.ts).
+ * - **Documents** sync through the Repo's subduction instance, over a link per
+ *   peer device (subduction-links.ts). Every commit is encrypted under the
+ *   document's keyhive key before it is stored for sync
+ *   (subduction-interceptor.ts), so a peer is handed ciphertext it can read only
+ *   if it holds that key — and is handed it only if keyhive says it may be
+ *   (subduction-policy.ts, subduction-scope.ts).
+ *
+ * So a document is protected twice: sealed for the device it is sent to, and
+ * encrypted for the members of the document. The first keeps the relay out of
+ * everything; the second is what holds when a device should no longer be able
+ * to read — a member removed from a document cannot read what is written after
+ * the writer has heard of it, whoever hands it the bytes.
+ *
+ * automerge-repo's classic sync protocol, which sends documents as plain
+ * Automerge messages, still runs inside every Repo. It is given nothing to do:
+ * the Repo shares no document with any peer, and the narrowed adapter would not
+ * carry a classic message if it tried.
+ *
+ * (The bridge has a second path that syncs keyhive through a subduction server.
+ * This app has no such server; peers sync with each other.)
  */
 import { KeyhiveOps } from './keyhive-ops';
 import { RELAY_PEER_ID } from './relay-identity';
-import { agentIdOfPeerId } from './peer-id';
 import { ensureKeyhiveStorageUsable } from './keyhive-format';
-import {
-  makeSecureChannelAdapter, type ChannelPeer, type SecureChannelControl, type SecureChannelTimings,
-} from './secure-channel';
+import { makeSecureChannelAdapter, type SecureChannelControl, type SecureChannelTimings } from './secure-channel';
+import { makeKeyhiveOnlyAdapter } from './keyhive-only-adapter';
+import { makeDeviceSigner } from './subduction-signer';
+import { makeGuardedInterceptor, type BlobInterceptor } from './subduction-interceptor';
+import { makeDocPolicy, type RequiredAccess } from './subduction-policy';
+import { startSubductionLinks, type SubductionLinks, type LinkTimings, type LinkedPeer } from './subduction-links';
+import { scopeSubductionToMembers, acceptEphemeral, type SubductionScope } from './subduction-scope';
+import { guardSubductionStorage, type DocShape } from './subduction-storage-guard';
 import { createLogger } from './logger';
 
 const log = createLogger('keyhive');
@@ -58,19 +77,23 @@ export interface CreateKeyhiveRepoOptions {
   /** Persist the personal user-group id (base64). */
   setUserGroupId: (id: string) => Promise<void>;
   /**
-   * Serialize every keyhive call on the bridge's shared queue (keyhive WASM is
-   * non-reentrant). The browser/CLI want this because high-frequency presence
-   * encrypt/decrypt races the bridge's own queued calls; CalDAV does not.
+   * Whether a document link with this device (its 32-byte keyhive key) is
+   * wanted. Asked before a link is opened or accepted, and again when keyhive's
+   * state changes. Default: every peer the relay introduces — document access
+   * is still decided per document, by keyhive.
    */
-  serialize?: boolean;
-  /**
-   * Install the keyhive-membership shareConfig gate (announce/access), so a doc
-   * is only announced to peers that have keyhive access. The browser and CLI want
-   * this; CalDAV historically ran without it.
-   */
-  withShareConfig?: boolean;
+  mayLinkDevice?: (deviceKey: Uint8Array) => Promise<boolean>;
   /** Secure-channel waits (hello retry, reordering), in ms. Shorten only under test. */
   channelTimings?: Partial<SecureChannelTimings>;
+  /** Link waits (handshake, retry), in ms. Shorten only under test. */
+  linkTimings?: Partial<LinkTimings>;
+  /**
+   * automerge-repo's `subductionTimeouts` (sync round deadline, heal-retry
+   * backoff). Defaults to automerge-repo's own. Shorten only under test: a
+   * sync round's deadline timer outlives the round, so a process that has
+   * synced with a peer cannot exit until `syncMs` (60 s by default) has passed.
+   */
+  subductionTimeouts?: Record<string, number>;
   /** Called before the bridge fires a share-config change (worker reconciles the home list). */
   onBeforeShareConfigChanged?: () => void;
   /**
@@ -114,6 +137,8 @@ export interface KeyhiveRepo {
   setNextDocId: (bytes: Uint8Array) => void;
   /** The secure channel to peer devices: its state, and the reset a reopened relay socket needs. */
   channel: SecureChannelControl;
+  /** The document-sync links to peer devices (subduction-links.ts). */
+  links: SubductionLinks;
   /**
    * Stop the hive (its sync timers, its network adapter) and shut the Repo
    * down, flushing storage. Nothing here is usable afterwards. The app never
@@ -223,101 +248,106 @@ export async function createKeyhiveRepo(opts: CreateKeyhiveRepoOptions): Promise
     return bytes;
   };
 
-  // shareConfig gates which docs are announced to which peers based on keyhive
-  // membership. A doc a peer has no keyhive access to is not announced/shared.
-  const khAccessCheck = async (peerId: string, docId: string | undefined): Promise<boolean> => {
-    if (!docId || !hive) return false;
-    // The relay is a router, not a keyhive member — never announce docs to it.
-    if (peerId === RELAY_PEER_ID) return false;
-    try {
-      // The peer's device is the verifying key in front of its peerId.
-      const keyBytes = Uint8Array.from(atob(agentIdOfPeerId(peerId)), (c) => c.charCodeAt(0));
-      const identifier = new bridge.Identifier(keyBytes);
-      // shareConfig is consulted off the keyhive queue (during sync-message handling),
-      // so serialize this keyhive access too. accessForDoc follows group
-      // membership, so a device is admitted through its user's group.
-      const access = await runOnKeyhiveQueue(() =>
-        hive.accessForDoc(identifier, `automerge:${docId}` as any));
-      return access !== undefined;
-    } catch {
-      return false;
-    }
-  };
-
-  // ── The secure channel ─────────────────────────────────────────────────────
+  // ── Document sync: encrypted, authenticated, and nothing else ──────────────
   //
-  // Whether a device holds a level of access to a document, as far as this
-  // device's keyhive knows. A device is admitted through its user's group:
-  // accessForDoc follows group membership. Answers are cached until keyhive's
-  // state changes; the write gate below asks once per inbound sync message.
-  let accessCache = new Map<string, Promise<boolean>>();
-  const forgetAccess = () => { accessCache = new Map(); };
-  const hasAccess = (deviceKey: Uint8Array, docId: string, level: 'any' | 'edit'): Promise<boolean> => {
-    const key = `${btoa(String.fromCharCode(...deviceKey))}|${docId}|${level}`;
-    let answer = accessCache.get(key);
-    if (!answer) {
-      answer = runOnKeyhiveQueue(async () => {
-        const access = await hive.keyhive.accessForDoc(new bridge.Identifier(deviceKey), khDocIdFromAm(docId));
-        return access !== undefined && (level === 'any' || access.atLeast(bridge.Power.edit()));
-      }).catch(() => false);
-      accessCache.set(key, answer);
-    }
-    return answer;
-  };
+  // The Repo's config is assembled here but the hive it depends on is built by
+  // the bridge, inside the call below, and is not returned until after the Repo
+  // exists. So the pieces that need the hive take a promise of it.
+  let closed = false;
+  let resolveHive!: (h: any) => void;
+  const hiveReady = new Promise<any>((resolve) => { resolveHive = resolve; });
+  const devicePrivateKey: Promise<CryptoKey> = hiveReady.then((h) => h.active.keyPair.privateKey);
 
-  // The Repo decides which peers a document is shared with (the share gate
-  // below), but re-decides asynchronously: after a member is removed there is
-  // a moment in which it would still send that member the next change. The
-  // channel asks again, per message, as it is about to seal one — so the
-  // removal holds from the instant keyhive records it. (`doc-unavailable` is
-  // the reply to a peer that asked and may not have the document; it must go.)
-  const maySend = (message: any, peer: ChannelPeer): Promise<boolean> | boolean => {
-    if (!message?.documentId || message.type === 'doc-unavailable') return true;
-    return hasAccess(peer.deviceKey, message.documentId, 'any');
-  };
+  // Every commit is encrypted under the document's keyhive key on its way into
+  // subduction's store. The bridge's interceptor is given the RAW keyhive: it
+  // queues its own calls, and handing it the serializing proxy would queue them
+  // twice (a nested queue call never runs).
+  let bridgeInterceptor: any = null;
+  let onPendingDecrypt = () => {};
+  const interceptor = makeGuardedInterceptor({
+    onPendingDecrypt: () => onPendingDecrypt(),
+    inner: hiveReady.then((h): BlobInterceptor => {
+      bridgeInterceptor = new bridge.KeyhiveBlobInterceptor(
+        h.keyhive, h.networkAdapter.keyhiveQueue, () => h.networkAdapter.invalidateCaches(), opts.storage);
+      return bridgeInterceptor;
+    }),
+    docIdBytes: (documentId) => parseAutomergeUrl(`automerge:${documentId}`).binaryDocumentId,
+  });
 
-  // automerge-repo applies whatever changes a peer it shares a document with
-  // sends: sharing is all-or-nothing there, and a read-only member is shared
-  // with. The channel proves which device a message came from, which makes a
-  // write rule enforceable at last: a sync message that carries changes is
-  // taken only from a device keyhive says may edit the document. Messages
-  // without changes — the reader saying what it has, so it can be sent what it
-  // lacks — pass.
-  const refusedWrites = new Set<string>();
-  const writeGate = async (message: any, peer: ChannelPeer) => {
-    if ((message?.type !== 'sync' && message?.type !== 'request') || !message.documentId || !message.data) return message;
-    if (await hasAccess(peer.deviceKey, message.documentId, 'edit')) return message;
-    let carriesChanges = true; // an unreadable sync message is not given the benefit of the doubt
-    try { carriesChanges = Automerge.decodeSyncMessage(message.data).changes.length > 0; } catch { /* as above */ }
-    if (!carriesChanges) return message;
-    const key = `${peer.peerId}|${message.documentId}`;
-    if (!refusedWrites.has(key)) {
-      refusedWrites.add(key);
-      log.warn(`not applying changes to ${message.documentId} from a device without edit access`);
-    }
-    return null;
-  };
+  // A peer is served, and written by, only what keyhive says. A device is
+  // admitted through its user's group: accessForDoc follows group membership.
+  const hasAccess = (deviceKey: Uint8Array, docIdBytes: Uint8Array, level: RequiredAccess): Promise<boolean> =>
+    runOnKeyhiveQueue(async () => {
+      const access = await hive.keyhive.accessForDoc(new bridge.Identifier(deviceKey), new bridge.DocumentId(docIdBytes));
+      return access !== undefined && access.atLeast(level === 'edit' ? bridge.Power.edit() : bridge.Power.relay());
+    });
+  const mayLinkDevice = opts.mayLinkDevice ?? (async () => true);
+  const policy = makeDocPolicy({ hasAccess, mayConnect: mayLinkDevice });
 
-  // The channel signs its handshakes with the device's keyhive key, which the
-  // bridge loads (or creates) inside the call below.
-  let resolveDeviceKey!: (key: CryptoKey) => void;
+  // The Repo's view of storage: the same adapter, minus deletes of records its
+  // compaction would remove while the document still needs them
+  // (subduction-storage-guard.ts). `repoForGuard` is the Repo, once it exists.
+  let repoForGuard: any = null;
+  const hexToBytes = (hex: string) => Uint8Array.from(hex.match(/../g) ?? [], (b) => parseInt(b, 16));
+  // A document's shape is asked once per delete and a pass deletes many, so it
+  // is kept until the document's heads move.
+  const shapes = new Map<string, { heads: string; shape: DocShape }>();
+  const repoStorage = guardSubductionStorage(opts.storage, {
+    shape: (sedimentreeIdHex) => {
+      try {
+        const handle = repoForGuard?.handles[amDocIdFromBytes(hexToBytes(sedimentreeIdHex))];
+        const doc = handle?.doc();
+        if (!doc) return undefined;
+        const heads = Automerge.getHeads(doc).join(',');
+        const known = shapes.get(sedimentreeIdHex);
+        if (known?.heads === heads) return known.shape;
+        const shape: DocShape = {
+          has: (hash) => Automerge.hasHeads(doc, [hash]),
+          looseCommits: new Set((Automerge.getFragmentMetadata(doc, 0) as { head: string }[]).map((m) => m.head)),
+          fragments: new Set((Automerge.getFragmentMetadata(doc, { start: 1 }) as { head: string }[]).map((m) => m.head)),
+        };
+        shapes.set(sedimentreeIdHex, { heads, shape });
+        return shape;
+      } catch {
+        return undefined;
+      }
+    },
+  });
+
+  // The secure channel: what the relay/WebRTC adapter carries from here on is
+  // sealed for the one device it is addressed to, and a peer is announced above
+  // it only once it has proved its key. It signs its handshakes with the
+  // device's keyhive key, which the bridge loads (or creates) below.
   const secure = makeSecureChannelAdapter(NetworkAdapter, opts.networkAdapter, {
     relayPeerId: RELAY_PEER_ID,
-    privateKey: new Promise<CryptoKey>((resolve) => { resolveDeviceKey = resolve; }),
-    inspectInbound: writeGate,
-    maySend,
+    privateKey: devicePrivateKey,
     timings: opts.channelTimings,
   });
 
+  // The links are told about peers by the channel, as the bridge is, so they
+  // start listening before the Repo connects it; they act once the Repo exists.
+  let resolveLinksReady!: (r: { localPeerId: string; subduction: any }) => void;
+  let onLinkUp = () => {};
+  let onDatagram: (peer: LinkedPeer, payload: Uint8Array) => void = () => {};
+  const links = startSubductionLinks({
+    channel: secure,
+    relayPeerId: RELAY_PEER_ID,
+    ready: new Promise((resolve) => { resolveLinksReady = resolve; }),
+    mayLink: mayLinkDevice,
+    onLinkUp: () => onLinkUp(),
+    onDatagram: (peer, payload) => onDatagram(peer, payload),
+    timings: opts.linkTimings,
+  });
+
   // The bridge builds the hive and the Repo together: it injects the hive's
-  // network adapter (the secure channel, wrapped so keyhive's own traffic is
-  // also signed and verified) and peerId into the config it hands `createRepo`,
+  // network adapter (the channel, narrowed to keyhive's messages and wrapped so
+  // they are also signed and verified) and peerId into the config it hands `createRepo`,
   // then links the two so keyhive membership changes reach
   // `repo.shareConfigChanged()`.
   const built = await bridge.initializeLegacyAutomergeRepoKeyhive({
     storage: opts.storage,
     peerIdSuffix: opts.peerIdSuffix,
-    networkAdapter: secure,
+    networkAdapter: makeKeyhiveOnlyAdapter(NetworkAdapter, secure),
     // The relay is a stateless router with no keyhive identity, so there is no
     // sync server to register: peers sync keyhive state with each other.
     syncServer: 'none',
@@ -329,42 +359,138 @@ export async function createKeyhiveRepo(opts: CreateKeyhiveRepoOptions): Promise
     ...(opts.shareConfigDebounceMs !== undefined ? { shareConfigDebounceMs: opts.shareConfigDebounceMs } : {}),
     ...(opts.onBeforeShareConfigChanged ? { onBeforeShareConfigChanged: opts.onBeforeShareConfigChanged } : {}),
     repo: {
-      storage: opts.storage,
-      ...(opts.withShareConfig
-        ? { shareConfig: { announce: khAccessCheck, access: khAccessCheck as (peer: string, doc: string) => Promise<boolean> } }
-        : {}),
+      storage: repoStorage,
+      // Classic sync shares no document with any peer — see the file header.
+      shareConfig: { announce: async () => false, access: async () => false },
+      subductionBlobInterceptor: interceptor,
+      subductionPolicy: policy,
+      ...(opts.subductionTimeouts ? { subductionTimeouts: opts.subductionTimeouts } : {}),
     },
-    createRepo: (config: any) => new Repo({ ...config, idFactory }),
+    // The Repo signs subduction's handshake and commits as this device's
+    // keyhive key, so the key a peer proves is the one keyhive knows it by.
+    createRepo: (config: any) => new Repo({ ...config, idFactory, signer: makeDeviceSigner(config.peerId, devicePrivateKey) }),
   });
   hive = built.hive;
   const repo = built.repo;
+  repoForGuard = repo;
   const integration = hive;
-  resolveDeviceKey(hive.active.keyPair.privateKey);
+  resolveHive(hive);
 
-  // Keyhive learned something from a peer — possibly that a device has been
-  // removed. The bridge tells the Repo to re-check who may see what, but only
-  // after a 2 s debounce it shares with heavier work; until then this device
-  // would go on sending a just-removed device new changes. Re-check sooner.
-  let accessRecheckTimer: any = null;
-  hive.networkAdapter.on('ingest-remote', () => {
-    forgetAccess();
-    if (accessRecheckTimer) return;
-    accessRecheckTimer = setTimeout(() => {
-      accessRecheckTimer = null;
-      try { repo.shareConfigChanged(); } catch (err) { log.warn('re-checking document access failed:', err); }
-    }, 250);
-    if (typeof accessRecheckTimer?.unref === 'function') accessRecheckTimer.unref();
+  // Subduction logs through its own tracing stack, straight to the console, and
+  // the Repo sets it to `warn` when it is constructed. Its warnings are routine
+  // here — a connection closing, a commit refused because this device's keyhive
+  // has not caught up with a membership change yet — so they show only when our
+  // own logging is at debug. The links report what matters (up, down, why).
+  try { repoModule.setSubductionLogLevel?.(log.enabled('debug') ? 'warn' : 'error'); }
+  catch { /* tracing not initialised: nothing to set */ }
+
+  // Subduction's document source only tracks connections it opened itself, so
+  // a link made here goes unnoticed: documents already open would not sync with
+  // the new peer. Tell the Repo — once, however many links come up together.
+  let nudgeTimer: any = null;
+  const nudgeDocSync = () => {
+    if (nudgeTimer) return;
+    nudgeTimer = setTimeout(() => {
+      nudgeTimer = null;
+      try {
+        repo.shareConfigChanged();
+        for (const documentId of Object.keys(repo.handles)) repo.resyncSubduction(documentId);
+      } catch (err) { log.warn('re-syncing documents after a link came up failed:', err); }
+    }, 20);
+    if (typeof nudgeTimer?.unref === 'function') nudgeTimer.unref();
+  };
+  onLinkUp = nudgeDocSync;
+
+  let scope: SubductionScope | null = null;
+
+  // Presence arrives as a link datagram (subduction-scope.ts) and is handed to
+  // the Repo only when it is what the link proved it to be.
+  const docIdBytesOf = (documentId: string): Uint8Array => parseAutomergeUrl(`automerge:${documentId}`).binaryDocumentId;
+  onDatagram = (peer, payload) => {
+    void acceptEphemeral(peer, payload, {
+      policy,
+      isOpen: (documentId) => documentId in repo.handles,
+      docIdBytes: docIdBytesOf,
+      deliver: (message) => repo.synchronizer.receiveMessage(message),
+    }).catch((err) => log.warn('handling a presence message failed:', err));
+  };
+
+  void (repo.subduction as Promise<any>).then((subduction) => {
+    // Before any link exists: from the first sync on, a document is only ever
+    // offered to the peers that are in it.
+    scope = scopeSubductionToMembers(subduction, {
+      links,
+      policy,
+      onRecovered: (docIdBytes) => {
+        try { repo.resyncSubduction(amDocIdFromBytes(docIdBytes)); }
+        catch (err) { log.warn('re-syncing a document after its sync recovered failed:', err); }
+      },
+    });
+    resolveLinksReady({ localPeerId: repo.peerId, subduction });
   });
 
-  // Serialize ALL keyhive access through the bridge's shared queue when requested.
-  const khForOps = opts.serialize ? serializeKeyhive(integration.keyhive) : integration.keyhive;
+  // A commit can arrive before the key that opens it: a member's first write,
+  // or any write after a membership change, starts a new key epoch whose
+  // operation travels by keyhive sync, separately. The Repo keeps such a commit
+  // and retries it when told the share config changed — which the keyhive-change
+  // hook below does. But that signal can fire in the instant between the key
+  // landing and the commit being recorded as unreadable, and then nothing fires
+  // again: the document sits unreadable with its key in hand (seen in testing).
+  // So an unreadable commit also starts a short, bounded series of retries, each
+  // asking peers for keyhive state first.
+  const DECRYPT_RETRY_MS = [300, 700, 1500, 3000, 5000, 10_000, 20_000, 30_000];
+  let decryptRetryTimer: any = null;
+  let decryptRetryAttempt = 0;
+  const scheduleDecryptRetry = () => {
+    if (decryptRetryTimer || closed || decryptRetryAttempt >= DECRYPT_RETRY_MS.length) return;
+    const delay = DECRYPT_RETRY_MS[decryptRetryAttempt] * (0.75 + Math.random() * 0.5);
+    decryptRetryTimer = setTimeout(() => {
+      decryptRetryTimer = null;
+      if (closed || !interceptor.hasPendingDecrypts()) { decryptRetryAttempt = 0; return; }
+      decryptRetryAttempt++;
+      try {
+        void hive.networkAdapter.syncKeyhive?.();
+        repo.shareConfigChanged();
+      } catch (err) { log.warn('retrying pending decrypts failed:', err); }
+      scheduleDecryptRetry();
+    }, delay);
+    if (typeof decryptRetryTimer?.unref === 'function') decryptRetryTimer.unref();
+  };
+  onPendingDecrypt = () => { decryptRetryAttempt = 0; scheduleDecryptRetry(); };
+
+  // Keyhive learned something (a membership change, a key). Cached policy
+  // answers may be stale, a refused link may now be wanted, and a commit that
+  // arrived before its key may now decrypt. The bridge tells the Repo itself,
+  // but after a 2 s debounce shared with heavier work; a waiting document
+  // should not sit unreadable that long.
+  let keyhiveChangedTimer: any = null;
+  const onKeyhiveChanged = () => {
+    policy.invalidate();
+    if (keyhiveChangedTimer) return;
+    keyhiveChangedTimer = setTimeout(() => {
+      keyhiveChangedTimer = null;
+      links.reevaluate();
+      if (interceptor.hasPendingDecrypts()) {
+        try { repo.shareConfigChanged(); } catch (err) { log.warn('retrying pending decrypts failed:', err); }
+        decryptRetryAttempt = 0;
+        scheduleDecryptRetry();
+      }
+    }, 100);
+    if (typeof keyhiveChangedTimer?.unref === 'function') keyhiveChangedTimer.unref();
+  };
+  hive.networkAdapter.on('ingest-remote', onKeyhiveChanged);
+  (hive as any).emitter?.on?.('update', onKeyhiveChanged);
+
+  // Serialize ALL keyhive access through the bridge's shared queue: keyhive WASM
+  // is not reentrant, and the document interceptor and policy above run on that
+  // queue at any moment a peer syncs.
+  const khForOps = serializeKeyhive(integration.keyhive);
   const khOps = new KeyhiveOps(khForOps, bridge, {
     persist: () => integration.keyhiveStorage.saveKeyhiveWithHash(khForOps),
     syncKeyhive: () => integration.networkAdapter?.syncKeyhive?.(),
-    // After a local keyhive membership change, re-evaluate shareConfig so newly-
-    // authorized peers get the doc announced (shareConfigChanged is the equivalent
-    // of the old forceResync).
-    forceResyncAllPeers: () => { forgetAccess(); repo.shareConfigChanged(); },
+    // After a local keyhive membership change: forget cached access answers,
+    // and have the Repo retry documents that did not sync or decrypt before.
+    forceResyncAllPeers: () => { policy.invalidate(); repo.shareConfigChanged(); },
     getUserGroupId: opts.getUserGroupId,
     setUserGroupId: opts.setUserGroupId,
   });
@@ -391,12 +517,10 @@ export async function createKeyhiveRepo(opts: CreateKeyhiveRepoOptions): Promise
     let timer: any = null;
     let saving = false;
     let dirty = false;
-    // With the serializing proxy, saveKeyhiveWithHash's internal toArchive() is
-    // queued by the proxy itself; without it (CalDAV), queue the whole save —
-    // never both (nested queue.run deadlocks).
-    const doSave = opts.serialize
-      ? () => integration.keyhiveStorage.saveKeyhiveWithHash(khForOps)
-      : () => runOnKeyhiveQueue(() => integration.keyhiveStorage.saveKeyhiveWithHash(integration.keyhive));
+    // saveKeyhiveWithHash's internal toArchive() is queued by the serializing
+    // proxy itself — so the save must NOT be queued as well (nested queue.run
+    // deadlocks).
+    const doSave = () => integration.keyhiveStorage.saveKeyhiveWithHash(khForOps);
     const persistArchive = async () => {
       if (saving) { dirty = true; return; }
       saving = true;
@@ -422,13 +546,17 @@ export async function createKeyhiveRepo(opts: CreateKeyhiveRepoOptions): Promise
     };
   }
 
-  let closed = false;
   const close = async () => {
     if (closed) return;
     closed = true;
     await flushArchive();
-    if (accessRecheckTimer) { clearTimeout(accessRecheckTimer); accessRecheckTimer = null; }
+    if (nudgeTimer) { clearTimeout(nudgeTimer); nudgeTimer = null; }
+    if (keyhiveChangedTimer) { clearTimeout(keyhiveChangedTimer); keyhiveChangedTimer = null; }
+    if (decryptRetryTimer) { clearTimeout(decryptRetryTimer); decryptRetryTimer = null; }
+    scope?.stop();
+    try { await links.stop(); } catch (err) { log.warn('stopping the document links failed:', err); }
     try { await secure.channel.stop(); } catch (err) { log.warn('stopping the secure channel failed:', err); }
+    try { bridgeInterceptor?.clearCachedKeyMaterial?.(); } catch { /* best effort */ }
     // The hive first: closing it disconnects the network adapter, so nothing
     // arrives while the Repo below flushes and releases storage.
     try { hive.close(); } catch (err) { log.warn('closing the hive failed:', err); }
@@ -437,6 +565,6 @@ export async function createKeyhiveRepo(opts: CreateKeyhiveRepoOptions): Promise
 
   return {
     repo, khOps, integration, bridge,
-    Automerge, Presence, amDocIdFromBytes, khDocIdFromAm, setNextDocId, channel: secure.channel, close,
+    Automerge, Presence, amDocIdFromBytes, khDocIdFromAm, setNextDocId, channel: secure.channel, links, close,
   };
 }

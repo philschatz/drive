@@ -32,10 +32,12 @@
  * leaves, is introduced again, or the relay socket reopens, and the next one
  * starts from new ECDH keys.
  *
- * What this does not do: decide who may see a document. That is still each
- * sending device's keyhive access check, now made about a proven identity. A
- * device that was a member and has been removed stops being sent changes when
- * the sender learns of the removal — there is no document key here to rotate.
+ * What this does not do: decide who may see a document, or keep a document
+ * from a device that was once given it. The channel seals for a *device*. Who
+ * is offered a document is keyhive's answer (subduction-policy.ts,
+ * subduction-scope.ts), and what keeps a removed member from reading what is
+ * written afterwards is the document's own key (subduction-interceptor.ts) —
+ * both ride inside this channel.
  *
  * Order. A peer's route can switch between the relay and a direct channel
  * mid-stream, so a later frame can overtake an earlier one. Frames carry a
@@ -241,19 +243,6 @@ export interface SecureChannelOptions {
   relayPeerId: string;
   /** This device's Ed25519 signing key (the keyhive device key), once it exists. */
   privateKey: Promise<CryptoKey>;
-  /**
-   * Look at each message after it has been opened and before the layers above
-   * see it; return null to drop it. Runs in arrival order.
-   */
-  inspectInbound?: (message: Message, peer: ChannelPeer) => Promise<Message | null> | Message | null;
-  /**
-   * Decide, for each message the layers above want sent, whether it may go to
-   * this device; false drops it. Runs in send order, at the last moment before
-   * the message is sealed — so a decision that has just changed (a member
-   * removed) applies to the very next message, whatever the layers above have
-   * caught up with.
-   */
-  maySend?: (message: Message, peer: ChannelPeer) => Promise<boolean> | boolean;
   timings?: Partial<SecureChannelTimings>;
 }
 
@@ -342,10 +331,9 @@ export function makeSecureChannelAdapter(
   // ── sending ──
 
   function seal(peer: Peer, session: Session, message: Message): void {
-    // Deciding and sealing are asynchronous; the chain keeps messages leaving
-    // in the order they were sent, each with the next counter.
+    // Sealing is asynchronous; the chain keeps messages leaving in the order
+    // they were sent, each with the next counter.
     peer.sendChain = peer.sendChain.then(async () => {
-      if (opts.maySend && !(await opts.maySend(message, { peerId: peer.peerId, deviceKey: peer.deviceKey }))) return;
       if (peer.session !== session) return; // the session ended while this waited its turn
       const counter = session.sendCounter++;
       const header = concat(VERSION, KIND_DATA, session.id, u64(counter));
@@ -488,10 +476,7 @@ export function makeSecureChannelAdapter(
       log.warn(`dropping a message from ${short(peer.peerId)} that names a different sender or target`);
       return true;
     }
-    const kept = opts.inspectInbound
-      ? await opts.inspectInbound(message, { peerId: peer.peerId, deviceKey: peer.deviceKey })
-      : message;
-    if (kept) adapter.emit('message', kept);
+    adapter.emit('message', message);
     return true;
   }
 

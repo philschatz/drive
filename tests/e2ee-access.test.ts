@@ -76,6 +76,28 @@ describe('who a document reaches', () => {
     expect(storedFor(bob, docId)).toBeGreaterThan(0);
   });
 
+  it('tells a connected friend nothing about a document they are not in: not one frame', async () => {
+    const framesToCarol = () => alice.kr.links.describe().find((l) => l.peerId === carol.peerId)!.framesOut;
+    await waitFor(() => alice.kr.links.linked().length === 2, 'alice to be linked to bob and carol');
+    await sleep(500); // let the links' own handshakes settle
+    const before = framesToCarol();
+
+    const { docId, handle } = await createSharedDoc(alice, bob, { v: 0 });
+    const bobsCopy = await openDoc(bob, docId);
+    for (let i = 1; i <= 5; i++) {
+      handle.change((d: any) => { d.v = i; });
+      bobsCopy.change((d: any) => { d[`b${i}`] = i; });
+      await sleep(100);
+    }
+    await waitFor(() => bobsCopy.doc().v === 5 && handle.doc().b5 === 5, 'alice and bob to converge');
+    await sleep(500);
+
+    // Stock subduction would have asked carol about the document on every sync,
+    // showing her its id and commit ids. She is linked to alice the whole time,
+    // and is sent nothing.
+    expect(framesToCarol()).toBe(before);
+  });
+
   it('does not take a read-only member\'s changes, and keeps sending it everyone else\'s', async () => {
     const { docId, khDocId, handle } = await createDoc(alice, { v: 1 });
     await shareDoc(alice, bob, khDocId, 'read');

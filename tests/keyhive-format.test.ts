@@ -117,15 +117,21 @@ describe('ensureKeyhiveStorageUsable (the guard in front of the bridge)', () => 
 });
 
 describe('resetKeyhiveState', () => {
-  it('removes the old keyhive state and keeps the device key and every document chunk', async () => {
+  it('removes the old keyhive state and the sync stores, and keeps the device key and every document chunk', async () => {
     const { fx, storage, kv } = seedLegacyProfile();
-    const docChunks = storage.keys().filter((k) => !k.startsWith('keyhive-db'));
+    // The Repo's sync stores: the plain one the old build wrote, and (as a
+    // newer build would have left) commits sealed under the keys being deleted.
+    const isSyncStore = (k: string) => k.startsWith('subduction|') || k.startsWith('subduction-interceptor|');
+    await storage.save(['subduction-interceptor', 'blobs', 'ab'.repeat(32), 'cd'.repeat(32)], Uint8Array.from([1]));
+    const docChunks = storage.keys().filter((k) => !k.startsWith('keyhive-db') && !isSyncStore(k));
     expect(storage.keys().some((k) => k.startsWith('keyhive-db'))).toBe(true);
+    expect(storage.keys().filter(isSyncStore).length).toBeGreaterThan(1);
 
     await resetKeyhiveState(storage, kv);
 
     const after = storage.keys();
     expect(after.some((k) => k.startsWith('keyhive-db'))).toBe(false);
+    expect(after.filter(isSyncStore)).toEqual([]);
     expect(after).toContain('active-key-pair-2');
     for (const k of docChunks) expect(after).toContain(k);
     for (const id of Object.values(fx.docs)) expect(after.some((k) => k.startsWith(`${id}|`))).toBe(true);

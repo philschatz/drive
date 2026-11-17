@@ -139,6 +139,14 @@ export interface StartPeerOptions {
    * with the same device key.
    */
   reloadOf?: HarnessPeer;
+  /**
+   * Leave every wait at what the app ships with (keyhive's 2 s sync interval
+   * and share-config debounce, the channel's and links' own retries) instead
+   * of the short ones tests normally run on. For a test that measures what a
+   * user would wait for. Only subduction's sync deadline is still shortened:
+   * its timer outlives the round and would hold the process open.
+   */
+  productionTimings?: boolean;
 }
 
 export async function startPeer(name: string, relayUrl: string, opts: StartPeerOptions = {}): Promise<HarnessPeer> {
@@ -169,19 +177,27 @@ export async function startPeer(name: string, relayUrl: string, opts: StartPeerO
     if (declared) sendOverlayFrame(declared);
   };
 
-  // The options the engine passes (src/shared/drive-engine.ts), with the two
-  // waits shortened so a test does not sit through production's 2 s rounds.
+  // The options the engine passes (src/shared/drive-engine.ts), with the
+  // waits shortened so a test does not sit through production's 2 s rounds —
+  // unless the test asked for production's.
+  const timings = opts.productionTimings
+    ? { subductionTimeouts: { syncMs: 5_000 } }
+    : {
+      syncRequestInterval: 150,
+      shareConfigDebounceMs: 50,
+      channelTimings: { helloRetryMs: 200, helloRetryMaxMs: 1_000, gapMs: 500 },
+      linkTimings: { handshakeMs: 5_000, retryBaseMs: 100, retryMaxMs: 1_000 },
+      // A sync round's deadline timer outlives the round, so the default 60 s
+      // would keep the process alive that long after the last test.
+      subductionTimeouts: { syncMs: 3_000, defaultMs: 3_000, healInitialDelayMs: 100, healMaxDelayMs: 1_000 },
+    };
   kr = await createKeyhiveRepo({
     storage,
     networkAdapter: adapter,
     peerIdSuffix: 'drive',
     getUserGroupId: async () => userGroupId,
     setUserGroupId: async (id) => { userGroupId = id; },
-    syncRequestInterval: 150,
-    shareConfigDebounceMs: 50,
-    serialize: true,
-    withShareConfig: true,
-    channelTimings: { helloRetryMs: 200, helloRetryMaxMs: 1_000, gapMs: 500 },
+    ...timings,
   });
   const booted = kr;
   const groupId = await booted.khOps.ensureUserGroup({ create: true });
@@ -277,6 +293,27 @@ export async function openDoc(peer: HarnessPeer, docId: string, timeoutMs = 45_0
     }
   }
   throw new Error(`${peer.name} could not open ${docId} within ${timeoutMs}ms: ${String(lastError)}`);
+}
+
+/**
+ * The commits and fragments that make up `handle`'s document, per Automerge,
+ * that are NOT in the peer's sync store. A peer can only give another peer
+ * what its sync store holds, so a change that is in the document but not in
+ * the store is one no later joiner can get from it.
+ *
+ * Empty is the invariant only at rest: compaction and the save that stores a
+ * new fragment are separate steps. So wait for it rather than sampling it, and
+ * assert the thing it protects as well — that a later member can load the
+ * document from this peer alone (tests/e2ee-history.test.ts does both).
+ */
+export function missingFromSyncStore(peer: HarnessPeer, handle: any): string[] {
+  const stored = new Set<string>();
+  for (const e of peer.storage.store.values()) {
+    if (e.key[0] === 'subduction-interceptor' && (e.key[1] === 'commits' || e.key[1] === 'fragments')) stored.add(e.key[3]);
+  }
+  return (peer.kr.Automerge.getFragmentMetadata(handle.doc()) as { head: string }[])
+    .map((m) => m.head)
+    .filter((head) => !stored.has(head));
 }
 
 // ── Reading the recording ───────────────────────────────────────────────────

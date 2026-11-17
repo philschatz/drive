@@ -93,6 +93,14 @@ interface DocEntry {
 /** See OPEN_DOCS_IN_BACKGROUND in the original worker. */
 const OPEN_DOCS_IN_BACKGROUND = true;
 
+/**
+ * How long something that is itself being waited on waits for a document to
+ * load (see `getOrLoadHandle`). Long enough for a link to come up and keyhive
+ * to sync on a slow connection; short enough that a document which is not
+ * coming does not look like a hang.
+ */
+const DOC_LOAD_WAIT_MS = 20_000;
+
 /** Order-insensitive head-set equality. A missing record never equals. */
 export function headsEqual(a: string[] | undefined, b: string[]): boolean {
   if (!a || a.length !== b.length) return false;
@@ -278,11 +286,30 @@ export class EngineCore {
   }
 
   // ── Doc registry ───────────────────────────────────────────────────────────
-  protected async getOrLoadHandle(docId: string): Promise<any> {
+  /**
+   * The handle for a document, loading it if need be.
+   *
+   * `Repo.find` rejects when nothing has the document. With documents syncing
+   * over encrypted links it can also simply go on waiting: the commits are
+   * here but the key that opens them has not arrived, or the peer that has the
+   * document is not linked yet. A caller that is itself being waited on (a
+   * request, the home-list reconcile, boot) gets a bounded wait and a plain
+   * error; one that is only preparing a document in the background passes
+   * `'unbounded'` and is called back whenever the document does turn up.
+   */
+  protected async getOrLoadHandle(docId: string, wait: 'bounded' | 'unbounded' = 'bounded'): Promise<any> {
     const existing = this.docRegistry.get(docId);
     if (existing) return existing.handle;
     const r = this.getRepo();
-    return await r.find(docId as any);
+    if (wait === 'unbounded') return await r.find(docId as any);
+    try {
+      return await r.find(docId as any, { signal: AbortSignal.timeout(DOC_LOAD_WAIT_MS) });
+    } catch (err: any) {
+      if (err?.name === 'TimeoutError' || err?.name === 'AbortError') {
+        throw new Error('Document is not available yet — it is still arriving, or its key has not reached this device.');
+      }
+      throw err;
+    }
   }
 
   protected getOrCreateEntry(docId: string, handle: any): DocEntry {
@@ -706,7 +733,7 @@ export class EngineCore {
       if (!pending) { pending = new Map(); this.pendingSubs.set(docId, pending); }
       pending.set(subId, sub);
       if (OPEN_DOCS_IN_BACKGROUND) {
-        this.getOrLoadHandle(docId)
+        this.getOrLoadHandle(docId, 'unbounded')
           .then(handle => this.getOrCreateEntry(docId, handle))
           .catch(err => log.warn(`subscribe-query open failed ${docId}:`, errMsg(err)));
       }
@@ -1025,13 +1052,13 @@ export class EngineCore {
       if (changed) {
         await this.host.kv.set(KEYS.docIds, list);
         this.emit({ type: 'doc-list-updated', list });
+        // Not awaited: a newly listed document may take a while to arrive (its
+        // peer is not linked yet, or its key is still on the way), and this
+        // reconcile must not hold up the next one while it does.
         for (const docId of newDocHandles) {
-          try {
-            const handle = await this.getOrLoadHandle(docId);
-            this.getOrCreateEntry(docId, handle);
-          } catch (err) {
-            log.warn(`reconcileHomeDocs: failed to pre-load ${docId}:`, errMsg(err));
-          }
+          void this.getOrLoadHandle(docId, 'unbounded')
+            .then((handle) => { this.getOrCreateEntry(docId, handle); })
+            .catch((err) => log.warn(`reconcileHomeDocs: failed to pre-load ${docId}:`, errMsg(err)));
         }
       }
     } catch (err) {
@@ -1088,8 +1115,6 @@ export class EngineCore {
         // peerId is `<device key>-drive-<random>` (see peer-id.ts). One engine
         // per device is enforced above this, by the tab-leader Web Lock.
         peerIdSuffix: 'drive',
-        serialize: true,
-        withShareConfig: true,
         // Debug mode only: record the most-recent keyhive (Rust/WASM) call so the
         // worker's error handler can name the call that trapped when the worker dies
         // on a WASM `unreachable` panic. See reportWorkerError in automerge-worker.ts.
@@ -1334,10 +1359,11 @@ export class EngineCore {
           return { docId: msg.docId };
         }
         // Await readiness OR unavailability so a doc no online peer has resolves
-        // the wait (as 'unavailable') instead of hanging forever. In this
-        // automerge-repo (subduction.37) `Repo.find()` already rejects on
-        // unavailable — caught below — but a handle that reaches this branch and
-        // then goes unavailable is reported as an error rather than left pending.
+        // the wait (as 'unavailable') instead of hanging forever. `Repo.find()`
+        // already rejects on unavailable, and getOrLoadHandle bounds the wait
+        // for a document that is neither — both caught below — but a handle
+        // that reaches this branch and then goes unavailable is reported as an
+        // error rather than left pending.
         await handle.whenReady(['ready', 'unavailable']);
         if (handle.isReady ? handle.isReady() : true) {
           progress(100, 'Ready');

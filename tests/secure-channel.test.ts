@@ -78,14 +78,13 @@ async function newKeys(): Promise<{ keys: CryptoKeyPair; peerId: string }> {
   return { keys, peerId: `${Buffer.from(raw).toString('base64')}-drive-${Math.random().toString(36).slice(2, 10)}` };
 }
 
-async function device(wire: Wire, opts: { inspectInbound?: any; gapMs?: number } = {}): Promise<Device> {
+async function device(wire: Wire, opts: { gapMs?: number } = {}): Promise<Device> {
   const { keys, peerId } = await newKeys();
   const log: string[] = [];
   const messages: any[] = [];
   const adapter = makeSecureChannelAdapter(FakeBase as any, wire.attach(peerId), {
     relayPeerId: RELAY_PEER_ID,
     privateKey: Promise.resolve(keys.privateKey),
-    inspectInbound: opts.inspectInbound,
     timings: { helloRetryMs: 50, helloRetryMaxMs: 200, gapMs: opts.gapMs ?? 150 },
   });
   adapter.on('peer-candidate', (p: any) => log.push(`+${p.peerId}`));
@@ -330,24 +329,5 @@ describe('what a sealed message may claim', () => {
     say(a, b, 'as myself');
     await until(() => b.messages.length === 1, 'the honest message');
     expect(Buffer.from(b.messages[0].data).toString()).toBe('as myself');
-  });
-
-  it('lets the caller refuse a message once it knows who sent it', async () => {
-    const wire = new Wire();
-    const seen: string[] = [];
-    const a = await make(wire);
-    const b = await make(wire, {
-      inspectInbound: (message: any, peer: any) => {
-        seen.push(Buffer.from(peer.deviceKey).toString('base64'));
-        return Buffer.from(message.data).toString() === 'refuse me' ? null : message;
-      },
-    });
-    await pair(wire, a, b);
-    say(a, b, 'refuse me');
-    say(a, b, 'keep me');
-    await until(() => b.messages.length === 1, 'the kept message');
-    expect(Buffer.from(b.messages[0].data).toString()).toBe('keep me');
-    // The device key handed over is the one in front of the sender's peerId.
-    expect(seen).toEqual([a.peerId.split('-')[0], a.peerId.split('-')[0]]);
   });
 });

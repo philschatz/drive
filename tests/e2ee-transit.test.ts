@@ -80,4 +80,20 @@ describe('document content in transit', () => {
     }
     expect(findLeaks(relay.frames, MARKER, alice.kr.Automerge)).toEqual([]);
   });
+
+  it('keeps what it syncs from encrypted too: the sync store holds ciphertext', async () => {
+    await befriend(alice, bob);
+    const { docId } = await createSharedDoc(alice, bob, { note: MARKER });
+    expect((await openDoc(bob, docId)).doc().note).toBe(MARKER);
+    await alice.kr.repo.flush();
+    await bob.kr.repo.flush();
+
+    // A peer is handed blobs from this store, never the document itself. (The
+    // Repo's own local copy of the document, under the document id, is plain.)
+    for (const peer of [alice, bob]) {
+      const blobs = [...peer.storage.store.values()].filter((e) => e.key[0] === 'subduction-interceptor' && e.key[1] === 'blobs');
+      expect(blobs.length).toBeGreaterThan(0);
+      for (const blob of blobs) expect(Buffer.from(blob.data).includes(MARKER)).toBe(false);
+    }
+  });
 });
