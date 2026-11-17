@@ -12,6 +12,7 @@ sequenceDiagram
   B->>R: relay-watch(group)
   R->>A: peer introduced
   R->>B: peer introduced
+  A->>B: secure channel: fresh keys, signed by each device
   A->>B: keyhive ops + sealed document keys
   B->>B: reachableDocs() → doc ids → Home
   A->>B: automerge sync — encrypted content

@@ -31,8 +31,9 @@ npm run dev    # Start dev server on port 3000
 ## Headless CLI
 
 A Node peer that syncs over the relay without a browser — useful for backups or a
-long-lived sync node. It runs the same engine as the app, so it is end-to-end
-encrypted (keyhive) and identifies as one of your linked devices.
+long-lived sync node. It runs the same engine as the app, so everything it
+exchanges with another device is encrypted between the two (the relay cannot
+read it), and it identifies as one of your linked devices.
 
 ```bash
 npm run cli -- accept-invite "<link>"  # link this device (Settings -> Link Device in the app), then exit
