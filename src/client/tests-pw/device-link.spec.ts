@@ -148,18 +148,20 @@ test('linking a new device via rendezvous converges both onto one user-group', a
       { label: 'deviceB sees both devices' },
     );
 
-    // The device list marks a device online when the peer list contains its
-    // peerId (`<agentId>-drive`) — assert that source signal from each side.
+    // The device list marks a device online when the peer list contains a
+    // peerId of that device — `<agentId>-drive`, plus a per-boot random
+    // component under the newer bridge, so match on the agentId prefix.
+    const hasDevice = (peers: string[], agentId: string) => peers.some((p) => p.startsWith(`${agentId}-`));
     const idB = await deviceB.call('getIdentity');
     const idA = await deviceA.call('getIdentity');
     await waitFor(
       () => deviceA!.call('getConnectedPeers'),
-      (peers) => peers.includes(`${idB.agentId}-drive`),
+      (peers) => hasDevice(peers, idB.agentId),
       { label: 'deviceA sees deviceB online' },
     );
     await waitFor(
       () => deviceB!.call('getConnectedPeers'),
-      (peers) => peers.includes(`${idA.agentId}-drive`),
+      (peers) => hasDevice(peers, idA.agentId),
       { label: 'deviceB sees deviceA online' },
     );
 
@@ -177,7 +179,7 @@ test('linking a new device via rendezvous converges both onto one user-group', a
     deviceB = undefined;
     await waitFor(
       () => deviceA!.call('getConnectedPeers'),
-      (peers) => !peers.includes(`${idB.agentId}-drive`),
+      (peers) => !hasDevice(peers, idB.agentId),
       { label: 'deviceA drops the departed deviceB' },
     );
     // Exact match is safe here: this targets the light-DOM <span>, not the

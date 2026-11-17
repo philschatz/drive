@@ -38,6 +38,7 @@ import { PeerDot } from '../../common/PeerDot';
 import { RenameSheet } from '../../common/RenameSheet';
 import { getDeviceName, setDeviceName, resolveDeviceName } from '../../device-names';
 import { PRODUCTION_RELAY_URL } from '../../../../shared/relay-identity';
+import { agentIdOfPeerId } from '../../../../shared/peer-id';
 import { isDebugEnabled } from '../../../shared/idb-storage';
 import { SettingsGroup, SettingsProse } from '../SettingsGroup';
 import { CopyRow } from '../CopyRow';
@@ -85,10 +86,9 @@ export function DebuggingSettings() {
   /** The Open-link form's draft. */
   const [linkUrl, setLinkUrl] = useState('');
 
-  // This device's peerId is "<base64 agentId>-drive"; the prefix is the agentId
-  // its device name is keyed by (base64 never contains '-', so the split is exact).
+  // The agentId (peerId prefix) is what this device's name is keyed by.
   const myPeerId = getWorkerPeerId();
-  const myAgentId = myPeerId ? myPeerId.split('-')[0] : '';
+  const myAgentId = myPeerId ? agentIdOfPeerId(myPeerId) : '';
 
   const handleToggleDebug = async () => {
     if (busy) return;
@@ -197,8 +197,7 @@ export function DebuggingSettings() {
           </md-list-item>
         ) : (
           peers.map(peerId => {
-            // peerId is "<base64 agentId>-drive"; the prefix is the device agentId.
-            const agentId = peerId.split('-')[0];
+            const agentId = agentIdOfPeerId(peerId);
             // NOT resolveDeviceName: its fallback is generateDefaultDeviceName(),
             // i.e. *this* browser's name, which would mislabel every unnamed peer.
             const name = getDeviceName(agentId);

@@ -199,6 +199,14 @@ export function startTabRouter(opts: TabRouterOptions): TabRouter {
 
     if (STICKY.has(msg.type)) sticky.set(stickyKey(msg.type), msg);
     else if (msg.type === STICKY_BY_PEER) stickyPeers.set((msg as any).peerId, msg);
+    // A peerId names one engine boot of a remote device, so every reload of a
+    // peer adds a new key here. Drop the per-peer state of whoever just left —
+    // on `peer-disconnected` only, whose list is the survivors; a `p2p-status`
+    // can legitimately precede the `peer-connected` that first lists its peer.
+    if (msg.type === 'peer-disconnected') {
+      const live = new Set(msg.peers);
+      for (const peerId of stickyPeers.keys()) if (!live.has(peerId)) stickyPeers.delete(peerId);
+    }
 
     if (BY_REQUEST_ID.has(msg.type)) {
       const id = (msg as any).id as number;

@@ -4,6 +4,7 @@ import type { PeerState } from './automerge';
 import { getFriendName } from '../friend-names';
 
 import { MATERIAL_CATEGORICAL as PEER_COLORS } from './categorical-colors';
+import { agentIdOfPeerId } from '../../../shared/peer-id';
 
 export interface PresenceState {
   viewing: boolean;
@@ -21,10 +22,10 @@ export interface PresenceState {
 /**
  * Stable identity for a peer: the user-group id when the peer advertised one
  * (collapses a user's many devices to one identity), else the per-device agentId
- * parsed from the peerId. base64 never contains '-', so the split is unambiguous.
+ * parsed from the peerId (see shared/peer-id.ts).
  */
 export function peerIdentityKey(peerId: string, userGroupId?: string | null): string {
-  return userGroupId || peerId.split('-')[0];
+  return userGroupId || agentIdOfPeerId(peerId);
 }
 
 /** The name to show for a stable identity key (see peerIdentityKey). */

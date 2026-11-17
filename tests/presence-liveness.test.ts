@@ -10,6 +10,7 @@
  */
 
 import { freshPresencePeerIds, PRESENCE_STALE_MS } from '../src/shared/drive-engine';
+import { visiblePresencePeerIds } from '../src/shared/engine-presence';
 
 describe('freshPresencePeerIds', () => {
   const NOW = 1_000_000_000;
@@ -47,5 +48,35 @@ describe('freshPresencePeerIds', () => {
     const seen = new Map([['peer-a', NOW - 5000]]);
     expect(freshPresencePeerIds(seen, NOW, 4000).size).toBe(0);
     expect(freshPresencePeerIds(seen, NOW, 6000)).toEqual(new Set(['peer-a']));
+  });
+});
+
+describe('visiblePresencePeerIds', () => {
+  const NOW = 1_000_000_000;
+  const KEY = 'tUakwkAvGgclyhSdcw0sPKbDexSAguoN204IoFttT9M=';
+
+  it('hides a rebooted peer\'s previous peerId as soon as its new one is seen', () => {
+    // The bridge mints a new peerId on every engine boot. The old id never says
+    // goodbye on a reload, so it is still "fresh" — showing both would render the
+    // same device twice (a frozen ghost caret next to the live one).
+    const lastSeen = new Map([
+      [`${KEY}-drive-before00`, NOW - 4000],
+      [`${KEY}-drive-after000`, NOW - 100],
+    ]);
+    expect([...freshPresencePeerIds(lastSeen, NOW)].length).toBe(2);
+    expect([...visiblePresencePeerIds(lastSeen, NOW)]).toEqual([`${KEY}-drive-after000`]);
+  });
+
+  it('still shows two different devices of the same user', () => {
+    const lastSeen = new Map([
+      ['AAAA=-drive-11111111', NOW - 100],
+      ['BBBB=-drive-22222222', NOW - 200],
+    ]);
+    expect(visiblePresencePeerIds(lastSeen, NOW).size).toBe(2);
+  });
+
+  it('never resurrects a stale id, even when it is the only one for its device', () => {
+    const lastSeen = new Map([[`${KEY}-drive-before00`, NOW - PRESENCE_STALE_MS - 1]]);
+    expect(visiblePresencePeerIds(lastSeen, NOW).size).toBe(0);
   });
 });

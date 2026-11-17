@@ -322,6 +322,31 @@ describe('client lifecycle', () => {
     expect(peerMsgs).toEqual([{ type: 'peer-connected', peerCount: 1, peers: ['a'] }]);
   });
 
+  it('forgets a departed peer\'s transport, so the replay does not grow per remote reload', () => {
+    const h = track(harness());
+    // Each reload of a remote device is a NEW peerId (the bridge appends a
+    // per-boot random component), so per-peer sticky state must die with the peer.
+    h.w.emit({ type: 'peer-connected', peerCount: 1, peers: ['dev-boot1'] } as any);
+    h.w.emit({ type: 'p2p-status', peerId: 'dev-boot1', transport: 'direct' } as any);
+    h.w.emit({ type: 'peer-disconnected', peerCount: 0, peers: [] } as any);
+    h.w.emit({ type: 'peer-connected', peerCount: 1, peers: ['dev-boot2'] } as any);
+    h.w.emit({ type: 'p2p-status', peerId: 'dev-boot2', transport: 'relay' } as any);
+
+    join(h, 'late');
+    const transports = h.b.ofKind('welcome')[0].replay.filter((m) => m.type === 'p2p-status');
+    expect(transports).toEqual([{ type: 'p2p-status', peerId: 'dev-boot2', transport: 'relay' }]);
+  });
+
+  it('keeps a transport announced before its peer is first listed', () => {
+    const h = track(harness());
+    h.w.emit({ type: 'p2p-status', peerId: 'early', transport: 'direct' } as any);
+    h.w.emit({ type: 'peer-connected', peerCount: 1, peers: ['someone-else'] } as any);
+
+    join(h, 'late');
+    const transports = h.b.ofKind('welcome')[0].replay.filter((m) => m.type === 'p2p-status');
+    expect(transports).toEqual([{ type: 'p2p-status', peerId: 'early', transport: 'direct' }]);
+  });
+
   it('releases a departed tab\'s subscriptions', () => {
     const h = track(harness());
     const b = join(h, 'b');

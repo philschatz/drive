@@ -20,6 +20,7 @@ import {
 import { usePeerList, usePeerTransports, onDeviceNamesUpdated, type PeerTransport } from '../worker-api';
 import { getDeviceName } from '../device-names';
 import { generateDefaultDeviceName } from '../lib/device-name';
+import { agentIdOfPeerId } from '../../../shared/peer-id';
 
 export function useDevices(opts?: {
   onError?: (msg: string) => void;
@@ -108,20 +109,36 @@ export function mostConnectedStatus(
 }
 
 /**
+ * Per-device connectivity from the connected peer list, keyed by base64 agentId.
+ *
+ * A peerId names one engine boot of a device, not the device (see
+ * shared/peer-id.ts), so right after a peer reloads the list can briefly hold
+ * two peerIds with the same agentId: the new connection and the old one that
+ * has not timed out yet. The device is as connected as its best peerId — a
+ * direct channel on either wins, whatever order the list is in.
+ */
+export function deviceStatusesFromPeers(
+  peers: readonly string[],
+  transports: Readonly<Record<string, 'direct' | 'relay'>>,
+): Record<string, DeviceStatus> {
+  const statuses: Record<string, DeviceStatus> = {};
+  for (const peerId of peers) {
+    const agentId = agentIdOfPeerId(peerId);
+    const transport = transports[peerId] ?? 'relay';
+    if (statuses[agentId]?.transport === 'direct') continue;
+    statuses[agentId] = { online: true, transport };
+  }
+  return statuses;
+}
+
+/**
  * Live per-device connectivity, keyed by base64 agentId. A device is online iff
- * the relay's peer list contains a peerId whose prefix is that agentId (a peerId
- * is `<base64 agentId>-drive`; base64 never contains '-', so the split is exact).
+ * the relay's peer list contains a peerId whose prefix is that agentId.
  * The map covers every connected peer, not just the user's own devices — callers
  * look up by agentId, so extra keys are harmless. Absent key = offline.
  */
 export function useDeviceStatuses(): Record<string, DeviceStatus> {
   const peers = usePeerList();
   const transports = usePeerTransports();
-  return useMemo(() => {
-    const statuses: Record<string, DeviceStatus> = {};
-    for (const peerId of peers) {
-      statuses[peerId.split('-')[0]] = { online: true, transport: transports[peerId] ?? 'relay' };
-    }
-    return statuses;
-  }, [peers, transports]);
+  return useMemo(() => deviceStatusesFromPeers(peers, transports), [peers, transports]);
 }

@@ -14,6 +14,7 @@ import type { EngineCore } from './drive-engine';
 import type { MainToWorker } from './worker-protocol';
 import { errMsg } from './keyhive-ops';
 import { createLogger } from './logger';
+import { newestPeerPerAgent } from './peer-id';
 
 const log = createLogger('engine');
 
@@ -61,6 +62,23 @@ export function freshPresencePeerIds(
     if (now - seenAt < staleMs) fresh.add(peerId);
   }
   return fresh;
+}
+
+/**
+ * The peers to SHOW: fresh ones, collapsed to one peerId per device.
+ *
+ * A peerId names one engine boot, not a device (see peer-id.ts): a peer that
+ * reloads returns under a new peerId while its previous one — which never said
+ * goodbye — is still inside the stale window. Keeping only the newest-seen id
+ * per agent drops that ghost as soon as the device is heard from again, rather
+ * than PRESENCE_STALE_MS later.
+ */
+export function visiblePresencePeerIds(
+  lastSeen: ReadonlyMap<string, number>,
+  now: number,
+  staleMs: number = PRESENCE_STALE_MS,
+): Set<string> {
+  return newestPeerPerAgent(freshPresencePeerIds(lastSeen, now, staleMs), lastSeen);
 }
 
 /**
@@ -229,11 +247,11 @@ export function EnginePresence<C extends EngineCtor>(Base: C):
       let lastEmittedFresh = new Set<string>();
       const sendPresence = async (): Promise<boolean> => {
         const raw = presence.getPeerStates().value;
-        const fresh = freshPresencePeerIds(lastSeen, Date.now());
+        const fresh = visiblePresencePeerIds(lastSeen, Date.now());
         const peers: Record<string, any> = {};
         let allOk = true;
         for (const [peerId, st] of Object.entries<any>(raw)) {
-          if (!fresh.has(peerId)) continue; // stale — hide and skip decrypt work
+          if (!fresh.has(peerId)) continue; // stale or superseded — hide and skip decrypt work
           const value: Record<string, unknown> = {};
           for (const [ch, enc] of Object.entries<any>(st?.value ?? {})) {
             try { value[ch] = await this.decryptPresenceValue(doc, enc as Uint8Array); }
@@ -282,7 +300,7 @@ export function EnginePresence<C extends EngineCtor>(Base: C):
       const setsEqual = (a: Set<string>, b: Set<string>) =>
         a.size === b.size && [...a].every(x => b.has(x));
       entry.liveness = setInterval(() => {
-        if (!setsEqual(freshPresencePeerIds(lastSeen, Date.now()), lastEmittedFresh)) {
+        if (!setsEqual(visiblePresencePeerIds(lastSeen, Date.now()), lastEmittedFresh)) {
           void sendPresence();
         }
       }, PRESENCE_LIVENESS_CHECK_MS);
