@@ -96,6 +96,14 @@ export interface KeyhiveRepo {
   khDocIdFromAm: (docId: string) => any;
   /** Slot a pre-generated keyhive doc-id for the next repo.create2() (create-doc flow). */
   setNextDocId: (bytes: Uint8Array) => void;
+  /**
+   * Stop the hive (its sync timers, its network adapter) and shut the Repo
+   * down, flushing storage. Nothing here is usable afterwards. The app never
+   * needs this — an engine lives as long as its process — but a test that boots
+   * the real stack cannot exit without it: the bridge's adapter holds interval
+   * timers that are not unref'd.
+   */
+  close: () => Promise<void>;
 }
 
 /**
@@ -276,6 +284,7 @@ export async function createKeyhiveRepo(opts: CreateKeyhiveRepoOptions): Promise
   // notice the new epoch and re-encrypt (see flushPresenceOutbox). Saving the
   // archive about a second after each event makes that the exception: without
   // it, every reload of a device that has written anything loses an epoch.
+  let stopArchiveTimer = () => {};
   {
     const emitter = (integration as any).emitter;
     let timer: any = null;
@@ -302,10 +311,22 @@ export async function createKeyhiveRepo(opts: CreateKeyhiveRepoOptions): Promise
       timer = setTimeout(() => { timer = null; void persistArchive(); }, 1000);
       if (typeof timer?.unref === 'function') timer.unref();
     });
+    stopArchiveTimer = () => { if (timer) { clearTimeout(timer); timer = null; } };
   }
+
+  let closed = false;
+  const close = async () => {
+    if (closed) return;
+    closed = true;
+    stopArchiveTimer();
+    // The hive first: closing it disconnects the network adapter, so nothing
+    // arrives while the Repo below flushes and releases storage.
+    try { hive.close(); } catch (err) { log.warn('closing the hive failed:', err); }
+    try { await repo.shutdown(); } catch (err) { log.warn('shutting the repo down failed:', err); }
+  };
 
   return {
     repo, khOps, integration, bridge,
-    Automerge, Presence, amDocIdFromBytes, khDocIdFromAm, setNextDocId,
+    Automerge, Presence, amDocIdFromBytes, khDocIdFromAm, setNextDocId, close,
   };
 }
