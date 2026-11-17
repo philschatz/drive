@@ -52,30 +52,52 @@ function describeData(data: unknown): string {
 }
 
 /**
- * Extract the signed payload from a keyhive `Signed` blob without loading the
- * keyhive WASM module (which the relay deliberately avoids).
+ * Width of the length prefix keyhive's frame uses for a payload of `n` bytes.
  *
- * `Signed::to_bytes()` is `bincode::serialize(Signed<Vec<u8>>)`. With bincode's
- * default config (little-endian, fixed-width lengths) and the struct field order
- * `payload, issuer, signature`, the layout is:
- *   [u64-LE payload length][payload bytes][32-byte issuer][64-byte signature]
- * Since `payload` is first, we can slice it off using just the leading length.
+ * The prefix is a canonical variable-width integer: one byte for n < 248, and
+ * above that a marker byte followed by k big-endian bytes, where each width
+ * starts counting where the previous one ended (so every length has exactly one
+ * encoding): 248..503 take 2 bytes, 504..66039 take 3, and so on.
  */
-function extractSignedPayload(signedBytes: Uint8Array): Uint8Array | undefined {
-  if (signedBytes.length < 8) return undefined;
-  const view = new DataView(
-    signedBytes.buffer,
-    signedBytes.byteOffset,
-    signedBytes.byteLength
-  );
-  const len = Number(view.getBigUint64(0, true));
-  if (len < 0 || 8 + len > signedBytes.length) return undefined;
-  return signedBytes.subarray(8, 8 + len);
+function lengthPrefixSize(n: number): number {
+  let limit = 248;
+  let span = 256;
+  let size = 1;
+  while (n >= limit) {
+    limit += span;
+    span *= 256;
+    size++;
+  }
+  return size;
 }
 
-// Prefix byte keyhive uses to mark a signed payload as encrypted document
-// content (mirrors ENC_ENCRYPTED in the keyhive network adapter's messages.ts).
-const ENC_ENCRYPTED = 0x01;
+/**
+ * Extract the signed payload from a keyhive `SignedBytes` frame without loading
+ * the keyhive WASM module (which the relay deliberately avoids).
+ *
+ * The frame is
+ *   "KHB" | version (1) | issuer verifying key (32) | payload length | payload | signature (64)
+ * with a variable-width length (see lengthPrefixSize). Rather than decode that
+ * integer, find the one prefix width consistent with the frame's total size:
+ * everything else in the frame is fixed-width, so the payload is whatever lies
+ * between the prefix and the trailing signature.
+ *
+ * Returns undefined for anything that is not such a frame. The relay only logs
+ * with this; nothing is verified.
+ */
+export function extractSignedPayload(signedBytes: Uint8Array): Uint8Array | undefined {
+  const HEADER = 4 + 32; // magic + version, issuer
+  const SIGNATURE = 64;
+  if (signedBytes.length < HEADER + 1 + SIGNATURE) return undefined;
+  if (signedBytes[0] !== 0x4b || signedBytes[1] !== 0x48 || signedBytes[2] !== 0x42) return undefined; // "KHB"
+  const body = signedBytes.length - HEADER - SIGNATURE; // prefix + payload
+  for (let prefix = 1; prefix <= 9; prefix++) {
+    const n = body - prefix;
+    if (n < 0) break;
+    if (lengthPrefixSize(n) === prefix) return signedBytes.subarray(HEADER + prefix, HEADER + prefix + n);
+  }
+  return undefined;
+}
 
 function isBytes(v: unknown): v is Uint8Array {
   return v instanceof Uint8Array || Buffer.isBuffer(v);
@@ -118,8 +140,11 @@ function stringifyValue(value: unknown): string {
   }
 }
 
-// Format the inner (post-envelope) payload according to the message type. Every
-// keyhive payload is CBOR; sync/change payloads are an encryption-prefixed blob.
+// Format a message payload according to its type. keyhive-* payloads (found
+// inside the signed envelope) are CBOR. `ephemeral` is CBOR too, and `sync` /
+// `change` are raw Automerge sync messages: the keyhive bridge signs only its
+// own keyhive-* messages and passes every other message through untouched, so
+// document content crosses the relay unencrypted.
 function describePayload(type: string, payload: Uint8Array): string {
   switch (type) {
     case 'ephemeral': {
@@ -127,8 +152,9 @@ function describePayload(type: string, payload: Uint8Array): string {
       return `ephemeral=${stringifyValue(decode(payload))}`;
     }
     case 'keyhive-sync-check': {
-      const d = decode(payload) as { myTotal?: number; beliefOfTheirTotal?: number };
-      return `check{myTotal=${d.myTotal}, beliefOfTheirTotal=${d.beliefOfTheirTotal}}`;
+      const d = decode(payload) as { senderTotal?: number; senderSyncpoint?: number; senderDigest?: unknown };
+      const digest = isBytes(d.senderDigest) ? hexPreview(d.senderDigest) : String(d.senderDigest);
+      return `check{senderTotal=${d.senderTotal}, senderSyncpoint=${d.senderSyncpoint}, digest=${digest}}`;
     }
     case 'keyhive-sync-request': {
       const d = decode(payload) as { found?: unknown[]; pending?: unknown[] };
@@ -155,36 +181,40 @@ function describePayload(type: string, payload: Uint8Array): string {
     case 'sync':
     case 'change': {
       if (payload.length === 0) return '[empty]';
-      // Document content is encrypted; we can only confirm the encryption marker
-      // and show a sanitized peek at the ciphertext for correlation.
-      const head = sanitizeAscii(payload.subarray(0, 10));
-      const tail = sanitizeAscii(payload.subarray(Math.max(0, payload.length - 10)));
-      if (payload[0] === ENC_ENCRYPTED) {
-        return `[encrypted, ${payload.length} bytes, "${head}…${tail}"]`;
-      }
-      const prefix = payload[0].toString(16).padStart(2, '0');
-      return `[plaintext?! prefix=0x${prefix}, ${payload.length} bytes, "${head}…${tail}"]`;
+      // A raw Automerge sync message. Say so plainly; do not print its bytes —
+      // they are the user's document content.
+      return `[automerge sync, ${payload.length} bytes, not encrypted]`;
     }
     default:
       return describeData(payload);
   }
 }
 
+/** Describe a payload by type, falling back to a fingerprint if it will not decode. */
+function describePayloadSafely(type: string, payload: Uint8Array): string {
+  try {
+    return describePayload(type, payload);
+  } catch {
+    return describeData(payload);
+  }
+}
+
 /**
- * Decode a keyhive message envelope and describe its contents.
+ * Describe a message's `data`.
  *
- * Every keyhive-adapter message wraps `data` as CBOR `{ contactCard, signed }`,
- * where `signed` is a `Signed` blob over the real payload. We peel both layers
- * (see extractSignedPayload) and format the payload per message type. The
- * contact card and signer are always carried in the envelope, so we note their
- * presence rather than decoding them.
+ * A keyhive-* message wraps its payload as CBOR `{ contactCard, signed }`, where
+ * `signed` is a keyhive signed frame over the real payload. We peel both layers
+ * (see extractSignedPayload) and format the payload per message type; the signer
+ * and the optional contact card are noted, not decoded. Every other message
+ * (document sync, ephemeral) is not enveloped at all and is described directly.
  */
 function describeMessageData(type: string, data: unknown): string {
   if (!isBytes(data)) return describeData(data);
+  if (!type.startsWith('keyhive-')) return describePayloadSafely(type, data);
 
-  let envelope: { contactCard?: string; signed?: unknown };
+  let envelope: { contactCard?: unknown; signed?: unknown };
   try {
-    envelope = decode(data) as { contactCard?: string; signed?: unknown };
+    envelope = decode(data) as { contactCard?: unknown; signed?: unknown };
   } catch {
     return describeData(data);
   }
@@ -193,16 +223,11 @@ function describeMessageData(type: string, data: unknown): string {
   const payload = extractSignedPayload(envelope.signed);
   if (!payload) return describeData(data);
 
-  let body: string;
-  try {
-    body = describePayload(type, payload);
-  } catch {
-    body = describeData(payload);
-  }
+  const body = describePayloadSafely(type, payload);
 
   // Note (don't decode) the envelope-level signer and optional contact card.
   const notes = ['signer'];
-  if (envelope.contactCard && envelope.contactCard.length > 0) notes.push('card');
+  if (isBytes(envelope.contactCard) && envelope.contactCard.length > 0) notes.push('card');
   return `${body} +(${notes.join(', ')})`;
 }
 
@@ -210,7 +235,7 @@ function describeMessageData(type: string, data: unknown): string {
  * One line per routed message: a firehose, hence debug.
  *
  * The level check comes FIRST and guards everything below it. Describing a
- * message decodes CBOR, peels a keyhive `Signed` envelope and hashes the
+ * message decodes CBOR, peels a keyhive signed frame and hashes the
  * payload — far too much to do per message on the off chance someone is
  * watching. (This replaced an `if (RELAY_QUIET) return` that had the same job.)
  */

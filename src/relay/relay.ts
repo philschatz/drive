@@ -72,8 +72,12 @@ function clientIp(request?: IncomingMessage): string | undefined {
  *  - No targetId (or the target is gone) → forward to the sender's introduced
  *    peers only. There is no relay-wide broadcast.
  *
- * The relay never interprets message content. The `data` field is treated as
- * opaque encrypted bytes and logged only by size.
+ * The relay never interprets message content: the `data` field is treated as
+ * opaque bytes and logged only by size. That is a property of this code, not of
+ * the bytes. Document sync messages are NOT encrypted on the wire — the keyhive
+ * bridge signs only its own `keyhive-*` messages and passes everything else
+ * through untouched (verified by capturing a sync message and reading the
+ * document text out of it). Presence values are encrypted, by the app itself.
  *
  * ── Discovery privacy: current limits, and the planned HMAC-token fix ──────
  *
@@ -82,10 +86,17 @@ function clientIp(request?: IncomingMessage): string | undefined {
  * unguessable (32-byte keys), so a true stranger can name nobody — but anyone
  * who ever LEARNED a group id (an ex-friend; anyone once shown a contact
  * bundle) can announce it as their own group, or impersonate a group that two
- * victims mutually watch, and get introduced at the transport level. Keyhive
- * verifies identity and encrypts everything above, so an impostor reads
- * nothing — but they gain a live connection, the target's online status, and
- * (via the automatic WebRTC upgrade's ICE exchange) potentially its public IP.
+ * victims mutually watch, and get introduced at the transport level. They
+ * gain a live connection, the target's online status, and (via the automatic
+ * WebRTC upgrade's ICE exchange) potentially its public IP.
+ *
+ * What ELSE an introduced impostor could obtain is an open question, not a
+ * guarantee. Keyhive's own sync messages are signed and verified against the
+ * sender's peerId, and a document is only announced to a peerId whose key has
+ * keyhive access to it — but document sync itself is neither encrypted nor
+ * signed (see above), and peerIds are self-asserted. This comment used to say
+ * an impostor "reads nothing"; that rested on document encryption the current
+ * bridge path does not do, and has not been re-analysed since.
  *
  * The agreed fix is daily HMAC rendezvous tokens, deferred until DriveSettings
  * is something every device reliably has:
