@@ -331,7 +331,7 @@
           "value": "Cheapest option"
         },
         "r19:c2": {
-          "value": "=INDEX({R[r1]C[c2]}:{R[r1]C[c5]},MATCH(MIN({R[r11]C[c2]}:{R[r11]C[c5]}),{R[r11]C[c2]}:{R[r11]C[c5]},0))"
+          "value": "=INDEX({R[r1]C[c2]}:{R[r1]C[c5]},1,MATCH(MIN({R[r11]C[c2]}:{R[r11]C[c5]}),{R[r11]C[c2]}:{R[r11]C[c5]},0))"
         },
         "r20:c1": {
           "value": "Cheapest grand total"
