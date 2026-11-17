@@ -11,17 +11,16 @@ import { stripComments } from './support/strip-comments';
 const SRC = join(__dirname, '..', 'src');
 
 /**
- * The only places a raw console reference is correct. Each one intercepts or
- * implements console itself, so routing it through the logger is impossible or
- * circular.
+ * The only place a raw console reference is correct: it implements console's
+ * replacement, so routing it through the logger would be circular.
+ *
+ * (The worker used to be here too, patching console to drop the keyhive
+ * bridge's firehose. The bridge now has its own log level, which
+ * createKeyhiveRepo sets from ours — so nothing intercepts console any more.)
  */
 const ALLOWED = new Set([
   // Implements the logger's console sink.
   'shared/logger.ts',
-  // Patches console.log/debug/info to drop the third-party keyhive bridge's
-  // firehose ([AMRepoKeyhive], [Streaming]) — library output never reaches our
-  // logger, so intercepting the real console is the only lever.
-  'client/worker/automerge-worker.ts',
 ]);
 
 /** Playwright specs forward the *page's* console to the runner; not app code. */

@@ -55,17 +55,6 @@ self.addEventListener('unhandledrejection', (e: PromiseRejectionEvent) => report
 const pendingMessages: MessageEvent[] = [];
 self.onmessage = (e: MessageEvent) => { pendingMessages.push(e); };
 
-// Suppress the chatty log/debug/info firehose from the third-party keyhive bridge
-// (warn/error pass through so real failures stay visible).
-const SILENCED_LOG_PREFIXES = ['[AMRepoKeyhive]', '[Streaming]', '[Streaming+]'];
-for (const level of ['log', 'debug', 'info'] as const) {
-  const orig = console[level].bind(console);
-  console[level] = (...args: unknown[]) => {
-    if (typeof args[0] === 'string' && SILENCED_LOG_PREFIXES.some((p) => (args[0] as string).startsWith(p))) return;
-    orig(...args);
-  };
-}
-
 let engine: DriveEngineInstance | null = null;
 let p2pAdapter: WebRTCRelayAdapter | null = null;
 let pendingWebrtcPort: MessagePort | null = null;
