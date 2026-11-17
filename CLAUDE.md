@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Collaborative document editor built on Automerge CRDTs. Currently supports Calendar, TaskList, DataGrid, Counters, Sentences, and Kitchen (a schema.org/Recipe collection with cook-to-learn gamification) document types. The frontend is a Preact PWA; the backend is an Express server with CalDAV support. Documents sync in real-time via automerge-repo through a WebSocket relay, with an opportunistic upgrade to direct peer-to-peer WebRTC channels (see Sync & Networking).
+Collaborative document editor built on Automerge CRDTs. Currently supports Calendar, TaskList, DataGrid, Counters, Sentences, Kitchen (a schema.org/Recipe collection with cook-to-learn gamification), and Timeline (a life diary with fuzzy dates, filled in retroactively — see Timeline) document types. The frontend is a Preact PWA; the backend is an Express server with CalDAV support. Documents sync in real-time via automerge-repo through a WebSocket relay, with an opportunistic upgrade to direct peer-to-peer WebRTC channels (see Sync & Networking).
 
 ## Commands
 
@@ -45,15 +45,15 @@ Each top-level directory under `src/` is one program or one runtime, and the bou
 
 **Browser** (`src/client/`) — split by *thread*, because the two halves cannot import each other:
 
-- `src/client/ui/` — everything Preact/DOM. `main.tsx`, `App.tsx`, `worker-api.ts` (the main thread's handle on the worker), `tab-transport.ts`/`tab-router.ts`/`multi-tab.ts` (the cross-tab layer — see Tabs & the single engine), `webrtc-bridge.ts`, and the feature dirs: `doc-plugins/` (`calendar/`, `tasks/`, `datagrid/`, `counters/`, `sentences/`, `kitchen/` + the registry `index.ts`/`types.ts`), `home/`, `source/`, `friends/`, `sharing/`, `settings/`, `debug/`, `components/`, `lib/`, and `common/` (shared UI hooks + components)
+- `src/client/ui/` — everything Preact/DOM. `main.tsx`, `App.tsx`, `worker-api.ts` (the main thread's handle on the worker), `tab-transport.ts`/`tab-router.ts`/`multi-tab.ts` (the cross-tab layer — see Tabs & the single engine), `webrtc-bridge.ts`, and the feature dirs: `doc-plugins/` (`calendar/`, `tasks/`, `datagrid/`, `counters/`, `sentences/`, `kitchen/`, `timeline/` + the registry `index.ts`/`types.ts`), `home/`, `source/`, `friends/`, `sharing/`, `settings/`, `debug/`, `components/`, `lib/`, and `common/` (shared UI hooks + components)
 - `src/client/worker/` — the Web Worker: `automerge-worker.ts` and the things only it loads (`idb-kvstore.ts`)
 - `src/client/shared/` — the small set of modules genuinely used by *both* threads: `idb-storage.ts`, `worker-client.ts`, `tab-channel.ts`
 - `src/client/assets/` — `globals.css` and `public/` (favicon, PWA icons). `index.html` stays at `src/client/` because it is Vite's root entry
 - `src/client/tests-pw/` — Playwright E2E (editor UI specs + two-peer sync harness)
 
-**Portable** (`src/shared/`) — code with no DOM and no Preact, imported by the browser *and* the Node programs: `drive-engine.ts`, `keyhive-repo.ts`/`keyhive-ops.ts`, `jq.ts`, `worker-protocol.ts`, `schemas/`, the WebRTC upgrade stack (`webrtc-relay-adapter.ts`, `webrtc-bridge-core.ts`, `webrtc-chunk.ts`, `ice-config.ts` — see Sync & Networking), the secure channel between devices (`secure-channel.ts`), encrypted document sync (`subduction-links.ts`, `subduction-interceptor.ts`, `subduction-policy.ts`, `subduction-scope.ts`, `subduction-storage-guard.ts`, `subduction-signer.ts`, `keyhive-only-adapter.ts` — see Sync & Networking), the overlay-frame plumbing (`relay-overlay.ts`), and the small utilities. `tests/` holds the repo-root Jest suites.
+**Portable** (`src/shared/`) — code with no DOM and no Preact, imported by the browser *and* the Node programs: `drive-engine.ts`, `keyhive-repo.ts`/`keyhive-ops.ts`, `jq.ts`, `worker-protocol.ts`, `schemas/`, the WebRTC upgrade stack (`webrtc-relay-adapter.ts`, `webrtc-bridge-core.ts`, `webrtc-chunk.ts`, `ice-config.ts` — see Sync & Networking), the secure channel between devices (`secure-channel.ts`), encrypted document sync (`subduction-links.ts`, `subduction-interceptor.ts`, `subduction-policy.ts`, `subduction-scope.ts`, `subduction-storage-guard.ts`, `subduction-signer.ts`, `keyhive-only-adapter.ts` — see Sync & Networking), the overlay-frame plumbing (`relay-overlay.ts`), the Timeline's date reasoning (`timeline/` — see Timeline), and the small utilities. `tests/` holds the repo-root Jest suites.
 
-**The one rule that matters:** `src/shared/**` must never import from `src/client/**`, and `src/client/ui` and `src/client/worker` must never import each other — including type-only imports, which are invisible at runtime and so would never fail loudly. Anything two of them need goes in `src/client/shared` (browser APIs allowed) or `src/shared` (portable). Adding a doc type means a `plugin.tsx` in `ui/doc-plugins/<type>/` plus a schema core in `src/shared/schemas/`.
+**The one rule that matters:** `src/shared/**` must never import from `src/client/**`, and `src/client/ui` and `src/client/worker` must never import each other — including type-only imports, which are invisible at runtime and so would never fail loudly. Anything two of them need goes in `src/client/shared` (browser APIs allowed) or `src/shared` (portable). Adding a doc type means a `plugin.tsx` in `ui/doc-plugins/<type>/` plus a schema core in `src/shared/schemas/`, each registered in its list (`DOC_PLUGINS` in `doc-plugins/index.ts`, `SCHEMA_PLUGINS` in `schemas/index.ts` — `doc-plugins.test.tsx` fails if they drift).
 
 ### Two TypeScript Projects
 
@@ -74,7 +74,7 @@ Documents follow JSCalendar (RFC 8984) with modifications for CRDT collaboration
 - **Maps over Arrays**: Events, tasks, rows are `Record<string, Item>` for conflict-free concurrent edits
 - **No stored IDs**: Document identity comes from the Automerge repo handle, not a field in the document
 - **Single recurrence rule** per event (not an array) since editors don't support multiple
-- **`@type` discriminator**: Each document has `"@type": "Calendar" | "TaskList" | "DataGrid"` for schema dispatch
+- **`@type` discriminator**: Each document has an `"@type"` (`"Calendar"`, `"TaskList"`, `"DataGrid"`, `"Calendar+Counters"`, `"Sentences"`, `"Kitchen"`, `"Calendar+Timeline"`) for schema dispatch. A `Calendar+…` type keeps its items as JSCalendar Events under `events`, so All Calendars renders it too
 
 ### Schema Validation
 
@@ -167,6 +167,16 @@ Consequences worth knowing:
 Routes are ranked by segment specificity, not JSX order, so the static `/d/:docId/share` wins over `DocRoute`'s `/d/:docId/:rest*`. Build doc URLs with the helpers in `src/client/ui/common/doc-urls.ts` (`docUrl`, `shareUrl`, `sourceUrl`) rather than string concatenation.
 
 **Transient state never goes in the URL.** `<rest>` carries only real navigation (e.g. the DataGrid's `sheets/<sheetId>`, pushed via `pushDocHash` so Back moves between sheets). The focused field / selected cell is broadcast as presence by `useFocusPathSync` and is deliberately *not* mirrored into the hash.
+
+### Timeline
+
+A life diary (`@type: 'Calendar+Timeline'`) built out of order: memories are logged with however vague a date you have, and the app helps narrow dates and fill gaps.
+
+- **Entries are JSCalendar Events** validated by the Calendar's own field nodes and `checkCalendarDependencies` (`schemas/calendar.ts` exports `calendarEventFields`), plus extensions: fuzzy `when`/`until` (`{ earliest?, latest?, best? }`, ISO partial dates — earliest/latest *bound*, best is only a guess), order relations `rel`/`untilRel` ("this happened before that"), `recall`, `revisit` (a string: present = flagged, value = what to add), `settled`. `start`/`duration` are *derived* from `when`/`until` (`calendarFields`) so calendar viewers can place an entry — every change that writes the date rewrites them.
+- **Dates are ranges solved from relations** (`src/shared/timeline/order.ts`): each relation is a difference constraint, relaxed both ways to a fixpoint; a relation that contradicts the dates is a *conflict*, reported and rerun without, never applied. `displayOrder` also honours relations, so two entries with identical ranges show in the order you said.
+- **Bisecting** (`planner.ts`): Pin down asks the vaguest date "before or after <anchor>?" with the anchor that splits it most evenly (else a birthday/new-year pivot); gaps are ranked by *expected memories*, which weighs recent years more and early childhood less, and a date counts as pinned down at a precision proportional to how long ago it was. Dragging or inserting in the list writes the same relations (`placeBetween`).
+- **Every write is a self-contained function in `timeline/changes.ts`** — no closures, no imports — because `updateDoc` ships `fn.toString()` to the worker; `changes.test.ts` rebuilds each from source and runs it on real Automerge (the jsdom mock calls them directly and can't catch a closure).
+- **Photo prompts are written from outside the app**, by a feeder running in the one engine the device may run: each pass is ONE change through `engine.changeDoc` + `addPrompts`. Prompts are not Events (calendar views never see them) and are never deleted, so no device re-offers a moment. Thumbnails live in a top-level `thumbs` map as Automerge `ImmutableString`s — plain strings cost ~1.7 ms of load each, forever — which arrive in the UI as a string or, cloned across a thread, `{ val }` (`thumbBase64` reads both).
 
 ### CalDAV
 
