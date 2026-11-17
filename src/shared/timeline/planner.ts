@@ -19,7 +19,7 @@ import {
   type FuzzyDate, type Precision, boundsOf, bestDay, dayOf, fromDay, parsePartial, partialOf,
   precisionForWidth, formatFuzzy,
 } from './fuzzy-date';
-import { effectiveBounds, displayOrder, lifeSpan, type Bounds, type Range } from './order';
+import { effectiveBounds, displayOrder, hasOrderCycle, lifeSpan, type Bounds, type Range } from './order';
 
 export type Endpoint = 'start' | 'end';
 
@@ -331,14 +331,16 @@ export function placeBetween(
       reason: `Its date (${formatFuzzy(me.when, doc.birth)}) doesn't fit ${above && below ? 'between' : above ? 'after' : 'before'} ${names}.`,
     };
   }
-  // Keep each old relation that still agrees (canonical order).
+  // Keep each old relation that still agrees with the dates AND with the new
+  // order (one that would make the stated order circular contradicts the drop
+  // as surely as one contradicting the dates), in canonical order.
   const sorted = [...old].sort((a, b) => `${a.owner}|${a.field}|${a.target}`.localeCompare(`${b.owner}|${b.field}|${b.target}`));
   for (const r of sorted) {
     if (add.some(a => a.owner === r.owner && a.field === r.field && a.target === r.target)) continue;
     if ((r.owner === above || r.owner === below) && r.target === uid) continue; // superseded by the new order
     const without = remove.filter(x => !(x.owner === r.owner && x.field === r.field && x.target === r.target));
     const t = withRels(events, without, add);
-    if (!conflicted(t)) { remove = without; trial = t; }
+    if (!conflicted(t) && !hasOrderCycle(t)) { remove = without; trial = t; }
   }
   // Drop no-op removals (relations that were not there to begin with) and re-adds of what exists.
   remove = remove.filter(r => !add.some(a => a.owner === r.owner && a.field === r.field && a.target === r.target && events[r.owner]?.[r.field]?.[r.target] === a.rel));

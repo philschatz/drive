@@ -33,7 +33,7 @@ const defaultTZ = Intl.DateTimeFormat().resolvedOptions().timeZone;
  *  `@type: 'Event'` items schedule-x can lay out; counter events without a
  *  concrete `start` (recurring/time-of-day only) are skipped per-event by the
  *  schedule-x mapper rather than blanking the view. */
-const CALENDARISH_TYPES = new Set(['Calendar', 'Calendar+Counters']);
+const CALENDARISH_TYPES = new Set(['Calendar', 'Calendar+Counters', 'Calendar+Timeline']);
 
 export function AllCalendars({ path }: { path?: string }) {
   const [calendars, setCalendars] = useState<LoadedCalendar[]>([]);

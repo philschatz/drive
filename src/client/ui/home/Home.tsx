@@ -360,7 +360,7 @@ export function Home({ path }: { path?: string }) {
   // doc types it renders (see CALENDARISH_TYPES in AllCalendars), excluding
   // revoked docs.
   const calendarCount = useMemo(
-    () => entries.filter(e => e.access !== null && (e.type === 'Calendar' || e.type === 'Calendar+Counters')).length,
+    () => entries.filter(e => e.access !== null && (e.type === 'Calendar' || e.type === 'Calendar+Counters' || e.type === 'Calendar+Timeline')).length,
     [entries],
   );
 

@@ -1,0 +1,140 @@
+{
+  "@type": "Calendar+Timeline",
+  "name": "Life of Sam (example)",
+  "birth": "1986-08-14",
+  "events": {
+    "born": {
+      "@type": "Event",
+      "title": "Born in Duluth",
+      "when": {
+        "earliest": "1986-08-14",
+        "latest": "1986-08-14"
+      },
+      "location": "Duluth, Minnesota",
+      "settled": true,
+      "start": "1986-08-14",
+      "duration": "P1D"
+    },
+    "lake-house": {
+      "@type": "Event",
+      "title": "Summers at Grandma’s lake house",
+      "when": {
+        "earliest": "1990",
+        "latest": "1992"
+      },
+      "until": {
+        "earliest": "1997",
+        "latest": "1998"
+      },
+      "location": "Lake Vermilion",
+      "recall": "hazy",
+      "description": "Every July: the screen porch, the leaky canoe, Grandma’s blueberry pancakes.",
+      "start": "1991-07-02",
+      "duration": "P2375D"
+    },
+    "broke-arm": {
+      "@type": "Event",
+      "title": "Broke my arm falling off the dock",
+      "rel": {
+        "lake-house": "during"
+      },
+      "recall": "vivid",
+      "revisit": "ask Mom which summer — the cast was purple"
+    },
+    "moved-st-paul": {
+      "@type": "Event",
+      "title": "Moved to St. Paul",
+      "when": {
+        "earliest": "1995",
+        "latest": "1996"
+      },
+      "recall": "hazy",
+      "start": "1996-01-01",
+      "duration": "P1D"
+    },
+    "first-job": {
+      "@type": "Event",
+      "title": "First job: bagging groceries",
+      "when": {
+        "earliest": "2002-06",
+        "latest": "2002-08"
+      },
+      "location": "St. Paul",
+      "start": "2002-07-16",
+      "duration": "P1D"
+    },
+    "college": {
+      "@type": "Event",
+      "title": "College",
+      "when": {
+        "earliest": "2004-09",
+        "latest": "2004-09"
+      },
+      "until": {
+        "earliest": "2008-05",
+        "latest": "2008-05"
+      },
+      "location": "Madison, Wisconsin",
+      "recall": "vivid",
+      "start": "2004-09-15",
+      "duration": "P1340D"
+    },
+    "road-trip": {
+      "@type": "Event",
+      "title": "Road trip to the Badlands",
+      "when": {
+        "earliest": "2005",
+        "latest": "2008"
+      },
+      "rel": {
+        "college": "during"
+      },
+      "revisit": "",
+      "start": "2007-01-01",
+      "duration": "P1D"
+    },
+    "chicago": {
+      "@type": "Event",
+      "title": "Moved to Chicago for the first real job",
+      "when": {
+        "earliest": "2008-09",
+        "latest": "2008-09"
+      },
+      "location": "Chicago",
+      "start": "2008-09-15",
+      "duration": "P1D"
+    },
+    "marathon": {
+      "@type": "Event",
+      "title": "Ran the Chicago marathon",
+      "when": {
+        "earliest": "2013-10-13",
+        "latest": "2013-10-13"
+      },
+      "location": "Chicago",
+      "recall": "vivid",
+      "description": "Hit the wall at mile 20. Finished anyway.",
+      "start": "2013-10-13",
+      "duration": "P1D"
+    },
+    "dog": {
+      "@type": "Event",
+      "title": "Adopted Juniper (the dog)",
+      "rel": {
+        "marathon": "after"
+      },
+      "when": {
+        "earliest": "2012",
+        "latest": "2016"
+      },
+      "start": "2014-07-02",
+      "duration": "P1D"
+    },
+    "a-dog-before": {
+      "@type": "Event",
+      "title": "A neighbour’s dog that followed me home"
+    }
+  },
+  "prompts": {},
+  "thumbs": {}
+}

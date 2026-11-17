@@ -11,13 +11,14 @@ export interface PillTab {
   count?: number;
 }
 
-export function PillTabs({ tabs, active, onSelect }: {
+export function PillTabs({ tabs, active, onSelect, 'data-testid': testId }: {
   tabs: PillTab[];
   active: string;
   onSelect: (id: string) => void;
+  'data-testid'?: string;
 }) {
   return (
-    <div className="flex items-center gap-1 overflow-x-auto py-2" role="tablist" data-testid="kitchen-tabs">
+    <div className="flex items-center gap-1 overflow-x-auto py-2" role="tablist" data-testid={testId}>
       {tabs.map(tab => {
         const isActive = tab.id === active;
         return (

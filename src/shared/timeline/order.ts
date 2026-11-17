@@ -242,6 +242,12 @@ function because(e: Edge, narrowed: Node): Because | undefined {
 
 // ── Display order ─────────────────────────────────────────────────────────────
 
+/** The day an entry is shown at: its own best guess, kept inside what is known; else the middle of that. */
+export function displayDay(ev: TimelineEvent, b: EntryBounds): number {
+  const guess = bestDay(ev.when);
+  return guess !== undefined ? Math.min(b.start.hi, Math.max(b.start.lo, guess)) : Math.floor((b.start.lo + b.start.hi) / 2);
+}
+
 /**
  * Entries in the order the list shows them: by the middle of what is known
  * (or the entry's own best guess, when it has one), then adjusted so every
@@ -258,9 +264,7 @@ export function displayOrder(
   for (const [uid, b] of bounds.entries) {
     if (!b.placed) { undated.push(uid); continue; }
     placed.push(uid);
-    const guess = bestDay(events[uid].when);
-    const mid = Math.floor((b.start.lo + b.start.hi) / 2);
-    keyOf.set(uid, guess !== undefined ? Math.min(b.start.hi, Math.max(b.start.lo, guess)) : mid);
+    keyOf.set(uid, displayDay(events[uid], b));
   }
   const title = (u: string) => events[u]?.title ?? '';
   const cmp = (a: string, b: string) =>
@@ -303,4 +307,36 @@ export function displayOrder(
   }
   undated.sort((a, b) => title(a).localeCompare(title(b)) || (a < b ? -1 : 1));
   return { ordered, undated };
+}
+
+/**
+ * Whether the stated orderings ("before", "after", "during") go round in a
+ * circle. The solver accepts a circle (everything on one day), but for the
+ * list it means the answers no longer say which comes first.
+ */
+export function hasOrderCycle(events: Record<string, TimelineEvent>): boolean {
+  const succ = new Map<string, string[]>();
+  const edge = (a: string, b: string) => {
+    if (a === b || !events[a] || !events[b]) return;
+    if (!succ.has(a)) succ.set(a, []);
+    succ.get(a)!.push(b);
+  };
+  for (const [uid, ev] of Object.entries(events)) {
+    for (const [target, rel] of Object.entries(ev.rel ?? {})) {
+      if (rel === 'before') edge(uid, target);
+      else if (rel === 'after' || rel === 'during') edge(target, uid);
+    }
+  }
+  const state = new Map<string, 1 | 2>(); // 1 = on the stack, 2 = done
+  const visit = (u: string): boolean => {
+    state.set(u, 1);
+    for (const v of succ.get(u) ?? []) {
+      const s = state.get(v);
+      if (s === 1 || (s === undefined && visit(v))) return true;
+    }
+    state.set(u, 2);
+    return false;
+  };
+  for (const u of succ.keys()) if (!state.has(u) && visit(u)) return true;
+  return false;
 }

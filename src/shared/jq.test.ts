@@ -337,6 +337,15 @@ describe('jq', () => {
         .toEqual({ tasks: doc.tasks, name: 'Sprint' });
     });
 
+    it('Timeline projection, and one thumbnail by photo id (Thumb)', () => {
+      const tl = { name: 'Life', events: { a: { title: 'A' } }, thumbs: { pqx7a2b1c9: 'QUJD' } };
+      expect(one('{ name: (.name // "Timeline"), birth: (.birth // null), events: (.events // {}), prompts: (.prompts // {}) }', tl))
+        .toEqual({ name: 'Life', birth: null, events: tl.events, prompts: {} });
+      expect(one('.thumbs["pqx7a2b1c9"]', tl)).toBe('QUJD');
+      expect(one('.thumbs["missing"]', tl)).toBeNull();
+      expect(one('.thumbs["x"]', { name: 'No thumbs' })).toBeNull();
+    });
+
     it('Sentences projection', () => {
       expect(one('{ name: (.name // "Sentences") }', doc)).toEqual({ name: 'Sprint' });
     });

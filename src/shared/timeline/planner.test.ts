@@ -276,6 +276,15 @@ describe('placeBetween', () => {
     expect(order(back)).toEqual(['a', 'b', 'c']);
   });
 
+  it('drops an old answer the new order contradicts even when the dates allow it', () => {
+    const evs = events();
+    // b says "after a"; moving a below c makes that circular (a after c after b after a).
+    const p = placeBetween({ events: evs }, 'a', 'c', null, TODAY);
+    if (!p.ok) throw new Error(p.reason);
+    expect(p.remove).toContainEqual({ owner: 'b', field: 'rel', target: 'a' });
+    expect(order(apply(evs, 'a', p))).toEqual(['b', 'c', 'a']);
+  });
+
   it('refuses a spot its own date forbids, saying why', () => {
     const evs = { ...events(), x: ev('X', { when: year(2004) }) };
     const p = placeBetween({ events: evs }, 'x', 'a', 'b', TODAY);

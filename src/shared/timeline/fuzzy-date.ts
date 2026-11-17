@@ -56,6 +56,11 @@ export function toDay(d: Temporal.PlainDate): number {
 export function fromDay(n: number): Temporal.PlainDate {
   return EPOCH.add({ days: n });
 }
+/** Today, as a day number, in the local time zone. */
+export function todayDay(): number {
+  return toDay(Temporal.Now.plainDateISO());
+}
+
 export function dayOf(s: string): number | null {
   const p = parsePartial(s);
   return p ? toDay(p.first) : null;

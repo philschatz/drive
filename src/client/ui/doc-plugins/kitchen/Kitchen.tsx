@@ -23,7 +23,7 @@ import {
   type RecipeEntry, type Requirement,
 } from './logic';
 import { formatIngredient } from './ingredients';
-import { PillTabs, type PillTab } from './PillTabs';
+import { PillTabs, type PillTab } from '../../common/PillTabs';
 import { RecipeList } from './RecipeList';
 import { InventoryTab } from './InventoryTab';
 import { ShoppingList } from './ShoppingList';
@@ -388,7 +388,7 @@ export function Kitchen({ docId, recipeId, readOnly }: {
             </div>
           ) : recipeId !== undefined ? null : (
             <>
-              <PillTabs tabs={tabs} active={activeTab} onSelect={setUserTab} />
+              <PillTabs tabs={tabs} active={activeTab} onSelect={setUserTab} data-testid="kitchen-tabs" />
               {activeTab === 'shopping' && (
                 <ShoppingList
                   shopping={shownShopping.record}
