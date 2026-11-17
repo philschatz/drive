@@ -132,7 +132,9 @@ const recurrenceOverrideSchema = obj({
   ...commonEventFields,
 });
 
-export const calendarEventSchema = obj({
+/** Every field of a Calendar Event. Exported so Event-shaped doc types that
+ * extend JSCalendar (the Timeline) validate those fields with these very nodes. */
+export const calendarEventFields: Record<string, SchemaNode> = {
   '@type': str({ enum: ['Event'] }),
   created: str({ pattern: UTC_DATE_TIME_RE, optional: true }),
   ...commonEventFields,
@@ -140,7 +142,9 @@ export const calendarEventSchema = obj({
   recurrenceOverrides: record(recurrenceOverrideSchema, { optional: true }),
   recurrenceId: str({ pattern: LOCAL_DATE_TIME_RE, optional: true }),
   recurrenceIdTimeZone: str({ optional: true }),
-});
+};
+
+export const calendarEventSchema = obj(calendarEventFields);
 
 export const calendarDocumentSchema = obj({
   '@type': str({ enum: ['Calendar'] }),
