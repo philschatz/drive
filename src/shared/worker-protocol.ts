@@ -132,7 +132,9 @@ export type MainToWorker =
   // shares carets as cursors (stable across concurrent edits, per Peritext
   // convention); the doc lives in the worker, so minting happens here. This is
   // the ONLY cursor round trip — resolution rides the query-result push below.
-  | { type: 'text-cursors'; id: number; docId: string; path: (string | number)[]; positions: number[] }
+  /** `heads` names the version the positions are indices into: the push the
+   * caller is showing. Without it they are read against the newest document. */
+  | { type: 'text-cursors'; id: number; docId: string; path: (string | number)[]; positions: number[]; heads?: string[] }
   // Cursor tokens to resolve into flat-text positions on every change, delivered
   // with the spans push. Replaces the whole set for this doc+path (an empty list
   // clears it), so a missed unregister cannot leak a token. Peers' carets come

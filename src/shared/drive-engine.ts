@@ -131,6 +131,8 @@ export class EngineCore {
   protected khOps: KeyhiveOps | null = null;
   protected bridge: any = null;
   protected Automerge: any = null;
+  /** A handle's heads (as pushes carry them) → Automerge change hashes. See KeyhiveRepo. */
+  protected decodeHeads: ((heads: string[]) => string[]) | null = null;
   protected PresenceClass: any = null;
   protected amDocIdFromBytes: ((bytes: Uint8Array) => string) | null = null;
   protected khDocIdFromAm: ((docId: string) => any) | null = null;
@@ -754,6 +756,20 @@ export class EngineCore {
     }
   }
 
+  /**
+   * `doc` as it was at `heads` — a handle's heads, the form every push carries
+   * — or undefined when they do not name a version of it. Only the decoding is
+   * allowed to fail quietly (the heads came from outside); a failure in
+   * Automerge itself is a bug here and must surface as one.
+   */
+  protected docAtHeads(doc: any, heads: string[] | undefined): any | undefined {
+    if (!heads?.length) return undefined;
+    if (!this.decodeHeads) throw new Error('engine not initialised: no heads decoder');
+    let hashes: string[];
+    try { hashes = this.decodeHeads(heads); } catch { return undefined; }
+    return this.Automerge.hasHeads(doc, hashes) ? this.Automerge.view(doc, hashes) : undefined;
+  }
+
   private async pushToSubscriptions(docId: string): Promise<void> {
     const entry = this.docRegistry.get(docId);
     if (!entry) return;
@@ -1142,6 +1158,7 @@ export class EngineCore {
       this.khOps = kh.khOps;
       this.bridge = kh.bridge;
       this.Automerge = kh.Automerge;
+      this.decodeHeads = kh.decodeHeads;
       this.PresenceClass = kh.Presence;
       this.amDocIdFromBytes = kh.amDocIdFromBytes;
       this.khDocIdFromAm = kh.khDocIdFromAm;
@@ -1517,7 +1534,19 @@ export class EngineCore {
         const handle = await this.getOrLoadHandle(msg.docId);
         const doc = handle.doc();
         if (!doc) throw new Error('Document not ready');
-        return msg.positions.map((p: number) => this.Automerge.getCursor(doc, msg.path, p));
+        // The positions are indices into the text the caller is showing, which
+        // is the version it names and not necessarily this one: pushes are
+        // messages, so the page can be several peer edits behind the document
+        // (a peer's edits arrive in bursts). Read against the newer text, the
+        // same index is a different character, and the caret would follow that
+        // one from then on. A cursor minted on the older view names the right
+        // character and resolves in every later version.
+        const named = this.docAtHeads(doc, msg.heads);
+        if (msg.heads?.length && !named) {
+          // The page only names heads this engine pushed for this document.
+          log.warn(`text-cursors: ${msg.docId} has no such version; reading the positions against the newest`);
+        }
+        return msg.positions.map((p: number) => this.Automerge.getCursor(named ?? doc, msg.path, p));
       });
       return;
     }

@@ -377,6 +377,62 @@ describe('SentencesView container', () => {
     await waitFor(() => expect(currentMarkdown()).toBe('ZWXYhello wo!rld'));
   });
 
+  // The worker can be several peer edits ahead of what the page has drawn: each
+  // push is a message, and a peer's edits can arrive in a burst. Both tests
+  // below put the mock in that state (`__holdPushes`) and then hand the pushes
+  // over one at a time.
+  it('keeps the caret on its character when peer edits arrive faster than they are shown', async () => {
+    await renderWithCaret('hello world', 'hello world', 8); // flat 9, "hello wo|rld"
+    const tokens = [...mock.__getCursorSubs(DOC, ['content'])];
+
+    // Two peer edits are in the document; the editor has been shown neither.
+    mock.__holdPushes();
+    mock.__applyRemoteOps(DOC, ['content'], [{ op: 'splice', index: 1, del: 0, text: 'XY' }]);
+    mock.__applyRemoteOps(DOC, ['content'], [{ op: 'splice', index: 1, del: 0, text: 'ZW' }]);
+
+    // The first is shown: the caret moves with its character (9 → 11), and the
+    // browser reports that move like any other selection change (jsdom leaves
+    // the report to the test).
+    await act(async () => { mock.__deliverNext(); });
+    await waitFor(() => expect(screen.getByText('XYhello world')).toBeTruthy());
+    document.dispatchEvent(new Event('selectionchange'));
+    await act(() => new Promise(r => setTimeout(r, 50)));
+
+    // Minting again here would ask for "index 11" of a document that already has
+    // the second edit, where index 11 is a different character — and the answer
+    // would replace the tokens the second push was resolved for.
+    expect(mock.__getCursorSubs(DOC, ['content'])).toEqual(tokens);
+
+    await act(async () => { mock.__releasePushes(); });
+    await waitFor(() => expect(screen.getByText('ZWXYhello world')).toBeTruthy());
+    typeChar('!');
+    // 9 → 11 → 13. A caret left at 11 gives 'ZWXYhello !world'.
+    await waitFor(() => expect(currentMarkdown()).toBe('ZWXYhello wo!rld'));
+  });
+
+  it('mints a new selection against the text on screen, not against an edit it has not been shown', async () => {
+    seed('hello world');
+    render(<SentencesView docId={DOC} />);
+    await waitFor(() => expect(screen.getByText('hello world')).toBeTruthy());
+    await editableEditor();
+    editor().focus();
+
+    // A peer's edit is in the document but not yet on screen…
+    mock.__holdPushes();
+    mock.__applyRemoteOps(DOC, ['content'], [{ op: 'splice', index: 1, del: 0, text: 'XY' }]);
+    // …when the user selects "world" in the text they can see: flat [7, 12).
+    selectText('hello world', 6, 11);
+    await waitFor(() => expect(mock.__getCursorSubs(DOC, ['content']).length).toBe(2));
+
+    await act(async () => { mock.__releasePushes(); });
+    await waitFor(() => expect(screen.getByText('XYhello world')).toBeTruthy());
+    await act(() => new Promise(r => setTimeout(r, 50)));
+
+    fireEvent.click(screen.getByTestId('fmt-format_bold'));
+    // Tokens minted for [7, 12) of the newer text would name "o wor".
+    await waitFor(() => expect(currentMarkdown()).toBe('XYhello **world**'));
+  });
+
   it('rebases a selection, keeping formatting on the same characters', async () => {
     seed('hello world');
     render(<SentencesView docId={DOC} />);

@@ -129,6 +129,13 @@ export interface KeyhiveRepo {
   Automerge: any;
   /** automerge-repo Presence class. */
   Presence: any;
+  /**
+   * A handle's heads → Automerge change hashes. `handle.heads()` — which is
+   * what every push to the page carries — is automerge-repo's own encoding
+   * (base58check), and Automerge itself (`view`, `hasHeads`, `diff`) takes hex.
+   * Throws on anything that is not such heads.
+   */
+  decodeHeads: (heads: string[]) => string[];
   /** Convert keyhive doc-id bytes (== automerge BinaryDocumentId) → automerge doc id string. */
   amDocIdFromBytes: (bytes: Uint8Array) => string;
   /** The inverse: an automerge doc id string → the keyhive DocumentId with the same bytes. */
@@ -564,6 +571,7 @@ export async function createKeyhiveRepo(opts: CreateKeyhiveRepoOptions): Promise
   };
 
   return {
+    decodeHeads: (heads: string[]) => repoModule.decodeHeads(heads),
     repo, khOps, integration, bridge,
     Automerge, Presence, amDocIdFromBytes, khDocIdFromAm, setNextDocId, channel: secure.channel, links, close,
   };

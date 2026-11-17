@@ -748,13 +748,22 @@ export function updateDoc(
  * same character across concurrent edits); the doc lives in the worker, so
  * minting is a request. It is the ONLY cursor round trip, and it happens when
  * the caret moves — never per change.
+ *
+ * A position is an index, and an index names a character only in one version
+ * of the text. Pass `heads` — those of the push the positions were read from —
+ * whenever the text on screen IS a push: the worker's document can already be
+ * several peer edits past it, where the same index is some other character.
+ * Leave it out when local edits not yet echoed back are on screen; requests
+ * are FIFO behind those writes, so the newest document is then the nearest
+ * thing to what the user sees.
  */
 export function getTextCursors(
   docId: string,
   path: (string | number)[],
   positions: number[],
+  heads?: string[],
 ): Promise<string[]> {
-  return request('text-cursors', { docId, path, positions });
+  return request('text-cursors', { docId, path, positions, ...(heads ? { heads } : {}) });
 }
 
 /**

@@ -86,6 +86,26 @@ const cursorSubs = new Map<string, string[]>();
 let nextCursorId = 0;
 
 const cursorKey = (docId: string, path: (string | number)[]) => docId + '|' + pathKey(path);
+
+// Versions. The engine names every push by the document's heads and can read
+// the text as of any of them; a mint that names a version is resolved against
+// THAT text (see `text-cursors` in drive-engine.ts). Here a version is a counter
+// per document, and a field's history is the ops applied to it — enough to
+// answer the one question asked of an older version: which character did this
+// index name, and where is it now?
+const versions = new Map<string, number>();
+/** Per document: the oldest version the op log still reaches back to. */
+const logFloor = new Map<string, number>();
+interface LoggedOps { after: number; lengthBefore: number; ops: RichTextOp[] }
+const opLog = new Map<string, LoggedOps[]>();
+const versionOf = (docId: string) => versions.get(docId) ?? 0;
+const headsOf = (docId: string) => ['h' + versionOf(docId)];
+const bumpVersion = (docId: string) => { const v = versionOf(docId) + 1; versions.set(docId, v); return v; };
+/** A wholesale replacement: positions cannot be followed through it. */
+function restartHistory(docId: string): void {
+  logFloor.set(docId, bumpVersion(docId));
+  for (const key of opLog.keys()) if (key.startsWith(docId + '|')) opLog.delete(key);
+}
 const flatLength = (docId: string, path: (string | number)[]) =>
   flatTextFromSpans(getSpans(docId, path)).length;
 
@@ -101,6 +121,10 @@ function shiftCursors(docId: string, path: (string | number)[], ops: RichTextOp[
 
 /** Apply rich-text ops to a doc's spans, rebasing every cursor into that field. */
 function applyOpsToField(docId: string, path: (string | number)[], ops: RichTextOp[]): void {
+  const key = cursorKey(docId, path);
+  let log = opLog.get(key);
+  if (!log) { log = []; opLog.set(key, log); }
+  log.push({ after: bumpVersion(docId), lengthBefore: flatLength(docId, path), ops });
   shiftCursors(docId, path, ops);
   setSpans(docId, path, applyOpsToSpans(getSpans(docId, path), ops));
 }
@@ -134,6 +158,10 @@ export function __reset(): void {
   presenceSubs.clear();
   cursors.clear();
   cursorSubs.clear();
+  versions.clear();
+  logFloor.clear();
+  opLog.clear();
+  heldPushes = null;
   docList = [];
   docListSubs.clear();
   unseenFlags = {};
@@ -150,6 +178,7 @@ export function __setPresence(docId: string, peers: Record<string, any>): void {
 /** Seed rich-text spans for a Peritext field (and its flat-text mirror). */
 export function __setSpans(docId: string, path: (string | number)[], spans: RichTextSpan[]): void {
   setSpans(docId, path, spans);
+  restartHistory(docId);
   __notify(docId);
 }
 /** Read the current spans (for assertions). */
@@ -173,6 +202,7 @@ export function __applyRemoteOps(docId: string, path: (string | number)[], ops: 
 /** Seed (or replace) a document and notify its subscribers. */
 export function __setDoc(docId: string, doc: Doc): void {
   docs.set(docId, doc);
+  restartHistory(docId);
   __notify(docId);
 }
 /** Read the current in-memory document (for assertions). */
@@ -192,19 +222,51 @@ function project(filter: string, doc: Doc): any {
     return null;
   }
 }
-function deliver(s: QuerySub): void {
-  s.cb(
-    project(s.filter, docs.get(s.docId)), ['h'], undefined,
-    // A FRESH array per delivery, for the same reason `project` clones (above):
-    // the engine calls Automerge.spans() anew on every push and posts whenever
-    // the resolved cursors changed, so a pure cursor registration re-pushes
-    // identical content in a new array and the subscriber re-renders. Handing
-    // out the stored array by identity made setState bail on Object.is, so the
-    // mock silently lost the mid-edit re-render the real app has.
-    s.spansPath ? getSpans(s.docId, s.spansPath).map(v => ({ ...v })) : undefined,
-    s.spansPath ? resolveCursors(s.docId, s.spansPath) : undefined,
-    s.allRichText ? allRichTextFields(s.docId) : undefined,
-  );
+/**
+ * One push to one subscriber, with its payload fixed NOW: like the engine's, it
+ * describes the document as it was when the push was made, however much later
+ * it is delivered.
+ */
+function preparePush(s: QuerySub): () => void {
+  const result = project(s.filter, docs.get(s.docId));
+  const heads = headsOf(s.docId);
+  // A FRESH array per delivery, for the same reason `project` clones (above):
+  // the engine calls Automerge.spans() anew on every push and posts whenever
+  // the resolved cursors changed, so a pure cursor registration re-pushes
+  // identical content in a new array and the subscriber re-renders. Handing
+  // out the stored array by identity made setState bail on Object.is, so the
+  // mock silently lost the mid-edit re-render the real app has.
+  const spans = s.spansPath ? getSpans(s.docId, s.spansPath).map(v => ({ ...v })) : undefined;
+  const resolved = s.spansPath ? resolveCursors(s.docId, s.spansPath) : undefined;
+  const fields = s.allRichText ? allRichTextFields(s.docId) : undefined;
+  return () => { if (querySubs.has(s)) s.cb(result, heads, undefined, spans, resolved, fields); };
+}
+
+// A worker that is ahead of what it has shown. Pushes are messages: the worker
+// can have applied several edits — and answered a request against the newest —
+// before the page has handled the push for the first. `__holdPushes` makes that
+// state reachable: pushes queue (one entry per notification) instead of being
+// delivered, while requests such as getTextCursors still answer from the
+// current document.
+let heldPushes: Array<() => void> | null = null;
+function post(pushes: Array<() => void>): void {
+  const run = () => { for (const push of pushes) push(); };
+  if (heldPushes) heldPushes.push(run);
+  else run();
+}
+/** Stop delivering pushes; they queue until released. */
+export function __holdPushes(): void { heldPushes ??= []; }
+/** Deliver the oldest queued push. False when there was none. */
+export function __deliverNext(): boolean {
+  const next = heldPushes?.shift();
+  next?.();
+  return !!next;
+}
+/** Deliver everything queued, in order, and go back to delivering immediately. */
+export function __releasePushes(): void {
+  const queued = heldPushes ?? [];
+  heldPushes = null;
+  for (const run of queued) run();
 }
 
 /**
@@ -223,9 +285,7 @@ function allRichTextFields(docId: string): MarkerField[] {
   return out;
 }
 function __notify(docId: string): void {
-  for (const s of querySubs) {
-    if (s.docId === docId) deliver(s);
-  }
+  post([...querySubs].filter(s => s.docId === docId).map(preparePush));
 }
 
 // --- The functions the editor containers actually exercise ------------------
@@ -246,7 +306,7 @@ export function subscribeQuery(
 ): () => void {
   const sub: QuerySub = { docId, filter, cb, spansPath: opts?.spansPath, allRichText: opts?.allRichText };
   querySubs.add(sub);
-  deliver(sub); // deliver current state immediately
+  post([preparePush(sub)]); // deliver current state immediately
   return () => { querySubs.delete(sub); };
 }
 
@@ -262,7 +322,9 @@ export function updateDoc(
   const bound = args.map(a => a === richText
     ? (_d: Doc, path: (string | number)[], ops: RichTextOp[]) => applyOpsToField(docId, path, ops)
     : a);
+  const before = versionOf(docId);
   fn(doc, ...bound);
+  if (versionOf(docId) === before) bumpVersion(docId); // a write that touched no rich text
   __notify(docId);
   return Promise.resolve();
 }
@@ -348,13 +410,28 @@ export function subscribePresence(docId: string, cb: (peers: Record<string, any>
 }
 export function setPresence(): void {}
 
-/** Mint cursor tokens for flat-text positions (see the MockCursor notes above). */
-export function getTextCursors(docId: string, path: (string | number)[], positions: number[]): Promise<string[]> {
+/**
+ * Mint cursor tokens for flat-text positions (see the MockCursor notes above).
+ * With `heads`, the positions are indices into THAT version's text: the token
+ * names the character that was there, wherever it has moved to since.
+ */
+export function getTextCursors(
+  docId: string, path: (string | number)[], positions: number[], heads?: string[],
+): Promise<string[]> {
   const key = cursorKey(docId, path);
-  const len = flatLength(docId, path);
+  const named = heads?.length === 1 && /^h\d+$/.test(heads[0]) ? Number(heads[0].slice(1)) : undefined;
+  const since = named !== undefined && named >= (logFloor.get(docId) ?? 0)
+    ? (opLog.get(key) ?? []).filter(e => e.after > named)
+    : [];
+  const len = since.length ? since[0].lengthBefore : flatLength(docId, path);
+  const ops = since.flatMap(e => e.ops);
   return Promise.resolve(positions.map(p => {
     const token = 'a' + (++nextCursorId);
-    cursors.set(token, { key, pos: p >= len ? 'end' : Math.max(0, p) });
+    if (p >= len) cursors.set(token, { key, pos: 'end' });
+    else {
+      const now = shiftPositionThroughOps(Math.max(0, p), ops);
+      if (now !== null) cursors.set(token, { key, pos: now }); // else unresolvable, like a foreign token
+    }
     return token;
   }));
 }

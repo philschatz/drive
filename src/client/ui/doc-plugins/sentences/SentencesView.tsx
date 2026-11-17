@@ -31,6 +31,10 @@ const DOC_QUERY = '{ name: (.name // "Sentences") }';
  */
 const NO_RANGES: TextRange[] = [];
 
+/** One push from the worker, as the editor is showing it. One object per push,
+ * so identity means "the same push"; `heads` names that version to the worker. */
+type Shown = { heads: string[] };
+
 export function SentencesView({ docId, readOnly }: { docId?: string; rest?: string; readOnly?: boolean }) {
   const [name, setName] = useState('Sentences');
   const [spans, setSpans] = useState<RichTextSpan[] | null>(null);
@@ -60,7 +64,11 @@ export function SentencesView({ docId, readOnly }: { docId?: string; rest?: stri
   // disturb it — and the model must stay current, because the ops the editor
   // reconciles at compositionend are merged against exactly these spans.
   const pendingWritesRef = useRef(0);
-  const heldRef = useRef<{ spans: RichTextSpan[]; cursors?: Record<string, number | null> } | null>(null);
+  const heldRef = useRef<{ spans: RichTextSpan[]; cursors?: Record<string, number | null>; heads: string[] } | null>(null);
+  // The version of the document on screen: the push last applied. Null while
+  // local edits the worker has not echoed back yet sit on top of it — the text
+  // is then no version the worker could be asked about.
+  const shownRef = useRef<Shown | null>(null);
   // Registered cursor tokens → their position in the spans currently in state.
   // Delivered by the same push as the spans, which is what lets a peer caret be
   // drawn (and the local caret rebased) against exactly the text being rendered.
@@ -72,7 +80,11 @@ export function SentencesView({ docId, readOnly }: { docId?: string; rest?: stri
    * rendered against a stale caret index would make the next keystroke splice at
    * the wrong offset. Nothing can interleave between the two calls.
    */
-  const applyRemoteSpans = useCallback((next: RichTextSpan[], cursors?: Record<string, number | null>) => {
+  const applyRemoteSpans = useCallback((
+    next: RichTextSpan[], cursors: Record<string, number | null> | undefined, heads: string[],
+  ) => {
+    const shown: Shown = { heads };
+    shownRef.current = shown;
     const held = localCursorRef.current;
     const api = editorApiRef.current;
     // localCursorRef is only populated once a caret exists, and isFocused() keeps
@@ -84,8 +96,11 @@ export function SentencesView({ docId, readOnly }: { docId?: string; rest?: stri
         const sel = { from: Math.min(from, to), to: Math.max(from, to) };
         // The tokens still point at the same characters, so re-key them to the
         // rebased selection rather than re-minting — back-to-back remote pushes
-        // then each get rebased instead of tripping the staleness guard.
-        if (api.rebaseCaret(held.sel, sel, held.serial)) localCursorRef.current = { ...held, sel };
+        // then each get rebased instead of tripping the staleness guard. `shown`
+        // records that they are known good for THIS push, which is what lets the
+        // mint effect below recognise the caret move it is about to be told of
+        // as this one, and not mint for it.
+        if (api.rebaseCaret(held.sel, sel, held.serial)) localCursorRef.current = { ...held, sel, shown };
       }
     }
     setSpans(next);
@@ -97,7 +112,7 @@ export function SentencesView({ docId, readOnly }: { docId?: string; rest?: stri
     const held = heldRef.current;
     if (!held) return;
     heldRef.current = null;
-    applyRemoteSpans(held.spans, held.cursors);
+    applyRemoteSpans(held.spans, held.cursors, held.heads);
   }, [applyRemoteSpans]);
 
   useEffect(() => {
@@ -106,9 +121,9 @@ export function SentencesView({ docId, readOnly }: { docId?: string; rest?: stri
     const unsubscribe = subscribeQuery(docId, DOC_QUERY, (result, heads, _lastModified, docSpans, cursors) => {
       if (!mounted || !result) return;
       if (pendingWritesRef.current > 0) {
-        heldRef.current = { spans: docSpans ?? [], cursors };
+        heldRef.current = { spans: docSpans ?? [], cursors, heads };
       } else {
-        applyRemoteSpans(docSpans ?? [], cursors);
+        applyRemoteSpans(docSpans ?? [], cursors, heads);
       }
       onHeads(heads);
       if (result.name) {
@@ -123,6 +138,7 @@ export function SentencesView({ docId, readOnly }: { docId?: string; rest?: stri
   // carries the same (merged) state and simply replaces the local spans.
   const applyOps = useCallback((ops: RichTextOp[]) => {
     if (!canEditRef.current || !docId) return;
+    shownRef.current = null;
     setSpans(prev => applyOpsToSpans(prev ?? [], ops));
     pendingWritesRef.current++;
     updateDoc(docId, (d, richText, ops) => { richText(d, ['content'], ops); }, richText, ops)
@@ -138,33 +154,63 @@ export function SentencesView({ docId, readOnly }: { docId?: string; rest?: stri
   // broadcast in `focusedField` as ['content', fromToken, toToken]; peers'
   // tokens arrive the same way.
   //
-  // Minting a token is the only round trip, and it happens when the caret
-  // MOVES. Resolving tokens back to indices is registered with the worker
+  // Minting a token is the only round trip, and it happens when the USER moves
+  // the caret. Resolving tokens back to indices is registered with the worker
   // (subscribeCursors) and rides the spans push, so every position arrives in
-  // the same message as the text it describes. Requests are FIFO behind our own
-  // updateDoc calls, so a token is minted against a doc that already includes
-  // the selection's optimistic edits.
+  // the same message as the text it describes.
+  //
+  // A mint sends indices, and an index names a character in one version of the
+  // text only. The worker's document is not that version whenever a push is
+  // still on its way here — and a peer's edits arrive in bursts, so it can be
+  // many edits ahead. Two rules keep an index from being read against the
+  // wrong text:
+  //
+  // - A caret moved by a push is not re-minted. Its tokens were re-keyed in
+  //   applyRemoteSpans and still name the same characters. Minting again asked
+  //   for "the caret's new index" of a document that had already moved on, got
+  //   a token for some other character, and swapped out the very tokens the
+  //   next push had been resolved for — so the caret stopped following its
+  //   text for good (a selection over `the tents` ended up over `t and set up`).
+  // - A real mint names the push the selection was read from (`selShown`), and
+  //   the worker mints against that version. With local edits on screen there
+  //   is no such push; requests are FIFO behind our own updateDoc calls, so the
+  //   worker's document then at least includes those edits.
   const [cursorPath, setCursorPath] = useState<(string | number)[] | null>(null);
+  // The push `selState` was read from. Set in the same update as selState, so
+  // the two cannot describe different texts by the time the effect runs.
+  const [selShown, setSelShown] = useState<Shown | null>(null);
+  const onSelectionState = useCallback((state: SelectionState | null) => {
+    setSelState(state);
+    setSelShown(shownRef.current);
+  }, []);
   // Which selection the current tokens describe. If the user types past it
   // before the mint returns, a resolution from those tokens describes an older
   // caret — the editor's rebaseCaret guard refuses it.
   // `serial` is the editor's edit count at the mint: a local edit re-mints
   // (see the deps), and a resolution from older tokens is refused by
   // rebaseCaret — such tokens can name the right index for the wrong caret.
-  const localCursorRef = useRef<{ tokens: [string, string]; sel: { from: number; to: number }; serial: number } | null>(null);
+  // `shown` is the push for which the tokens are known to resolve to `sel`: the
+  // one they were minted against, then each one that rebased them.
+  const localCursorRef = useRef<{
+    tokens: [string, string]; sel: { from: number; to: number }; serial: number; shown: Shown | null;
+  } | null>(null);
   useEffect(() => {
     if (!docId || !canEdit || !selState) {
       localCursorRef.current = null;
       setCursorPath(null);
       return;
     }
-    let cancelled = false;
     const sel = { from: selState.from, to: selState.to };
     const serial = selState.editSerial;
-    getTextCursors(docId, ['content'], [sel.from, sel.to])
+    // The push that moved the caret here already re-keyed the tokens to it.
+    const held = localCursorRef.current;
+    if (held && selShown && held.shown === selShown && held.serial === serial
+      && held.sel.from === sel.from && held.sel.to === sel.to) return;
+    let cancelled = false;
+    getTextCursors(docId, ['content'], [sel.from, sel.to], selShown?.heads)
       .then(([from, to]) => {
         if (cancelled) return;
-        localCursorRef.current = { tokens: [from, to], sel, serial };
+        localCursorRef.current = { tokens: [from, to], sel, serial, shown: selShown };
         setCursorPath(['content', from, to]);
       })
       .catch(() => { /* doc not ready — next selection change retries */ });
@@ -316,7 +362,7 @@ export function SentencesView({ docId, readOnly }: { docId?: string; rest?: stri
             spans={spans}
             editable={canEdit}
             onOps={applyOps}
-            onSelectionState={setSelState}
+            onSelectionState={onSelectionState}
             onUndo={undo}
             onRedo={redo}
             apiRef={editorApiRef}

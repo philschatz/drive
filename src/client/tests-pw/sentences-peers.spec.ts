@@ -316,11 +316,15 @@ test('a selection overlapping a peer edit keeps the words that survive', async (
   // Two overlapping selections: alice's ends inside bob's, sharing `and pitch`.
   await selectText(bob.page, OVERLAP_BOB);
 
-  // Bob's selection triggers a cursor MINT — a worker round-trip that resolves
-  // against the worker's CURRENT doc state. If alice's replacement ops reach
-  // bob's worker before that mint lands, the cursors are minted against a doc
-  // with part of her edit already applied, and their later resolution comes out
-  // shifted ("t up the t" instead of "the tents").
+  // Bob's selection triggers a cursor MINT — a worker round-trip. Until it has
+  // landed, bob holds indices and no tokens, and nothing can carry his selection
+  // across an edit of alice's.
+  //
+  // (The mint names the version bob's editor is showing, and a selection that a
+  // push merely moved is not minted again — see SentencesView. Before both, the
+  // indices were read against whatever bob's worker held by then; when alice's
+  // keystrokes arrived in a burst that was a later text, and the selection
+  // ended up over "t and set up" instead of "the tents".)
   //
   // Waiting for ALICE to draw bob's highlight is the end-to-end proof that it
   // landed: the highlight only exists once bob's mint resolved, populated his
@@ -340,8 +344,8 @@ test('a selection overlapping a peer edit keeps the words that survive', async (
   // …and bob's is re-verified at the last possible moment, for the same reason.
   // The whole test rests on his tokens describing THIS range at the instant
   // alice's ops land; a selection that drifted during the waits above would be
-  // re-minted against her already-applied edit, and resolve into the middle of
-  // her new text. Cheap — selectText re-applies only if it actually drifted.
+  // a different selection, and what survives of it a different string. Cheap —
+  // selectText re-applies only if it actually drifted.
   await selectText(bob.page, OVERLAP_BOB);
 
   // Alice types over hers, destroying the two shared words along the way.
