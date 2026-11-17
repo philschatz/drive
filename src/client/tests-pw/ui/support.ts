@@ -95,7 +95,7 @@ export async function openApp(
 }
 
 /** Home Create-sheet item labels. */
-type CreateLabel = 'Calendar' | 'Task list' | 'Spreadsheet' | 'Habit Tracker' | 'Sentences';
+type CreateLabel = 'Calendar' | 'Task list' | 'Spreadsheet' | 'Habit Tracker' | 'Sentences' | 'Kitchen' | 'Timeline';
 
 /**
  * Create a document through the home page FAB → Create sheet. Docs are created

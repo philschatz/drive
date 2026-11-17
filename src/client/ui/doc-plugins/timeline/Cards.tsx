@@ -7,7 +7,7 @@ import type { TimelineDocument, TimelinePrompt, Rel } from '../../../../shared/s
 import type { Question } from '../../../../shared/timeline/planner';
 import type { Gap } from '../../../../shared/timeline/planner';
 import type { Conflict } from '../../../../shared/timeline/order';
-import { formatFuzzy, formatDayRange, fromDay, parsePartial } from '../../../../shared/timeline/fuzzy-date';
+import { formatFuzzy, formatDayRange, formatPartial, partialOf, fromDay, parsePartial } from '../../../../shared/timeline/fuzzy-date';
 import { Thumb } from './Thumb';
 
 const card = 'rounded-2xl border p-4 mb-3 flex flex-col gap-3';
@@ -66,7 +66,8 @@ export function GapCard({ gap, birth, canEdit, onAdd, onNothing }: {
   return (
     <div className={card} data-testid="timeline-gap-card">
       <div className="text-sm">
-        <div className="font-semibold">Nothing between {formatDayRange(gap.lo, gap.lo)} and {formatDayRange(gap.hi, gap.hi)} yet{ages}.</div>
+        {/* Month precision: a gap's ends are best guesses, not known days. */}
+        <div className="font-semibold">Nothing between {formatPartial(partialOf(gap.lo, 'month'))} and {formatPartial(partialOf(gap.hi, 'month'))} yet{ages}.</div>
         <div className="mt-1">What do you remember from around {fromDay(Math.floor((gap.lo + gap.hi) / 2)).year}?</div>
       </div>
       {canEdit && (

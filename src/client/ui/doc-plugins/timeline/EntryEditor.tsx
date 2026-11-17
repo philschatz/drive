@@ -158,7 +158,7 @@ export function EntryEditor(p: EntryEditorProps) {
     },
     {
       id: 'tl-until',
-      label: 'Until (for a period of life)',
+      label: 'Until',
       icon: 'date_range',
       hidden: isNew,
       transactional: true,
