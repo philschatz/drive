@@ -58,6 +58,14 @@ export interface BackupPayload {
   version: 1;
   kind: 'snapshot' | 'full';
   exportedAt: string;
+  /**
+   * The keyhive storage generation the exporting device was on
+   * (KEYHIVE_STORAGE_GENERATION in keyhive-format.ts). User-group and document
+   * ids do not survive a keyhive reset, so a snapshot's friends and archive
+   * tombstones only mean something to a device on the same generation. Absent
+   * on every backup written before the field existed — i.e. generation 1.
+   */
+  keyhive?: number;
   /** Snapshot tier: materialized doc states. */
   docs?: BackupDocEntry[];
   /** Snapshot tier: the DriveSettings surface. */

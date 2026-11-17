@@ -52,6 +52,16 @@ export type MainToWorker =
   // BackupResult.
   | { type: 'export-backup'; id: number; tiers: BackupTier[] }
   | { type: 'import-backup'; id: number; payload: BackupPayload }
+  // Keyhive-format reset (see keyhive-format.ts / engine-recovery.ts). While the
+  // engine is blocked on old-format keyhive state these are the ONLY requests it
+  // serves. `export-legacy-backup` builds a snapshot straight from storage
+  // (result: { payload: BackupPayload; unreadable: string[] }) — before a reset
+  // from the live home list, after one from the record the reset left.
+  // `reset-keyhive` removes the old keyhive state (result: { ok: true }; the
+  // caller reloads). `get-pre-reset-info` reports that record, or null.
+  | { type: 'export-legacy-backup'; id: number }
+  | { type: 'reset-keyhive'; id: number }
+  | { type: 'get-pre-reset-info'; id: number }
   // `peek: true` = "don't count this read as the user viewing the doc" (home
   // page summary, source inspector/export, background tooling). Default
   // (absent) = viewing: the doc's last-viewed heads are updated, clearing its
@@ -145,6 +155,11 @@ export type WorkerToMain =
   | { type: 'ready'; peerId: string }
   | { type: 'kh-ready' }
   | { type: 'kh-error'; message: string }
+  // The stored keyhive state was written by an older version this build cannot
+  // read. Sent INSTEAD of ready/kh-ready/kh-error: the engine has not booted
+  // keyhive or the repo and will not until the state is reset. `docCount` is
+  // how many documents the home list holds (all still readable from storage).
+  | { type: 'reset-required'; reason: string; docCount: number }
   | { type: 'error'; message: string }
   | { type: 'data-warning'; message: string }
   // Debug mode only: the name of a keyhive (Rust/WASM) call, emitted just before

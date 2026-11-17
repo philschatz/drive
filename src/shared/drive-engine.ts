@@ -26,11 +26,13 @@ import {
   type QueryCacheEntry,
 } from './storage-keys';
 import { createKeyhiveRepo } from './keyhive-repo';
+import { KeyhiveResetRequiredError } from './keyhive-format';
+import { buildBackupDocEntry } from './legacy-backup';
+import { EngineRecovery } from './engine-recovery';
 import { RELAY_PEER_ID } from './relay-identity';
 import type { EngineHost } from './engine-host';
 import type { MainToWorker, WorkerToMain } from './worker-protocol';
 import { BLOCK_MARKER, applyRichTextOps, richTextAwareStringSync, type RichTextOp, type RichTextSpan } from './rich-text-ops';
-import { spansToMarkdown } from './rich-text-markdown';
 import { EngineSettings, type EngineSettingsSurface } from './engine-settings';
 import { EnginePresence, type EnginePresenceSurface } from './engine-presence';
 import { EngineRendezvous, type EngineRendezvousSurface } from './engine-rendezvous';
@@ -124,6 +126,14 @@ export class EngineCore {
   protected PresenceClass: any = null;
   protected amDocIdFromBytes: ((bytes: Uint8Array) => string) | null = null;
   protected setNextDocId: ((bytes: Uint8Array) => void) | null = null;
+
+  /**
+   * Set by init() when the stored keyhive state is in an older, unreadable
+   * format: keyhive and the repo were NOT booted, and stay that way until the
+   * state is reset. While set, engine-recovery.ts answers every request itself
+   * and only the reset screen's two requests do anything.
+   */
+  resetRequired: { reason: string; docCount: number } | null = null;
 
   // Doc registry + subscriptions.
   protected docRegistry = new Map<string, DocEntry>();
@@ -379,18 +389,7 @@ export class EngineCore {
           const handle = await this.getOrLoadHandle(entry.id);
           const doc = handle.doc();
           if (!doc) throw new Error('Document not ready');
-          const item: BackupDocEntry = {
-            bin: this.Automerge.save(doc),
-            metadata: entry.type || entry.name ? { type: entry.type, name: entry.name } : undefined,
-          };
-          if (doc['@type'] === 'Sentences') {
-            // The JSON projection is a flat string (marks/block markers live
-            // only in the binary); carry the readable Markdown rendering.
-            item.markdown = spansToMarkdown(this.Automerge.spans(doc, ['content']));
-          } else {
-            item.doc = JSON.parse(JSON.stringify(doc));
-          }
-          docs.push(item);
+          docs.push(buildBackupDocEntry(this.Automerge, doc, entry));
         } catch (err) {
           log.warn(`export-backup: skipping unreadable doc ${entry.id}:`, errMsg(err));
         }
@@ -1167,6 +1166,16 @@ export class EngineCore {
       void this.rendezvousSurface.refreshRelayWatch();
       this.emit({ type: 'kh-ready' });
     } catch (khErr: any) {
+      if (khErr instanceof KeyhiveResetRequiredError) {
+        // Old-format keyhive state. Not a failure to report as one: nothing was
+        // booted and nothing was changed. Say so and stop — the UI swaps in the
+        // reset screen, and engine-recovery.ts gates every request from here.
+        const docCount = ((await this.host.kv.get<StoredDocEntry[]>(KEYS.docIds)) ?? []).length;
+        this.resetRequired = { reason: khErr.reason, docCount };
+        log.warn(`keyhive state is in an older format (${khErr.reason}); waiting for a reset`);
+        this.emit({ type: 'reset-required', reason: khErr.reason, docCount });
+        return;
+      }
       log.error('keyhive init failed:', khErr);
       this.emit({ type: 'kh-error', message: errMsg(khErr) });
     }
@@ -1612,13 +1621,14 @@ export class EngineCore {
 }
 
 /**
- * The composed engine: settings → presence → rendezvous → watch, layered over
- * the core. Each mixin assigns its `*Surface` hook in a field initializer (they
+ * The composed engine: settings → presence → rendezvous → watch → recovery,
+ * layered over the core. Recovery is outermost on purpose: its `handleMessage`
+ * runs first, so while the engine is blocked no inner layer ever sees a request. Each mixin assigns its `*Surface` hook in a field initializer (they
  * avoid constructors so the composed class keeps the core's `(host, opts)`
  * signature — see engine-settings.ts), and the core's `init()`/`handleMessage`
  * reach subsystem state through those hooks.
  */
-export const DriveEngine = EngineWatch(EngineRendezvous(EnginePresence(EngineSettings(EngineCore))));
+export const DriveEngine = EngineRecovery(EngineWatch(EngineRendezvous(EnginePresence(EngineSettings(EngineCore)))));
 
 /** The composed engine's instance type (mixins' public members included). */
 export type DriveEngineInstance = InstanceType<typeof DriveEngine>;
