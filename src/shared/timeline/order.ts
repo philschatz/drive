@@ -2,10 +2,11 @@
  * What the Timeline knows about when each entry happened, once every order
  * relation ("this was before that") is taken into account.
  *
- * Each entry has a START; a period (an entry with `until`) also has an END.
- * Each is a variable whose value is a day, bounded by [lo, hi]: initially the
- * entry's own `when` / `until`, an unknown side defaulting to birth (or
- * 1900-01-01) and today. Every relation is a difference constraint
+ * Each entry has a START; a period (an entry with `until`, or any chapter)
+ * also has an END. Each is a variable whose value is a day, bounded by
+ * [lo, hi]: initially the entry's own `when` / `until`, an unknown side
+ * defaulting to birth (or 1900-01-01) and today. A chapter with no `until` is
+ * still going: its end is today. Every relation is a difference constraint
  * `x ≤ y + c` (c ≥ 0) between two such variables:
  *
  *   X before B   X ≤ start(B)
@@ -76,7 +77,10 @@ interface Edge {
   src?: { owner: string; field: 'rel' | 'untilRel'; target: string; rel: Rel };
 }
 
-const isPeriod = (ev: TimelineEvent | undefined) => !!ev?.until;
+/** Has an END: an entry with `until`, or any chapter (one with no `until` is still going). */
+export const isPeriod = (ev: TimelineEvent | undefined) => !!ev?.until || !!ev?.chapter;
+/** A chapter that has not ended: its end is today. */
+export const isOngoing = (ev: TimelineEvent | undefined) => !!ev?.chapter && !ev.until;
 const startOf = (uid: string): Node => `${uid}:s`;
 const endOf = (uid: string, ev: TimelineEvent): Node => isPeriod(ev) ? `${uid}:e` : `${uid}:s`;
 const uidOf = (n: Node) => n.slice(0, -2);
@@ -129,7 +133,9 @@ export function effectiveBounds(doc: Pick<TimelineDocument, 'birth' | 'events'>,
     const ev = events[uid];
     const w = boundsOf(ev.when);
     init.set(startOf(uid), clampPair(w.lo ?? life.lo, w.hi ?? life.hi));
-    if (isPeriod(ev)) {
+    if (isOngoing(ev)) {
+      init.set(`${uid}:e`, { lo: life.hi, hi: life.hi });
+    } else if (isPeriod(ev)) {
       const u = boundsOf(ev.until);
       init.set(`${uid}:e`, clampPair(u.lo ?? life.lo, u.hi ?? life.hi));
     }
@@ -267,8 +273,11 @@ export function displayOrder(
     keyOf.set(uid, displayDay(events[uid], b));
   }
   const title = (u: string) => events[u]?.title ?? '';
+  // On the same day a chapter comes first, so what happened that day is inside it.
+  const chapterFirst = (u: string) => (events[u]?.chapter ? 0 : 1);
   const cmp = (a: string, b: string) =>
-    keyOf.get(a)! - keyOf.get(b)! || title(a).localeCompare(title(b)) || (a < b ? -1 : a > b ? 1 : 0);
+    keyOf.get(a)! - keyOf.get(b)! || chapterFirst(a) - chapterFirst(b)
+    || title(a).localeCompare(title(b)) || (a < b ? -1 : a > b ? 1 : 0);
 
   // "a precedes b" edges from live relations.
   const deadRels = new Set<string>();

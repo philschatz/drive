@@ -26,6 +26,14 @@ export const TIMELINE_TYPE = 'Calendar+Timeline';
 export type Rel = 'before' | 'after' | 'during' | 'near' | 'unsure';
 export const REL_VALUES: readonly Rel[] = ['before', 'after', 'during', 'near', 'unsure'];
 
+/**
+ * What kind of stretch of life a chapter is. Place: where I lived. People: who
+ * I was with. Pursuit: what my days went into (a school, a job, a team).
+ * Phase: a stage or circumstance (new parent, the pandemic).
+ */
+export type ChapterKind = 'place' | 'people' | 'pursuit' | 'phase' | 'other';
+export const CHAPTER_KINDS: readonly ChapterKind[] = ['place', 'people', 'pursuit', 'phase', 'other'];
+
 export interface TimelineEvent {
   '@type': 'Event';
   title: string;
@@ -42,8 +50,17 @@ export interface TimelineEvent {
   // ── extensions ──
   /** When it happened or began. The source of truth for `start`. */
   when?: FuzzyDate;
-  /** Present ⇒ a period (a chapter of life), ending at `until`. */
+  /**
+   * Present ⇒ a period, ending at `until`. For a chapter, ABSENT means it is
+   * still going (it ends today) and `{}` means it ended, date unknown.
+   */
   until?: FuzzyDate;
+  /**
+   * Present ⇒ this entry is a chapter: a stretch of life that frames memories
+   * (where I lived, who I was with). Always a period. Its colour is not stored:
+   * chapters take the palette in turn, in start order.
+   */
+  chapter?: ChapterKind;
   /** RFC 8984 Location coordinates form: 'geo:<lat>,<lng>'. */
   coordinates?: string;
   recall?: 'vivid' | 'hazy';
@@ -78,6 +95,8 @@ export interface TimelinePrompt {
   /** Answered: the entry it became. */
   entry?: string;
   dismissed?: true;
+  /** A chapter-gap card ("where were you living then?"): the kind it asked about. */
+  chapter?: ChapterKind;
 }
 
 export interface TimelineDocument {
@@ -112,6 +131,7 @@ export const timelineEventSchema = obj({
   settled: bool({ literal: true, optional: true }),
   rel: relMap,
   untilRel: relMap,
+  chapter: str({ enum: CHAPTER_KINDS, optional: true }),
 });
 
 export const timelinePromptSchema = obj({
@@ -126,6 +146,7 @@ export const timelinePromptSchema = obj({
   added: str(),
   entry: str({ optional: true }),
   dismissed: bool({ literal: true, optional: true }),
+  chapter: str({ enum: CHAPTER_KINDS, optional: true }),
 });
 
 export const timelineDocumentSchema = obj({

@@ -105,6 +105,22 @@ describe('timeline changes, rebuilt as the worker rebuilds them', () => {
     expect(plain(after).prompts).toBeUndefined();
   });
 
+  it('chapters: setChapter toggles the kind; setDuring adds and removes only "during"', () => {
+    let doc = run(fresh(), changes.addEntry, 'chi', ev('Chicago', { when: { earliest: '2008', latest: '2008' } }));
+    doc = run(doc, changes.addEntry, 'job', ev('Acme'));
+    doc = run(doc, changes.addEntry, 'm', ev('Met Jamie', { rel: { job: 'after' } }));
+    doc = run(doc, changes.setChapter, 'chi', 'place');
+    doc = run(doc, changes.setChapter, 'job', 'pursuit');
+    expect(plain(doc).events.chi.chapter).toBe('place');
+    doc = run(doc, changes.setDuring, 'm', ['chi', 'gone', 'm'], []);
+    expect(plain(doc).events.m.rel).toEqual({ job: 'after', chi: 'during' });
+    doc = run(doc, changes.setDuring, 'm', [], ['chi', 'job']);
+    expect(plain(doc).events.m.rel).toEqual({ job: 'after' }); // "after" is not the pane's to remove
+    doc = run(doc, changes.setChapter, 'job', null);
+    expect(plain(doc).events.job.chapter).toBeUndefined();
+    expect(errors(doc)).toEqual([]);
+  });
+
   it('birth and rename', () => {
     let doc = run(fresh(), changes.setBirth, '1987-03-04');
     doc = run(doc, changes.rename, 'My life');

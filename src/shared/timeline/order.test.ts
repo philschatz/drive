@@ -135,4 +135,35 @@ describe('displayOrder', () => {
     const o = displayOrder({ birth: '1990', events }, effectiveBounds({ birth: '1990', events }, TODAY));
     expect(o.ordered).toEqual(['b', 'a']);
   });
+
+  it('on the same day a chapter comes before what happened that day', () => {
+    const exact = { earliest: '1986-08-14', latest: '1986-08-14' };
+    const events = { born: ev('Born', { when: exact }), home: ev('Duluth', { when: exact, chapter: 'place', until: year(1995) }) };
+    expect(displayOrder({ events }, effectiveBounds({ events }, TODAY)).ordered).toEqual(['home', 'born']);
+  });
 });
+
+describe('chapters', () => {
+  it('a chapter is a period; with no `until` it is still going, ending today', () => {
+    const events = { chi: ev('Chicago', { chapter: 'place', when: year(2008) }) };
+    const b = effectiveBounds({ events }, TODAY).entries.get('chi')!;
+    expect(b.end).toEqual({ lo: TODAY, hi: TODAY });
+  });
+
+  it('"during" a still-going chapter bounds a memory by its start and today', () => {
+    const events = {
+      chi: ev('Chicago', { chapter: 'place', when: year(2008) }),
+      m: ev('Met the neighbours', { rel: { chi: 'during' } }),
+    };
+    const b = effectiveBounds({ birth: '1986', events }, TODAY).entries.get('m')!;
+    expect(range(b.start)).toEqual(['2008-01-01', '2026-11-17']);
+    expect(b.start.loBy).toEqual({ uid: 'chi', rel: 'during' });
+  });
+
+  it('an ended chapter of unknown end ({}) still ends after it begins', () => {
+    const events = { j: ev('Dating Jamie', { chapter: 'people', when: year(2010), until: {} }) };
+    const b = effectiveBounds({ birth: '1986', events }, TODAY).entries.get('j')!;
+    expect(range(b.end!)).toEqual(['2010-01-01', '2026-11-17']);
+  });
+});
+

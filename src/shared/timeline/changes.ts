@@ -69,6 +69,31 @@ export function removeRelation(d: any, owner: string, field: 'rel' | 'untilRel',
   if (m && target in m) delete m[target];
 }
 
+/** Make an entry a chapter of the given kind, or (null) a plain entry again. */
+export function setChapter(d: any, uid: string, kind: string | null): void {
+  const ev = d.events[uid];
+  if (!ev) return;
+  if (kind) { if (ev.chapter !== kind) ev.chapter = kind; } else if ('chapter' in ev) delete ev.chapter;
+}
+
+/**
+ * The "During" pane's Save: the chapters this memory happened during. Adds
+ * `rel[c] = 'during'` for each of `add`, and removes the relation to each of
+ * `remove` only while it still says "during" (not some other answer).
+ */
+export function setDuring(d: any, uid: string, add: string[], remove: string[]): void {
+  const ev = d.events[uid];
+  if (!ev) return;
+  for (const c of remove) {
+    if (ev.rel && ev.rel[c] === 'during') delete ev.rel[c];
+  }
+  for (const c of add) {
+    if (c === uid || !d.events[c]) continue;
+    if (!ev.rel) ev.rel = {};
+    if (ev.rel[c] !== 'during') ev.rel[c] = 'during';
+  }
+}
+
 /**
  * A drop or keyboard move: the planner's placement (relations to drop and to
  * add, the new best guess) and the calendar fields that follow from it.
