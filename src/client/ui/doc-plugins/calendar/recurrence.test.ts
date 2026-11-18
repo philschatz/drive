@@ -87,6 +87,19 @@ describe('generateDates correctness (no regression)', () => {
   });
 });
 
+describe('rebuildExpanded: multi-day events', () => {
+  it('keeps one that began before the range and is still running in it, and drops one that ended', () => {
+    const events: Record<string, CalendarEvent> = {
+      years: { '@type': 'Event', title: 'Dating Jamie', start: '2010-07-02', duration: 'P1462D' } as any,
+      ended: { '@type': 'Event', title: 'Trip', start: '2025-12-20', duration: 'P1W' } as any,
+      edge: { '@type': 'Event', title: 'Lands on the 1st', start: '2025-12-30', duration: 'P3D' } as any,
+      day: { '@type': 'Event', title: 'One day', start: '2025-12-31', duration: 'P1D' } as any,
+    };
+    expect(rebuildExpanded(events, '2012-06-11', '2012-06-17').map(e => e.uid)).toEqual(['years']);
+    expect(rebuildExpanded(events, '2026-01-01', '2026-01-31').map(e => e.uid).sort()).toEqual(['edge']);
+  });
+});
+
 describe('rebuildExpanded robustness', () => {
   it('skips events whose expansion throws and keeps the rest', () => {
     const events: Record<string, CalendarEvent> = {

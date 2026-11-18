@@ -54,6 +54,21 @@ export function parseDuration(dur: string): { days: number; hours: number; minut
   return { days, hours: parseInt(m[3] || '0'), minutes: parseInt(m[4] || '0') };
 }
 
+/**
+ * The last day a non-recurring event touches (a multi-day event that began
+ * before the visible range may still be running in it). Unparseable → its
+ * start day, which is what the range check used to assume.
+ */
+function lastDayOf(startDay: string, duration: string | undefined): string {
+  const { days } = parseDuration(duration ?? 'P1D');
+  if (days <= 1) return startDay;
+  try {
+    return Temporal.PlainDate.from(startDay).add({ days: days - 1 }).toString();
+  } catch {
+    return startDay;
+  }
+}
+
 // Hard backstop against pathological rules (crafted CRDT JSON / malicious .ics).
 // Validation is advisory, so the generator itself must never hang: every loop
 // advances/checks a counter regardless of whether an occurrence is produced.
@@ -170,7 +185,7 @@ export function rebuildExpanded(events: Record<string, CalendarEvent>, rangeStar
 
     if (!isRecurring) {
       const evDay = ev.start.substring(0, 10);
-      if (evDay >= rangeStart && evDay <= rangeEnd) {
+      if (evDay <= rangeEnd && (evDay >= rangeStart || lastDayOf(evDay, ev.duration) >= rangeStart)) {
         expanded.push({ uid, recurrenceDate: null, ev, isRecurring: false });
       }
       continue;

@@ -133,6 +133,21 @@ describe('calendarQuery', () => {
     expect(result.events['ev-after-range']).toBeUndefined();
   });
 
+  it('includes a multi-day event that began before the range (it may still be running)', async () => {
+    const long = {
+      events: {
+        years: { '@type': 'Event', title: 'Dating Jamie', start: '2010-07-02', duration: 'P1462D' },
+        trip: { '@type': 'Event', title: 'Trip', start: '2026-01-28', duration: 'P1W' },
+        day: { '@type': 'Event', title: 'One day', start: '2025-06-01', duration: 'P1D' },
+        hour: { '@type': 'Event', title: 'Meeting', start: '2025-06-01T10:00:00', duration: 'PT1H' },
+        none: { '@type': 'Event', title: 'No duration', start: '2025-06-01' },
+        later: { '@type': 'Event', title: 'Later', start: '2027-01-01', duration: 'P3D' },
+      },
+    };
+    const result = await one(calendarQuery('2026-02-01', '2026-04-30'), long);
+    expect(Object.keys(result.events).sort()).toEqual(['trip', 'years']);
+  });
+
   it('excludes recurring events whose until date is before the range', async () => {
     const query = calendarQuery('2026-02-01', '2026-04-30');
     const result = await one(query, doc);

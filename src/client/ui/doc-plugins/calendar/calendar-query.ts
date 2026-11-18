@@ -17,7 +17,12 @@ export function expandRange(start: string, end: string): { start: string; end: s
 /**
  * Build a jq filter string that returns only events relevant to a date range.
  *
- * Non-recurring: start date falls within [rangeStart, rangeEnd].
+ * Non-recurring: start date falls within [rangeStart, rangeEnd], OR it lasts
+ *            more than a day and starts no later than rangeEnd — it may still
+ *            be running in the range (a week's trip, a Timeline chapter that
+ *            spans years). jq here cannot add a duration to a date, so every
+ *            such earlier multi-day event is sent and the calendar view shows
+ *            only the ones that overlap.
  * Recurring: start date <= rangeEnd (could produce occurrences in range)
  *            AND until date (if set) >= rangeStart (hasn't ended before range).
  */
@@ -27,9 +32,11 @@ export function calendarQuery(rangeStart: string, rangeEnd: string): string {
   const recurring =
     '.value.recurrenceRule != null and .value.start[:10] <= "' + rangeEnd +
     '" and ((.value.recurrenceRule.until // null) == null or .value.recurrenceRule.until[:10] >= "' + rangeStart + '")';
+  // "P2D", "P1W", "P1DT2H": more than a day. "P1D" and "PT…" are not.
+  const multiDay = '(.value.duration // "P1D") != "P1D" and (.value.duration // "PT")[:2] != "PT"';
   const nonRecurring =
-    '.value.recurrenceRule == null and .value.start[:10] >= "' + rangeStart +
-    '" and .value.start[:10] <= "' + rangeEnd + '"';
+    '.value.recurrenceRule == null and .value.start[:10] <= "' + rangeEnd +
+    '" and (.value.start[:10] >= "' + rangeStart + '" or (' + multiDay + '))';
   return (
     '{ "@type": .["@type"], events: (.events // {} | to_entries | map(select((' + recurring + ') or (' + nonRecurring +
     '))) | from_entries), name: (.name // "Calendar"), description: (.description // ""), color: .color, timeZone: .timeZone }'

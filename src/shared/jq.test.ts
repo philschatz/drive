@@ -367,7 +367,7 @@ describe('jq', () => {
     });
 
     it('calendarQuery (Calendar + AllCalendars)', () => {
-      const query = '{ "@type": .["@type"], events: (.events // {} | to_entries | map(select((.value.recurrenceRule != null and .value.start[:10] <= "2026-06-30" and ((.value.recurrenceRule.until // null) == null or .value.recurrenceRule.until[:10] >= "2026-05-01")) or (.value.recurrenceRule == null and .value.start[:10] >= "2026-05-01" and .value.start[:10] <= "2026-06-30"))) | from_entries), name: (.name // "Calendar"), description: (.description // ""), color: .color, timeZone: .timeZone }';
+      const query = '{ "@type": .["@type"], events: (.events // {} | to_entries | map(select((.value.recurrenceRule != null and .value.start[:10] <= "2026-06-30" and ((.value.recurrenceRule.until // null) == null or .value.recurrenceRule.until[:10] >= "2026-05-01")) or (.value.recurrenceRule == null and .value.start[:10] <= "2026-06-30" and (.value.start[:10] >= "2026-05-01" or ((.value.duration // "P1D") != "P1D" and (.value.duration // "PT")[:2] != "PT"))))) | from_entries), name: (.name // "Calendar"), description: (.description // ""), color: .color, timeZone: .timeZone }';
       expect(one(query, doc)).toEqual({
         '@type': 'TaskList',
         events: { 'evt-1': doc.events['evt-1'], 'evt-2': doc.events['evt-2'] },
