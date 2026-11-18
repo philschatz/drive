@@ -241,6 +241,79 @@ describe('Timeline container', () => {
       expect(within(screen.getByTestId('timeline-editor')).getAllByText('Dating Jamie').length).toBeGreaterThan(0);
     });
 
+    const open = (title: string) => tap(rowItem(title).querySelector('[data-entry-row]')!);
+
+    it('the Chapter dropdown makes an entry a chapter in one change, and back again', async () => {
+      await renderTimeline(life());
+      open('Adopted a dog');
+      fireEvent.click(screen.getByTestId('tl-chapter-row'));
+      fireEvent.input(screen.getByTestId('tl-chapter'), { target: { value: 'phase' } });
+      expect(writes).toHaveBeenCalledTimes(1);
+      expect(events().m2.chapter).toBe('phase');
+      fireEvent.click(screen.getByTestId('tl-chapter-row'));
+      fireEvent.input(screen.getByTestId('tl-chapter'), { target: { value: '' } });
+      expect(events().m2.chapter).toBeUndefined();
+    });
+
+    it('a chapter can end, or be still going', async () => {
+      await renderTimeline(life());
+      open('Dating Jamie');
+      fireEvent.click(screen.getByTestId('tl-until-row'));
+      fireEvent.input(screen.getByTestId('tl-until-kind'), { target: { value: 'ongoing' } });
+      expect(screen.getByTestId('tl-until-preview').textContent).toBe('Still going');
+      fireEvent.click(screen.getByTestId('tl-until-save'));
+      expect(writes).toHaveBeenCalledTimes(1);
+      expect(events().jamie.until).toBeUndefined();
+      fireEvent.click(screen.getByTestId('tl-until-row'));
+      fireEvent.input(screen.getByTestId('tl-until-kind'), { target: { value: 'unknown' } });
+      fireEvent.click(screen.getByTestId('tl-until-save'));
+      expect(events().jamie.until).toEqual({});
+    });
+
+    it('the During pane is one change, and refuses a chapter that cannot hold the memory', async () => {
+      await renderTimeline(life());
+      open('Adopted a dog');
+      fireEvent.click(screen.getByTestId('tl-during-row'));
+      // Chapters that can hold it come first.
+      const boxes = [...document.querySelectorAll('[data-testid^="tl-during-"]')].map(b => b.getAttribute('data-testid'));
+      expect(boxes.filter(t => t === 'tl-during-home' || t === 'tl-during-jamie')).toEqual(['tl-during-home', 'tl-during-jamie']);
+      fireEvent.click(screen.getByTestId('tl-during-jamie'));
+      expect(screen.getByTestId('tl-during-error').textContent).toContain('Dating Jamie');
+      expect((screen.getByTestId('tl-during-save') as HTMLButtonElement).disabled).toBe(true);
+      fireEvent.click(screen.getByTestId('tl-during-jamie'));
+      fireEvent.click(screen.getByTestId('tl-during-home'));
+      fireEvent.click(screen.getByTestId('tl-during-save'));
+      expect(writes).toHaveBeenCalledTimes(1);
+      expect(events().m2.rel).toEqual({ home: 'during' });
+    });
+
+    it('a new chapter is its kind and name in one change; Enter starts another of the same kind', async () => {
+      await renderTimeline(life());
+      fireEvent.click(screen.getByTitle('New chapter'));
+      fireEvent.input(screen.getByTestId('tl-chapter-kind'), { target: { value: 'people' } });
+      fireEvent.input(screen.getByTestId('tl-title'), { target: { value: 'Roommates with Sam' } });
+      fireEvent.keyDown(screen.getByTestId('tl-title'), { key: 'Enter' });
+      expect(writes).toHaveBeenCalledTimes(1);
+      expect((screen.getByTestId('tl-chapter-kind') as HTMLSelectElement).value).toBe('people');
+      expect((screen.getByTestId('tl-title') as HTMLInputElement).value).toBe('');
+      fireEvent.input(screen.getByTestId('tl-title'), { target: { value: 'Book club' } });
+      fireEvent.click(screen.getByTestId('tl-title-save'));
+      const made = Object.values(events()).filter((e: any) => e.chapter === 'people').map((e: any) => e.title).sort();
+      expect(made).toEqual(['Book club', 'Dating Jamie', 'Roommates with Sam']);
+    });
+
+    it('"Add a memory during this chapter" keeps adding to that chapter', async () => {
+      await renderTimeline(life());
+      open('Chicago');
+      fireEvent.click(screen.getByTestId('tl-add-during'));
+      fireEvent.input(screen.getByTestId('tl-title'), { target: { value: 'Housewarming' } });
+      fireEvent.keyDown(screen.getByTestId('tl-title'), { key: 'Enter' });
+      fireEvent.input(screen.getByTestId('tl-title'), { target: { value: 'Met the neighbours' } });
+      fireEvent.keyDown(screen.getByTestId('tl-title'), { key: 'Enter' });
+      const added = Object.values(events()).filter((e: any) => e.title === 'Housewarming' || e.title === 'Met the neighbours');
+      expect(added.map((e: any) => e.rel)).toEqual([{ home: 'during' }, { home: 'during' }]);
+    });
+
     it('chapters have no drag handle', async () => {
       await renderTimeline(life());
       fireEvent.click(screen.getByTitle('Arrange'));

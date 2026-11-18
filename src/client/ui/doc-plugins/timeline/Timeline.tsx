@@ -27,10 +27,10 @@ import { FieldSheet } from '../../common/FieldEditor';
 import { ListRow } from '../../common/ListRow';
 import { Fab } from '@/components/ui/fab';
 import { MdTextField } from '@/components/ui/md-text-field';
-import type { TimelineEvent, TimelinePrompt, Rel } from '../../../../shared/schemas/timeline';
+import type { TimelineEvent, TimelinePrompt, Rel, ChapterKind } from '../../../../shared/schemas/timeline';
 import * as changes from '../../../../shared/timeline/changes';
 import { effectiveBounds, displayOrder, type Conflict } from '../../../../shared/timeline/order';
-import { chapterLayout } from '../../../../shared/timeline/chapters';
+import { chapterLayout, chapterSpans } from '../../../../shared/timeline/chapters';
 import {
   nextDateQuestion, pinTargets, largestGaps, placeBetween, applyPivotAnswer, targetKey,
   type Question, type Target, type Gap,
@@ -38,8 +38,9 @@ import {
 import {
   calendarFields, todayDay, partialOf, parsePartial, bestDay, formatFuzzy, type FuzzyDate,
 } from '../../../../shared/timeline/fuzzy-date';
-import { TimelineList } from './TimelineList';
-import { EntryEditor, PROP_TO_FIELDS, type EntryPatch } from './EntryEditor';
+import { TimelineList, chapterDates } from './TimelineList';
+import { EntryEditor, PROP_TO_FIELDS, type EntryPatch, type ChapterOption } from './EntryEditor';
+import { chapterColor } from './chapter-kinds';
 import { PromptCard, GapCard, PinDownCard, ConflictList } from './Cards';
 
 const TIMELINE_QUERY =
@@ -57,6 +58,14 @@ interface EditorState {
   promptKey?: string;
   gap?: { key: string; prompt: TimelinePrompt };
   insert?: { earlier: string | null; later: string | null };
+  /** A memory started from a chapter ("Add a memory during this chapter"): Enter keeps adding to it. */
+  during?: string;
+  /**
+   * Keys the editor. The sheet reads its first pane only when it mounts, so
+   * starting a new entry from inside an open sheet bumps this to remount it;
+   * Enter-to-add-another keeps it (the title pane is already showing).
+   */
+  fresh?: number;
 }
 
 function generateUid(): string {
@@ -163,14 +172,14 @@ export function Timeline({ docId, readOnly }: { docId?: string; rest?: string; r
 
   // ── Entries ───────────────────────────────────────────────────────────────
   const openNew = useCallback((ctx: Partial<EditorState> = {}) => {
-    setEditor({ uid: generateUid(), entry: ctx.entry ?? blank(), isNew: true, ...ctx } as EditorState);
+    setEditor({ uid: generateUid(), entry: ctx.entry ?? blank(), isNew: true, fresh: editorRef.current?.fresh, ...ctx } as EditorState);
   }, []);
 
-  const createEntry = useCallback((uid: string, title: string, viaEnter: boolean) => {
+  const createEntry = useCallback((uid: string, title: string, viaEnter: boolean, kind?: ChapterKind) => {
     const ed = editorRef.current;
     if (!ed || ed.uid !== uid || !canEditRef.current) return;
     const d = docRef.current;
-    let entry: TimelineEvent = clean({ ...ed.entry, title });
+    let entry: TimelineEvent = clean({ ...ed.entry, title, ...(kind ? { chapter: kind } : {}) });
     if (ed.insert) {
       const p = placeBetween(d, uid, ed.insert.earlier, ed.insert.later, today, entry);
       if (p.ok) {
@@ -188,6 +197,8 @@ export function Timeline({ docId, readOnly }: { docId?: string; rest?: string; r
     // Rapid entry: the next one goes right after this one in time (just above
     // it in the newest-first list), or into the same stretch of time.
     if (ed.insert) openNew({ insert: { earlier: uid, later: ed.insert.later } });
+    else if (entry.chapter) openNew({ entry: blank({ chapter: entry.chapter }) });
+    else if (ed.during) openNew({ during: ed.during, entry: blank({ rel: { [ed.during]: 'during' } }) });
     else if (ed.gap) openNew({ entry: blank({ when: ed.entry.when }) });
     else openNew();
   }, [today, write, openNew]);
@@ -212,6 +223,45 @@ export function Timeline({ docId, readOnly }: { docId?: string; rest?: string; r
 
   const removeRelation = useCallback((owner: string, field: 'rel' | 'untilRel', target: string) =>
     write(changes.removeRelation, owner, field, target), [write]);
+
+  // ── Chapters ──────────────────────────────────────────────────────────────
+  const newChapter = useCallback((kind: ChapterKind = 'place', over: Partial<EditorState> = {}) =>
+    openNew({ ...over, entry: blank({ chapter: kind, ...(over.entry ?? {}) }) }), [openNew]);
+  const addDuring = useCallback((chapter: string) =>
+    openNew({ during: chapter, entry: blank({ rel: { [chapter]: 'during' } }), fresh: (editorRef.current?.fresh ?? 0) + 1 }), [openNew]);
+  const setChapter = useCallback((uid: string, kind: ChapterKind | null) => write(changes.setChapter, uid, kind), [write]);
+  const setDuring = useCallback((uid: string, add: string[], remove: string[]) =>
+    write(changes.setDuring, uid, add, remove), [write]);
+
+  /** Ticking these chapters for this memory: the first that cannot hold it, said plainly. */
+  const duringError = useCallback((uid: string, chosen: string[]): string | null => {
+    const d = docRef.current;
+    const me = d.events[uid];
+    if (!me) return null;
+    const rel: Record<string, Rel> = { ...(me.rel ?? {}) };
+    for (const [c, r] of Object.entries(rel)) if (r === 'during' && !chosen.includes(c)) delete rel[c];
+    for (const c of chosen) rel[c] = 'during';
+    const trial = effectiveBounds({ birth: d.birth, events: { ...d.events, [uid]: { ...me, rel } } }, today);
+    const bad = trial.entries.get(uid)?.conflicts.find(c => c.owner === uid && chosen.includes(c.target));
+    if (!bad) return null;
+    const c = d.events[bad.target];
+    return `“${c?.title}” (${c ? chapterDates(c, d.birth) : ''}) doesn't fit this memory's date. Change one of the dates first.`;
+  }, [today]);
+
+  const chapterOptions = useMemo((): ChapterOption[] => {
+    const spans = chapterSpans(doc, bounds);
+    const colour = new Map(layout.bars.map(b => [b.uid, chapterColor(b.colorIndex)]));
+    const range = editor ? bounds.entries.get(editor.uid)?.start : undefined;
+    const overlaps = (uid: string) => {
+      const s = spans.get(uid);
+      return !!(s && range && s.from <= range.hi && range.lo <= s.to);
+    };
+    return Object.entries(events)
+      .filter(([uid, e]) => e.chapter && uid !== editor?.uid)
+      .sort(([a], [b]) => Number(overlaps(b)) - Number(overlaps(a))
+        || (spans.get(a)?.from ?? Infinity) - (spans.get(b)?.from ?? Infinity) || (a < b ? -1 : 1))
+      .map(([uid, e]) => ({ uid, title: e.title, kind: e.chapter!, color: colour.get(uid), dates: chapterDates(e, birth) }));
+  }, [doc, bounds, layout, events, editor?.uid, birth]);
 
   const move = useCallback((uid: string, earlier: string | null, later: string | null) => {
     const d = docRef.current;
@@ -314,7 +364,10 @@ export function Timeline({ docId, readOnly }: { docId?: string; rest?: string; r
         action={canEdit && tab === 'timeline'
           ? { icon: 'swap_vert', label: arranging ? 'Done arranging' : 'Arrange', active: arranging, onSelect: () => setArranging(a => !a) }
           : undefined}
-        overflow={[{ icon: 'cake', label: birth ? `Birth date (${formatFuzzy({ earliest: birth, latest: birth })})` : 'Set your birth date', onSelect: () => setBirthOpen(true), disabled: !canEdit }]}
+        overflow={[
+          { icon: 'bookmark_add', label: 'New chapter', onSelect: () => newChapter(), disabled: !canEdit },
+          { icon: 'cake', label: birth ? `Birth date (${formatFuzzy({ earliest: birth, latest: birth })})` : 'Set your birth date', onSelect: () => setBirthOpen(true), disabled: !canEdit },
+        ]}
       />
       <HistorySlider history={history} />
       <div className="max-w-screen-md mx-auto w-full px-2 sm:px-4 pb-28" style={noAccess ? { opacity: 0.4, pointerEvents: 'none' } : undefined}>
@@ -398,6 +451,7 @@ export function Timeline({ docId, readOnly }: { docId?: string; rest?: string; r
       {canEdit && tab === 'timeline' && <Fab icon="add" aria-label="New entry" onClick={() => openNew()} />}
 
       <EntryEditor
+        key={editor?.fresh ?? 0}
         docId={docId}
         uid={editor?.uid ?? ''}
         entry={editor?.entry ?? blank()}
@@ -409,6 +463,11 @@ export function Timeline({ docId, readOnly }: { docId?: string; rest?: string; r
         titleOf={titleOf}
         initialPane={editor?.pane ?? null}
         onCreate={createEntry}
+        chapters={chapterOptions}
+        duringError={duringError}
+        onSetChapter={setChapter}
+        onSetDuring={setDuring}
+        onAddDuring={addDuring}
         onPatch={patchEntry}
         onSetDate={setDate}
         onDelete={deleteEntry}

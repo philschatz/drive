@@ -2,6 +2,9 @@
  * The "When" / "Until" pane: how precise the date is (a preset), then only the
  * fields that preset needs. Every field lives in one draft, so switching
  * presets keeps what was typed, and Save is one document change.
+ *
+ * `ongoing` (a chapter's end): "Still going" saves no `until` at all, and
+ * "Unknown" becomes "Ended — not sure when", saved as `{}`.
  */
 import { GroupEditor } from '../../common/FieldEditor';
 import { MdSelect } from '@/components/ui/md-select';
@@ -20,9 +23,10 @@ const SEASON_OPTIONS: { value: Season; label: string }[] = [
   { value: 'winter', label: 'Winter (Dec–Feb)' },
 ];
 const PARTIAL_HINT = 'YYYY, YYYY-MM or YYYY-MM-DD';
+export const ENDED_UNKNOWN = 'Ended — not sure when';
 
 export function FuzzyDatePane({
-  idPrefix, value, birth, hint, onSave, onCancel, onFocus, onBlur, allowAge = true,
+  idPrefix, value, birth, hint, onSave, onCancel, onFocus, onBlur, allowAge = true, ongoing = false,
 }: {
   /** 'tl-when' / 'tl-until': testids and ids, kept apart so the two panes never share a draft. */
   idPrefix: string;
@@ -36,22 +40,27 @@ export function FuzzyDatePane({
   onFocus: () => void;
   onBlur: () => void;
   allowAge?: boolean;
+  /** A chapter's end: offer "Still going". */
+  ongoing?: boolean;
 }) {
-  const kinds = (Object.keys(PRESET_LABELS) as PresetKind[]).filter(k => k !== 'age' || (allowAge && !!birth));
-  const options = kinds.map(k => ({ value: k, label: PRESET_LABELS[k] }));
+  const kinds = (Object.keys(PRESET_LABELS) as PresetKind[])
+    .filter(k => (k !== 'age' || (allowAge && !!birth)) && (k !== 'ongoing' || ongoing));
+  const label = (k: PresetKind) => (ongoing && k === 'unknown' ? ENDED_UNKNOWN : PRESET_LABELS[k]);
+  const options = kinds.map(k => ({ value: k, label: label(k) }));
+  const seed = ongoing && value === undefined ? { ...draftOf(undefined, birth), kind: 'ongoing' as PresetKind } : draftOf(value, birth);
   const field = (suffix: string) => `${idPrefix}-${suffix}`;
 
   return (
     <GroupEditor<PresetDraft>
       key={idPrefix}
       data-testid={idPrefix}
-      value={draftOf(value, birth)}
+      value={seed}
       validate={d => fromDraft(d, birth) !== null}
       onCancel={onCancel}
       onSave={d => {
         const next = fromDraft(d, birth);
         if (next === null) return;
-        onSave(next ?? null);
+        onSave(ongoing && d.kind === 'unknown' ? {} : next ?? null);
       }}
     >
       {({ draft, patch }) => {
@@ -106,7 +115,8 @@ export function FuzzyDatePane({
                 data-testid={field('to')} value={draft.to} onInput={v => patch({ to: v })} {...common} />
             )}
             <p className="text-sm" data-testid={field('preview')}>
-              {result === null ? <span className="text-muted-foreground">Incomplete</span> : formatFuzzy(result, birth)}
+              {result === null ? <span className="text-muted-foreground">Incomplete</span>
+                : ongoing && (draft.kind === 'ongoing' || draft.kind === 'unknown') ? label(draft.kind) : formatFuzzy(result, birth)}
             </p>
           </div>
         );

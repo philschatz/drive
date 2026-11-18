@@ -211,8 +211,9 @@ export function formatDayRange(lo: number, hi: number): string {
 
 // ── Presets (what the date pane edits) ────────────────────────────────────────
 
+/** `ongoing` is offered only for a chapter's end: "still going" (no `until`). */
 export type PresetKind =
-  | 'unknown' | 'day' | 'month' | 'season' | 'year' | 'around' | 'decade' | 'age' | 'between' | 'after' | 'before';
+  | 'ongoing' | 'unknown' | 'day' | 'month' | 'season' | 'year' | 'around' | 'decade' | 'age' | 'between' | 'after' | 'before';
 
 /** The pane's draft: every field any preset uses, so switching presets keeps what was typed. */
 export interface PresetDraft {
@@ -228,6 +229,7 @@ export interface PresetDraft {
 }
 
 export const PRESET_LABELS: Record<PresetKind, string> = {
+  ongoing: 'Still going',
   unknown: 'Unknown',
   day: 'An exact day',
   month: 'A month',
@@ -279,6 +281,7 @@ export function draftOf(fd: FuzzyDate | undefined, birth?: PartialDate): PresetD
 export function fromDraft(d: PresetDraft, birth?: PartialDate): FuzzyDate | undefined | null {
   const y = d.year.trim();
   switch (d.kind) {
+    case 'ongoing':
     case 'unknown': return undefined;
     case 'day': return parsePartial(d.day)?.precision === 'day' ? { earliest: d.day, latest: d.day } : null;
     case 'month': {

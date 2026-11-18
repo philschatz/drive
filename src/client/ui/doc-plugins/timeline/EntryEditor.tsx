@@ -5,6 +5,12 @@
  * A brand-new entry opens straight in its title pane. Enter saves it and opens
  * the next blank one in the same place (so a run of memories can be typed in
  * order); the Save button lands on the property list instead.
+ *
+ * A chapter is an entry too. A new one opens on a pane holding its kind and
+ * name together (one Save, one change); an existing entry becomes a chapter,
+ * or stops being one, from its "Chapter" dropdown. A memory's "During" pane
+ * says which chapters it happened in — the order relation `during`, which
+ * narrows its date.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { PropertySheet, type PropertyDef } from '../../common/PropertySheet';
@@ -14,11 +20,13 @@ import { MdTextField } from '@/components/ui/md-text-field';
 import { MdSelect } from '@/components/ui/md-select';
 import { Checkbox } from '@/components/ui/checkbox';
 import type { PeerFieldInfo } from '../../common/presence';
-import type { TimelineEvent } from '../../../../shared/schemas/timeline';
+import { CHAPTER_KINDS, type ChapterKind, type TimelineEvent } from '../../../../shared/schemas/timeline';
+import { isDated } from '../../../../shared/timeline/fuzzy-date';
 import type { EntryBounds } from '../../../../shared/timeline/order';
 import { formatFuzzy, formatDayRange, type FuzzyDate } from '../../../../shared/timeline/fuzzy-date';
 import { Thumb } from './Thumb';
-import { FuzzyDatePane as FuzzyDatePaneFor } from './FuzzyDatePane';
+import { FuzzyDatePane as FuzzyDatePaneFor, ENDED_UNKNOWN } from './FuzzyDatePane';
+import { CHAPTER_KIND_META } from './chapter-kinds';
 
 /** Editor input id → the entry property it edits (presence paths). */
 export const FIELD_TO_PROP: Record<string, string> = {
@@ -29,6 +37,8 @@ export const FIELD_TO_PROP: Record<string, string> = {
   'tl-place': 'location',
   'tl-recall': 'recall',
   'tl-revisit': 'revisit',
+  'tl-chapter': 'chapter',
+  'tl-during': 'rel',
 };
 export const PROP_TO_FIELDS: Record<string, string[]> = Object.fromEntries(
   Object.entries(FIELD_TO_PROP).map(([id, prop]) => [prop, [id]]),
@@ -39,6 +49,15 @@ const RECALL_OPTIONS = [
   { value: 'vivid', label: 'Vivid — I remember it clearly' },
   { value: 'hazy', label: 'Hazy — only roughly' },
 ];
+
+const CHAPTER_OPTIONS = [
+  { value: '', label: 'Not a chapter' },
+  ...CHAPTER_KINDS.map(k => ({ value: k, label: `${CHAPTER_KIND_META[k].label} — ${CHAPTER_KIND_META[k].hint}` })),
+];
+const NEW_KIND_OPTIONS = CHAPTER_KINDS.map(k => ({ value: k, label: `${CHAPTER_KIND_META[k].label} — ${CHAPTER_KIND_META[k].hint}` }));
+
+/** A chapter the During pane can offer. */
+export interface ChapterOption { uid: string; title: string; kind: ChapterKind; color?: string; dates: string }
 
 /** Changes the editor asks for. `null` clears a field. */
 export type EntryPatch = Partial<Record<'title' | 'description' | 'location' | 'recall' | 'revisit' | 'settled', string | true | null>>;
@@ -57,8 +76,16 @@ export interface EntryEditorProps {
   titleOf: (uid: string) => string;
   /** The pane to open into, for an existing entry (e.g. "Widen its date"). */
   initialPane?: string | null;
-  /** A new entry's title: creates it. `viaEnter` chains to another new entry. */
-  onCreate: (uid: string, title: string, viaEnter: boolean) => void;
+  /** A new entry's title (and a new chapter's kind): creates it. `viaEnter` chains to another new entry. */
+  onCreate: (uid: string, title: string, viaEnter: boolean, kind?: ChapterKind) => void;
+  /** Every chapter, the likeliest for this entry first (the During pane). */
+  chapters?: ChapterOption[];
+  /** Why ticking these chapters would contradict the entry's dates, or null. */
+  duringError?: (uid: string, chapters: string[]) => string | null;
+  onSetChapter?: (uid: string, kind: ChapterKind | null) => void;
+  onSetDuring?: (uid: string, add: string[], remove: string[]) => void;
+  /** A chapter's "Add a memory during this chapter". */
+  onAddDuring?: (chapterUid: string) => void;
   onPatch: (uid: string, patch: EntryPatch) => void;
   onSetDate: (uid: string, field: 'when' | 'until', value: FuzzyDate | null) => void;
   onDelete: (uid: string) => void;
@@ -71,6 +98,9 @@ export interface EntryEditorProps {
 
 export function EntryEditor(p: EntryEditorProps) {
   const { uid, entry, isNew, opened, canEdit, birth, bounds } = p;
+  const chapters = p.chapters ?? [];
+  const isChapterEntry = !!entry.chapter;
+  const during = chapters.filter(c => entry.rel?.[c.uid] === 'during').map(c => c.uid);
   const [title, setTitle] = useState(entry.title || '');
   const prevUid = useRef(uid);
   useEffect(() => {
@@ -107,11 +137,38 @@ export function EntryEditor(p: EntryEditorProps) {
   const properties: PropertyDef[] = useMemo(() => [
     {
       id: 'tl-title',
-      label: 'Title',
+      label: isChapterEntry ? 'Name' : 'Title',
       icon: 'edit',
       summary: () => title,
       transactional: true,
-      render: ({ back }) => (
+      render: ({ back }) => isNew && isChapterEntry ? (
+        <GroupEditor<{ kind: ChapterKind; title: string }>
+          key={uid}
+          data-testid="tl-title"
+          value={{ kind: entry.chapter!, title }}
+          validate={v => !!v.title.trim()}
+          onCancel={back}
+          onSave={v => {
+            const enter = viaEnter.current;
+            viaEnter.current = false;
+            const t = v.title.trim();
+            if (enter) setTitle(''); else setTitle(t);
+            p.onCreate(uid, t, enter, v.kind);
+            if (!enter) back();
+          }}
+        >
+          {({ draft, patch, save }) => (
+            <div className="flex flex-col gap-3">
+              <MdSelect label="What kind of chapter?" data-testid="tl-chapter-kind" value={draft.kind}
+                options={NEW_KIND_OPTIONS} onValueChange={v => patch({ kind: v as ChapterKind })} />
+              <MdTextField label="Name this chapter" supportingText="e.g. Chicago apartment, Dating Jamie, Acme, The pandemic"
+                data-testid="tl-title" value={draft.title} onInput={v => patch({ title: v })}
+                onFocus={() => focusField('tl-title')} onBlur={blurField}
+                onEnter={() => { viaEnter.current = true; save(); }} />
+            </div>
+          )}
+        </GroupEditor>
+      ) : (
         <FieldEditor
           key={uid}
           data-testid="tl-title"
@@ -136,7 +193,7 @@ export function EntryEditor(p: EntryEditorProps) {
           }}
         >
           {({ value, onInput, save }) => (
-            <MdTextField label="What happened?" data-testid="tl-title" value={value} onInput={onInput}
+            <MdTextField label={isChapterEntry ? 'Name' : 'What happened?'} data-testid="tl-title" value={value} onInput={onInput}
               onFocus={() => focusField('tl-title')} onBlur={blurField}
               onEnter={() => { viaEnter.current = true; save(); }} />
           )}
@@ -145,7 +202,7 @@ export function EntryEditor(p: EntryEditorProps) {
     },
     {
       id: 'tl-when',
-      label: entry.until ? 'From' : 'When',
+      label: isChapterEntry ? 'Began' : entry.until ? 'From' : 'When',
       icon: 'event',
       hidden: isNew,
       transactional: true,
@@ -162,9 +219,11 @@ export function EntryEditor(p: EntryEditorProps) {
       icon: 'date_range',
       hidden: isNew,
       transactional: true,
-      summary: () => (entry.until ? formatFuzzy(entry.until, birth) : ''),
+      summary: () => (isChapterEntry
+        ? (!entry.until ? 'Still going' : isDated(entry.until) ? formatFuzzy(entry.until, birth) : ENDED_UNKNOWN)
+        : entry.until ? formatFuzzy(entry.until, birth) : ''),
       render: ({ back }) => (
-        <FuzzyDatePaneFor idPrefix="tl-until" value={entry.until} birth={birth} hint={untilHint}
+        <FuzzyDatePaneFor idPrefix="tl-until" value={entry.until} birth={birth} hint={untilHint} ongoing={isChapterEntry}
           onCancel={back} onFocus={() => focusField('tl-until')} onBlur={blurField}
           onSave={v => { p.onSetDate(uid, 'until', v); back(); }} />
       ),
@@ -245,7 +304,65 @@ export function EntryEditor(p: EntryEditorProps) {
         </GroupEditor>
       ),
     },
-  ], [uid, isNew, entry, title, birth, whenHint, untilHint, focusField, blurField]);
+    {
+      id: 'tl-during',
+      label: 'During',
+      icon: 'bookmarks',
+      hidden: isNew || isChapterEntry || chapters.length === 0,
+      transactional: true,
+      summary: () => chapters.filter(c => during.includes(c.uid)).map(c => c.title).join(', '),
+      render: ({ back }) => (
+        <GroupEditor<{ set: string[] }>
+          key={uid}
+          data-testid="tl-during"
+          value={{ set: during }}
+          validate={v => !p.duringError?.(uid, v.set)}
+          onCancel={back}
+          onSave={v => {
+            p.onSetDuring?.(uid, v.set.filter(c => !during.includes(c)), during.filter(c => !v.set.includes(c)));
+            back();
+          }}
+        >
+          {({ draft, patch }) => {
+            const error = p.duringError?.(uid, draft.set);
+            return (
+              <div className="flex flex-col gap-2">
+                <p className="text-sm text-muted-foreground">Which chapters of your life did this happen during?</p>
+                {chapters.map(c => (
+                  <label key={c.uid} className="flex items-center gap-2 text-sm">
+                    <Checkbox data-testid={`tl-during-${c.uid}`} checked={draft.set.includes(c.uid)}
+                      onCheckedChange={(on: boolean | 'indeterminate') => patch({
+                        set: on === true ? [...draft.set, c.uid] : draft.set.filter(x => x !== c.uid),
+                      })} />
+                    <span aria-hidden="true" className="material-symbols-outlined text-lg" style={c.color ? { color: c.color } : undefined}>
+                      {CHAPTER_KIND_META[c.kind].icon}
+                    </span>
+                    <span className="flex-1 min-w-0">
+                      <span className="block truncate">{c.title}</span>
+                      <span className="block text-xs text-muted-foreground">{c.dates}</span>
+                    </span>
+                  </label>
+                ))}
+                {error && <p className="text-sm text-error" data-testid="tl-during-error">{error}</p>}
+              </div>
+            );
+          }}
+        </GroupEditor>
+      ),
+    },
+    {
+      id: 'tl-chapter',
+      label: 'Chapter',
+      icon: entry.chapter ? CHAPTER_KIND_META[entry.chapter].icon : 'bookmark',
+      hidden: isNew,
+      summary: () => (entry.chapter ? CHAPTER_KIND_META[entry.chapter].label : 'Not a chapter'),
+      render: ({ back }) => (
+        <MdSelect label="A chapter of your life?" data-testid="tl-chapter" value={entry.chapter ?? ''}
+          options={CHAPTER_OPTIONS} onFocus={() => focusField('tl-chapter')}
+          onValueChange={v => { p.onSetChapter?.(uid, (v || null) as ChapterKind | null); blurField(); back(); }} />
+      ),
+    },
+  ], [uid, isNew, entry, title, birth, whenHint, untilHint, focusField, blurField, chapters, during.join('|'), p.duringError]);
 
   const banner = (photoIds.length > 0 || conflicts.length > 0) ? (
     <div className="flex flex-col gap-2">
@@ -280,6 +397,10 @@ export function EntryEditor(p: EntryEditorProps) {
 
   const footer = !isNew ? (
     <SheetActions>
+      {canEdit && isChapterEntry && (
+        <SheetActionItem icon="add" label="Add a memory during this chapter" data-testid="tl-add-during"
+          onClick={() => p.onAddDuring?.(uid)} />
+      )}
       {canEdit && !entry.settled && (
         <SheetActionItem icon="center_focus_strong" label="Pin down the date" data-testid="tl-pin" onClick={() => p.onPinDown(uid)} />
       )}
@@ -300,7 +421,7 @@ export function EntryEditor(p: EntryEditorProps) {
   return (
     <PropertySheet
       open={opened}
-      title={isNew ? 'New entry' : (entry.title || 'Entry')}
+      title={isNew ? (isChapterEntry ? 'New chapter' : 'New entry') : (entry.title || (isChapterEntry ? 'Chapter' : 'Entry'))}
       properties={canEdit ? properties : properties.map(d => ({ ...d, render: undefined }))}
       peerFocusedFields={p.peerFocusedFields}
       initialDetailId={isNew ? 'tl-title' : (p.initialPane ?? null)}
