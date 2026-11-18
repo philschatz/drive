@@ -41,7 +41,7 @@ describe('Timeline container', () => {
   beforeEach(() => { mock.__reset(); __clearThumbCache(); writes = jest.spyOn(api, 'updateDoc'); });
   afterEach(() => writes.mockRestore());
 
-  it('lists entries oldest first under year headers, with gap rows and an Undated section', async () => {
+  it('lists entries newest first (birth at the bottom) under year headers, with gap rows and an Undated section on top', async () => {
     await renderTimeline(base({
       events: {
         b: ev('Moved to Houston', { when: year(2010), location: 'Houston' }),
@@ -50,8 +50,8 @@ describe('Timeline container', () => {
         r: ev('Before Houston', { rel: { b: 'before' }, when: { earliest: '2009' } }),
       },
     }));
-    expect(titles()).toEqual(['Started school', 'Before Houston', 'Moved to Houston', 'A dog called Max']);
-    expect(screen.getAllByTestId('timeline-year').map(s => s.getAttribute('data-year'))).toEqual(['1993', '2009', '2010']);
+    expect(titles()).toEqual(['A dog called Max', 'Moved to Houston', 'Before Houston', 'Started school']);
+    expect(screen.getAllByTestId('timeline-year').map(s => s.getAttribute('data-year'))).toEqual(['2010', '2009', '1993']);
     expect(screen.getByTestId('timeline-gap').textContent).toContain('1994–2008');
     expect(within(screen.getByTestId('timeline-undated')).getByText('A dog called Max')).toBeTruthy();
   });
@@ -136,9 +136,10 @@ describe('Timeline container', () => {
     it('inserting between two entries is one change holding both relations', async () => {
       await renderTimeline(three());
       fireEvent.click(screen.getByTitle('Arrange'));
-      expect(titles()).toEqual(['Alpha', 'Bravo', 'Charlie', 'Exact day']);
-      // Targets: before Alpha, after Alpha, after Bravo, …
-      fireEvent.click(screen.getAllByTestId('timeline-insert')[1]);
+      expect(titles()).toEqual(['Exact day', 'Charlie', 'Bravo', 'Alpha']);
+      // Targets, top down: after Exact day, Exact–Charlie, Charlie–Bravo, Bravo–Alpha, before Alpha.
+      expect(screen.getAllByTestId('timeline-insert').map(b => b.textContent)).toEqual(['addInsert later', 'addInsert here', 'addInsert here', 'addInsert here', 'addInsert earlier']);
+      fireEvent.click(screen.getAllByTestId('timeline-insert')[3]);
       fireEvent.input(screen.getByTestId('tl-title'), { target: { value: 'Between' } });
       fireEvent.click(screen.getByTestId('tl-title-save'));
       expect(writes).toHaveBeenCalledTimes(1);
@@ -147,16 +148,25 @@ describe('Timeline container', () => {
       expect(created.when.best).toMatch(/^2010/);
       expect(created.start).toMatch(/^2010-/);
       close();
-      expect(titles().slice(0, 3)).toEqual(['Alpha', 'Between', 'Bravo']);
+      expect(titles().slice(-3)).toEqual(['Bravo', 'Between', 'Alpha']);
     });
 
-    it('keyboard ↑ on a handle moves an entry up one place; exact-day entries have no handle', async () => {
+    it('keyboard ↓ on a handle moves an entry down (earlier) one place; exact-day entries have no handle', async () => {
       await renderTimeline(three());
       fireEvent.click(screen.getByTitle('Arrange'));
       expect(screen.queryByTestId('drag-x')).toBeNull();
-      fireEvent.keyDown(screen.getByTestId('drag-c'), { key: 'ArrowUp' });
+      fireEvent.keyDown(screen.getByTestId('drag-c'), { key: 'ArrowDown' });
       expect(writes).toHaveBeenCalledTimes(1);
-      expect(titles().slice(0, 3)).toEqual(['Alpha', 'Charlie', 'Bravo']);
+      expect(titles()).toEqual(['Exact day', 'Bravo', 'Charlie', 'Alpha']);
+      expect(events().c.rel).toMatchObject({ a: 'after' });
+      expect(events().c.rel.b).toBe('before');
+    });
+
+    it('keyboard ↑ moves an entry up (later) one place', async () => {
+      await renderTimeline(three());
+      fireEvent.click(screen.getByTitle('Arrange'));
+      fireEvent.keyDown(screen.getByTestId('drag-a'), { key: 'ArrowUp' });
+      expect(titles()).toEqual(['Exact day', 'Charlie', 'Alpha', 'Bravo']);
     });
 
     it('a drag drops an entry where the pointer lets go', async () => {
@@ -167,10 +177,11 @@ describe('Timeline container', () => {
         r.getBoundingClientRect = () => ({ top: i * 100, height: 80, bottom: i * 100 + 80, left: 0, right: 0, width: 0, x: 0, y: i * 100, toJSON: () => ({}) });
       });
       const handle = screen.getByTestId('drag-a');
-      pointer(handle, 'pointerdown', 40);
-      pointer(handle, 'pointermove', 250);
-      pointer(handle, 'pointerup', 250);
-      expect(titles().slice(0, 3)).toEqual(['Bravo', 'Charlie', 'Alpha']);
+      pointer(handle, 'pointerdown', 340);
+      // Alpha starts at the bottom; let go between Exact day (mid 40) and Charlie (mid 140).
+      pointer(handle, 'pointermove', 50);
+      pointer(handle, 'pointerup', 50);
+      expect(titles()).toEqual(['Exact day', 'Alpha', 'Charlie', 'Bravo']);
     });
 
     it('a spot the entry\'s date forbids changes nothing and says why', async () => {
@@ -182,7 +193,7 @@ describe('Timeline container', () => {
         },
       }));
       fireEvent.click(screen.getByTitle('Arrange'));
-      fireEvent.keyDown(screen.getByTestId('drag-old'), { key: 'ArrowDown' });
+      fireEvent.keyDown(screen.getByTestId('drag-old'), { key: 'ArrowUp' });
       expect(writes).not.toHaveBeenCalled();
       expect(screen.getByTestId('timeline-move-refused').textContent).toContain('doesn\'t fit between “Alpha” and “Bravo”');
       fireEvent.click(screen.getByTestId('timeline-widen'));

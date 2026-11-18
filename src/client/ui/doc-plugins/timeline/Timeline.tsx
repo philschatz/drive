@@ -55,7 +55,7 @@ interface EditorState {
   /** Where a new entry came from — decides the change that creates it. */
   promptKey?: string;
   gap?: { key: string; prompt: TimelinePrompt };
-  insert?: { above: string | null; below: string | null };
+  insert?: { earlier: string | null; later: string | null };
 }
 
 function generateUid(): string {
@@ -170,7 +170,7 @@ export function Timeline({ docId, readOnly }: { docId?: string; rest?: string; r
     const d = docRef.current;
     let entry: TimelineEvent = clean({ ...ed.entry, title });
     if (ed.insert) {
-      const p = placeBetween(d, uid, ed.insert.above, ed.insert.below, today, entry);
+      const p = placeBetween(d, uid, ed.insert.earlier, ed.insert.later, today, entry);
       if (p.ok) {
         const rel: Record<string, Rel> = {};
         for (const r of p.add) if (r.owner === uid) rel[r.target] = r.rel;
@@ -183,9 +183,9 @@ export function Timeline({ docId, readOnly }: { docId?: string; rest?: string; r
     else write(changes.addEntry, uid, entry);
 
     if (!viaEnter) { setEditor(prev => (prev && prev.uid === uid ? { ...prev, entry, isNew: false } : prev)); return; }
-    // Rapid entry: the next one goes right after this one (in arrange-insert
-    // order), or into the same stretch of time.
-    if (ed.insert) openNew({ insert: { above: uid, below: ed.insert.below } });
+    // Rapid entry: the next one goes right after this one in time (just above
+    // it in the newest-first list), or into the same stretch of time.
+    if (ed.insert) openNew({ insert: { earlier: uid, later: ed.insert.later } });
     else if (ed.gap) openNew({ entry: blank({ when: ed.entry.when }) });
     else openNew();
   }, [today, write, openNew]);
@@ -211,9 +211,9 @@ export function Timeline({ docId, readOnly }: { docId?: string; rest?: string; r
   const removeRelation = useCallback((owner: string, field: 'rel' | 'untilRel', target: string) =>
     write(changes.removeRelation, owner, field, target), [write]);
 
-  const move = useCallback((uid: string, above: string | null, below: string | null) => {
+  const move = useCallback((uid: string, earlier: string | null, later: string | null) => {
     const d = docRef.current;
-    const p = placeBetween(d, uid, above, below, today);
+    const p = placeBetween(d, uid, earlier, later, today);
     if (!p.ok) { setNotice({ uid, message: p.reason }); return; }
     setNotice(null);
     write(changes.applyPlacement, uid, p.remove, p.add, p.when, calendarFields(p.when, d.events[uid]?.until));
@@ -348,7 +348,7 @@ export function Timeline({ docId, readOnly }: { docId?: string; rest?: string; r
             arranging={arranging}
             peerEditing={peerEditing}
             onOpen={uid => setEditor({ uid, entry: events[uid], isNew: false })}
-            onInsert={(above, below) => openNew({ insert: { above, below } })}
+            onInsert={(earlier, later) => openNew({ insert: { earlier, later } })}
             onMove={move}
             onGap={(lo, hi) => openNew({ entry: blank({ when: { earliest: String(lo), latest: String(hi) } }) })}
           />

@@ -1,9 +1,14 @@
 /**
- * The timeline itself: entries oldest first under sticky year headers, a gap
- * row wherever whole years are empty, and "Undated" last.
+ * The timeline itself: entries NEWEST FIRST under sticky year headers (birth at
+ * the bottom), a gap row wherever whole years are empty, and "Undated" on top —
+ * next to the newest end, where ↓ on an undated entry's handle drops it in.
+ *
+ * `ordered` arrives oldest first (order.displayOrder) and the callbacks speak
+ * chronology — (earlier, later) — so only this component knows the list is
+ * drawn upside down. Visually "above" is later, "below" is earlier.
  *
  * In arrange mode, an insertion target sits between every two rows (a new
- * entry dropped there is "after the one above, before the one below"), and
+ * entry dropped there is "after the one below, before the one above"), and
  * fuzzy entries carry a drag handle. Dragging — or ↑/↓ on the focused handle —
  * moves an entry among the others; the container turns the spot into order
  * relations (planner.placeBetween), or refuses when the entry's date forbids it.
@@ -31,10 +36,10 @@ export interface TimelineListProps {
   arranging: boolean;
   peerEditing: Record<string, PeerFieldInfo>;
   onOpen: (uid: string) => void;
-  /** A new entry between two rows (either may be null at the ends). */
-  onInsert: (above: string | null, below: string | null) => void;
-  /** Move an entry between two rows. */
-  onMove: (uid: string, above: string | null, below: string | null) => void;
+  /** A new entry between two entries in time (either may be null at the ends). */
+  onInsert: (earlier: string | null, later: string | null) => void;
+  /** Move an entry between two entries in time. */
+  onMove: (uid: string, earlier: string | null, later: string | null) => void;
   /** Start an entry in an empty stretch. */
   onGap: (loYear: number, hiYear: number) => void;
 }
@@ -58,16 +63,19 @@ export function TimelineList(p: TimelineListProps) {
   const dragRef = useRef<{ uid: string; startY: number; mids: { uid: string; mid: number }[] } | null>(null);
 
   const yearOf = (uid: string) => fromDay(displayDay(events[uid], bounds.entries.get(uid)!)).year;
-  const others = (uid: string) => ordered.filter(u => u !== uid);
+  /** Screen order: newest first. */
+  const shown = [...ordered].reverse();
+  const others = (uid: string) => shown.filter(u => u !== uid);
   const dropIndex = (uid: string, y: number) => {
     const mids = dragRef.current?.mids.filter(m => m.uid !== uid) ?? [];
     let i = 0;
     while (i < mids.length && y > mids[i].mid) i++;
     return i;
   };
+  /** The [earlier, later] entries around screen slot `index` among the others. */
   const neighbours = (uid: string, index: number): [string | null, string | null] => {
     const rest = others(uid);
-    return [rest[index - 1] ?? null, rest[index] ?? null];
+    return [rest[index] ?? null, rest[index - 1] ?? null];
   };
 
   const startDrag = (uid: string, clientY: number) => {
@@ -94,18 +102,18 @@ export function TimelineList(p: TimelineListProps) {
     dragRef.current = null;
     setDrag(null);
     if (!d || Math.abs(clientY - d.startY) < 4) return;
-    const [above, below] = neighbours(d.uid, index);
+    const [earlier, later] = neighbours(d.uid, index);
     const i = ordered.indexOf(d.uid);
-    if (i >= 0 && ordered[i - 1] === (above ?? undefined) && ordered[i + 1] === (below ?? undefined)) return;
-    p.onMove(d.uid, above, below);
+    if (i >= 0 && ordered[i - 1] === (earlier ?? undefined) && ordered[i + 1] === (later ?? undefined)) return;
+    p.onMove(d.uid, earlier, later);
   };
   const keyMove = (uid: string, key: 'ArrowUp' | 'ArrowDown') => {
-    const i = ordered.indexOf(uid);
-    const rest = others(uid);
-    // An undated entry enters at the end (↑) of the timeline.
-    const at = i < 0 ? rest.length : key === 'ArrowUp' ? i - 1 : i + 1;
-    if (at < 0 || at > rest.length) return;
-    p.onMove(uid, rest[at - 1] ?? null, rest[at] ?? null);
+    const i = shown.indexOf(uid);
+    // An undated entry (shown above the timeline) enters at its top (↓).
+    const at = i < 0 ? (key === 'ArrowDown' ? 0 : -1) : key === 'ArrowUp' ? i - 1 : i + 1;
+    if (at < 0 || at > others(uid).length) return;
+    const [earlier, later] = neighbours(uid, at);
+    p.onMove(uid, earlier, later);
   };
 
   const row = (uid: string) => {
@@ -158,17 +166,17 @@ export function TimelineList(p: TimelineListProps) {
     );
   };
 
-  const insertTarget = (above: string | null, below: string | null, key: string) =>
+  const insertTarget = (earlier: string | null, later: string | null, key: string) =>
     canEdit && arranging ? (
       <button
         key={key}
         type="button"
         data-testid="timeline-insert"
         className="w-full flex items-center gap-2 px-4 h-8 text-sm text-primary state-layer rounded-full"
-        onClick={() => p.onInsert(above, below)}
+        onClick={() => p.onInsert(earlier, later)}
       >
         <span aria-hidden="true" className="material-symbols-outlined text-base">add</span>
-        Insert {above && below ? 'here' : above ? 'after' : 'before'}
+        Insert {earlier && later ? 'here' : earlier ? 'later' : 'earlier'}
       </button>
     ) : null;
 
@@ -207,16 +215,16 @@ export function TimelineList(p: TimelineListProps) {
     );
     group = [];
   };
-  ordered.forEach((uid, i) => {
+  shown.forEach((uid, i) => {
     const y = yearOf(uid);
     if (lastYear !== null && y !== lastYear) {
       flush();
-      if (y - lastYear > 2) out.push(gapRow(lastYear + 1, y - 1, `g${lastYear}`));
+      if (lastYear - y > 2) out.push(gapRow(y + 1, lastYear - 1, `g${lastYear}`));
     }
     if (lastYear === null || y !== lastYear) lastYear = y;
-    if (i === 0) group.push(insertTarget(null, uid, 'ins-first'));
+    if (i === 0) group.push(insertTarget(uid, null, 'ins-first'));
     group.push(row(uid));
-    group.push(insertTarget(uid, ordered[i + 1] ?? null, `ins-${uid}`));
+    group.push(insertTarget(shown[i + 1] ?? null, uid, `ins-${uid}`));
   });
   flush();
 
@@ -227,14 +235,14 @@ export function TimelineList(p: TimelineListProps) {
           Nothing here yet. Add a memory — however vague the date — and the timeline will fill in around it.
         </p>
       )}
-      {ordered.length === 0 && undated.length > 0 && insertTarget(null, null, 'ins-empty')}
-      {out}
       {undated.length > 0 && (
         <section data-testid="timeline-undated">
           <h3 className="text-xs font-semibold uppercase text-muted-foreground pt-3 pb-1">Undated</h3>
           <md-list style={{ background: 'transparent' }}>{undated.map(row)}</md-list>
         </section>
       )}
+      {ordered.length === 0 && undated.length > 0 && insertTarget(null, null, 'ins-empty')}
+      {out}
       {drag && <div className="sr-only" aria-live="polite">Dropping at position {drag.index + 1}</div>}
     </div>
   );
