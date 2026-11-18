@@ -273,10 +273,15 @@ export function displayOrder(
     keyOf.set(uid, displayDay(events[uid], b));
   }
   const title = (u: string) => events[u]?.title ?? '';
-  // On the same day a chapter comes first, so what happened that day is inside it.
+  // On the same day a chapter comes first, so what happened that day is inside
+  // it; and of two chapters the one ending later, so the outer one holds the inner.
   const chapterFirst = (u: string) => (events[u]?.chapter ? 0 : 1);
+  const endOf = (u: string) => {
+    const e = events[u]?.chapter ? bounds.entries.get(u)?.end : undefined;
+    return e ? (e.lo + e.hi) / 2 : 0;
+  };
   const cmp = (a: string, b: string) =>
-    keyOf.get(a)! - keyOf.get(b)! || chapterFirst(a) - chapterFirst(b)
+    keyOf.get(a)! - keyOf.get(b)! || chapterFirst(a) - chapterFirst(b) || endOf(b) - endOf(a)
     || title(a).localeCompare(title(b)) || (a < b ? -1 : a > b ? 1 : 0);
 
   // "a precedes b" edges from live relations.

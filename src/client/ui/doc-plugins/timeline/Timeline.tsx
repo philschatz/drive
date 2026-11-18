@@ -30,7 +30,9 @@ import { MdTextField } from '@/components/ui/md-text-field';
 import type { TimelineEvent, TimelinePrompt, Rel, ChapterKind } from '../../../../shared/schemas/timeline';
 import * as changes from '../../../../shared/timeline/changes';
 import { effectiveBounds, displayOrder, type Conflict } from '../../../../shared/timeline/order';
-import { chapterLayout, chapterSpans } from '../../../../shared/timeline/chapters';
+import {
+  chapterLayout, chapterSpans, chaptersAt, placeGaps, hasPlaces, chapterCards, type ChapterGap,
+} from '../../../../shared/timeline/chapters';
 import {
   nextDateQuestion, pinTargets, largestGaps, placeBetween, applyPivotAnswer, targetKey,
   type Question, type Target, type Gap,
@@ -40,8 +42,17 @@ import {
 } from '../../../../shared/timeline/fuzzy-date';
 import { TimelineList, chapterDates } from './TimelineList';
 import { EntryEditor, PROP_TO_FIELDS, type EntryPatch, type ChapterOption } from './EntryEditor';
-import { chapterColor } from './chapter-kinds';
-import { PromptCard, GapCard, PinDownCard, ConflictList } from './Cards';
+import { chapterColor, CHAPTER_KIND_META } from './chapter-kinds';
+
+/** What a chapter card asks, by kind. */
+const CHAPTER_QUESTION: Record<ChapterKind, string> = {
+  place: 'What happened while you lived there?',
+  people: 'What do you remember from that time together?',
+  pursuit: 'What do you remember from it?',
+  phase: 'What do you remember from that time?',
+  other: 'What do you remember from that time?',
+};
+import { PromptCard, GapCard, PinDownCard, ConflictList, PlaceGapCard, ChapterCard, type ChapterChip } from './Cards';
 
 const TIMELINE_QUERY =
   '{ name: (.name // "Timeline"), birth: (.birth // null), events: (.events // {}), prompts: (.prompts // {}) }';
@@ -277,6 +288,39 @@ export function Timeline({ docId, readOnly }: { docId?: string; rest?: string; r
     .sort(([ka, a], [kb, b]) => (bestDay(b.when) ?? 0) - (bestDay(a.when) ?? 0) || (ka < kb ? -1 : 1)), [prompts]);
   const gaps = useMemo(() => largestGaps(doc, today).slice(0, 3), [doc, today]);
 
+  // ── Chapter prompts ─────────────────────────────────────────────────────────
+  const spans = useMemo(() => chapterSpans(doc, bounds), [doc, bounds]);
+  const chipOf = useCallback((uid: string): ChapterChip => {
+    const bar = layout.bars.find(b => b.uid === uid);
+    const e = events[uid];
+    return { uid, title: e?.title ?? '', icon: CHAPTER_KIND_META[e?.chapter ?? 'other'].icon, color: bar ? chapterColor(bar.colorIndex) : undefined };
+  }, [layout, events]);
+  /** One place card: the invitation (no places yet), or the stretch with nowhere to live most worth asking. */
+  const placeCard = useMemo((): { gap: ChapterGap | null } | null => {
+    if (!hasPlaces(doc)) return { gap: null };
+    const top = placeGaps(doc, bounds, today)[0];
+    return top ? { gap: top } : null;
+  }, [doc, bounds, today]);
+  const [chapterSkip, setChapterSkip] = useState<Set<string>>(() => new Set());
+  const cards = useMemo(
+    () => chapterCards(doc, bounds, order.ordered, layout, today).filter(c => !chapterSkip.has(c.uid)).slice(0, 2),
+    [doc, bounds, order, layout, today, chapterSkip],
+  );
+
+  const placeGapPrompt = (gap: ChapterGap, extra: Partial<TimelinePrompt> = {}): TimelinePrompt => ({
+    source: 'gap', chapter: 'place', when: { earliest: partialOf(gap.lo, 'month') }, until: { latest: partialOf(gap.hi, 'month') },
+    added: nowIso(), ...extra,
+  });
+  const placeAdd = useCallback((gap: ChapterGap | null) => {
+    if (!gap) { newChapter('place'); return; }
+    // A first guess: the place filled the whole stretch. Its own dates are the user's to sharpen.
+    const around = (day: number): FuzzyDate => ({ earliest: partialOf(day, 'year'), latest: partialOf(day, 'year'), best: partialOf(day, 'month') });
+    newChapter('place', { gap: { key: 'gap-' + generateUid(), prompt: placeGapPrompt(gap) }, entry: blank({ when: around(gap.lo), until: around(gap.hi) }) });
+  }, [newChapter]);
+  const placeSkip = useCallback((gap: ChapterGap) => {
+    write(changes.recordGap, 'gap-' + generateUid(), placeGapPrompt(gap, { dismissed: true }));
+  }, [write]);
+
   const writePrompt = useCallback((key: string) => {
     const p = docRef.current.prompts[key];
     if (!p) return;
@@ -332,7 +376,7 @@ export function Timeline({ docId, readOnly }: { docId?: string; rest?: string; r
 
   const tabs = [
     { id: 'timeline', label: 'Timeline', count: Object.keys(events).length },
-    { id: 'prompts', label: 'Prompts', count: openPrompts.length + gaps.length },
+    { id: 'prompts', label: 'Prompts', count: (placeCard ? 1 : 0) + openPrompts.length + cards.length + gaps.length },
     { id: 'pin', label: 'Pin down', count: targets.length },
     { id: 'revisit', label: 'Revisit', count: revisit.length },
   ];
@@ -412,14 +456,21 @@ export function Timeline({ docId, readOnly }: { docId?: string; rest?: string; r
 
         {tab === 'prompts' && (
           <div data-testid="timeline-prompts">
+            {placeCard && <PlaceGapCard gap={placeCard.gap} birth={birth} canEdit={canEdit} onAdd={placeAdd} onSkip={placeSkip} />}
             {openPrompts.map(([key, p]) => (
               <PromptCard key={key} docId={docId} promptKey={key} prompt={p} birth={birth} canEdit={canEdit}
                 onWrite={writePrompt} onSkip={k => write(changes.dismissPrompt, k)} />
             ))}
-            {gaps.map(g => (
-              <GapCard key={`${g.lo}-${g.hi}`} gap={g} birth={birth} canEdit={canEdit} onAdd={gapAdd} onNothing={gapNothing} />
+            {cards.map(c => (
+              <ChapterCard key={c.uid} chip={chipOf(c.uid)} dates={chapterDates(events[c.uid], birth)} memories={c.memories}
+                question={CHAPTER_QUESTION[events[c.uid].chapter!]} canEdit={canEdit}
+                onAdd={addDuring} onLater={uid => setChapterSkip(prev => new Set(prev).add(uid))} />
             ))}
-            {openPrompts.length === 0 && gaps.length === 0 && (
+            {gaps.map(g => (
+              <GapCard key={`${g.lo}-${g.hi}`} gap={g} birth={birth} canEdit={canEdit} onAdd={gapAdd} onNothing={gapNothing}
+                backThen={chaptersAt(spans, Math.floor((g.lo + g.hi) / 2)).map(c => chipOf(c.uid))} />
+            ))}
+            {!placeCard && openPrompts.length === 0 && cards.length === 0 && gaps.length === 0 && (
               <p className="text-sm text-muted-foreground py-4">No prompts right now.</p>
             )}
           </div>

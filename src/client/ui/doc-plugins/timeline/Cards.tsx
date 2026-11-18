@@ -1,12 +1,15 @@
 /**
  * The cards on the Prompts and Pin down tabs: a photo moment to write up, an
- * empty stretch of life to fill, and one before/after question at a time.
+ * empty stretch of life to fill (with the chapters you were in then), a
+ * stretch with nowhere to live yet, a chapter short of memories, and one
+ * before/after question at a time.
  */
 import { Button } from '@/components/ui/button';
 import type { TimelineDocument, TimelinePrompt, Rel } from '../../../../shared/schemas/timeline';
 import type { Question } from '../../../../shared/timeline/planner';
 import type { Gap } from '../../../../shared/timeline/planner';
-import type { Conflict } from '../../../../shared/timeline/order';
+import { isPeriod, type Conflict } from '../../../../shared/timeline/order';
+import type { ChapterGap } from '../../../../shared/timeline/chapters';
 import { formatFuzzy, formatDayRange, formatPartial, partialOf, fromDay, parsePartial } from '../../../../shared/timeline/fuzzy-date';
 import { Thumb } from './Thumb';
 
@@ -52,10 +55,28 @@ export function PromptCard({ docId, promptKey, prompt, birth, canEdit, onWrite, 
   );
 }
 
-export function GapCard({ gap, birth, canEdit, onAdd, onNothing }: {
+/** A chapter as a small coloured label. */
+export interface ChapterChip { uid: string; title: string; color?: string; icon: string }
+
+function Chips({ chips }: { chips: ChapterChip[] }) {
+  return (
+    <span className="inline-flex flex-wrap gap-1 align-middle">
+      {chips.map(c => (
+        <span key={c.uid} data-testid="gap-chapter" className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs">
+          <span aria-hidden="true" className="material-symbols-outlined text-sm" style={c.color ? { color: c.color } : undefined}>{c.icon}</span>
+          {c.title}
+        </span>
+      ))}
+    </span>
+  );
+}
+
+export function GapCard({ gap, birth, canEdit, onAdd, onNothing, backThen = [] }: {
   gap: Gap;
   birth?: string;
   canEdit: boolean;
+  /** The chapters under way in the middle of the gap: memory cues. */
+  backThen?: ChapterChip[];
   onAdd: (gap: Gap) => void;
   onNothing: (gap: Gap) => void;
 }) {
@@ -69,11 +90,81 @@ export function GapCard({ gap, birth, canEdit, onAdd, onNothing }: {
         {/* Month precision: a gap's ends are best guesses, not known days. */}
         <div className="font-semibold">Nothing between {formatPartial(partialOf(gap.lo, 'month'))} and {formatPartial(partialOf(gap.hi, 'month'))} yet{ages}.</div>
         <div className="mt-1">What do you remember from around {fromDay(Math.floor((gap.lo + gap.hi) / 2)).year}?</div>
+        {backThen.length > 0 && <div className="mt-2 flex items-center gap-2 text-muted-foreground">Back then: <Chips chips={backThen} /></div>}
       </div>
       {canEdit && (
         <div className="flex gap-2 justify-end">
           <Button variant="outline" data-testid="gap-nothing" onClick={() => onNothing(gap)}>Nothing comes to mind</Button>
           <Button data-testid="gap-add" onClick={() => onAdd(gap)}>Add a memory</Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Somewhere you must have lived: a stretch no Place chapter covers. With no
+ * places at all (`gap` null), the invitation to start with them.
+ */
+export function PlaceGapCard({ gap, birth, canEdit, onAdd, onSkip }: {
+  gap: ChapterGap | null;
+  birth?: string;
+  canEdit: boolean;
+  onAdd: (gap: ChapterGap | null) => void;
+  onSkip: (gap: ChapterGap) => void;
+}) {
+  const b = birth ? parsePartial(birth) : null;
+  const ages = gap && b
+    ? ` — you were ${Math.max(0, fromDay(gap.lo).year - b.first.year)} to ${fromDay(gap.hi).year - b.first.year}` : '';
+  return (
+    <div className={card} data-testid="timeline-place-gap">
+      <div className="flex gap-3 items-start text-sm">
+        <span aria-hidden="true" className="material-symbols-outlined">home</span>
+        <div className="flex-1">
+          {gap ? (
+            <div className="font-semibold">
+              Where were you living between {formatPartial(partialOf(gap.lo, 'month'))} and {formatPartial(partialOf(gap.hi, 'month'))}{ages}?
+            </div>
+          ) : (<>
+            <div className="font-semibold">Where have you lived?</div>
+            <div className="mt-1">Add each place as a chapter — they become the backbone of your timeline, and every memory has somewhere to sit.</div>
+          </>)}
+        </div>
+      </div>
+      {canEdit && (
+        <div className="flex gap-2 justify-end">
+          {gap && <Button variant="outline" data-testid="place-gap-skip" onClick={() => onSkip(gap)}>Skip</Button>}
+          <Button data-testid="place-gap-add" onClick={() => onAdd(gap)}>Add a place</Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** A chapter short of memories, asking for one. */
+export function ChapterCard({ chip, dates, memories, question, canEdit, onAdd, onLater }: {
+  chip: ChapterChip;
+  dates: string;
+  memories: number;
+  question: string;
+  canEdit: boolean;
+  onAdd: (uid: string) => void;
+  onLater: (uid: string) => void;
+}) {
+  return (
+    <div className={card} data-testid="timeline-chapter-card" data-chapter={chip.uid}>
+      <div className="flex gap-3 items-start text-sm">
+        <span aria-hidden="true" className="material-symbols-outlined" style={chip.color ? { color: chip.color } : undefined}>{chip.icon}</span>
+        <div className="flex-1">
+          <div className="font-semibold">{chip.title}</div>
+          <div className="text-muted-foreground">{dates} · {memories === 0 ? 'no memories yet' : `${memories} ${memories === 1 ? 'memory' : 'memories'}`}</div>
+          <div className="mt-1">{question}</div>
+        </div>
+      </div>
+      {canEdit && (
+        <div className="flex gap-2 justify-end">
+          <Button variant="outline" data-testid="chapter-card-later" onClick={() => onLater(chip.uid)}>Not now</Button>
+          <Button data-testid="chapter-card-add" onClick={() => onAdd(chip.uid)}>Add a memory</Button>
         </div>
       )}
     </div>
@@ -102,7 +193,7 @@ export function PinDownCard({ question, doc, birth, canEdit, onAnswer, onPivot, 
     );
   }
   const me = doc.events[question.uid];
-  const verb = question.end === 'end' ? 'end' : me.until ? 'begin' : 'happen';
+  const verb = question.end === 'end' ? 'end' : isPeriod(me) ? 'begin' : 'happen';
   const now = formatDayRange(question.range.lo, question.range.hi);
   let text: string;
   if (question.kind === 'anchor') {

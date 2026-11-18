@@ -29,6 +29,7 @@
       "location": "Lake Vermilion",
       "recall": "hazy",
       "description": "Every July: the screen porch, the leaky canoe, Grandma’s blueberry pancakes.",
+      "chapter": "place",
       "start": "1991-07-02",
       "duration": "P2375D"
     },
@@ -76,6 +77,7 @@
       },
       "location": "Madison, Wisconsin",
       "recall": "vivid",
+      "chapter": "pursuit",
       "start": "2004-09-15",
       "duration": "P1340D"
     },
@@ -133,6 +135,110 @@
     "a-dog-before": {
       "@type": "Event",
       "title": "A neighbour’s dog that followed me home"
+    },
+    "duluth-house": {
+      "@type": "Event",
+      "title": "House on 4th Street",
+      "chapter": "place",
+      "location": "Duluth, Minnesota",
+      "when": {
+        "earliest": "1986-08-14",
+        "latest": "1986-08-14"
+      },
+      "until": {
+        "earliest": "1995",
+        "latest": "1996"
+      },
+      "start": "1986-08-14",
+      "duration": "P3428D"
+    },
+    "st-paul-house": {
+      "@type": "Event",
+      "title": "Grand Avenue, St. Paul",
+      "chapter": "place",
+      "location": "St. Paul",
+      "when": {
+        "earliest": "1995",
+        "latest": "1996"
+      },
+      "until": {
+        "earliest": "2004-08",
+        "latest": "2004-08"
+      },
+      "start": "1996-01-01",
+      "duration": "P3151D"
+    },
+    "chicago-apartment": {
+      "@type": "Event",
+      "title": "Chicago apartment",
+      "chapter": "place",
+      "location": "Chicago",
+      "when": {
+        "earliest": "2008-09",
+        "latest": "2008-09"
+      },
+      "start": "2008-09-15",
+      "duration": "P1D"
+    },
+    "acme": {
+      "@type": "Event",
+      "title": "Acme Logistics",
+      "chapter": "pursuit",
+      "location": "Chicago",
+      "when": {
+        "earliest": "2008-09",
+        "latest": "2008-09"
+      },
+      "until": {
+        "earliest": "2015",
+        "latest": "2015"
+      },
+      "start": "2008-09-15",
+      "duration": "P2482D"
+    },
+    "jamie": {
+      "@type": "Event",
+      "title": "Dating Jamie",
+      "chapter": "people",
+      "when": {
+        "earliest": "2010",
+        "latest": "2010"
+      },
+      "until": {
+        "earliest": "2014",
+        "latest": "2014"
+      },
+      "start": "2010-07-02",
+      "duration": "P1462D"
+    },
+    "marathon-training": {
+      "@type": "Event",
+      "title": "Marathon training",
+      "chapter": "phase",
+      "when": {
+        "earliest": "2013-03",
+        "latest": "2013-03"
+      },
+      "until": {
+        "earliest": "2013-10-13",
+        "latest": "2013-10-13"
+      },
+      "start": "2013-03-16",
+      "duration": "P212D"
+    },
+    "jamie-barbecue": {
+      "@type": "Event",
+      "title": "Met Jamie at Priya’s barbecue",
+      "when": {
+        "earliest": "2010-06",
+        "latest": "2010-08"
+      },
+      "rel": {
+        "jamie": "during"
+      },
+      "recall": "vivid",
+      "start": "2010-07-16",
+      "duration": "P1D"
     }
   },
   "prompts": {},

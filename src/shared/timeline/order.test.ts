@@ -141,6 +141,15 @@ describe('displayOrder', () => {
     const events = { born: ev('Born', { when: exact }), home: ev('Duluth', { when: exact, chapter: 'place', until: year(1995) }) };
     expect(displayOrder({ events }, effectiveBounds({ events }, TODAY)).ordered).toEqual(['home', 'born']);
   });
+
+  it('of two chapters starting the same day, the one ending later (the outer one) comes first', () => {
+    const sep = { earliest: '2008-09', latest: '2008-09' };
+    const events = {
+      acme: ev('Acme', { when: sep, chapter: 'pursuit', until: year(2015) }),
+      chi: ev('Chicago apartment', { when: sep, chapter: 'place' }),
+    };
+    expect(displayOrder({ events }, effectiveBounds({ events }, TODAY)).ordered).toEqual(['chi', 'acme']);
+  });
 });
 
 describe('chapters', () => {

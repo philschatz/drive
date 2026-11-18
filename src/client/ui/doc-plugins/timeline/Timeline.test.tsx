@@ -314,6 +314,68 @@ describe('Timeline container', () => {
       expect(added.map((e: any) => e.rel)).toEqual([{ home: 'during' }, { home: 'during' }]);
     });
 
+    it('with no places yet, the Prompts tab invites the first one', async () => {
+      await renderTimeline(base({ events: { m: ev('Adopted a dog', { when: year(2015) }) } }));
+      openTab(/Prompts/);
+      expect(screen.getByTestId('timeline-place-gap').textContent).toContain('Where have you lived?');
+      expect(screen.queryByTestId('place-gap-skip')).toBeNull();
+      fireEvent.click(screen.getByTestId('place-gap-add'));
+      expect((screen.getByTestId('tl-chapter-kind') as HTMLSelectElement).value).toBe('place');
+    });
+
+    it('a stretch with nowhere to live: Add is one change (the place and its record), Skip is one', async () => {
+      const doc = base({
+        events: {
+          stp: ev('St. Paul', { chapter: 'place', when: year(1995), until: year(2004) }),
+          chi: ev('Chicago', { chapter: 'place', when: year(2008) }),
+        },
+      });
+      await renderTimeline(doc);
+      openTab(/Prompts/);
+      // Recent stretches first: 2004–2008 outranks birth–1995.
+      const first = screen.getByTestId('timeline-place-gap').textContent!;
+      expect(first).toMatch(/Where were you living between \w+ 2004 and \w+ 2008/);
+      fireEvent.click(screen.getByTestId('place-gap-add'));
+      fireEvent.input(screen.getByTestId('tl-title'), { target: { value: 'College dorms' } });
+      fireEvent.click(screen.getByTestId('tl-title-save'));
+      expect(writes).toHaveBeenCalledTimes(1);
+      const dorms = Object.values(events()).find((e: any) => e.title === 'College dorms') as any;
+      expect(dorms).toMatchObject({ chapter: 'place', when: { earliest: '2004' }, until: { earliest: '2008' } });
+      const record = Object.values(mock.__getDoc(DOC).prompts).find((p: any) => p.chapter === 'place') as any;
+      expect(record.entry).toBeTruthy();
+      close();
+      // The next stretch: birth to St. Paul.
+      expect(screen.getByTestId('timeline-place-gap').textContent).toMatch(/between \w+ 1987 and \w+ 1995/);
+      fireEvent.click(screen.getByTestId('place-gap-skip'));
+      expect(writes).toHaveBeenCalledTimes(2);
+      expect(screen.queryByTestId('timeline-place-gap')).toBeNull();
+    });
+
+    it('chapter cards ask for memories; Add makes one during the chapter, Not now hides it', async () => {
+      await renderTimeline(life());
+      openTab(/Prompts/);
+      const card = () => screen.getAllByTestId('timeline-chapter-card').map(c => c.getAttribute('data-chapter'));
+      expect(card()).toEqual(['home', 'jamie']);
+      fireEvent.click(within(screen.getAllByTestId('timeline-chapter-card')[1]).getByTestId('chapter-card-later'));
+      expect(card()).toEqual(['home']);
+      fireEvent.click(screen.getByTestId('chapter-card-add'));
+      fireEvent.input(screen.getByTestId('tl-title'), { target: { value: 'First snow' } });
+      fireEvent.click(screen.getByTestId('tl-title-save'));
+      expect((Object.values(events()).find((e: any) => e.title === 'First snow') as any).rel).toEqual({ home: 'during' });
+    });
+
+    it('a gap card names the chapters you were in back then', async () => {
+      await renderTimeline(base({
+        events: {
+          home: ev('Chicago', { chapter: 'place', when: year(2005) }),
+          a: ev('A', { when: year(2006) }), b: ev('B', { when: year(2024) }),
+        },
+      }));
+      openTab(/Prompts/);
+      const chips = screen.getAllByTestId('timeline-gap-card').flatMap(c => within(c).queryAllByTestId('gap-chapter').map(x => x.textContent));
+      expect(chips).toContain('homeChicago');
+    });
+
     it('chapters have no drag handle', async () => {
       await renderTimeline(life());
       fireEvent.click(screen.getByTitle('Arrange'));
