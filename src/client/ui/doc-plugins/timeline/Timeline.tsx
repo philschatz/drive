@@ -30,6 +30,7 @@ import { MdTextField } from '@/components/ui/md-text-field';
 import type { TimelineEvent, TimelinePrompt, Rel } from '../../../../shared/schemas/timeline';
 import * as changes from '../../../../shared/timeline/changes';
 import { effectiveBounds, displayOrder, type Conflict } from '../../../../shared/timeline/order';
+import { chapterLayout } from '../../../../shared/timeline/chapters';
 import {
   nextDateQuestion, pinTargets, largestGaps, placeBetween, applyPivotAnswer, targetKey,
   type Question, type Target, type Gap,
@@ -123,6 +124,7 @@ export function Timeline({ docId, readOnly }: { docId?: string; rest?: string; r
   const doc = useMemo(() => ({ birth, events, prompts }), [birth, events, prompts]);
   const bounds = useMemo(() => effectiveBounds(doc, today), [doc, today]);
   const order = useMemo(() => displayOrder(doc, bounds), [doc, bounds]);
+  const layout = useMemo(() => chapterLayout(doc, bounds, order.ordered), [doc, bounds, order]);
   const titleOf = useCallback((uid: string) => events[uid]?.title ?? 'a deleted entry', [events]);
 
   const write = useCallback(<A extends unknown[]>(fn: (d: any, ...a: A) => unknown, ...args: A) => {
@@ -343,6 +345,7 @@ export function Timeline({ docId, readOnly }: { docId?: string; rest?: string; r
             bounds={bounds}
             ordered={order.ordered}
             undated={order.undated}
+            layout={layout}
             birth={birth}
             canEdit={canEdit}
             arranging={arranging}

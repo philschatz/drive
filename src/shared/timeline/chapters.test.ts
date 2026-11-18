@@ -1,7 +1,7 @@
 import { effectiveBounds, displayOrder } from './order';
 import { dayOf, fromDay } from './fuzzy-date';
 import {
-  chapterSpans, chapterLayout, cellAtRow, coversBetween, memoriesIn, chaptersAt, placeGaps, hasPlaces, chapterCards,
+  chapterSpans, chapterLayout, cellAtRow, coversBetween, memoriesIn, chaptersAt, chaptersDuring, placeGaps, hasPlaces, chapterCards,
 } from './chapters';
 import type { TimelineEvent, TimelinePrompt } from '../schemas/timeline';
 
@@ -131,6 +131,7 @@ describe('chapterLayout', () => {
     const spans = chapterSpans(s.doc, s.bounds);
     expect(chaptersAt(spans, day('2012-07-01')).map(c => c.uid)).toEqual(['chi', 'jamie', 'run']);
     expect(chaptersAt(spans, day('2006-01-01'))).toEqual([]);
+    expect(chaptersDuring(spans, day('2014-01-01'), day('2014-12-31')).map(c => c.uid)).toEqual(['chi', 'jamie']);
   });
 });
 

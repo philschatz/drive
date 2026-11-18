@@ -201,6 +201,54 @@ describe('Timeline container', () => {
     });
   });
 
+  describe('chapters', () => {
+    const life = () => base({
+      events: {
+        home: ev('Chicago', { chapter: 'place', when: year(2005) }),
+        jamie: ev('Dating Jamie', { chapter: 'people', when: year(2010), until: year(2012) }),
+        m1: ev('Met her parents', { when: year(2011) }),
+        m2: ev('Adopted a dog', { when: year(2015) }),
+      },
+    });
+    const rowItem = (title: string) => [...document.querySelectorAll('[slot="headline"]')]
+      .find(h => h.textContent === title)!.closest('[role="listitem"]')!;
+    const cells = (title: string) => {
+      const item = rowItem(title);
+      return [...item.querySelectorAll<HTMLElement>('[data-chapter]')]
+        .map(c => `${c.dataset.chapter}:${c.dataset.lane}:${c.dataset.shape}`);
+    };
+
+    it('draws a bar per chapter beside the rows it spans, outer chapters leftmost', async () => {
+      await renderTimeline(life());
+      expect(screen.getAllByTestId('timeline-chapter-row').map(r => r.getAttribute('data-chapter-kind'))).toEqual(['people', 'place']);
+      expect(cells('Adopted a dog')).toEqual(['home:0:through']);
+      expect(cells('Met her parents')).toEqual(['home:0:through', 'jamie:1:end']);
+      expect(cells('Dating Jamie')).toEqual(['home:0:through', 'jamie:1:start']);
+      expect(cells('Chicago')).toEqual(['home:0:start']);
+      expect(screen.getByText('Since 2005 · 2 memories')).toBeTruthy();
+      expect(screen.getByText('2010 – 2012 · 1 memory')).toBeTruthy();
+    });
+
+    it('year headers name the chapters under way that year; tapping a bar opens its chapter', async () => {
+      await renderTimeline(life());
+      const chips = (y: string) => within(screen.getAllByTestId('timeline-year').find(s => s.getAttribute('data-year') === y)!)
+        .queryAllByTestId('year-chapter').map(c => c.textContent);
+      expect(chips('2015')).toEqual(['Chicago']);
+      expect(chips('2011')).toEqual(['Chicago', 'Dating Jamie']);
+      expect(chips('2005')).toEqual(['Chicago']);
+      const item = rowItem('Met her parents');
+      fireEvent.click(item.querySelector('[data-chapter="jamie"]')!);
+      expect(within(screen.getByTestId('timeline-editor')).getAllByText('Dating Jamie').length).toBeGreaterThan(0);
+    });
+
+    it('chapters have no drag handle', async () => {
+      await renderTimeline(life());
+      fireEvent.click(screen.getByTitle('Arrange'));
+      expect(screen.queryByTestId('drag-jamie')).toBeNull();
+      expect(screen.getByTestId('drag-m1')).toBeTruthy();
+    });
+  });
+
   describe('pin down', () => {
     it('asks one question at a time; each answer is one change', async () => {
       await renderTimeline(base({

@@ -144,7 +144,12 @@ export function memoriesIn(bar: ChapterBar, ordered: string[], events: Record<st
 
 /** The chapters under way on a given day (by best guess), oldest first. */
 export function chaptersAt(spans: Map<string, ChapterSpan>, day: number): ChapterSpan[] {
-  return [...spans.values()].filter(s => s.from <= day && day <= s.to).sort((a, b) => a.from - b.from);
+  return chaptersDuring(spans, day, day);
+}
+
+/** The chapters under way at any point in [lo, hi] (by best guess), oldest first. */
+export function chaptersDuring(spans: Map<string, ChapterSpan>, lo: number, hi: number): ChapterSpan[] {
+  return [...spans.values()].filter(s => s.from <= hi && lo <= s.to).sort((a, b) => a.from - b.from || b.to - a.to);
 }
 
 // ── Prompts ──────────────────────────────────────────────────────────────────
