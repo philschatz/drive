@@ -26,9 +26,11 @@ export function PromptCard({ docId, promptKey, prompt, birth, canEdit, onWrite, 
   onSkip: (key: string) => void;
 }) {
   const photos = Object.keys(prompt.links ?? {});
-  const extra = (prompt.count ?? photos.length) - 1;
   const cover = prompt.cover ?? photos[0];
   const href = cover ? prompt.links?.[cover]?.href : undefined;
+  // The moment's other photos the prompt carries; "+N more" counts the rest.
+  const others = photos.filter(id => id !== cover);
+  const extra = (prompt.count ?? photos.length) - (cover ? 1 : 0) - others.length;
   const people = Object.values(prompt.participants ?? {}).map(x => x.name).filter((n): n is string => !!n);
   const map = mapUrl(prompt.coordinates);
   const place = prompt.location || (map ? geoText(prompt.coordinates) : '');
@@ -58,6 +60,16 @@ export function PromptCard({ docId, promptKey, prompt, birth, canEdit, onWrite, 
           <div className="mt-1">What was happening here?</div>
         </div>
       </div>
+      {others.length > 0 && (
+        <div className="flex gap-2 overflow-x-auto" data-testid="prompt-photos">
+          {others.map(id => {
+            const h = prompt.links?.[id]?.href;
+            return h
+              ? <a key={id} href={h} target="_blank" rel="noopener noreferrer" title="Open the photo" className="shrink-0"><Thumb docId={docId} photoId={id} size={56} /></a>
+              : <Thumb key={id} docId={docId} photoId={id} size={56} className="shrink-0" />;
+          })}
+        </div>
+      )}
       {canEdit && (
         <div className="flex gap-2 justify-end">
           <Button variant="outline" data-testid="prompt-skip" onClick={() => onSkip(promptKey)}>Skip</Button>

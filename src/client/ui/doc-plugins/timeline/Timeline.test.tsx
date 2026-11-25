@@ -508,6 +508,25 @@ describe('Timeline container', () => {
       expect(screen.getByTestId('timeline-prompt').textContent).toContain('Galveston');
     });
 
+    it('shows the moment\'s other photos under the cover; "+N more" counts the rest; the entry keeps them all', async () => {
+      const ln = (id: string) => ({ ...link, href: `https://photos.example/library/browse?q=uid:${id}` });
+      const doc = withPrompt();
+      Object.assign((doc.prompts as any)['photo-p1'], { links: { p1: ln('p1'), p2: ln('p2'), p3: ln('p3') }, count: 5 });
+      Object.assign(doc.thumbs as any, { p2: 'REVG', p3: 'R0hJ' });
+      await renderTimeline(doc);
+      openTab(/Prompts/);
+      const card = screen.getByTestId('timeline-prompt');
+      const strip = within(card).getByTestId('prompt-photos');
+      await waitFor(() => expect(within(strip).getAllByTestId('timeline-thumb').map(i => i.getAttribute('src')))
+        .toEqual(['data:image/jpeg;base64,REVG', 'data:image/jpeg;base64,R0hJ']));
+      expect(within(strip).getAllByRole('link').map(a => a.getAttribute('href'))).toEqual([ln('p2').href, ln('p3').href]);
+      expect(card.textContent).toContain('+2 more photos');
+      fireEvent.click(within(card).getByTestId('prompt-write'));
+      fireEvent.input(screen.getByTestId('tl-title'), { target: { value: 'Beach weekend' } });
+      fireEvent.click(screen.getByTestId('tl-title-save'));
+      expect(Object.keys((Object.values(events())[0] as any).links).sort()).toEqual(['p1', 'p2', 'p3']);
+    });
+
     it('Skip dismisses the prompt and drops its thumbnail', async () => {
       await renderTimeline(withPrompt());
       openTab(/Prompts/);
