@@ -8,8 +8,10 @@
  * what it announced and delivered.)
  */
 import { EventEmitter } from 'events';
+import { Encoder, decode } from 'cbor-x';
 import {
   makeSecureChannelAdapter, decodeFrame, encodeHello, helloSigningBytes, SECURE_CHANNEL_MESSAGE,
+  paddedSize, padEncodedMessage, DATA_FRAME_OVERHEAD_BYTES,
   type SecureChannelAdapter,
 } from '../src/shared/secure-channel';
 import { RELAY_PEER_ID } from '../src/shared/relay-identity';
@@ -189,6 +191,74 @@ describe('a session', () => {
     a.adapter.send({ type: 'keyhive-sync-request', senderId: a.peerId, targetId: RELAY_PEER_ID, data: Buffer.from('x') } as any);
     await sleep(30);
     expect(wire.frames).toEqual([]);
+  });
+});
+
+describe('what a frame\'s length tells', () => {
+  const BUCKETS = [1024, 2048, 4096, 8192, 16384];
+  const dataFrames = (wire: Wire) => wire.frames.filter((f) => decodeFrame(f.data)?.kind === 'data');
+
+  it('is which of a few sizes, not how long the message was', async () => {
+    const wire = new Wire();
+    const [a, b] = [await make(wire), await make(wire)];
+    await pair(wire, a, b);
+    const texts = ['x', 'x'.repeat(10), 'x'.repeat(500), 'x'.repeat(700), 'y'.repeat(1500), 'z'.repeat(5000)];
+    for (const text of texts) say(a, b, text);
+    await until(() => b.messages.length === texts.length, 'all messages to arrive');
+
+    const sizes = dataFrames(wire).map((f) => f.data!.byteLength - DATA_FRAME_OVERHEAD_BYTES);
+    for (const size of sizes) expect(BUCKETS).toContain(size);
+    // 1, 10, 500 and 700 characters are one size on the wire; so a document that
+    // grows by a few bytes per change, or an edit of a few characters, shows nothing.
+    expect(sizes.slice(0, 4)).toEqual([1024, 1024, 1024, 1024]);
+    expect(sizes.slice(4)).toEqual([2048, 8192]);
+  });
+
+  it('delivers the message as it was sent: the padding does not arrive', async () => {
+    const wire = new Wire();
+    const [a, b] = [await make(wire), await make(wire)];
+    await pair(wire, a, b);
+    say(a, b, 'hello', { extra: { nested: [1, 2, 3] } });
+    await until(() => b.messages.length === 1, 'the message to arrive');
+    expect(Object.keys(b.messages[0]).sort()).toEqual(['data', 'documentId', 'extra', 'senderId', 'targetId', 'type']);
+    expect(b.messages[0].extra).toEqual({ nested: [1, 2, 3] });
+  });
+
+  it('paddedSize: five sizes up to 16 KiB, then at most about an eighth more', () => {
+    expect([1, 1024, 1025, 2048, 4097, 16384].map(paddedSize)).toEqual([1024, 1024, 2048, 2048, 8192, 16384]);
+    for (const n of [16385, 20_000, 100_000, 1_000_000, 5_000_000, 60_000_000]) {
+      const padded = paddedSize(n);
+      expect(padded).toBeGreaterThanOrEqual(n);
+      expect(padded / n).toBeLessThan(1.13);
+    }
+    // Far fewer distinct sizes than lengths: ten thousand consecutive lengths
+    // around 100 KB share half a dozen sizes (steps of 2 KiB there).
+    const distinct = new Set(Array.from({ length: 10_000 }, (_, i) => paddedSize(100_000 + i)));
+    expect(distinct.size).toBeLessThanOrEqual(6);
+  });
+
+  it('padEncodedMessage lands exactly on the size for every length, and decodes to the same message', () => {
+    // The same encoder settings the channel uses.
+    const cbor = new Encoder({ tagUint8Array: false, useRecords: false });
+    for (let n = 0; n < 2_300; n++) {
+      const message = { type: 'sync', senderId: 'a', targetId: 'b', data: new Uint8Array(n).fill(7) };
+      const encoded = Uint8Array.from(cbor.encode(message));
+      const padded = padEncodedMessage(encoded);
+      expect(padded.byteLength).toBe(paddedSize(padded.byteLength)); // on a bucket
+      expect(padded.byteLength).toBeLessThanOrEqual(paddedSize(encoded.byteLength + 16));
+      const back = decode(padded) as any;
+      const padKeys = Object.keys(back).filter((k) => k.startsWith('__pad'));
+      expect(padKeys).toHaveLength(1);
+      expect(back[padKeys[0]].every((v: number) => v === 0)).toBe(true);
+      delete back[padKeys[0]];
+      expect(back).toEqual(message);
+    }
+    // Across a CBOR header step for the padding itself (a 255- vs 256-byte string).
+    const big = Uint8Array.from(cbor.encode({ type: 'x', data: new Uint8Array(70_000) }));
+    expect(padEncodedMessage(big).byteLength).toBe(paddedSize(big.byteLength + 16));
+    // Not a map as the encoder writes one: left alone rather than corrupted.
+    const notAMap = Uint8Array.from([0x83, 1, 2, 3]);
+    expect(padEncodedMessage(notAMap)).toBe(notAMap);
   });
 });
 

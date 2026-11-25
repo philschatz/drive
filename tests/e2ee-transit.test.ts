@@ -17,6 +17,7 @@ import {
   startRecordingRelay, startPeer, befriend, createSharedDoc, openDoc, findLeaks, waitFor,
   type RecordingRelay, type HarnessPeer,
 } from './support/two-peer-harness';
+import { decodeFrame, paddedSize, DATA_FRAME_OVERHEAD_BYTES } from '../src/shared/secure-channel';
 
 jest.setTimeout(120_000);
 
@@ -79,6 +80,25 @@ describe('document content in transit', () => {
       expect(bytes.includes('keyhive-')).toBe(false);
     }
     expect(findLeaks(relay.frames, MARKER, alice.kr.Automerge)).toEqual([]);
+  });
+
+  it('shows the relay a few frame sizes, whatever was typed', async () => {
+    await befriend(alice, bob);
+    const { docId, handle: alicesCopy } = await createSharedDoc(alice, bob, { text: '' });
+    const bobsCopy = await openDoc(bob, docId);
+    const from = relay.frames.length;
+    // Edits of very different sizes, each its own change.
+    for (const n of [1, 3, 40, 300]) alicesCopy.change((d: any) => { d.text += 'k'.repeat(n); });
+    await waitFor(() => bobsCopy.doc().text.length === 344, 'bob to have every edit');
+
+    const sizes = relay.frames.slice(from)
+      .filter((f) => f.type === 'secure-channel' && decodeFrame(f.data)?.kind === 'data')
+      .map((f) => f.data!.byteLength - DATA_FRAME_OVERHEAD_BYTES);
+    expect(sizes.length).toBeGreaterThan(0);
+    // Every sealed frame is exactly a padded size…
+    for (const size of sizes) expect(paddedSize(size)).toBe(size);
+    // …and for a short document being typed in, that is a handful of values, not one per edit.
+    expect(new Set(sizes).size).toBeLessThanOrEqual(3);
   });
 
   it('keeps what it syncs from encrypted too: the sync store holds ciphertext', async () => {

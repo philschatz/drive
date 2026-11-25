@@ -39,6 +39,14 @@
  * written afterwards is the document's own key (subduction-interceptor.ts) —
  * both ride inside this channel.
  *
+ * Size. A sealed frame is as long as the message in it, and the relay — or
+ * anyone watching the connection — sees lengths. Unpadded, those told a lot:
+ * one frame grew by exactly 8 bytes with every change made to a document (a
+ * running change count, and a fingerprint of which document it was), and
+ * another gave the size of each edit to the byte. So a message is padded before
+ * it is sealed, to one of a few sizes (`paddedSize`): what shows is which
+ * bucket, not the length.
+ *
  * Order. A peer's route can switch between the relay and a direct channel
  * mid-stream, so a later frame can overtake an earlier one. Frames carry a
  * counter (which is also the cipher's nonce); an early one is held until the
@@ -70,6 +78,11 @@ export const SECURE_CHANNEL_MESSAGE = 'secure-channel';
 // A hello's signature covers a domain tag, both peerIds and every other byte of
 // the frame. A data frame's associated data is the same, so a frame cannot be
 // replayed into another pair, direction or session.
+//
+// The plaintext of a data frame is the CBOR of the message, with one extra map
+// entry — a byte string of zeros under a `__pad` key — sized so the whole lands
+// on a bucket (see `padEncodedMessage`). The receiver drops the entry. A build
+// from before padding ignores an entry it does not know, so the two interwork.
 
 const VERSION = 1;
 const KIND_HELLO = 1;
@@ -89,6 +102,76 @@ const ECDH = { name: 'ECDH', namedCurve: 'P-256' } as const;
 
 // Same CBOR settings as the relay and the WebRTC adapter, so `Message.data` round-trips.
 const cbor = new Encoder({ tagUint8Array: false, useRecords: false });
+
+// ── Padding ──────────────────────────────────────────────────────────────────
+
+/** Bytes a data frame adds around its plaintext: the header and the GCM tag. */
+export const DATA_FRAME_OVERHEAD_BYTES = DATA_HEADER_BYTES + 16;
+
+/** The map key padding travels under. */
+const PAD_KEY = '__pad';
+
+/**
+ * What the padding entry adds besides its zeros: the key (a short text string)
+ * and a byte-string header whose length is always written in the 4-byte form.
+ * A minimal header grows with the length it states, which would leave some
+ * totals unreachable (a 23-byte string takes 24 bytes, a 24-byte one 26);
+ * decoders read either form.
+ */
+const PAD_ENTRY_OVERHEAD = 1 + PAD_KEY.length + 5;
+
+/** Small messages all look alike; these are the only sizes up to 16 KiB. */
+const PAD_BUCKETS = [1024, 2048, 4096, 8192, 16384];
+
+/**
+ * The size a message of `n` bytes is padded to.
+ *
+ * Up to 16 KiB, the next of five sizes: the frames that say most — keyhive's
+ * heartbeat, a sync round's opening summary, a keystroke's commit — all fall in
+ * the first one or two. Above that a fixed set would cost too much (a 5 MB
+ * first sync padded to 8 MB), so the size is rounded up to a multiple that
+ * grows with it (Padmé: Nikitin et al., "Reducing Metadata Leakage from
+ * Encrypted Files and Communication"): at most about 12% more, and the lengths
+ * a message can have shrink from n to roughly log n of them.
+ */
+export function paddedSize(n: number): number {
+  for (const bucket of PAD_BUCKETS) if (n <= bucket) return bucket;
+  const e = Math.floor(Math.log2(n));
+  const unit = 2 ** (e - (Math.floor(Math.log2(e)) + 1));
+  return Math.ceil(n / unit) * unit;
+}
+
+/**
+ * `encoded` — a message as this file's CBOR encoder writes it — with one more
+ * map entry: zeros that bring it to `paddedSize`. Returns it unchanged if it is
+ * not a map in the form expected (never a reason not to send).
+ *
+ * The entry is spliced on rather than encoded: cbor-x writes a plain object as
+ * a map with a 16-bit entry count (0xb9, high, low), so one more entry is the
+ * count plus one and the bytes appended, and a large message is not encoded
+ * twice to be measured. secure-channel.test.ts holds this to the encoder.
+ */
+export function padEncodedMessage(encoded: Uint8Array): Uint8Array {
+  if (encoded.length < 3 || encoded[0] !== 0xb9) return encoded;
+  const count = (encoded[1] << 8) | encoded[2];
+  if (count >= 0xffff) return encoded;
+  const unpadded = encoded.length + PAD_ENTRY_OVERHEAD;
+  const target = paddedSize(unpadded);
+  const zeros = target - unpadded;
+  const out = new Uint8Array(target); // the padding itself is the zeros already here
+  out.set(encoded);
+  out[1] = (count + 1) >> 8;
+  out[2] = (count + 1) & 0xff;
+  let at = encoded.length;
+  out[at++] = 0x60 + PAD_KEY.length;
+  for (let i = 0; i < PAD_KEY.length; i++) out[at++] = PAD_KEY.charCodeAt(i);
+  out[at++] = 0x5a;
+  out[at++] = (zeros >>> 24) & 0xff;
+  out[at++] = (zeros >>> 16) & 0xff;
+  out[at++] = (zeros >>> 8) & 0xff;
+  out[at++] = zeros & 0xff;
+  return out;
+}
 
 const sameBytes = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((v, i) => v === b[i]);
 const short = (peerId: string) => `${peerId.slice(0, 8)}…${peerId.slice(-8)}`;
@@ -339,7 +422,7 @@ export function makeSecureChannelAdapter(
       const header = concat(VERSION, KIND_DATA, session.id, u64(counter));
       const sealed = await crypto.subtle.encrypt(
         { name: 'AES-GCM', iv: buf(nonceOf(counter)), additionalData: buf(associatedData(me(), peer.peerId, header)) },
-        session.sendKey, buf(cbor.encode(message) as Uint8Array));
+        session.sendKey, buf(padEncodedMessage(cbor.encode(message) as Uint8Array)));
       raw.send({
         type: SECURE_CHANNEL_MESSAGE, senderId: me(), targetId: peer.peerId,
         data: concat(header, new Uint8Array(sealed)),
@@ -471,6 +554,8 @@ export function makeSecureChannelAdapter(
     }
     let message: Message;
     try { message = decode(new Uint8Array(plain)) as Message; } catch { return true; }
+    // Padding is the sender's business; what is passed on is the message it sealed.
+    if (message && typeof message === 'object') delete (message as any)[PAD_KEY];
     // The frame proved who sent it; the message inside must not claim otherwise.
     if ((message as any)?.senderId !== peer.peerId || (message as any)?.targetId !== me()) {
       log.warn(`dropping a message from ${short(peer.peerId)} that names a different sender or target`);
