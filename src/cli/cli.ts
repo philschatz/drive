@@ -18,34 +18,25 @@
  * the read commands (`list`/`show`/`diff`) run **local-only** — no relay socket is
  * opened, so they report exactly what is already in the local store.
  *
- * Storage model (see src/shared/keyhive-repo.ts + node-kvstore.ts):
- *   ${dataDir}/secure   NodeFS repo store — automerge docs AND the keyhive device
- *                       identity (so this device is stable across restarts).
- *   ${dataDir}/kv.json   app metadata — the user-group id + doc list.
+ * The engine bootstrap (storage model, relay + WebRTC wiring) is headless.ts,
+ * an importable module: the scripts repo's drive-sync service runs its own
+ * long-lived sync program on it, and `sync` here is the reference for that loop.
  *
  * Degraded vs. the browser: no HyperFormula (DataGrid formula recompute in
  * queries) — fine for a headless peer. Networked commands get the same
  * opportunistic WebRTC upgrade as the browser (werift-backed, see
  * webrtc-node-bridge.ts).
  */
-import * as fs from 'fs';
-import * as path from 'path';
 import { Command } from 'commander';
-import { NetworkAdapter } from '@automerge/automerge-repo';
-import { WebSocketClientAdapter } from '@automerge/automerge-repo-network-websocket';
-import { NodeFSStorageAdapter } from '@automerge/automerge-repo-storage-nodefs';
-import { PRODUCTION_RELAY_URL, RELAY_PEER_ID } from '../shared/relay-identity';
-import { makeWebRTCRelayAdapter } from '../shared/webrtc-relay-adapter';
-import { installOverlayIntercept, makeOverlayFrameSender } from '../shared/relay-overlay';
-import { startNodeWebRTCBridge } from './webrtc-node-bridge';
+import { PRODUCTION_RELAY_URL } from '../shared/relay-identity';
 import { parseRendezvousToken } from '../shared/rendezvous-url';
-import { DriveEngine, type DriveEngineInstance, type WatchUpdate } from '../shared/drive-engine';
+import type { DriveEngineInstance, WatchUpdate } from '../shared/drive-engine';
 import { relativeTime } from '../shared/relative-time';
-import { NodeKVStore } from './node-kvstore';
-import { initSubductionNode } from './keyhive-node-shim';
-import { KEYS } from '../shared/storage-keys';
-import type { EngineHost, EngineNetwork } from '../shared/engine-host';
-import type { WorkerToMain } from '../shared/worker-protocol';
+import type { NodeKVStore } from './node-kvstore';
+import {
+  startEngine as startHeadless, openKV, isLinked, waitForDocs as waitForHeadlessDocs,
+  resolveDataDir as resolveHeadlessDataDir, ResetRequiredError, sleep, type HeadlessEngine,
+} from './headless';
 import { createLogger } from '../shared/logger';
 
 // The CLI's transcript, not diagnostics: `info` so the default level shows it,
@@ -57,23 +48,6 @@ function intArg(value: string): number {
   const n = Number.parseInt(value, 10);
   if (Number.isNaN(n)) throw new Error(`expected an integer, got "${value}"`);
   return n;
-}
-
-const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
-
-/**
- * A do-nothing NetworkAdapter for the local-only read commands (list/show/diff).
- * It reports ready immediately and never discovers a peer, so the repo runs purely
- * against local storage and nothing ever dials the relay. We can't pass `undefined`
- * to the keyhive bridge — it wraps whatever adapter it's given and calls `.on()`,
- * `.connect()`, `.isReady()` on it — so this stub satisfies that contract with no I/O.
- */
-class OfflineNetworkAdapter extends NetworkAdapter {
-  isReady(): boolean { return true; }
-  whenReady(): Promise<void> { return Promise.resolve(); }
-  connect(): void { /* no peers, ever */ }
-  send(): void { /* nothing to send */ }
-  disconnect(): void { /* nothing to close */ }
 }
 
 // Command output — the only thing written to real stdout. Captured before main()
@@ -153,139 +127,30 @@ function withRelay(c: Command): Command {
 
 /** Resolve the data directory the same way whether or not the engine is started yet. */
 function resolveDataDir(opts: CliOpts): string {
-  return opts.dataDir ?? process.env.AUTOMERGE_DATA_DIR ?? './.data/cli';
+  return resolveHeadlessDataDir(opts.dataDir);
 }
 
 /**
- * Exit status when the stored keyhive state needs a reset (sysexits EX_CONFIG).
- * Distinct from 1 so a supervisor can tell "will fail the same way every time"
- * from a crash worth restarting.
- */
-const EXIT_RESET_REQUIRED = 78;
-
-/**
- * Build the node EngineHost and initialize the engine. Diagnostics go to stderr
- * so command output on stdout stays clean.
+ * Start the engine (src/cli/headless.ts) for one command. Diagnostics go to
+ * stderr so command output on stdout stays clean. Unreadable keyhive state
+ * exits 78 (EX_CONFIG) with the remedy.
  *
- * `mode.network` selects the transport:
- *   - `true`  (accept-invite, sync): open the relay WebSocket and wire the
- *             rendezvous overlay. `wsAdapter` in the result is that socket.
- *   - `false` (list, show, diff): local-only. No socket is opened; an
- *             OfflineNetworkAdapter stands in so nothing ever dials the relay,
- *             and `wsAdapter` in the result is null.
+ * `mode.network`: `true` (accept-invite, sync) opens the relay WebSocket and
+ * wires the rendezvous overlay; `false` (list, show, diff) is local-only.
  */
-async function startEngine(
-  opts: CliOpts,
-  mode: { network: boolean },
-): Promise<{ engine: DriveEngineInstance; kv: NodeKVStore; wsAdapter: any; stopBridge: (() => void) | null }> {
-  const dataDir = resolveDataDir(opts);
-
-  // Initialize the subduction WASM for Node before the Repo is created (in
-  // engine.init).
-  await initSubductionNode();
-
-  fs.mkdirSync(dataDir, { recursive: true });
-  const secureDir = path.join(dataDir, 'secure');
-  fs.mkdirSync(secureDir, { recursive: true });
-
-  const kv = new NodeKVStore(path.join(dataDir, 'kv.json'));
-  const storage = new NodeFSStorageAdapter(secureDir);
-
-  let wsAdapter: any = null;
-  let stopBridge: (() => void) | null = null;
-  let network: EngineNetwork;
-  if (mode.network) {
-    const relayUrl = opts.relay ?? process.env.DRIVE_RELAY_URL ?? PRODUCTION_RELAY_URL;
-    log.info(`relay=${relayUrl} data-dir=${dataDir}`);
-    wsAdapter = new WebSocketClientAdapter(relayUrl);
-    let rdvHandler: ((frame: any) => void) | null = null;
-    const sendOverlayFrame = makeOverlayFrameSender(wsAdapter);
-
-    // Wrap the relay adapter so peers can be upgraded to direct WebRTC data
-    // channels — same adapter the browser worker uses; the peer connections
-    // live in the in-process werift bridge.
-    const p2pAdapter = makeWebRTCRelayAdapter(NetworkAdapter as any, wsAdapter, {
-      sendSignalFrame: sendOverlayFrame,
-      onTransportChange: (peerId, transport) => emit({ type: 'p2p-status', peerId, transport }),
-      relayPeerId: RELAY_PEER_ID,
-    });
-    const { port1, port2 } = new MessageChannel();
-    p2pAdapter.attachPort(port1 as unknown as MessagePort);
-    stopBridge = startNodeWebRTCBridge(port2 as unknown as MessagePort);
-
-    // Intercept overlay frames off the raw socket before the repo sees them.
-    installOverlayIntercept(wsAdapter, {
-      onRendezvous: (frame) => rdvHandler?.(frame),
-      onWebRTCSignal: (frame) => p2pAdapter.handleSignal(frame),
-    });
-
-    // Notify the engine on every socket (re)open so it re-sends its RELAY_WATCH
-    // declaration — the relay's discovery state is per-socket. The adapter's own
-    // onOpen (which sends `join`) runs first, same pattern as the browser worker.
-    let socketOpenHandler: (() => void) | null = null;
-    const origOnOpen = wsAdapter.onOpen;
-    wsAdapter.onOpen = () => { origOnOpen(); socketOpenHandler?.(); };
-
-    network = {
-      networkAdapter: p2pAdapter,
-      sendOverlayFrame,
-      onRendezvousFrame: (handler) => { rdvHandler = handler; },
-      onSocketOpen: (handler) => { socketOpenHandler = handler; },
-    };
-  } else {
-    // Local-only: no relay socket, no rendezvous overlay. The OfflineNetworkAdapter
-    // keeps the keyhive bridge + repo happy while guaranteeing zero network I/O.
-    log.info(`local-only data-dir=${dataDir}`);
-    network = {
-      networkAdapter: new OfflineNetworkAdapter(),
-      sendOverlayFrame: () => { /* no relay in local-only mode */ },
-      onRendezvousFrame: () => { /* no relay in local-only mode */ },
-    };
+async function startEngine(opts: CliOpts, mode: { network: boolean }): Promise<HeadlessEngine> {
+  try {
+    return await startHeadless({ dataDir: resolveDataDir(opts), relayUrl: opts.relay, network: mode.network, log });
+  } catch (err) {
+    if (!(err instanceof ResetRequiredError)) throw err;
+    log.error(err.message);
+    process.exit(err.exitCode);
   }
-
-  const emit = (event: WorkerToMain): void => {
-    // Log every emitted engine event to stderr. A few get a friendlier one-line
-    // summary; the rest fall through to a generic dump so nothing is dropped.
-    switch (event.type) {
-      case 'ready': log.info(`ready, peerId=${event.peerId}`); return;
-      case 'kh-ready': log.info('keyhive ready'); return;
-      case 'kh-error': log.error('keyhive error:', event.message); return;
-      case 'error': log.error('error:', event.message); return;
-      case 'data-warning': log.warn('warning:', event.message); return;
-      case 'reset-required': return; // reported with the remedy, right after init()
-      case 'peer-connected':
-      case 'peer-disconnected': log.info(`peers: ${event.peerCount}`); return;
-      case 'p2p-status': log.info(`p2p ${event.peerId} → ${event.transport}`); return;
-      case 'doc-list-updated': log.info(`doc list: ${event.list.length} doc(s)`); return;
-      case 'kh-rdv-event':
-        log.info(`link ${event.status}${event.message ? `: ${event.message}` : ''}`); return;
-      default: log.info(`event ${event.type}`, event); return;
-    }
-  };
-
-  const host: EngineHost = { storage, kv, network, emit };
-  const engine = new DriveEngine(host);
-  await engine.init();
-
-  if (engine.resetRequired) {
-    // The keyhive state on disk predates this build's keyhive and cannot be
-    // read (src/shared/keyhive-format.ts). Nothing was booted or changed. There
-    // is deliberately no flag to wipe it: this peer only holds replicas, so the
-    // remedy is a fresh data dir — and a wipe switch in a service unit would
-    // fire on every restart.
-    log.error(
-      `The keyhive data in ${secureDir} was written by an older version and this one cannot read it ` +
-      `(${engine.resetRequired.reason}). Nothing was changed. To continue: stop the service, move ` +
-      `${dataDir} aside, and run \`accept-invite\` again with a new link from a device that has been reset.`,
-    );
-    process.exit(EXIT_RESET_REQUIRED);
-  }
-  return { engine, kv, wsAdapter, stopBridge };
 }
 
 /** Exit with a hint unless this device already has a linked identity. */
 async function requireLinked(kv: NodeKVStore): Promise<void> {
-  if (await kv.get<string>(KEYS.userGroupId)) return;
+  if (await isLinked(kv)) return;
   log.error('no stored identity — link this device first:');
   log.error('  npm run cli -- accept-invite "https://…/#/link-device/r.<id>.<key>"');
   process.exit(1);
@@ -297,15 +162,8 @@ function withTimeout<T>(p: Promise<T>, ms: number, message: string): Promise<T> 
 }
 
 /** Poll (up to ~20s) for the keyhive group graph to sync so accessible docs surface. */
-async function waitForDocs(engine: DriveEngineInstance): Promise<string[]> {
-  log.info('waiting for documents to sync…');
-  let ids: string[] = [];
-  for (let i = 0; i < 20; i++) {
-    ids = await engine.enumerateAccessibleDocIds();
-    if (ids.length) break;
-    await sleep(1000);
-  }
-  return ids;
+function waitForDocs(engine: DriveEngineInstance): Promise<string[]> {
+  return waitForHeadlessDocs(engine, 20, log);
 }
 
 async function main(): Promise<void> {
@@ -465,7 +323,7 @@ async function main(): Promise<void> {
 
       // Verify this device is linked BEFORE startEngine writes anything (kv.json,
       // keyhive archive, repo storage). Reading kv.json does not create files.
-      await requireLinked(new NodeKVStore(path.join(resolveDataDir(opts), 'kv.json')));
+      await requireLinked(openKV(resolveDataDir(opts)));
 
       const { engine, stopBridge } = await startEngine(opts, { network: true });
       const ids = await waitForDocs(engine);

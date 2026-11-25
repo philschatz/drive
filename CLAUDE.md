@@ -41,7 +41,7 @@ Each top-level directory under `src/` is one program or one runtime, and the bou
 
 - `src/relay/` — the stateless WebSocket relay (`relay.ts`), the production SPA host (`serve.ts`), and the Vite dev plugin that embeds the relay in the dev server (`relay-plugin.ts`)
 - `src/bitrot-caldav/` — the CalDAV bridge: RFC 4791 handler, `/dav` + `/admin` routes, and the ICS↔JMAP `parser.ts` / `serializer.ts`. Depends on `src/relay` (it embeds one) and on `src/cli` (the Node WASM bootstrap, `keyhive-node-shim.ts`)
-- `src/cli/` — the headless drive peer (`cli.ts`, driven by `drive-service.sh` in the scripts repo: `~/code/mine/scripts/services/drive-sync/`), its JSON-file KVStore, the Node WASM bootstrap (`keyhive-node-shim.ts` — it initialises subduction; keyhive needs nothing), and the Node half of the WebRTC upgrade (`webrtc-node-bridge.ts` + the werift driver `werift-rtc.ts`)
+- `src/cli/` — the headless drive peer: `cli.ts` (accept-invite, list/show/diff, and `sync`, the reference long-running loop) over `headless.ts`, the importable engine bootstrap (data dir, relay + WebRTC wiring; no import-time side effects). The scripts repo's drive-sync service (`~/code/mine/scripts/services/drive-sync/`) runs its own sync program on `headless.ts` — keep its exports stable. Also here: the JSON-file KVStore, the Node WASM bootstrap (`keyhive-node-shim.ts` — it initialises subduction; keyhive needs nothing), and the Node half of the WebRTC upgrade (`webrtc-node-bridge.ts` + the werift driver `werift-rtc.ts`)
 
 **Browser** (`src/client/`) — split by *thread*, because the two halves cannot import each other:
 
