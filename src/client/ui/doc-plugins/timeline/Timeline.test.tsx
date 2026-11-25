@@ -98,6 +98,31 @@ describe('Timeline container', () => {
     expect(events().a.duration).toMatch(/^P\d+D$/);
   });
 
+  it('feelings: pick broad and nuanced emotions, add your own, all in one change', async () => {
+    await renderTimeline(base({ events: { a: ev('Moved', { when: year(2010), emotions: { calm: true } }) } }));
+    tap(screen.getByText('Moved').closest('[data-testid="timeline-row"]')!);
+    expect(screen.getByTestId('tl-emotions-row').textContent).toContain('Calm');
+    fireEvent.click(screen.getByTestId('tl-emotions-row'));
+    expect(screen.getByTestId('tl-emotion-calm').getAttribute('aria-pressed')).toBe('true');
+    fireEvent.click(screen.getByTestId('tl-emotion-calm'));
+    fireEvent.click(screen.getByTestId('tl-emotion-sad'));
+    fireEvent.click(screen.getByTestId('tl-emotion-anticipatory:hopeful'));
+    fireEvent.click(screen.getByTestId('tl-emotion-self-evaluative:imposter'));
+    fireEvent.input(screen.getByTestId('tl-emotion-own'), { target: { value: 'a::b' } });
+    expect(screen.getByTestId('tl-emotion-invalid')).toBeTruthy();
+    expect((screen.getByTestId('tl-emotion-add') as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.input(screen.getByTestId('tl-emotion-own'), { target: { value: 'Temporal: Nostalgic: for college' } });
+    fireEvent.click(screen.getByTestId('tl-emotion-add'));
+    expect(screen.getByTestId('tl-emotion-temporal:nostalgic:for-college').getAttribute('aria-pressed')).toBe('true');
+    expect(writes).not.toHaveBeenCalled(); // nothing is written until Save
+    fireEvent.click(screen.getByTestId('tl-emotions-save'));
+    expect(writes).toHaveBeenCalledTimes(1);
+    expect(events().a.emotions).toEqual({
+      sad: true, 'anticipatory:hopeful': true, 'self-evaluative:imposter': true, 'temporal:nostalgic:for-college': true,
+    });
+    expect(screen.getByTestId('tl-emotions-row').textContent).toContain('Sad, Hopeful, Imposter, Nostalgic — for college');
+  });
+
   it('story, place and revisit are each one change', async () => {
     await renderTimeline(base({ events: { a: ev('Moved', { when: year(2010) }) } }));
     tap(screen.getByText('Moved').closest('[data-testid="timeline-row"]')!);

@@ -28,6 +28,9 @@ import { Thumb } from './Thumb';
 import { mapUrl, geoText } from './map-link';
 import { FuzzyDatePane as FuzzyDatePaneFor, ENDED_UNKNOWN } from './FuzzyDatePane';
 import { CHAPTER_KIND_META } from './chapter-kinds';
+import {
+  GENERIC_EMOTIONS, EMOTION_GROUPS, VOCABULARY_KEYS, normalizeEmotion, emotionLabel, sortEmotions,
+} from '../../../../shared/timeline/emotions';
 
 /** Editor input id → the entry property it edits (presence paths). */
 export const FIELD_TO_PROP: Record<string, string> = {
@@ -36,6 +39,7 @@ export const FIELD_TO_PROP: Record<string, string> = {
   'tl-until': 'until',
   'tl-story': 'description',
   'tl-place': 'location',
+  'tl-emotions': 'emotions',
   'tl-recall': 'recall',
   'tl-revisit': 'revisit',
   'tl-chapter': 'chapter',
@@ -88,6 +92,8 @@ export interface EntryEditorProps {
   /** A chapter's "Add a memory during this chapter". */
   onAddDuring?: (chapterUid: string) => void;
   onPatch: (uid: string, patch: EntryPatch) => void;
+  /** Add and take away emotion keys (shared/timeline/emotions.ts). */
+  onSetEmotions?: (uid: string, add: string[], remove: string[]) => void;
   /** Take one person off a saved entry. */
   onRemoveParticipant?: (uid: string, participantId: string) => void;
   onSetDate: (uid: string, field: 'when' | 'until', value: FuzzyDate | null) => void;
@@ -277,6 +283,72 @@ export function EntryEditor(p: EntryEditorProps) {
           )}
         </FieldEditor>
       ),
+    },
+    {
+      id: 'tl-emotions',
+      label: 'Feelings',
+      icon: 'mood',
+      hidden: isNew,
+      transactional: true,
+      summary: () => sortEmotions(Object.keys(entry.emotions ?? {})).map(emotionLabel).join(', '),
+      render: ({ back }) => {
+        const saved = Object.keys(entry.emotions ?? {});
+        return (
+          <GroupEditor<{ set: string[]; own: string }>
+            key={uid}
+            data-testid="tl-emotions"
+            value={{ set: saved, own: '' }}
+            onCancel={back}
+            onSave={v => {
+              p.onSetEmotions?.(uid, v.set.filter(k => !saved.includes(k)), saved.filter(k => !v.set.includes(k)));
+              back();
+            }}
+          >
+            {({ draft, patch }) => {
+              const toggle = (k: string) => patch({ set: draft.set.includes(k) ? draft.set.filter(x => x !== k) : [...draft.set, k] });
+              const chip = (k: string, label: string) => {
+                const on = draft.set.includes(k);
+                return (
+                  <button key={k} type="button" data-testid={`tl-emotion-${k}`} aria-pressed={on} onClick={() => toggle(k)}
+                    className={'inline-flex items-center rounded-full px-3 h-8 md-label-large state-layer border' +
+                      (on ? ' bg-secondary-container text-on-secondary-container border-transparent font-semibold' : ' text-muted-foreground')}>
+                    {label}
+                  </button>
+                );
+              };
+              const own = sortEmotions(draft.set.filter(k => !VOCABULARY_KEYS.includes(k)));
+              const typed = normalizeEmotion(draft.own);
+              const add = () => { if (typed) patch({ set: draft.set.includes(typed) ? draft.set : [...draft.set, typed], own: '' }); };
+              const group = (title: string, chips: preact.ComponentChildren) => (
+                <section className="flex flex-col gap-1.5">
+                  <h3 className="text-xs uppercase tracking-wide text-muted-foreground">{title}</h3>
+                  <div className="flex flex-wrap gap-1.5">{chips}</div>
+                </section>
+              );
+              return (
+                <div className="flex flex-col gap-3">
+                  <p className="text-sm text-muted-foreground">How did it feel? Pick as many as fit, broad or nuanced.</p>
+                  {group('General', GENERIC_EMOTIONS.map(e => chip(e, emotionLabel(e))))}
+                  {EMOTION_GROUPS.map(g => <div key={g.key}>{group(g.label, g.emotions.map(e => chip(`${g.key}:${e}`, emotionLabel(e))))}</div>)}
+                  {own.length > 0 && group('Your own', own.map(k => chip(k, k)))}
+                  <div className="flex items-end gap-2">
+                    <div className="flex-1">
+                      <MdTextField label="Add your own, e.g. relational:left-out" data-testid="tl-emotion-own" value={draft.own}
+                        onInput={v => patch({ own: v })} onEnter={add}
+                        onFocus={() => focusField('tl-emotions')} onBlur={blurField} />
+                    </div>
+                    <button type="button" data-testid="tl-emotion-add" disabled={!typed} onClick={add}
+                      className="h-10 px-3 rounded-full text-primary md-label-large state-layer disabled:opacity-40">Add</button>
+                  </div>
+                  {draft.own.trim() && !typed && (
+                    <p className="text-sm text-error" data-testid="tl-emotion-invalid">Up to three parts separated by ":", e.g. temporal:nostalgic:for-college</p>
+                  )}
+                </div>
+              );
+            }}
+          </GroupEditor>
+        );
+      },
     },
     {
       id: 'tl-recall',

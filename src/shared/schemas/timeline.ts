@@ -17,6 +17,7 @@ import { calendarEventFields, checkCalendarDependencies } from './calendar';
 import {
   type FuzzyDate, type PartialDate, PARTIAL_DATE_RE, parsePartial, boundsOf, dayOf,
 } from '../timeline/fuzzy-date';
+import { EMOTION_KEY_RE } from '../timeline/emotions';
 
 export type { FuzzyDate, PartialDate } from '../timeline/fuzzy-date';
 
@@ -66,6 +67,12 @@ export interface TimelineEvent {
   /** RFC 8984 Location coordinates form: 'geo:<lat>,<lng>'. */
   coordinates?: string;
   recall?: 'vivid' | 'hazy';
+  /**
+   * How it felt: emotion key → true, any number of them. A key is a lowercase
+   * ':'-separated path — `sad`, `self-evaluative:imposter`,
+   * `temporal:nostalgic:for-college` (timeline/emotions.ts).
+   */
+  emotions?: Record<string, true>;
   /**
    * Present = come back to this entry; the value says what for ("ask Mom who
    * was there"), '' when there is nothing more to say. One field so the flag
@@ -134,6 +141,7 @@ export const timelineEventSchema = obj({
   until: fuzzyDateSchema,
   coordinates: str({ pattern: GEO_RE, optional: true }),
   recall: str({ enum: ['vivid', 'hazy'], optional: true }),
+  emotions: record(bool({ literal: true }), { optional: true }),
   revisit: str({ optional: true }),
   settled: bool({ literal: true, optional: true }),
   rel: relMap,
@@ -228,6 +236,13 @@ export function checkTimelineDependencies(doc: any, errors: ValidationError[]): 
       const s = dayOf(ev.start.substring(0, 10));
       if (s !== null && ((w.lo !== undefined && s < w.lo) || (w.hi !== undefined && s > w.hi))) {
         errors.push({ path: [...p, 'start'], message: 'start lies outside the entry\'s date range (when)', kind: 'dependency' });
+      }
+    }
+    if (ev.emotions && typeof ev.emotions === 'object') {
+      for (const key of Object.keys(ev.emotions)) {
+        if (!EMOTION_KEY_RE.test(key)) {
+          errors.push({ path: [...p, 'emotions', key], message: 'an emotion is lowercase words joined by "-", in up to three ":"-separated parts', kind: 'dependency' });
+        }
       }
     }
     for (const field of ['rel', 'untilRel'] as const) {

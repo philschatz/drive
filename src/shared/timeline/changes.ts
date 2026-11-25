@@ -37,6 +37,16 @@ export function patchEntry(d: any, uid: string, patch: Record<string, unknown>):
   }
 }
 
+/** Add and take away emotions (keys like `relational:seen`); the map goes once it is empty. */
+export function setEmotions(d: any, uid: string, add: string[], remove: string[]): void {
+  const ev = d.events[uid];
+  if (!ev) return;
+  if (add.length && !ev.emotions) ev.emotions = {};
+  for (const k of add) if (ev.emotions[k] !== true) ev.emotions[k] = true;
+  for (const k of remove) if (ev.emotions && k in ev.emotions) delete ev.emotions[k];
+  if (ev.emotions && Object.keys(ev.emotions).length === 0) delete ev.emotions;
+}
+
 /** Take one person off an entry (a wrong face match, or nobody worth keeping). */
 export function removeParticipant(d: any, uid: string, participantId: string): void {
   const ev = d.events[uid];

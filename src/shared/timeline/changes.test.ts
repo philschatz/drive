@@ -133,6 +133,19 @@ describe('timeline changes, rebuilt as the worker rebuilds them', () => {
     expect(errors(doc)).toEqual([]);
   });
 
+  it('setEmotions adds and takes away; the map goes once it is empty', () => {
+    let doc = run(fresh(), changes.addEntry, 'e', ev('Moving day'));
+    doc = run(doc, changes.setEmotions, 'e', ['sad', 'temporal:nostalgic', 'anticipatory:hopeful'], []);
+    expect(plain(doc).events.e.emotions).toEqual({ sad: true, 'temporal:nostalgic': true, 'anticipatory:hopeful': true });
+    doc = run(doc, changes.setEmotions, 'e', ['sad'], ['temporal:nostalgic', 'not-there']);
+    expect(plain(doc).events.e.emotions).toEqual({ sad: true, 'anticipatory:hopeful': true });
+    expect(errors(doc)).toEqual([]);
+    doc = run(doc, changes.setEmotions, 'e', [], ['sad', 'anticipatory:hopeful']);
+    expect(plain(doc).events.e.emotions).toBeUndefined();
+    doc = run(doc, changes.setEmotions, 'missing', ['sad'], []);
+    expect(plain(doc).events.missing).toBeUndefined();
+  });
+
   it('birth and rename', () => {
     let doc = run(fresh(), changes.setBirth, '1987-03-04');
     doc = run(doc, changes.rename, 'My life');

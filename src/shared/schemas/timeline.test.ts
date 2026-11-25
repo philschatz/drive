@@ -21,6 +21,7 @@ describe('Timeline schema', () => {
           description: 'Long drive.', location: 'Houston', coordinates: 'geo:29.76,-95.37',
           recall: 'hazy', revisit: 'ask Mom', settled: true, rel: { b: 'after' },
           participants: { js1: { '@type': 'Participant', name: 'Ana' } },
+          emotions: { sad: true, 'self-evaluative:imposter': true, 'temporal:nostalgic:for-college': true },
           links: { pq1: { '@type': 'Link', href: 'https://photos.example/library/browse?view=cards&q=uid:pq1', display: 'thumbnail', contentType: 'image/jpeg' } },
         }),
         b: entry({ title: 'High school', chapter: 'pursuit', when: { earliest: '2001', latest: '2001' }, until: { earliest: '2005', latest: '2005' }, start: '2001-07-02', duration: 'P1461D' }),
@@ -68,6 +69,11 @@ describe('Timeline schema', () => {
     ['an unknown chapter kind', { chapter: 'job' }, 'events.a.chapter'],
   ])('reports %s', (_name, over, path) => {
     expect(at(docWith({ events: { a: entry(over) as any } }))).toContain(path);
+  });
+
+  it('checks emotion keys: lowercase, up to three ":"-separated parts', () => {
+    const doc = docWith({ events: { a: entry({ emotions: { Sad: true, 'a:b:c:d': true, 'relational:seen': true } as any }) } });
+    expect(errorsOf(doc).map(e => e.path.join('/'))).toEqual(['events/a/emotions/Sad', 'events/a/emotions/a:b:c:d']);
   });
 
   it('checks thumbnails and prompt links', () => {
