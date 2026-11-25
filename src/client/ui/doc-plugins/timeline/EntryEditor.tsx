@@ -25,6 +25,7 @@ import { isDated } from '../../../../shared/timeline/fuzzy-date';
 import type { EntryBounds } from '../../../../shared/timeline/order';
 import { formatFuzzy, formatDayRange, type FuzzyDate } from '../../../../shared/timeline/fuzzy-date';
 import { Thumb } from './Thumb';
+import { mapUrl, geoText } from './map-link';
 import { FuzzyDatePane as FuzzyDatePaneFor, ENDED_UNKNOWN } from './FuzzyDatePane';
 import { CHAPTER_KIND_META } from './chapter-kinds';
 
@@ -254,7 +255,19 @@ export function EntryEditor(p: EntryEditorProps) {
       icon: 'place',
       hidden: isNew,
       transactional: true,
-      summary: () => entry.location ?? '',
+      // The name you gave it; a place known only by its coordinates shows those.
+      summary: () => entry.location || geoText(entry.coordinates),
+      inline: () => {
+        const map = mapUrl(entry.coordinates);
+        return map && (
+          <a href={map} target="_blank" rel="noopener noreferrer" title="Show on a map" aria-label="Show on a map"
+            data-testid="tl-place-map" className="inline-flex items-center justify-center h-10 w-10 rounded-full state-layer"
+            // The row opens the Place pane on click; the map link must not.
+            onClick={(e: Event) => e.stopPropagation()}>
+            <md-icon>map</md-icon>
+          </a>
+        );
+      },
       render: ({ back }) => (
         <FieldEditor key={uid} data-testid="tl-place" value={entry.location ?? ''} onCancel={back}
           onSave={v => { p.onPatch(uid, { location: v.trim() || null }); back(); }}>

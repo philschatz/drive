@@ -12,6 +12,7 @@ import { isPeriod, type Conflict } from '../../../../shared/timeline/order';
 import type { ChapterGap } from '../../../../shared/timeline/chapters';
 import { formatFuzzy, formatDayRange, formatPartial, partialOf, fromDay, parsePartial } from '../../../../shared/timeline/fuzzy-date';
 import { Thumb } from './Thumb';
+import { mapUrl, geoText } from './map-link';
 
 const card = 'rounded-2xl border p-4 mb-3 flex flex-col gap-3';
 
@@ -29,6 +30,8 @@ export function PromptCard({ docId, promptKey, prompt, birth, canEdit, onWrite, 
   const cover = prompt.cover ?? photos[0];
   const href = cover ? prompt.links?.[cover]?.href : undefined;
   const people = Object.values(prompt.participants ?? {}).map(x => x.name).filter((n): n is string => !!n);
+  const map = mapUrl(prompt.coordinates);
+  const place = prompt.location || (map ? geoText(prompt.coordinates) : '');
   return (
     <div className={card} data-testid="timeline-prompt" data-key={promptKey}>
       <div className="flex gap-3 items-start">
@@ -41,7 +44,15 @@ export function PromptCard({ docId, promptKey, prompt, birth, canEdit, onWrite, 
           <div className="font-semibold">
             {formatFuzzy(prompt.when, birth)}{prompt.until ? ` – ${formatFuzzy(prompt.until, birth)}` : ''}
           </div>
-          {prompt.location && <div className="text-muted-foreground">{prompt.location}</div>}
+          {place && (map
+            ? (
+              <a href={map} target="_blank" rel="noopener noreferrer" title="Show on a map" data-testid="prompt-map"
+                className="text-muted-foreground inline-flex items-center gap-1 underline decoration-dotted underline-offset-2">
+                <span aria-hidden="true" className="material-symbols-outlined text-[16px] leading-none">map</span>
+                {place}
+              </a>
+            )
+            : <div className="text-muted-foreground">{place}</div>)}
           {people.length > 0 && <div className="text-muted-foreground" data-testid="prompt-people">With {people.join(', ')}</div>}
           {extra > 0 && <div className="text-muted-foreground">+{extra} more photo{extra === 1 ? '' : 's'}</div>}
           <div className="mt-1">What was happening here?</div>

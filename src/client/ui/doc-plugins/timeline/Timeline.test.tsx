@@ -467,6 +467,47 @@ describe('Timeline container', () => {
       expect(events()[uid].participants).toEqual({ s2: participants.s2 });
     });
 
+    it('the place links to a map at the moment\'s coordinates, on the card and on the entry', async () => {
+      const map = 'https://www.openstreetmap.org/?mlat=29.3&mlon=-94.8#map=15/29.3/-94.8';
+      const doc = withPrompt();
+      (doc.prompts as any)['photo-p1'].coordinates = 'geo:29.3,-94.8';
+      await renderTimeline(doc);
+      openTab(/Prompts/);
+      const card = screen.getByTestId('timeline-prompt');
+      const link = within(card).getByTestId('prompt-map');
+      expect(link.getAttribute('href')).toBe(map);
+      expect(link.textContent).toContain('Galveston');
+      fireEvent.click(within(card).getByTestId('prompt-write'));
+      fireEvent.input(screen.getByTestId('tl-title'), { target: { value: 'Beach weekend' } });
+      fireEvent.click(screen.getByTestId('tl-title-save'));
+      const [uid, entry] = Object.entries(events())[0] as [string, any];
+      expect(entry).toMatchObject({ location: 'Galveston', coordinates: 'geo:29.3,-94.8' });
+
+      cleanup();
+      await renderTimeline(mock.__getDoc(DOC));
+      tap(screen.getByText('Beach weekend').closest('[data-testid="timeline-row"]')!);
+      const row = screen.getByTestId('tl-place-row');
+      expect(row.textContent).toContain('Galveston');
+      fireEvent.click(within(row).getByTestId('tl-place-map'));
+      expect(within(row).getByTestId('tl-place-map').getAttribute('href')).toBe(map);
+      expect(screen.queryByTestId('tl-place')).toBeNull(); // the map link does not open the Place pane
+      expect(events()[uid].location).toBe('Galveston');
+    });
+
+    it('a place known only by its coordinates shows them; without coordinates there is no map link', async () => {
+      const doc = withPrompt();
+      delete (doc.prompts as any)['photo-p1'].location;
+      (doc.prompts as any)['photo-p1'].coordinates = 'geo:29.3,-94.8';
+      await renderTimeline(doc);
+      openTab(/Prompts/);
+      expect(screen.getByTestId('prompt-map').textContent).toContain('29.3, -94.8');
+      cleanup();
+      await renderTimeline(withPrompt());
+      openTab(/Prompts/);
+      expect(screen.queryByTestId('prompt-map')).toBeNull();
+      expect(screen.getByTestId('timeline-prompt').textContent).toContain('Galveston');
+    });
+
     it('Skip dismisses the prompt and drops its thumbnail', async () => {
       await renderTimeline(withPrompt());
       openTab(/Prompts/);
