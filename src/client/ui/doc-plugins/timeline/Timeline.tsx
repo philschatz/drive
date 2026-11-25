@@ -29,6 +29,7 @@ import { Fab } from '@/components/ui/fab';
 import { MdTextField } from '@/components/ui/md-text-field';
 import type { TimelineEvent, TimelinePrompt, Rel, ChapterKind } from '../../../../shared/schemas/timeline';
 import * as changes from '../../../../shared/timeline/changes';
+import { newEntryId } from '../../../../shared/timeline/ids';
 import { effectiveBounds, displayOrder, type Conflict } from '../../../../shared/timeline/order';
 import {
   chapterLayout, chapterSpans, chaptersAt, placeGaps, hasPlaces, chapterCards, type ChapterGap,
@@ -200,14 +201,17 @@ export function Timeline({ docId, readOnly }: { docId?: string; rest?: string; r
       }
     }
     entry = clean({ ...entry, ...calendarFields(entry.when, entry.until) });
-    if (ed.promptKey) write(changes.answerPrompt, ed.promptKey, uid, entry);
-    else if (ed.gap) write(changes.answerGap, ed.gap.key, ed.gap.prompt, uid, entry);
-    else write(changes.addEntry, uid, entry);
+    // The editor's uid was a placeholder; the entry is named now, from its date,
+    // place, people (or title) — shared/timeline/ids.ts.
+    const id = newEntryId(entry, x => x in d.events);
+    if (ed.promptKey) write(changes.answerPrompt, ed.promptKey, id, entry);
+    else if (ed.gap) write(changes.answerGap, ed.gap.key, ed.gap.prompt, id, entry);
+    else write(changes.addEntry, id, entry);
 
-    if (!viaEnter) { setEditor(prev => (prev && prev.uid === uid ? { ...prev, entry, isNew: false } : prev)); return; }
+    if (!viaEnter) { setEditor(prev => (prev && prev.uid === uid ? { ...prev, uid: id, entry, isNew: false } : prev)); return; }
     // Rapid entry: the next one goes right after this one in time (just above
     // it in the newest-first list), or into the same stretch of time.
-    if (ed.insert) openNew({ insert: { earlier: uid, later: ed.insert.later } });
+    if (ed.insert) openNew({ insert: { earlier: id, later: ed.insert.later } });
     else if (entry.chapter) openNew({ entry: blank({ chapter: entry.chapter }) });
     else if (ed.during) openNew({ during: ed.during, entry: blank({ rel: { [ed.during]: 'during' } }) });
     else if (ed.gap) openNew({ entry: blank({ when: ed.entry.when }) });

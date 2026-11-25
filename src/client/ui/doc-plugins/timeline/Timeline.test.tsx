@@ -459,6 +459,7 @@ describe('Timeline container', () => {
       fireEvent.click(screen.getByTestId('tl-title-save'));
       const [uid, entry] = Object.entries(events())[0] as [string, any];
       expect(entry.participants).toEqual(participants);
+      expect(uid).toMatch(/^2014-06-12-galveston-ana-ben-[a-z0-9]{4}$/); // named by date, place and people
 
       cleanup();
       await renderTimeline(mock.__getDoc(DOC));
