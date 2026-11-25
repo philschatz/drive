@@ -100,6 +100,9 @@ export function EngineRendezvous<C extends EngineRendezvousCtor>(Base: C):
      * to schedule from every roster-affecting site.
      */
     scheduleRelayWatchRefresh(): void {
+      // Every roster-affecting site calls this, so it is also where the cached
+      // answer to "which devices am I related to" is dropped.
+      this.khRepo?.relations.invalidate();
       if (this.relayWatchTimer !== null) return;
       this.relayWatchTimer = setTimeout(() => {
         this.relayWatchTimer = null;

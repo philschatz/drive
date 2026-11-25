@@ -25,7 +25,7 @@ import {
   KEYS, CACHE_PREFIX, queryCacheKey, validationCacheKey, docCachePrefix, hashStr,
   type QueryCacheEntry,
 } from './storage-keys';
-import { createKeyhiveRepo } from './keyhive-repo';
+import { createKeyhiveRepo, type KeyhiveRepo } from './keyhive-repo';
 import { KeyhiveResetRequiredError, KEYHIVE_STORAGE_GENERATION } from './keyhive-format';
 import { buildBackupDocEntry } from './legacy-backup';
 import { EngineRecovery } from './engine-recovery';
@@ -127,6 +127,8 @@ export class EngineCore {
   // Populated by init() via createKeyhiveRepo. Protected (not private) so the
   // mixins can read them; null until init() runs.
   protected repo: any = null;
+  /** Everything createKeyhiveRepo returned — the parts below, plus the channel, links and relations. */
+  protected khRepo: KeyhiveRepo | null = null;
   protected khIntegration: any = null;
   protected khOps: KeyhiveOps | null = null;
   protected bridge: any = null;
@@ -1159,6 +1161,9 @@ export class EngineCore {
         syncRequestInterval: this.syncRequestInterval,
         getUserGroupId: async () => (await this.host.kv.get<string>(KEYS.userGroupId)) ?? null,
         setUserGroupId: async (groupId) => { await this.host.kv.set(KEYS.userGroupId, groupId); },
+        // The friend roster lives in settings; with the groups keyhive knows
+        // share a document, it is who this device is related to.
+        friendGroupIds: () => Object.keys(this.settingsSurface.driveSettingsDoc()?.friends ?? {}),
         onBeforeShareConfigChanged: () => {
           // After keyhive ingests remote ops, (re)resolve the settings doc (so a
           // deferred pointer or a just-synced settings doc loads) AND reconcile the
@@ -1173,6 +1178,7 @@ export class EngineCore {
         },
       });
       this.repo = kh.repo;
+      this.khRepo = kh;
       this.khIntegration = kh.integration;
       this.khOps = kh.khOps;
       this.bridge = kh.bridge;

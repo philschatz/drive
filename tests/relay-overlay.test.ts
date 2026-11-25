@@ -2,10 +2,11 @@
  * Unit tests for the relay overlay-frame plumbing shared by the browser worker
  * and the Node CLI.
  *
- * The regression that matters: a WRTC_SIGNAL frame must reach its handler and
- * NEVER fall through to the stock adapter's receiveMessage — before the CLI's
- * intercept learned about signaling, every browser peer's connection offers
- * landed in the repo's NetworkSubsystem as "invalid message" warnings.
+ * A relay-level WRTC_SIGNAL frame is unauthenticated: signaling now travels
+ * inside the secure channel, so one arriving here is from an older client or a
+ * relay trying to drive this device's RTC stack. It must be swallowed — acted
+ * on by nothing, and NEVER handed to the stock adapter's receiveMessage (where
+ * it would land in the repo's NetworkSubsystem as an "invalid message").
  */
 
 import { Encoder, decode } from 'cbor-x';
@@ -20,30 +21,29 @@ function build() {
   const origReceive = jest.fn();
   const wsAdapter = { receiveMessage: origReceive, emit: jest.fn() };
   const onRendezvous = jest.fn();
-  const onWebRTCSignal = jest.fn();
-  installOverlayIntercept(wsAdapter, { onRendezvous, onWebRTCSignal });
-  return { wsAdapter, origReceive, onRendezvous, onWebRTCSignal };
+  installOverlayIntercept(wsAdapter, { onRendezvous });
+  return { wsAdapter, origReceive, onRendezvous };
 }
 
 describe('installOverlayIntercept', () => {
-  test('WRTC_SIGNAL frames reach the handler and never the repo adapter', () => {
-    const { wsAdapter, origReceive, onWebRTCSignal } = build();
+  test('a relay-level WRTC_SIGNAL frame is swallowed: no handler, no repo adapter, no event', () => {
+    const { wsAdapter, origReceive, onRendezvous } = build();
     const frame = { type: WRTC_SIGNAL, senderId: 'peerB', targetId: 'me', signal: { kind: 'offer', sdp: 'v=0...' } };
 
     wsAdapter.receiveMessage(cbor.encode(frame));
 
-    expect(onWebRTCSignal).toHaveBeenCalledWith(frame);
     expect(origReceive).not.toHaveBeenCalled();
+    expect(onRendezvous).not.toHaveBeenCalled();
+    expect(wsAdapter.emit).not.toHaveBeenCalled();
   });
 
   test('rendezvous frames route to the rendezvous handler only', () => {
-    const { wsAdapter, origReceive, onRendezvous, onWebRTCSignal } = build();
+    const { wsAdapter, origReceive, onRendezvous } = build();
     const frame = { type: RDV_MSG, rendezvousId: 'r1', data: new Uint8Array([1, 2]) };
 
     wsAdapter.receiveMessage(cbor.encode(frame));
 
     expect(onRendezvous).toHaveBeenCalledWith(frame);
-    expect(onWebRTCSignal).not.toHaveBeenCalled();
     expect(origReceive).not.toHaveBeenCalled();
   });
 
@@ -58,14 +58,13 @@ describe('installOverlayIntercept', () => {
   });
 
   test('genuine repo protocol bytes fall through to the stock adapter', () => {
-    const { wsAdapter, origReceive, onRendezvous, onWebRTCSignal } = build();
+    const { wsAdapter, origReceive, onRendezvous } = build();
     const bytes = cbor.encode({ type: 'sync', senderId: 'peerB', targetId: 'me', data: new Uint8Array([7]) });
 
     wsAdapter.receiveMessage(bytes);
 
     expect(origReceive).toHaveBeenCalledWith(bytes);
     expect(onRendezvous).not.toHaveBeenCalled();
-    expect(onWebRTCSignal).not.toHaveBeenCalled();
   });
 
   test('undecodable bytes fall through rather than being swallowed', () => {

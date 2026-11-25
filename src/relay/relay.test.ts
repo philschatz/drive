@@ -227,33 +227,28 @@ describe('C2: connection caps', () => {
   });
 });
 
-describe('C2: WebRTC signaling senderId must not be spoofable', () => {
-  it('forwards a WRTC_SIGNAL only when senderId matches the joined peer', () => {
+describe('C2: relay-level WebRTC signaling is not forwarded', () => {
+  // Signaling carries each side's network addresses and drives RTCPeerConnection
+  // setup on the receiver. It now travels inside the secure channel (a sealed
+  // frame the relay cannot tell from any other); the plaintext overlay frame an
+  // older client sends is dropped, whoever sends it.
+  it('drops a WRTC_SIGNAL frame, even a truthful one between introduced peers', () => {
     const relay = new WebSocketRelay();
     const [alice, bob] = joinFriends(relay, 'alice', 'bob');
     const mallory = join(relay, 'mallory');
     watch(mallory, 'gM', ['g-alice', 'g-bob']); // one-sided: pairs with nobody
     bob.send.mockClear();
 
-    // Spoof: mallory claims to be alice. Signaling drives RTCPeerConnection
-    // setup/teardown on the receiver, so this must be dropped.
     mallory.frame({ type: WRTC_SIGNAL, senderId: 'alice', targetId: 'bob', signal: { kind: 'offer', sdp: 'v=0' } });
-    expect(bob.send).not.toHaveBeenCalled();
-
-    // Truthful senderId but no pairing: mallory was never introduced to bob,
-    // so it must not be able to drive bob's RTC stack either.
     mallory.frame({ type: WRTC_SIGNAL, senderId: 'mallory', targetId: 'bob', signal: { kind: 'offer', sdp: 'v=0' } });
-    expect(bob.send).not.toHaveBeenCalled();
-
-    // A socket that never joined has no identity to speak as.
-    const anon = connect(relay);
-    anon.frame({ type: WRTC_SIGNAL, senderId: 'alice', targetId: 'bob', signal: { kind: 'offer', sdp: 'v=0' } });
-    expect(bob.send).not.toHaveBeenCalled();
-
-    // The truthful frame between introduced peers still goes through.
+    connect(relay).frame({ type: WRTC_SIGNAL, senderId: 'alice', targetId: 'bob', signal: { kind: 'offer', sdp: 'v=0' } });
     alice.frame({ type: WRTC_SIGNAL, senderId: 'alice', targetId: 'bob', signal: { kind: 'offer', sdp: 'v=0' } });
+    expect(bob.send).not.toHaveBeenCalled();
+
+    // Ordinary traffic between the same two peers is unaffected.
+    alice.frame({ type: 'secure-channel', senderId: 'alice', targetId: 'bob', data: new Uint8Array([1, 2]) });
     expect(bob.send).toHaveBeenCalledTimes(1);
-    expect((decode(bob.send.mock.calls[0][0]) as any).type).toBe(WRTC_SIGNAL);
+    expect((decode(bob.send.mock.calls[0][0]) as any).type).toBe('secure-channel');
   });
 });
 

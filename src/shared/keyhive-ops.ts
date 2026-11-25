@@ -1,5 +1,5 @@
 import { Keyhive } from "@keyhive/keyhive/slim";
-import type { MemberRole, MemberInfo, ArchiveDocResult, DeviceEntry } from './keyhive-types';
+import type { MemberRole, MemberInfo, ArchiveDocResult, DeviceEntry, RelatedDevice } from './keyhive-types';
 import { createLogger } from './logger';
 
 const log = createLogger('kh');
@@ -1085,6 +1085,46 @@ export class KeyhiveOps {
     }
 
     return [...seen.values()];
+  }
+
+  /**
+   * Every device this one currently has a relationship with, by device key
+   * (base64 agentId): this user's other devices, and the devices of each friend
+   * (`friendGroupIds`, the roster) and of each group sharing a document with
+   * this user. This device itself is not listed.
+   *
+   * It is the answer to "is this a device I know?" — which a proved key alone
+   * is not: the secure channel shows a peer holds the key in its peerId, and
+   * anyone can mint a key. A direct connection, a discovery token and "another
+   * user is online" are all decided from this map.
+   *
+   * A device leaves the map when its user stops being a friend and shares no
+   * document any more, or when it is removed from its user's group. Several
+   * keyhive calls: callers cache it (see `relations` in keyhive-repo.ts).
+   */
+  async relatedDevices(friendGroupIds: string[] = []): Promise<Map<string, RelatedDevice>> {
+    const out = new Map<string, RelatedDevice>();
+    const me = this.selfId();
+    const myGroupId = await this.fx.getUserGroupId();
+    if (myGroupId) {
+      for (const d of await this.listGroupDevices()) {
+        if (d.role && !d.isMe) out.set(d.agentId, { groupId: myGroupId, own: true });
+      }
+    }
+    for (const g of await this.getKnownFriends(undefined, friendGroupIds)) {
+      const group = await this.getGroupById(g.agentId);
+      if (!group) continue;
+      let members: any[];
+      try { members = await group.members(); } catch { continue; } // membership not synced yet
+      for (const m of members) {
+        const idBytes: Uint8Array = m.who.toBytes();
+        if (await this.isKnownGroup(idBytes)) continue;
+        const agentId = bytesToBase64(idBytes);
+        if (agentId === me || out.has(agentId)) continue;
+        out.set(agentId, { groupId: g.agentId, own: false });
+      }
+    }
+    return out;
   }
 
   /**

@@ -7,6 +7,8 @@
  *   - routes a peer's `send()` over the data channel once it is marked open,
  *   - falls back to the relay (inner.send) when no channel is open,
  *   - re-emits inbound data-channel bytes as repo `message` events,
+ *   - negotiates with NOBODY until told to (`allowDirect`): a relay
+ *     introduction alone starts nothing and lets no signal in or out,
  *   - picks a deterministic initiator and skips the relay's own peerId.
  */
 
@@ -14,7 +16,6 @@ import { EventEmitter } from 'events';
 import { Encoder, decode } from 'cbor-x';
 import { makeWebRTCRelayAdapter } from '../src/shared/webrtc-relay-adapter';
 import { MAX_MESSAGE_BYTES } from '../src/shared/webrtc-chunk';
-import { WRTC_SIGNAL } from '../src/shared/webrtc-signal';
 import { RELAY_PEER_ID as RELAY_ID } from '../src/shared/relay-identity';
 
 const cbor = new Encoder({ tagUint8Array: false, useRecords: false });
@@ -55,11 +56,16 @@ function build(extra?: { onTransportChange?: (p: string, t: 'direct' | 'relay') 
   const port = makePort();
   const signals: any[] = [];
   const adapter = makeWebRTCRelayAdapter(FakeBase as any, inner, {
-    sendSignalFrame: (f) => signals.push(f),
     relayPeerId: RELAY_ID,
     onTransportChange: extra?.onTransportChange,
   });
-  return { inner, port, signals, adapter };
+  adapter.setSignalSender((peerId, signal) => signals.push({ peerId, signal }));
+  /** The relay introduces a peer, and the layer above vouches for it. */
+  const introduceAndAllow = (peerId: string) => {
+    inner.emit('peer-candidate', { peerId, peerMetadata: {} });
+    adapter.allowDirect(peerId);
+  };
+  return { inner, port, signals, adapter, introduceAndAllow };
 }
 
 describe('WebRTCRelayAdapter routing', () => {
@@ -132,13 +138,41 @@ describe('WebRTCRelayAdapter routing', () => {
     expect(received).toEqual([msg]);
   });
 
-  test('initiator is deterministic by peerId comparison', () => {
+  test('a relay introduction alone starts no negotiation and passes no signaling', () => {
+    const { inner, port, signals, adapter } = build();
+    adapter.connect('me' as any);
+    adapter.attachPort(port as any);
+
+    // The relay says a peer exists. Nothing has proved who it is.
+    inner.emit('peer-candidate', { peerId: 'zzz', peerMetadata: {} });
+    expect(port.posted.find((m) => m.kind === 'connect-peer')).toBeUndefined();
+
+    // It cannot drive the RTC stack, and nothing about this device goes to it.
+    adapter.handleSignal('zzz', { kind: 'offer', sdp: 'v=0...' });
+    expect(port.posted.find((m) => m.kind === 'signal-in')).toBeUndefined();
+    port.deliver({ kind: 'signal-out', peerId: 'zzz', signal: { kind: 'candidate', candidate: { candidate: 'candidate:1 1 udp 1 192.168.1.2 5 typ host' } } });
+    expect(signals).toEqual([]);
+  });
+
+  test('allowDirect is ignored for a peer the relay has not introduced, or that has left', () => {
     const { inner, port, adapter } = build();
+    adapter.connect('me' as any);
+    adapter.attachPort(port as any);
+
+    adapter.allowDirect('never-introduced');
+    inner.emit('peer-candidate', { peerId: 'zzz', peerMetadata: {} });
+    inner.emit('peer-disconnected', { peerId: 'zzz' });
+    adapter.allowDirect('zzz');
+    expect(port.posted.find((m) => m.kind === 'connect-peer')).toBeUndefined();
+  });
+
+  test('initiator is deterministic by peerId comparison', () => {
+    const { port, adapter, introduceAndAllow } = build();
     adapter.connect('mmm' as any);
     adapter.attachPort(port as any);
 
-    inner.emit('peer-candidate', { peerId: 'aaa', peerMetadata: {} }); // mmm > aaa → not initiator
-    inner.emit('peer-candidate', { peerId: 'zzz', peerMetadata: {} }); // mmm < zzz → initiator
+    introduceAndAllow('aaa'); // mmm > aaa → not initiator
+    introduceAndAllow('zzz'); // mmm < zzz → initiator
 
     const calls = port.posted.filter((m) => m.kind === 'connect-peer');
     expect(calls).toContainEqual({ kind: 'connect-peer', peerId: 'aaa', initiator: false });
@@ -151,65 +185,65 @@ describe('WebRTCRelayAdapter routing', () => {
     adapter.attachPort(port as any);
 
     inner.emit('peer-candidate', { peerId: RELAY_ID, peerMetadata: {} });
+    adapter.allowDirect(RELAY_ID);
     expect(port.posted.find((m) => m.kind === 'connect-peer')).toBeUndefined();
   });
 
-  test('peers discovered before the port attaches are negotiated on attach', () => {
-    const { inner, port, adapter } = build();
+  test('peers allowed before the port attaches are negotiated on attach', () => {
+    const { port, adapter, introduceAndAllow } = build();
     adapter.connect('me' as any);
-    // peer-candidate arrives before the bridge port is wired
-    inner.emit('peer-candidate', { peerId: 'zzz', peerMetadata: {} });
+    // the peer is vouched for before the bridge port is wired
+    introduceAndAllow('zzz');
     expect(port.posted.find((m) => m.kind === 'connect-peer')).toBeUndefined();
 
     adapter.attachPort(port as any);
     expect(port.posted).toContainEqual({ kind: 'connect-peer', peerId: 'zzz', initiator: true });
   });
 
-  test('signal-out from the bridge becomes a WRTC_SIGNAL frame on the relay', () => {
-    const { port, signals, adapter } = build();
+  test('signal-out from the bridge for an allowed peer goes to the signal sender', () => {
+    const { port, signals, adapter, introduceAndAllow } = build();
     adapter.connect('me' as any);
     adapter.attachPort(port as any);
+    introduceAndAllow('peerB');
 
     const signal = { kind: 'offer', sdp: 'v=0...' };
     port.deliver({ kind: 'signal-out', peerId: 'peerB', signal });
 
-    expect(signals).toEqual([{ type: WRTC_SIGNAL, senderId: 'me', targetId: 'peerB', signal }]);
+    expect(signals).toEqual([{ peerId: 'peerB', signal }]);
   });
 
-  test('handleSignal forwards an inbound frame from a discovered peer to the bridge as signal-in', () => {
-    const { inner, port, adapter } = build();
+  test('handleSignal forwards an inbound signal from an allowed peer to the bridge as signal-in', () => {
+    const { port, adapter, introduceAndAllow } = build();
     adapter.connect('me' as any);
     adapter.attachPort(port as any);
-    inner.emit('peer-candidate', { peerId: 'peerB', peerMetadata: {} });
+    introduceAndAllow('peerB');
 
-    const signal = { kind: 'answer', sdp: 'v=0...' };
-    adapter.handleSignal({ type: WRTC_SIGNAL, senderId: 'peerB', targetId: 'me', signal } as any);
+    const signal = { kind: 'answer', sdp: 'v=0...' } as const;
+    adapter.handleSignal('peerB', signal);
 
     expect(port.posted).toContainEqual({ kind: 'signal-in', peerId: 'peerB', signal });
   });
 
-  test('handleSignal ignores a frame from an undiscovered senderId', () => {
-    const { port, adapter } = build();
+  test('handleSignal ignores something that is not a signal', () => {
+    const { port, adapter, introduceAndAllow } = build();
     adapter.connect('me' as any);
     adapter.attachPort(port as any);
+    introduceAndAllow('peerB');
 
-    // 'stranger' was never announced by the relay — its signaling must not
-    // reach the bridge (it would create/tear down RTCPeerConnections).
-    const signal = { kind: 'offer', sdp: 'v=0...' };
-    adapter.handleSignal({ type: WRTC_SIGNAL, senderId: 'stranger', targetId: 'me', signal } as any);
+    adapter.handleSignal('peerB', { kind: 'reboot' } as any);
+    adapter.handleSignal('peerB', null as any);
 
     expect(port.posted.find((m) => m.kind === 'signal-in')).toBeUndefined();
   });
 
-  test('handleSignal stops accepting frames from a peer after it disconnects', () => {
-    const { inner, port, adapter } = build();
+  test('handleSignal stops accepting signals from a peer after it disconnects', () => {
+    const { inner, port, adapter, introduceAndAllow } = build();
     adapter.connect('me' as any);
     adapter.attachPort(port as any);
-    inner.emit('peer-candidate', { peerId: 'peerB', peerMetadata: {} });
+    introduceAndAllow('peerB');
     inner.emit('peer-disconnected', { peerId: 'peerB' });
 
-    const signal = { kind: 'offer', sdp: 'v=0...' };
-    adapter.handleSignal({ type: WRTC_SIGNAL, senderId: 'peerB', targetId: 'me', signal } as any);
+    adapter.handleSignal('peerB', { kind: 'offer', sdp: 'v=0...' });
 
     expect(port.posted.find((m) => m.kind === 'signal-in')).toBeUndefined();
   });

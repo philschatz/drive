@@ -77,18 +77,16 @@ try {
       : `ws://${self.location?.hostname || 'localhost'}:${self.location?.port || 3000}`
   );
 
-  // Intercept overlay frames (rendezvous, WebRTC signaling, relay leave) off the
+  // Intercept overlay frames (rendezvous, relay leave) off the
   // raw socket before the repo sees them, and write outbound overlay frames back
   // onto it — both shared with the CLI (src/shared/relay-overlay.ts).
   installOverlayIntercept(secureWs as any, {
     onRendezvous: (frame) => rdvHandler?.(frame),
-    onWebRTCSignal: (frame) => p2pAdapter?.handleSignal(frame),
   });
   const sendOverlayFrame = makeOverlayFrameSender(secureWs);
 
   // Wrap the relay adapter so peers can be upgraded to direct WebRTC data channels.
   p2pAdapter = makeWebRTCRelayAdapter(NetworkAdapterBase, secureWs, {
-    sendSignalFrame: sendOverlayFrame,
     onTransportChange: (peerId, transport) => {
       (self as any).postMessage({ type: 'p2p-status', peerId, transport } satisfies WorkerToMain);
     },

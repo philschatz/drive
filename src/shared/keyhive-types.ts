@@ -46,6 +46,17 @@ export interface DeviceEntry {
   issuerAgentId?: string;
 }
 
+/**
+ * A device this one has a relationship with (KeyhiveOps.relatedDevices): the
+ * user-group it belongs to, and whether that is this user's own group.
+ */
+export interface RelatedDevice {
+  /** Base64 id of the user-group the device is in. */
+  groupId: string;
+  /** One of this user's own devices (as opposed to a friend's or a co-member's). */
+  own: boolean;
+}
+
 interface MemberInfoBase {
   agentId: string;
   displayId: string;

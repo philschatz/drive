@@ -27,6 +27,9 @@ const log = createLogger('doc-sync');
 /** Minimal shape of the automerge-repo `NetworkAdapter` base class we extend. */
 type NetworkAdapterBase = new () => NetworkAdapterInterface & { emit: (event: string, payload?: unknown) => void };
 
+/** Message types other listeners on the channel handle (see the inbound filter). */
+const CHANNEL_OWN_TYPES = new Set<string>(['subduction-connection', 'wrtc-signal']);
+
 const isKeyhiveMessage = (message: Message | undefined): boolean =>
   typeof message?.type === 'string' && message.type.startsWith('keyhive-');
 
@@ -50,9 +53,11 @@ export function makeKeyhiveOnlyAdapter(Base: NetworkAdapterBase, channel: Networ
       super();
       raw.on('message', (message: Message) => {
         if (isKeyhiveMessage(message)) this.emit('message', message);
-        // subduction-connection frames are for subduction-links.ts, which
-        // listens on the channel itself.
-        else if (message?.type !== 'subduction-connection') report('inbound', message);
+        // Not classic sync, and not for the bridge: subduction-connection
+        // frames are for subduction-links.ts and wrtc-signal for the direct-
+        // connection wiring in keyhive-repo.ts, both of which listen on the
+        // channel themselves.
+        else if (!CHANNEL_OWN_TYPES.has(message?.type)) report('inbound', message);
       });
       raw.on('close', () => this.emit('close'));
       raw.on('peer-candidate', (p: { peerId: PeerId; peerMetadata: PeerMetadata }) => this.emit('peer-candidate', p));

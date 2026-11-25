@@ -1,18 +1,22 @@
 /**
  * Relay overlay-frame plumbing, shared by the browser worker and the Node CLI.
  *
- * Three overlay protocols ride the relay WebSocket alongside the automerge-repo
- * sync protocol: the encrypted rendezvous channel (RDV_*), WebRTC signaling
- * (WRTC_SIGNAL), and the relay's departure broadcast (`leave`). None of them are
- * repo messages — handed to the repo they'd be dropped with an "invalid message"
- * warning — so they must be intercepted off the raw socket before the stock
- * adapter forwards them, and written back onto the raw socket (bypassing the
- * repo adapter) on the way out.
+ * Two overlay protocols ride the relay WebSocket alongside the automerge-repo
+ * sync protocol: the encrypted rendezvous channel (RDV_*) and the relay's
+ * departure broadcast (`leave`). Neither is a repo message — handed to the repo
+ * they'd be dropped with an "invalid message" warning — so they must be
+ * intercepted off the raw socket before the stock adapter forwards them, and
+ * written back onto the raw socket (bypassing the repo adapter) on the way out.
+ *
+ * A third, WebRTC signaling (WRTC_SIGNAL), used to ride here in the clear. It
+ * now travels inside the secure channel (webrtc-signal.ts); a relay-level one —
+ * from an older client, or a relay trying to drive this device's RTC stack — is
+ * swallowed here and acted on by nothing.
  */
 import { decode as cborDecode, Encoder } from 'cbor-x';
 import { isRendezvousType } from './rendezvous-protocol';
 import { isRelayLeaveFrame } from './relay-identity';
-import { isWebRTCSignalType, type WebRTCSignalFrame } from './webrtc-signal';
+import { isWebRTCSignalType } from './webrtc-signal';
 
 /** The slice of WebSocketClientAdapter the intercept touches. */
 interface InterceptableAdapter {
@@ -22,7 +26,6 @@ interface InterceptableAdapter {
 
 export interface OverlayHandlers {
   onRendezvous: (frame: any) => void;
-  onWebRTCSignal: (frame: WebRTCSignalFrame) => void;
 }
 
 /**
@@ -37,7 +40,8 @@ export function installOverlayIntercept(wsAdapter: InterceptableAdapter, handler
     try {
       const decoded = cborDecode(new Uint8Array(bytes));
       if (isRendezvousType(decoded?.type)) { handlers.onRendezvous(decoded); return; }
-      if (isWebRTCSignalType(decoded?.type)) { handlers.onWebRTCSignal(decoded as WebRTCSignalFrame); return; }
+      // Unauthenticated signaling: never acted on (see the file header).
+      if (isWebRTCSignalType(decoded?.type)) return;
       if (isRelayLeaveFrame(decoded)) {
         wsAdapter.emit('peer-disconnected', { peerId: decoded.senderId });
         return;

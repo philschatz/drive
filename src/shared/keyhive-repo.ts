@@ -44,9 +44,21 @@
  *
  * (The bridge has a second path that syncs keyhive through a subduction server.
  * This app has no such server; peers sync with each other.)
+ *
+ * **Who a device is related to** is also decided here (`relations`): its user's
+ * other devices, friends' devices, and the devices of groups it shares a
+ * document with. The channel proves a peer holds the key in its peerId, which
+ * anyone can mint; being related is what a direct (WebRTC) connection requires,
+ * since negotiating one tells the other side this device's network addresses.
+ * That negotiation travels as sealed channel messages — see webrtc-signal.ts.
  */
+import { Encoder, decode } from 'cbor-x';
 import { KeyhiveOps } from './keyhive-ops';
+import type { RelatedDevice } from './keyhive-types';
+import { agentIdOfPeerId } from './peer-id';
 import { RELAY_PEER_ID } from './relay-identity';
+import { WRTC_SIGNAL } from './webrtc-signal';
+import { isWebRTCSignal, type WebRTCRelayAdapter } from './webrtc-relay-adapter';
 import { ensureKeyhiveStorageUsable } from './keyhive-format';
 import { makeSecureChannelAdapter, type SecureChannelControl, type SecureChannelTimings } from './secure-channel';
 import { makeKeyhiveOnlyAdapter } from './keyhive-only-adapter';
@@ -83,6 +95,13 @@ export interface CreateKeyhiveRepoOptions {
    * is still decided per document, by keyhive.
    */
   mayLinkDevice?: (deviceKey: Uint8Array) => Promise<boolean>;
+  /**
+   * The user-group ids (base64) on this user's friend roster, which lives in
+   * the engine's settings. With the groups keyhive knows share a document, they
+   * are who this device is related to (`KeyhiveRepo.relations`). Call
+   * `relations.invalidate()` when the roster changes. Default: none.
+   */
+  friendGroupIds?: () => string[] | Promise<string[]>;
   /** Secure-channel waits (hello retry, reordering), in ms. Shorten only under test. */
   channelTimings?: Partial<SecureChannelTimings>;
   /** Link waits (handshake, retry), in ms. Shorten only under test. */
@@ -146,6 +165,12 @@ export interface KeyhiveRepo {
   channel: SecureChannelControl;
   /** The document-sync links to peer devices (subduction-links.ts). */
   links: SubductionLinks;
+  /**
+   * The devices this one is related to, by device key (base64 agentId) — see
+   * KeyhiveOps.relatedDevices. Cached; `invalidate()` after anything that could
+   * change it that keyhive itself does not announce (the friend roster).
+   */
+  relations: { get(): Promise<Map<string, RelatedDevice>>; invalidate(): void };
   /**
    * Stop the hive (its sync timers, its network adapter) and shut the Repo
    * down, flushing storage. Nothing here is usable afterwards. The app never
@@ -465,6 +490,27 @@ export async function createKeyhiveRepo(opts: CreateKeyhiveRepoOptions): Promise
   };
   onPendingDecrypt = () => { decryptRetryAttempt = 0; scheduleDecryptRetry(); };
 
+  // ── Who this device is related to ──────────────────────────────────────────
+  // Several keyhive calls, so the answer is kept until keyhive's state or the
+  // friend roster changes. `khOpsLate` is KeyhiveOps, built further down.
+  let khOpsLate: KeyhiveOps | null = null;
+  let related: Promise<Map<string, RelatedDevice>> | null = null;
+  let onRelationsChanged = () => {};
+  const relations = {
+    get: (): Promise<Map<string, RelatedDevice>> => {
+      if (!khOpsLate) return Promise.resolve(new Map());
+      const ops = khOpsLate;
+      related ??= (async () => ops.relatedDevices(await (opts.friendGroupIds?.() ?? [])))()
+        .catch((err): Map<string, RelatedDevice> => {
+          log.warn('reading the related devices failed:', err);
+          related = null; // ask again next time rather than remembering "nobody"
+          return new Map();
+        });
+      return related;
+    },
+    invalidate: (): void => { related = null; onRelationsChanged(); },
+  };
+
   // Keyhive learned something (a membership change, a key). Cached policy
   // answers may be stale, a refused link may now be wanted, and a commit that
   // arrived before its key may now decrypt. The bridge tells the Repo itself,
@@ -473,6 +519,7 @@ export async function createKeyhiveRepo(opts: CreateKeyhiveRepoOptions): Promise
   let keyhiveChangedTimer: any = null;
   const onKeyhiveChanged = () => {
     policy.invalidate();
+    relations.invalidate();
     if (keyhiveChangedTimer) return;
     keyhiveChangedTimer = setTimeout(() => {
       keyhiveChangedTimer = null;
@@ -497,10 +544,65 @@ export async function createKeyhiveRepo(opts: CreateKeyhiveRepoOptions): Promise
     syncKeyhive: () => integration.networkAdapter?.syncKeyhive?.(),
     // After a local keyhive membership change: forget cached access answers,
     // and have the Repo retry documents that did not sync or decrypt before.
-    forceResyncAllPeers: () => { policy.invalidate(); repo.shareConfigChanged(); },
+    forceResyncAllPeers: () => { policy.invalidate(); relations.invalidate(); repo.shareConfigChanged(); },
     getUserGroupId: opts.getUserGroupId,
     setUserGroupId: opts.setUserGroupId,
   });
+  khOpsLate = khOps;
+
+  // ── Direct (WebRTC) connections: only with a proven, related device ────────
+  //
+  // The adapter under the channel can move a peer's traffic onto a direct data
+  // channel, and negotiating one hands the other side this device's LAN and
+  // public addresses. So it does nothing until told (webrtc-relay-adapter.ts),
+  // and it is told here, where both halves of "who is this?" are known: the
+  // channel has announced the peer (it proved the key in its peerId), and that
+  // key is a device this one is related to. Something the relay introduces
+  // under a key of its own gets a channel and nothing else.
+  //
+  // The negotiation itself — offer, answer, candidates — goes as sealed channel
+  // messages, so the relay neither sees the addresses nor can swap the session
+  // description for one of its own.
+  const direct = opts.networkAdapter as Partial<WebRTCRelayAdapter>;
+  const channelPeers = new Set<string>();
+  let directReviewTimer: any = null;
+  if (typeof direct?.allowDirect === 'function' && typeof direct.setSignalSender === 'function'
+    && typeof direct.handleSignal === 'function') {
+    const signalCbor = new Encoder({ tagUint8Array: false, useRecords: false });
+    const considerDirect = async (peerId: string): Promise<void> => {
+      if (closed || !channelPeers.has(peerId)) return;
+      const isRelated = (await relations.get()).has(agentIdOfPeerId(peerId));
+      // Re-checked: the peer may have left while keyhive was being asked.
+      if (isRelated && !closed && channelPeers.has(peerId)) direct.allowDirect!(peerId);
+    };
+    secure.on('peer-candidate', (p: { peerId: string }) => {
+      if (p.peerId === RELAY_PEER_ID) return;
+      channelPeers.add(p.peerId);
+      void considerDirect(p.peerId);
+    });
+    secure.on('peer-disconnected', (p: { peerId: string }) => { channelPeers.delete(p.peerId); });
+    direct.setSignalSender!((peerId, signal) => {
+      if (closed || !channelPeers.has(peerId)) return;
+      secure.send({ type: WRTC_SIGNAL, senderId: repo.peerId, targetId: peerId, data: signalCbor.encode(signal) } as any);
+    });
+    secure.on('message', (message: any) => {
+      if (message?.type !== WRTC_SIGNAL || !(message.data instanceof Uint8Array)) return;
+      let signal: unknown;
+      try { signal = decode(message.data); } catch { return; }
+      // The channel proved the sender; the adapter still refuses a peer it was not told to connect to.
+      if (isWebRTCSignal(signal)) direct.handleSignal!(message.senderId, signal);
+    });
+    // A peer that was not related when it was announced may be now (a friend
+    // just added, a membership that has since synced).
+    onRelationsChanged = () => {
+      if (directReviewTimer || closed || channelPeers.size === 0) return;
+      directReviewTimer = setTimeout(() => {
+        directReviewTimer = null;
+        for (const peerId of channelPeers) void considerDirect(peerId);
+      }, 150);
+      if (typeof directReviewTimer?.unref === 'function') directReviewTimer.unref();
+    };
+  }
 
   // Save the full keyhive archive (debounced) after every keyhive event.
   //
@@ -559,6 +661,7 @@ export async function createKeyhiveRepo(opts: CreateKeyhiveRepoOptions): Promise
     await flushArchive();
     if (nudgeTimer) { clearTimeout(nudgeTimer); nudgeTimer = null; }
     if (keyhiveChangedTimer) { clearTimeout(keyhiveChangedTimer); keyhiveChangedTimer = null; }
+    if (directReviewTimer) { clearTimeout(directReviewTimer); directReviewTimer = null; }
     if (decryptRetryTimer) { clearTimeout(decryptRetryTimer); decryptRetryTimer = null; }
     scope?.stop();
     try { await links.stop(); } catch (err) { log.warn('stopping the document links failed:', err); }
@@ -573,6 +676,6 @@ export async function createKeyhiveRepo(opts: CreateKeyhiveRepoOptions): Promise
   return {
     decodeHeads: (heads: string[]) => repoModule.decodeHeads(heads),
     repo, khOps, integration, bridge,
-    Automerge, Presence, amDocIdFromBytes, khDocIdFromAm, setNextDocId, channel: secure.channel, links, close,
+    Automerge, Presence, amDocIdFromBytes, khDocIdFromAm, setNextDocId, channel: secure.channel, links, relations, close,
   };
 }

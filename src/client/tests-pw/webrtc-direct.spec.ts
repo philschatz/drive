@@ -7,9 +7,10 @@ import { setupSharedDoc } from './support/scenarios';
  * direct WebRTC data channel (real loopback ICE candidates connect locally with
  * no TURN), and document sync should continue to work for edits made afterwards.
  *
- * This exercises the full path: relay peer discovery → WRTC_SIGNAL exchange over
- * the relay → RTCPeerConnection on the main thread → open data channel →
- * `p2p-status: direct` → sync messages routed off the relay.
+ * This exercises the full path: relay peer discovery → secure-channel handshake →
+ * the peer is a related device, so a direct connection is allowed → signaling
+ * exchanged as sealed channel messages → RTCPeerConnection on the main thread →
+ * open data channel → `p2p-status: direct` → sync messages routed off the relay.
  */
 
 /** Latch every peerId that ever reaches the 'direct' transport (survives flaps). */

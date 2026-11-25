@@ -145,7 +145,6 @@ export async function startEngine(opts: HeadlessOptions): Promise<HeadlessEngine
     // channels — same adapter the browser worker uses; the peer connections
     // live in the in-process werift bridge.
     const p2pAdapter = makeWebRTCRelayAdapter(NetworkAdapter as any, wsAdapter, {
-      sendSignalFrame: sendOverlayFrame,
       onTransportChange: (peerId, transport) => emit({ type: 'p2p-status', peerId, transport }),
       relayPeerId: RELAY_PEER_ID,
     });
@@ -156,7 +155,6 @@ export async function startEngine(opts: HeadlessOptions): Promise<HeadlessEngine
     // Intercept overlay frames off the raw socket before the repo sees them.
     installOverlayIntercept(wsAdapter, {
       onRendezvous: (frame) => rdvHandler?.(frame),
-      onWebRTCSignal: (frame) => p2pAdapter.handleSignal(frame),
     });
 
     // Notify the engine on every socket (re)open so it re-sends its RELAY_WATCH

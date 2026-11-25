@@ -95,8 +95,9 @@ function clientIp(request?: IncomingMessage): string | undefined {
  * who ever LEARNED a group id (an ex-friend; anyone once shown a contact
  * bundle) can announce it as their own group, or impersonate a group that two
  * victims mutually watch, and get introduced at the transport level. They
- * gain a live connection, the target's online status, and (via the automatic
- * WebRTC upgrade's ICE exchange) potentially its public IP.
+ * gain a live connection and the target's online status. (They no longer gain
+ * its network addresses: a direct connection is negotiated inside the secure
+ * channel, and only with a device the target is related to.)
  *
  * That is all an introduced impostor gains. To the relay a peerId is still
  * self-asserted, but to a client it no longer is: the secure channel announces
@@ -354,21 +355,13 @@ export class WebSocketRelay {
       this.watches.set(ws, new Set(message.watch));
       this.reevaluatePairs(ws, myPeerId);
     } else if (message.type === WRTC_SIGNAL) {
-      // WebRTC signaling (SDP offer/answer + ICE candidates). Unicast verbatim
-      // to the named peer so two peers can negotiate a direct data channel.
-      // The relay never inspects the `signal` payload, but it DOES require
-      // senderId to be the sending socket's joined id: signaling drives
-      // RTCPeerConnection setup/teardown on the receiver, so a client must not
-      // be able to speak as another live peer (join squatting is rejected above).
-      if (!myPeerId || message.senderId !== myPeerId) return;
-      const targetId = typeof message.targetId === 'string' ? message.targetId : undefined;
-      logMessage('←', myPeerId, message);
-      // Signaling reaches only introduced peers: a client the discovery rules
-      // didn't pair with the target must not be able to drive its RTC stack.
-      if (targetId && this.introduced.get(ws)?.has(targetId) && this.sockets.has(targetId)) {
-        const targetWs = this.sockets.get(targetId)!;
-        if (this.safeSend(targetWs, buf, targetId)) logMessage('→', targetId, message);
-      }
+      // Relay-level WebRTC signaling is no longer a thing: it carried each
+      // side's network addresses here in the clear, to whatever socket was
+      // introduced. Current clients negotiate inside the secure channel
+      // (src/shared/webrtc-signal.ts), which arrives here as an ordinary sealed
+      // frame. A frame of this type comes from an older client; it is dropped,
+      // so that client stays on the relay route until it updates.
+      return;
     } else if (myPeerId) {
       logMessage('←', myPeerId, message);
       const targetId = typeof message.targetId === 'string' ? message.targetId : undefined;

@@ -6,7 +6,8 @@
  *  - each peer is `createKeyhiveRepo` — the real keyhive WASM, the real keyhive
  *    bridge and a real automerge-repo `Repo` — over the same adapter stack the
  *    CLI builds (WebSocket client adapter → overlay intercept → WebRTC/relay
- *    adapter; no WebRTC bridge is attached, so every peer stays on the relay);
+ *    adapter). No WebRTC bridge is attached unless a test asks (`webrtc: true`),
+ *    so by default every peer stays on the relay;
  *  - the relay is `WebSocketRelay` behind a real `ws` server on a loopback port.
  *
  * What IS stood in for is everything above `createKeyhiveRepo`: the engine's
@@ -29,6 +30,8 @@ import { createKeyhiveRepo, type KeyhiveRepo } from '../../src/shared/keyhive-re
 import { installOverlayIntercept, makeOverlayFrameSender } from '../../src/shared/relay-overlay';
 import { makeWebRTCRelayAdapter } from '../../src/shared/webrtc-relay-adapter';
 import { RELAY_PEER_ID, buildRelayWatchFrame } from '../../src/shared/relay-identity';
+import { startWebRTCBridgeCore } from '../../src/shared/webrtc-bridge-core';
+import { createWeriftPeerConnection } from '../../src/cli/werift-rtc';
 import type { MemberRole } from '../../src/shared/keyhive-types';
 import { makeMemStorage, type MemStorage } from './mem-storage';
 
@@ -129,6 +132,17 @@ export interface HarnessPeer {
   connectedPeerIds(): string[];
   /** Cut this peer's relay socket; the adapter reconnects on its own, as after a network blip. */
   dropSocket(): void;
+  /** Write an arbitrary frame onto this peer's relay socket (what a modified client could send). */
+  sendRelayFrame(frame: unknown): void;
+  /** With `webrtc`: the route a peer's traffic is on now. Always 'relay' without it. */
+  transportOf(peerId: string): 'direct' | 'relay';
+  /** With `webrtc`: the peers this device's RTC stack has been asked to negotiate with, or handed a signal from. */
+  directAttempts(): string[];
+  /**
+   * With `webrtc`: behave as a modified client would — start a direct
+   * negotiation with a peer whatever keyhive says about it, as the offering side.
+   */
+  forceDirectOffer(peerId: string): void;
   close(): Promise<void>;
 }
 
@@ -147,6 +161,11 @@ export interface StartPeerOptions {
    * its timer outlives the round and would hold the process open.
    */
   productionTimings?: boolean;
+  /**
+   * Attach a real WebRTC bridge (werift, host candidates only — nothing leaves
+   * loopback), as the CLI does. Without it a peer can never leave the relay.
+   */
+  webrtc?: boolean;
 }
 
 export async function startPeer(name: string, relayUrl: string, opts: StartPeerOptions = {}): Promise<HarnessPeer> {
@@ -156,20 +175,43 @@ export async function startPeer(name: string, relayUrl: string, opts: StartPeerO
   // The CLI's adapter stack (src/cli/cli.ts), minus the WebRTC bridge.
   const ws: any = new WebSocketClientAdapter(relayUrl, 200);
   const sendOverlayFrame = makeOverlayFrameSender(ws);
+  const transports = new Map<string, 'direct' | 'relay'>();
   const adapter = makeWebRTCRelayAdapter(NetworkAdapter as any, ws, {
-    sendSignalFrame: sendOverlayFrame,
     relayPeerId: RELAY_PEER_ID,
+    onTransportChange: (peerId, transport) => { transports.set(peerId, transport); },
   });
   installOverlayIntercept(ws, {
     onRendezvous: () => {},
-    onWebRTCSignal: (frame) => adapter.handleSignal(frame),
   });
+
+  // The CLI's WebRTC bridge, with everything the adapter asks of it recorded.
+  const directAttempts = new Set<string>();
+  let bridgePort: MessagePort | null = null;
+  let stopBridge: (() => void) | null = null;
+  if (opts.webrtc) {
+    const { port1, port2 } = new MessageChannel();
+    bridgePort = port1 as unknown as MessagePort;
+    const tapped = {
+      postMessage: (msg: any, transfer?: any[]) => {
+        if (msg?.kind === 'connect-peer' || msg?.kind === 'signal-in') directAttempts.add(msg.peerId);
+        if (transfer) (port1 as any).postMessage(msg, transfer); else port1.postMessage(msg);
+      },
+      set onmessage(fn: any) { (port1 as any).onmessage = fn; },
+    };
+    adapter.attachPort(tapped as unknown as MessagePort);
+    stopBridge = startWebRTCBridgeCore(port2 as unknown as MessagePort, {
+      iceServers: [], createPeerConnection: createWeriftPeerConnection,
+    });
+  }
 
   // What the engine does on every socket (re)open: the relay's discovery state
   // is per socket, so the declaration is sent again, and sessions made over the
   // previous socket end (the relay re-introduces the peers).
   let kr: KeyhiveRepo | null = null;
   let declared: ReturnType<typeof buildRelayWatchFrame> | null = null;
+  // The friend roster, which the engine keeps in its settings: the groups this
+  // peer was last told to watch.
+  let roster: string[] = [];
   const origOnOpen = ws.onOpen;
   ws.onOpen = () => {
     origOnOpen();
@@ -197,6 +239,7 @@ export async function startPeer(name: string, relayUrl: string, opts: StartPeerO
     peerIdSuffix: 'drive',
     getUserGroupId: async () => userGroupId,
     setUserGroupId: async (id) => { userGroupId = id; },
+    friendGroupIds: () => roster,
     ...timings,
   });
   const booted = kr;
@@ -211,12 +254,25 @@ export async function startPeer(name: string, relayUrl: string, opts: StartPeerO
     storage,
     groupId,
     watch: (knownGroupIds) => {
+      roster = [...knownGroupIds];
+      booted.relations.invalidate();
       declared = buildRelayWatchFrame(groupId, knownGroupIds);
       sendOverlayFrame(declared);
     },
     connectedPeerIds: () => (booted.repo.peers as string[]).filter((id) => id !== RELAY_PEER_ID),
     dropSocket: () => ws.socket?.close(),
-    close: () => booted.close(),
+    sendRelayFrame: (frame) => sendOverlayFrame(frame),
+    transportOf: (peerId) => transports.get(peerId) ?? 'relay',
+    directAttempts: () => [...directAttempts],
+    forceDirectOffer: (peerId) => {
+      adapter.allowDirect(peerId);
+      (bridgePort as any)?.postMessage({ kind: 'connect-peer', peerId, initiator: true });
+    },
+    close: async () => {
+      await booted.close();
+      stopBridge?.();
+      (bridgePort as any)?.close?.();
+    },
   };
 }
 
