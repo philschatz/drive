@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks'
 import { subscribePresence, setPresence } from '../worker-api';
 import type { PeerState } from './automerge';
 import { getFriendName } from '../friend-names';
+import { getDeviceName } from '../device-names';
 
 import { MATERIAL_CATEGORICAL as PEER_COLORS } from './categorical-colors';
 import { agentIdOfPeerId } from '../../../shared/peer-id';
@@ -28,9 +29,15 @@ export function peerIdentityKey(peerId: string, userGroupId?: string | null): st
   return userGroupId || agentIdOfPeerId(peerId);
 }
 
-/** The name to show for a stable identity key (see peerIdentityKey). */
+/**
+ * The name to show for a stable identity key (see peerIdentityKey): a friend's
+ * name for a user-group id, else a device's name for a device agentId (a peer
+ * with no group id, e.g. Home's bare repo peers). The two caches are keyed by
+ * different kinds of id, so they cannot collide. Not resolveDeviceName: its
+ * fallback is *this* browser's generated name, which would mislabel the peer.
+ */
 export function displayNameForKey(key: string): string {
-  return getFriendName(key) || `${key.slice(0, 8)}…`;
+  return getFriendName(key) || getDeviceName(key) || `${key.slice(0, 8)}…`;
 }
 
 export function peerDisplayName(peerId: string, userGroupId?: string | null): string {

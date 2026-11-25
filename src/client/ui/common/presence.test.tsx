@@ -9,6 +9,7 @@ import { renderHook, act } from '@testing-library/preact';
 import { peerIdentityKey, peerDisplayName, peerColor, usePresence, type PresenceState } from './presence';
 import { subscribePresence, setPresence } from '../worker-api';
 import { applyFriendNamesFromWorker, getFriendName } from '../friend-names';
+import { applyDeviceNamesFromWorker } from '../device-names';
 
 // A peerId is `<base64-device-verifying-key>-<suffix>`; base64 never contains '-',
 // so device A and device B of the same user have different peerIds but share a group.
@@ -19,6 +20,7 @@ const PEER_B = 'BBBBdeviceKeyB=-drive';
 describe('presence identity helpers', () => {
   beforeEach(() => {
     applyFriendNamesFromWorker({});
+    applyDeviceNamesFromWorker({});
   });
 
   describe('peerIdentityKey', () => {
@@ -49,6 +51,21 @@ describe('presence identity helpers', () => {
 
     it('falls back to a short hash when the identity is unknown', () => {
       expect(peerDisplayName(PEER_A, GROUP)).toBe(`${GROUP.slice(0, 8)}…`);
+    });
+
+    // Home lists bare repo peerIds (no presence, so no group id): the key is the
+    // device agentId, which is exactly how device names are keyed.
+    it('names a bare peerId by its device name', () => {
+      applyDeviceNamesFromWorker({ AAAAdeviceKeyA: 'Phone' });
+      const peer = 'AAAAdeviceKeyA-drive-x1y2z3w4';
+      expect(peerDisplayName(peer)).toBe('Phone');
+      expect(peerDisplayName(PEER_B)).toBe('BBBBdevi…');
+    });
+
+    it('prefers the friend name when the peer carries its group id', () => {
+      applyFriendNamesFromWorker({ [GROUP]: 'Alice' });
+      applyDeviceNamesFromWorker({ AAAAdeviceKeyA: 'Phone' });
+      expect(peerDisplayName('AAAAdeviceKeyA-drive-x1y2z3w4', GROUP)).toBe('Alice');
     });
   });
 
