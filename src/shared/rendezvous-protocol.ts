@@ -41,7 +41,11 @@ export type RendezvousFrame = RdvSubMsg | RdvUnsubMsg | RdvDataMsg | RdvPeerMsg;
  *   sent         — payload delivered (friend-share sharer is done)
  *   receiving    — got the encrypted payload, decrypting + ingesting (receiver)
  *   received     — receiver finished ingesting the contact
+ *   confirm      — device link only: waiting for the person to confirm on the
+ *                  device that showed the link (where it carries the other
+ *                  device's name).
  *   linked       — device-link handshake complete
+ *   expired      — nobody completed the exchange in time; the link is dead
  *   error        — something failed (a human message accompanies it)
  */
 export type RendezvousStatus =
@@ -51,5 +55,7 @@ export type RendezvousStatus =
   | 'sent'
   | 'receiving'
   | 'received'
+  | 'confirm'
   | 'linked'
+  | 'expired'
   | 'error';

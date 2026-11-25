@@ -390,6 +390,8 @@ export interface RendezvousEvent {
   friendGroupId?: string;
   /** Whether that contact arrived with a display name (else the sharer must prompt for one). */
   friendHasName?: boolean;
+  /** On a device link's 'confirm' event, on the device that showed the link: the name the other device gave. */
+  deviceName?: string;
 }
 type RendezvousEventListener = (e: RendezvousEvent) => void;
 const rdvEventListeners = new Set<RendezvousEventListener>();
@@ -1018,7 +1020,20 @@ export function rendezvousJoinDeviceLink(rendezvousId: string, key: string, devi
   return khRequest('kh-rdv-link-join', { rendezvousId, key, deviceName });
 }
 
-/** Abandon a rendezvous (e.g. the sharer navigates away). Fire-and-forget. */
+/**
+ * Say yes to a device link's 'confirm' event, on the device that showed the
+ * link: add the device that asked. The outcome arrives as a rendezvous event
+ * ('linked', or 'error'). To turn the device away, cancel the rendezvous.
+ * Fire-and-forget.
+ */
+export function rendezvousConfirmDeviceLink(rendezvousId: string): void {
+  fire('kh-rdv-link-confirm', { rendezvousId });
+}
+
+/**
+ * Abandon a rendezvous (e.g. the sharer navigates away). A device waiting for
+ * a device link's answer is told no. Fire-and-forget.
+ */
 export function rendezvousCancel(rendezvousId: string): void {
   fire('kh-rdv-cancel', { rendezvousId });
 }

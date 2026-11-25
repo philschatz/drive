@@ -130,6 +130,17 @@ Transport, from the bottom up:
 
 Per-peer transport is surfaced to the UI via the worker's `p2p-status` message → `usePeerTransports()`; the shared `PeerDot` (`src/client/ui/common/presence.tsx`) renders a **filled** dot for a direct channel and a **hollow ring** (the default) for relay, so a relayed connection is never mistaken for P2P.
 
+### Invite links (rendezvous)
+
+A friend link or device link carries only a topic id and an AES key (`rendezvous-crypto.ts`); the contact cards cross the relay encrypted under that key (`engine-rendezvous.ts`). The key is a **bearer secret** — whoever holds the link can take either side's part — so:
+
+- **Every message is bound** to its rendezvous id and its sender's side (`host` made the link, `guest` opened it) as AES-GCM additional data. A frame reflected to its sender, or replayed elsewhere, does not open.
+- **A link this device showed expires** after `RDV_HOST_TTL_MS` (5 min) with an `expired` event, and every error path closes the session (`closeRdv`). Never leave a host session without a timer: use `hostRdv`.
+- **A device link asks before it links.** The host does *not* call `linkDevice` when the guest's card arrives. Both sides emit `confirm`; the host's UI (`RendezvousShare`) shows the guest's name and waits for `kh-rdv-link-confirm`. Only then does the host add the device and send the verdict; only on `accepted` does the guest adopt the group and settings. Declining, closing the sheet, or expiry sends `declined`. The first card is the one asked about — later ones are ignored, so the device confirmed is the one that was named. Nothing tells two devices holding the same link apart beyond that name, which the asking device chose: someone who has the link and asks first is what the person would be confirming.
+- The guest (`LinkDevicePage`, and the CLI's `accept-invite`) changes nothing locally until the verdict.
+- Pages that open a link cold (`AddFriendPage`, `LinkDevicePage`) await `keyhiveReady` and `whenWsConnected()` before subscribing: an overlay frame sent before the socket is open is dropped.
+- Not covered: someone holding the link can still pose as the *host* to the joining device, or ask first as the guest (above). The question on the host and the expiry are the only checks.
+
 ### Tabs & the single engine
 
 **There may only ever be one engine per device.** An engine is one keyhive instance of the device's identity writing that identity's whole state to one storage, and presence, version pinning and the WebRTC bridge are one-per-device by design. The `drive-tab-leader` Web Lock is the *only* thing enforcing it: the relay used to refuse a second socket with the same peerId, but peerIds are now per boot, so two engines would both connect and pair with each other. (Current keyhive recovers from a lost key by rotating, so a second instance is no longer certain to corrupt the first — but it is not a supported or tested mode, and without Web Locks, e.g. plain http on a LAN address, nothing prevents it.)

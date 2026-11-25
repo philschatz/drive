@@ -127,6 +127,9 @@ export type MainToWorker =
   | { type: 'kh-rdv-receive'; id: number; rendezvousId: string; key: string; displayName?: string }
   | { type: 'kh-rdv-link-create'; id: number; deviceName?: string }
   | { type: 'kh-rdv-link-join'; id: number; rendezvousId: string; key: string; deviceName?: string }
+  // The device that showed a device link answers its 'confirm' event with a yes: add the
+  // device that asked. (A no is 'kh-rdv-cancel'.)
+  | { type: 'kh-rdv-link-confirm'; rendezvousId: string }
   | { type: 'kh-rdv-cancel'; rendezvousId: string }
   // Mint Automerge Cursors for flat-text positions in a Peritext field. Presence
   // shares carets as cursors (stable across concurrent edits, per Peritext
@@ -207,4 +210,7 @@ export type WorkerToMain =
       // and whether they sent a name (so the sharer's UI can prompt for one if not).
       friendGroupId?: string;
       friendHasName?: boolean;
+      // Set on a device link's 'confirm' event, on the device that showed the
+      // link: the name the other device gave.
+      deviceName?: string;
     };

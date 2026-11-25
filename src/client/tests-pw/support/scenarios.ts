@@ -39,6 +39,27 @@ export async function setupFriendPair(browser: Browser): Promise<FriendPair> {
 }
 
 /**
+ * Watch a device link `host` is showing, answering its question the way the
+ * person tapping "Link this device" would: a device link adds nothing until the
+ * device that showed it says so (the `confirm` rendezvous event). Resolves with
+ * how the link ended — 'linked', 'error' or 'expired'. Call it BEFORE the other
+ * device joins.
+ */
+export function confirmDeviceLink(host: Peer, rendezvousId: string): Promise<string> {
+  return host.page.evaluate(
+    (rid) => new Promise<string>((resolve) => {
+      const drive = (window as any).__drive;
+      const off = drive.onRendezvousEvent((e: any) => {
+        if (e.rendezvousId !== rid) return;
+        if (e.status === 'confirm') drive.rendezvousConfirmDeviceLink(rid);
+        if (e.status === 'linked' || e.status === 'error' || e.status === 'expired') { off(); resolve(e.status); }
+      });
+    }),
+    rendezvousId,
+  );
+}
+
+/**
  * Re-open a peer's page, which re-opens its relay socket and with it re-sends the
  * RELAY_WATCH declaration the relay pairs two sockets on. The only recovery when
  * a declaration went missing — nothing at the application layer can introduce two

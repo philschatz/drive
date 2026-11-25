@@ -9,6 +9,7 @@
  */
 
 jest.mock('../src/shared/rendezvous-crypto', () => ({
+  ...jest.requireActual('../src/shared/rendezvous-crypto'),
   generateRendezvous: jest.fn(() => ({ rendezvousId: 'rid', key: 'k' })),
   encryptString: jest.fn(async () => new Uint8Array(0)),
   decryptString: jest.fn(async () => 'plaintext'),
@@ -22,7 +23,7 @@ import { RDV_MSG } from '../src/shared/rendezvous-protocol';
  *  only touches the session map and the crypto helpers, which are mocked). */
 function makeEngine(onData: (pt: string) => void, emit: (m: any) => void = () => {}): DriveEngine {
   const engine = new DriveEngine({ emit } as any);
-  (engine as any).rdvSessions.set('rid', { key: 'k', onData });
+  (engine as any).rdvSessions.set('rid', { key: 'k', role: 'guest', onData });
   return engine;
 }
 
@@ -72,7 +73,7 @@ describe('rdvSendPayload outbound bounds', () => {
   it('refuses to send a payload the peer would be forced to drop', async () => {
     const engine = makeEngine(jest.fn());
     (encryptString as jest.Mock).mockResolvedValueOnce(new Uint8Array(RDV_MAX_DATA_BYTES + 1));
-    await expect((engine as any).rdvSendPayload('rid', 'k', 'x'))
+    await expect((engine as any).rdvSendPayload('rid', 'k', 'guest', 'x'))
       .rejects.toThrow(/too large to exchange/i);
   });
 
@@ -81,7 +82,7 @@ describe('rdvSendPayload outbound bounds', () => {
     const engine = makeEngine(jest.fn());
     (engine as any).host.network = { sendOverlayFrame: (f: any) => sent.push(f) };
     (encryptString as jest.Mock).mockResolvedValueOnce(new Uint8Array(1024));
-    await (engine as any).rdvSendPayload('rid', 'k', 'x');
+    await (engine as any).rdvSendPayload('rid', 'k', 'guest', 'x');
     expect(sent).toEqual([expect.objectContaining({ type: RDV_MSG, rendezvousId: 'rid' })]);
   });
 

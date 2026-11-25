@@ -41,7 +41,8 @@ function currentStep(phase: RendezvousStatus | null, connected: boolean): number
     case 'waiting': return 1;
     case 'peer-joined': return 2;
     case 'sending':
-    case 'receiving': return 3;
+    case 'receiving':
+    case 'confirm': return 3;
     case 'sent':
     case 'received':
     case 'linked': return 5;

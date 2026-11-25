@@ -10,6 +10,7 @@ export {
   rendezvousReceive,
   rendezvousCreateDeviceLink,
   rendezvousJoinDeviceLink,
+  rendezvousConfirmDeviceLink,
   rendezvousCancel,
   onRendezvousEvent,
   listDevices,

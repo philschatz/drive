@@ -9,10 +9,20 @@
  * Reused for: friend share (Settings + AddFriendPage success) and device linking
  * ("Invite Another Device"). Callers supply the create/buildUrl pair and the
  * event status(es) that mean "done".
+ *
+ * Two things here are about the link being a secret anyone could use:
+ * - **It expires.** The worker ends an unused link after a few minutes; this
+ *   shows that and offers a new one.
+ * - **A device link asks before it links.** When another device has opened the
+ *   link, the worker reports its name and a code (`confirm`) and waits. The
+ *   person checks the code against the one on the device in their hand, and
+ *   only "Link this device" adds it — the QR and link are hidden meanwhile,
+ *   since they have done their job.
  */
 
 import { useState, useEffect, useRef } from 'preact/hooks';
-import { rendezvousCancel, onRendezvousEvent } from '../common/keyhive-api';
+import { rendezvousCancel, rendezvousConfirmDeviceLink, onRendezvousEvent } from '../common/keyhive-api';
+import { Button } from '@/components/ui/button';
 import type { RendezvousStatus } from '../worker-api';
 import { formatBytes } from '../../../shared/format-bytes';
 import { QRCodeDisplay } from '@/components/ui/qr-code';
@@ -39,15 +49,26 @@ interface RendezvousShareProps {
   onReceivedContact?: (info: { groupId: string; hasName: boolean }) => void;
 }
 
-export function RendezvousShare({
-  create, buildUrl, waitingLabel, transferLabel = 'Exchanging encrypted data…', doneLabel, onReceivedContact,
-}: RendezvousShareProps) {
+export function RendezvousShare(props: RendezvousShareProps) {
+  // Bumped to throw the current link away and stage a fresh one. Each link is
+  // its own mount of the component below, so nothing of the last one carries
+  // over — and leaving it cancels its rendezvous.
+  const [attempt, setAttempt] = useState(0);
+  return <SharedLink key={attempt} {...props} startOver={() => setAttempt((n) => n + 1)} />;
+}
+
+function SharedLink({
+  create, buildUrl, waitingLabel, transferLabel = 'Exchanging encrypted data…', doneLabel, onReceivedContact, startOver,
+}: RendezvousShareProps & { startOver: () => void }) {
   const [url, setUrl] = useState('');
   const [rendezvousId, setRendezvousId] = useState('');
   const [error, setError] = useState('');
   const [phase, setPhase] = useState<RendezvousStatus | null>(null);
   const [transferDetail, setTransferDetail] = useState<string>();
   const [payloadBytes, setPayloadBytes] = useState<number>();
+  // A device has asked to be linked and is waiting for the answer.
+  const [asking, setAsking] = useState<{ deviceName?: string } | null>(null);
+  const [expired, setExpired] = useState(false);
   // Keep the latest callback reachable from the mount-only effect below.
   const onReceivedContactRef = useRef(onReceivedContact);
   onReceivedContactRef.current = onReceivedContact;
@@ -57,9 +78,11 @@ export function RendezvousShare({
     let cancelled = false;
     const offEvent = onRendezvousEvent((e) => {
       if (e.rendezvousId !== rid) return;
-      if (e.status === 'error') setError(e.message ?? 'Something went wrong.');
+      if (e.status === 'error') { setAsking(null); setError(e.message ?? 'Something went wrong.'); }
+      else if (e.status === 'expired') { setAsking(null); setExpired(true); }
       else {
         setPhase(e.status);
+        setAsking(e.status === 'confirm' ? { deviceName: e.deviceName } : null);
         if (e.status === 'sending' && e.message) setTransferDetail(e.message);
         if (e.status === 'received' && e.friendGroupId) {
           onReceivedContactRef.current?.({ groupId: e.friendGroupId, hasName: !!e.friendHasName });
@@ -83,6 +106,48 @@ export function RendezvousShare({
     // create/buildUrl are provided fresh each render; intentionally run once on mount.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  if (expired) {
+    return (
+      <div className="space-y-3" data-testid="rendezvous-expired">
+        <p className="md-body-medium text-on-surface-variant">
+          This code has expired. A code only works for a few minutes.
+        </p>
+        <Button onClick={startOver} data-testid="rendezvous-new-code">Show a new code</Button>
+      </div>
+    );
+  }
+
+  if (asking) {
+    const name = asking.deviceName?.trim();
+    return (
+      <div className="space-y-3" data-testid="link-confirm">
+        <p className="md-title-medium">
+          {name ? <>Link <span data-testid="link-confirm-name">“{name}”</span> to your account?</> : 'Link this device to your account?'}
+        </p>
+        <p className="md-body-medium text-on-surface-variant">
+          It will be able to open all of your documents. If you did not just open this link on a device of yours, something else did — choose “Not my device”.
+        </p>
+        <div className="flex gap-2">
+          <Button
+            data-testid="link-confirm-accept"
+            onClick={() => { rendezvousConfirmDeviceLink(rendezvousId); setAsking(null); }}
+          >
+            Link this device
+          </Button>
+          <Button
+            variant="outline"
+            data-testid="link-confirm-decline"
+            // The link has been used by something else. Leaving it cancels the
+            // rendezvous, which tells the device that asked no; a new one is staged.
+            onClick={startOver}
+          >
+            Not my device
+          </Button>
+        </div>
+      </div>
+    );
+  }
 
   // Couldn't even stage the share — nothing to show but the failure.
   if (error && !url) {

@@ -7,14 +7,22 @@
  * merely opening the link committed to it. Nothing may reach the worker before the
  * confirm button is tapped.
  */
-import { render, screen, fireEvent, waitFor } from '@testing-library/preact';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/preact';
 
 let mockJoin: jest.Mock;
+const mockListeners = new Set<(e: any) => void>();
 
 jest.mock('../common/keyhive-api', () => ({
   rendezvousJoinDeviceLink: (...args: any[]) => mockJoin(...args),
   getIdentity: () => Promise.resolve({ agentId: 'my-agent', userGroupId: 'my-group' }),
-  onRendezvousEvent: () => () => {},
+  onRendezvousEvent: (fn: (e: any) => void) => { mockListeners.add(fn); return () => { mockListeners.delete(fn); }; },
+}));
+
+// The relay socket: open unless a test holds it shut.
+let mockWsOpen: Promise<void> = Promise.resolve();
+jest.mock('../common/automerge', () => ({
+  keyhiveReady: Promise.resolve(),
+  whenWsConnected: () => mockWsOpen,
 }));
 
 jest.mock('../device-names', () => ({
@@ -30,6 +38,7 @@ import { LinkDevicePage } from './LinkDevicePage';
 const TOKEN = 'r.abcdef123456.key123456';
 
 beforeEach(() => {
+  mockWsOpen = Promise.resolve();
   mockJoin = jest.fn(() => Promise.resolve({ ok: true }));
   window.location.hash = '#/link-device/start';
 });
@@ -88,4 +97,45 @@ it('offers a way out even mid-handshake', async () => {
   await startFlow();
 
   expect(screen.getByLabelText('Close').getAttribute('href')).toBe('#/settings/devices');
+});
+
+it('says the other device is asking, while that device decides', async () => {
+  // The join stays open until the other device answers.
+  let finish!: (v: { ok: true }) => void;
+  mockJoin = jest.fn(() => new Promise((resolve) => { finish = resolve; }));
+  render(<LinkDevicePage token={TOKEN} />);
+  await startFlow();
+  await waitFor(() => expect(mockJoin).toHaveBeenCalled());
+  expect(screen.queryByTestId('link-device-asked')).toBeNull();
+
+  act(() => { for (const fn of mockListeners) fn({ rendezvousId: 'abcdef123456', status: 'confirm' }); });
+  expect((await screen.findByTestId('link-device-asked')).textContent).toContain('Confirm on your other device');
+  // Nothing here to tap: the answer is given on the device that showed the link.
+  expect(screen.queryByTestId('link-device-done')).toBeNull();
+
+  // Another link's events are not this page's.
+  act(() => { for (const fn of mockListeners) fn({ rendezvousId: 'someone-else', status: 'linked' }); });
+  expect(screen.getByTestId('link-device-asked')).toBeDefined();
+
+  await act(async () => {
+    for (const fn of mockListeners) fn({ rendezvousId: 'abcdef123456', status: 'linked' });
+    finish({ ok: true });
+  });
+  await waitFor(() => expect(screen.getByTestId('link-device-done')).toBeDefined());
+  expect(screen.queryByTestId('link-device-asked')).toBeNull();
+});
+
+it('waits for the relay socket before joining: a tap on a page that is still starting is not lost', async () => {
+  // This page is usually the first thing a new device opens, so the tap can land
+  // before the socket is up — and a rendezvous subscribe sent then is dropped,
+  // leaving both devices waiting for each other.
+  let open!: () => void;
+  mockWsOpen = new Promise((resolve) => { open = resolve; });
+  render(<LinkDevicePage token={TOKEN} />);
+  await startFlow();
+  await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+  expect(mockJoin).not.toHaveBeenCalled();
+
+  await act(async () => { open(); });
+  await waitFor(() => expect(mockJoin).toHaveBeenCalledWith('abcdef123456', 'key123456', 'This Device'));
 });

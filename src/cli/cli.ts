@@ -194,10 +194,10 @@ async function main(): Promise<void> {
       // subscribe, or the RDV_SUB is dropped and the other device waits forever.
       log.info('connecting to relay…');
       await waitForRelayConnection(wsAdapter, 20_000);
-      log.info('linking device via rendezvous…');
+      // The device that showed the link asks its user before it links.
+      log.info('linking device via rendezvous… your other device will ask you to confirm');
       await engine.rendezvousLinkJoin(parsed.rendezvousId, parsed.key);
-      // Flush the return handshake frame before we do anything else, or the other
-      // device hangs (stuck "Exchanging keys…") waiting for a frame we never flushed.
+      // Let the socket drain before anything else is sent on it.
       await drainRelay(wsAdapter);
       // Pull best-effort: wait for the keyhive group graph to arrive so the doc list
       // surfaces. Sync completion isn't observable in this stack (there's no

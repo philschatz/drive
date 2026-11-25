@@ -16,6 +16,7 @@
 import { useState, useCallback, useEffect } from 'preact/hooks';
 import { Button } from '@/components/ui/button';
 import { rendezvousJoinDeviceLink, onRendezvousEvent, getIdentity } from '../common/keyhive-api';
+import { keyhiveReady, whenWsConnected } from '../common/automerge';
 import { resolveDeviceName } from '../device-names';
 import type { RendezvousStatus } from '../worker-api';
 import { RendezvousProgress } from './RendezvousProgress';
@@ -45,6 +46,8 @@ export function LinkDevicePage({ token }: LinkDevicePageProps) {
   const [processing, setProcessing] = useState(false);
   const [phase, setPhase] = useState<RendezvousStatus | null>(null);
   const [transferDetail, setTransferDetail] = useState<string>();
+  // The other device is asking its user whether to link this one.
+  const [asked, setAsked] = useState(false);
 
   const rdv = token ? parseRendezvousToken(token) : null;
   const linkOk = !!rdv;
@@ -59,6 +62,7 @@ export function LinkDevicePage({ token }: LinkDevicePageProps) {
       if (e.rendezvousId !== rdv.rendezvousId || e.status === 'error') return;
       setPhase(e.status);
       if (e.status === 'sending' && e.message) setTransferDetail(e.message);
+      setAsked(e.status === 'confirm');
     });
     return off;
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -71,8 +75,15 @@ export function LinkDevicePage({ token }: LinkDevicePageProps) {
     }
     setProcessing(true);
     setError(null);
+    setAsked(false);
 
     try {
+      // Cold-open guard, as on AddFriendPage: this page is usually the first
+      // navigation of a new device, and a rendezvous subscribe sent before the
+      // relay socket is open is silently dropped — both devices would then wait
+      // for each other until they time out.
+      await keyhiveReady;
+      await whenWsConnected();
       // Share this device's name so the original device can label us.
       const { agentId } = await getIdentity();
       await rendezvousJoinDeviceLink(rdv.rendezvousId, rdv.key, resolveDeviceName(agentId));
@@ -163,6 +174,13 @@ export function LinkDevicePage({ token }: LinkDevicePageProps) {
               </Button>
             </div>
           </>
+        ) : asked ? (
+          <div className="space-y-3" data-testid="link-device-asked">
+            <p className="md-title-medium">Confirm on your other device</p>
+            <p className="md-body-medium text-on-surface-variant">
+              It is asking whether to link this device. Choose “Link this device” there.
+            </p>
+          </div>
         ) : (
           <RendezvousProgress
             phase={phase}

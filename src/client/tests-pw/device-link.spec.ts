@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { newPeer, waitFor, type Peer } from './support/peer';
-import { setupSharedDoc } from './support/scenarios';
+import { setupSharedDoc, confirmDeviceLink } from './support/scenarios';
 import { mdField } from './ui/support';
 
 /**
@@ -22,16 +22,7 @@ test('linking a new device exchanges device names both ways', async ({ browser }
 
     // A (original) creates the rendezvous, passing its own device name.
     const { rendezvousId, key } = await deviceA.call('rendezvousCreateDeviceLink', NAME_A);
-    const linkedPromise = deviceA.page.evaluate(
-      (rid) => new Promise<string>((resolve) => {
-        const off = (window as any).__drive.onRendezvousEvent((e: any) => {
-          if (e.rendezvousId === rid && (e.status === 'linked' || e.status === 'error')) {
-            off(); resolve(e.status);
-          }
-        });
-      }),
-      rendezvousId,
-    );
+    const linkedPromise = confirmDeviceLink(deviceA, rendezvousId);
 
     // B (new) joins, passing its own device name.
     await deviceB.call('rendezvousJoinDeviceLink', rendezvousId, key, NAME_B);
@@ -116,16 +107,7 @@ test('linking a new device via rendezvous converges both onto one user-group', a
     // A is notified once the handshake completes. The worker now emits a richer
     // progress stream (waiting → peer-joined → sending → … → linked), so wait for
     // the terminal status rather than the first event.
-    const linkedPromise = deviceA.page.evaluate(
-      (rid) => new Promise<string>((resolve) => {
-        const off = (window as any).__drive.onRendezvousEvent((e: any) => {
-          if (e.rendezvousId === rid && (e.status === 'linked' || e.status === 'error')) {
-            off(); resolve(e.status);
-          }
-        });
-      }),
-      rendezvousId,
-    );
+    const linkedPromise = confirmDeviceLink(deviceA, rendezvousId);
 
     // Device B (new) joins via the same id+key (what opening the link does).
     await deviceB.call('rendezvousJoinDeviceLink', rendezvousId, key);
@@ -204,16 +186,7 @@ test('a newly linked device loads a friend-shared document', async ({ browser })
     // bob (already has edit access to alice's doc) links a second device.
     bob2 = await newPeer(browser, 'bob2');
     const { rendezvousId, key } = await bob.call('rendezvousCreateDeviceLink');
-    const linkedPromise = bob.page.evaluate(
-      (rid) => new Promise<string>((resolve) => {
-        const off = (window as any).__drive.onRendezvousEvent((e: any) => {
-          if (e.rendezvousId === rid && (e.status === 'linked' || e.status === 'error')) {
-            off(); resolve(e.status);
-          }
-        });
-      }),
-      rendezvousId,
-    );
+    const linkedPromise = confirmDeviceLink(bob, rendezvousId);
     await bob2.call('rendezvousJoinDeviceLink', rendezvousId, key);
     expect(await linkedPromise).toBe('linked');
 
@@ -269,16 +242,7 @@ test('a newly linked device loads documents when the host uses Shared settings',
 
     // Link device B via the encrypted rendezvous (what the UI does).
     const { rendezvousId, key } = await deviceA.call('rendezvousCreateDeviceLink');
-    const linkedPromise = deviceA.page.evaluate(
-      (rid) => new Promise<string>((resolve) => {
-        const off = (window as any).__drive.onRendezvousEvent((e: any) => {
-          if (e.rendezvousId === rid && (e.status === 'linked' || e.status === 'error')) {
-            off(); resolve(e.status);
-          }
-        });
-      }),
-      rendezvousId,
-    );
+    const linkedPromise = confirmDeviceLink(deviceA, rendezvousId);
     await deviceB.call('rendezvousJoinDeviceLink', rendezvousId, key);
     expect(await linkedPromise).toBe('linked');
 
@@ -331,5 +295,86 @@ test('a newly linked device loads documents when the host uses Shared settings',
   } finally {
     await deviceA?.close();
     await deviceB?.close();
+  }
+});
+
+// ── The link asks before it links (through the real sheets) ──────────────────
+
+/** Open "Link a device" on `host` and return the link it shows. */
+async function showDeviceLink(host: Peer): Promise<string> {
+  await host.page.evaluate(() => { location.hash = '#/settings/devices'; });
+  await host.page.getByTestId('devices-link').click();
+  // A device still on local settings is first asked whether to share them.
+  const link = host.page.getByTestId('rendezvous-url');
+  const syncChoice = host.page.getByTestId('link-sync-no');
+  await expect(link.or(syncChoice)).toBeVisible({ timeout: 30_000 });
+  if (await syncChoice.isVisible()) await syncChoice.click();
+  await expect(link).toHaveValue(/#\/link-device\/r\./, { timeout: 30_000 });
+  return link.inputValue();
+}
+
+/** Open a device link in a fresh browser — the new device — and tap through its gate. */
+async function openDeviceLink(browser: import('@playwright/test').Browser, url: string) {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await page.goto(url);
+  await page.getByTestId('link-device-confirm').click();
+  return { context, page };
+}
+
+const deviceCount = async (peer: Peer) => (await peer.call('listDevices')).filter((d: any) => d.role !== null).length;
+
+/**
+ * The link is a secret anything might get hold of — a QR photographed over a
+ * shoulder, a link in a chat. So opening it adds nothing: the device that
+ * showed it asks, and the new device joins the account only on "Link this
+ * device".
+ */
+test('a device link asks first, and nothing is linked until the tap', async ({ browser }) => {
+  let host: Peer | undefined;
+  let joiner: Awaited<ReturnType<typeof openDeviceLink>> | undefined;
+  try {
+    host = await newPeer(browser, 'host');
+    await host.call('ensureUserGroup', { create: true });
+    const url = await showDeviceLink(host);
+    joiner = await openDeviceLink(browser, url);
+
+    await expect(host.page.getByTestId('link-confirm')).toBeVisible({ timeout: 45_000 });
+    await expect(joiner.page.getByTestId('link-device-asked')).toBeVisible({ timeout: 45_000 });
+    // The QR and link are gone from the screen: they have done their job.
+    await expect(host.page.getByTestId('rendezvous-url')).toHaveCount(0);
+    // Asked, not done: this account still has one device.
+    expect(await deviceCount(host)).toBe(1);
+
+    await host.page.getByTestId('link-confirm-accept').click();
+    await expect(joiner.page.getByTestId('link-device-done')).toBeVisible({ timeout: 60_000 });
+    await waitFor(() => deviceCount(host!), (n) => n === 2, { label: 'the account to have two devices' });
+  } finally {
+    await joiner?.context.close();
+    await host?.close();
+  }
+});
+
+test('"Not my device" adds nothing, tells the device that asked, and shows a fresh link', async ({ browser }) => {
+  let host: Peer | undefined;
+  let joiner: Awaited<ReturnType<typeof openDeviceLink>> | undefined;
+  try {
+    host = await newPeer(browser, 'host');
+    await host.call('ensureUserGroup', { create: true });
+    const url = await showDeviceLink(host);
+    joiner = await openDeviceLink(browser, url);
+    await expect(host.page.getByTestId('link-confirm')).toBeVisible({ timeout: 45_000 });
+
+    await host.page.getByTestId('link-confirm-decline').click();
+    await expect(joiner.page.getByTestId('link-device-error')).toContainText(/did not accept/i, { timeout: 30_000 });
+    expect(await deviceCount(host)).toBe(1);
+
+    // The link that was used is dead; the sheet is showing another.
+    const fresh = host.page.getByTestId('rendezvous-url');
+    await expect(fresh).toHaveValue(/#\/link-device\/r\./, { timeout: 30_000 });
+    expect(await fresh.inputValue()).not.toBe(url);
+  } finally {
+    await joiner?.context.close();
+    await host?.close();
   }
 });
