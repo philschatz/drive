@@ -10,8 +10,8 @@
  * extensions are checked here.
  */
 import {
-  type ValidationError, type DocSchemaPlugin, type Link, type Duration, type LocalDateTime,
-  str, num, bool, obj, record, union, linkSchema,
+  type ValidationError, type DocSchemaPlugin, type Link, type Duration, type LocalDateTime, type Participant,
+  str, num, bool, obj, record, union, linkSchema, participantSchema,
 } from './core';
 import { calendarEventFields, checkCalendarDependencies } from './calendar';
 import {
@@ -47,6 +47,8 @@ export interface TimelineEvent {
   location?: string;
   /** Photos: key = the photo's id in its library; display 'thumbnail'. Thumbnail bytes live in doc.thumbs. */
   links?: Record<string, Link>;
+  /** Who was there (JSCalendar), e.g. carried over from a photo prompt. */
+  participants?: Record<string, Participant>;
   // ── extensions ──
   /** When it happened or began. The source of truth for `start`. */
   when?: FuzzyDate;
@@ -90,6 +92,11 @@ export interface TimelinePrompt {
   cover?: string;
   /** Photos in the moment, including ones not linked. */
   count?: number;
+  /**
+   * Who is in the moment's photos (JSCalendar participants, keyed by the photo
+   * library's id for the person). Writing the prompt up copies them to the entry.
+   */
+  participants?: Record<string, Participant>;
   /** UTC stamp of the feeder pass (or the in-app answer) that wrote it. */
   added: string;
   /** Answered: the entry it became. */
@@ -143,6 +150,7 @@ export const timelinePromptSchema = obj({
   links: record(linkSchema, { optional: true }),
   cover: str({ optional: true }),
   count: num({ min: 0, integer: true, optional: true }),
+  participants: record(participantSchema, { optional: true }),
   added: str(),
   entry: str({ optional: true }),
   dismissed: bool({ literal: true, optional: true }),

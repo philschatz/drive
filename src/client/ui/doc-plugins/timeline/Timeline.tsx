@@ -215,6 +215,7 @@ export function Timeline({ docId, readOnly }: { docId?: string; rest?: string; r
   }, [today, write, openNew]);
 
   const patchEntry = useCallback((uid: string, patch: EntryPatch) => write(changes.patchEntry, uid, patch), [write]);
+  const removeParticipant = useCallback((uid: string, participantId: string) => write(changes.removeParticipant, uid, participantId), [write]);
 
   const setDate = useCallback((uid: string, field: 'when' | 'until', value: FuzzyDate | null) => {
     const ev = docRef.current.events[uid];
@@ -329,6 +330,7 @@ export function Timeline({ docId, readOnly }: { docId?: string; rest?: string; r
       entry: clean(blank({
         when: p.when, until: p.until, location: p.location, coordinates: p.coordinates,
         links: p.links ? JSON.parse(JSON.stringify(p.links)) : undefined,
+        participants: p.participants ? JSON.parse(JSON.stringify(p.participants)) : undefined,
       })),
     });
   }, [openNew]);
@@ -520,6 +522,7 @@ export function Timeline({ docId, readOnly }: { docId?: string; rest?: string; r
         onSetDuring={setDuring}
         onAddDuring={addDuring}
         onPatch={patchEntry}
+        onRemoveParticipant={removeParticipant}
         onSetDate={setDate}
         onDelete={deleteEntry}
         onPinDown={uid => { setEditor(null); setPinTarget({ uid, end: 'start' }); setTab('pin'); }}

@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, within, waitFor } from '@testing-library/preact';
+import { render, screen, fireEvent, within, waitFor, cleanup } from '@testing-library/preact';
 
 // The real Timeline container on the in-memory + jq worker-api mock. md-*
 // elements are unregistered under jsdom, so MdSelect is a native <select> and
@@ -442,6 +442,29 @@ describe('Timeline container', () => {
       const [uid, entry] = Object.entries(events())[0] as [string, any];
       expect(entry).toMatchObject({ title: 'Beach weekend', location: 'Galveston', start: '2014-06-12', links: { p1: link } });
       expect(mock.__getDoc(DOC).prompts['photo-p1'].entry).toBe(uid);
+    });
+
+    it('the people in a moment show on the card, go into the entry, and can be taken off it', async () => {
+      const participants = { s1: { '@type': 'Participant', name: 'Ana' }, s2: { '@type': 'Participant', name: 'Ben' } };
+      const doc = withPrompt();
+      (doc.prompts as any)['photo-p1'].participants = participants;
+      await renderTimeline(doc);
+      openTab(/Prompts/);
+      const card = screen.getByTestId('timeline-prompt');
+      expect(within(card).getByTestId('prompt-people').textContent).toBe('With Ana, Ben');
+      fireEvent.click(within(card).getByTestId('prompt-write'));
+      expect(screen.getAllByTestId('tl-person').map(e => e.textContent)).toEqual(['Ana', 'Ben']);
+      expect(screen.queryByTestId('tl-person-remove')).toBeNull(); // not until it is saved
+      fireEvent.input(screen.getByTestId('tl-title'), { target: { value: 'Beach weekend' } });
+      fireEvent.click(screen.getByTestId('tl-title-save'));
+      const [uid, entry] = Object.entries(events())[0] as [string, any];
+      expect(entry.participants).toEqual(participants);
+
+      cleanup();
+      await renderTimeline(mock.__getDoc(DOC));
+      tap(screen.getByText('Beach weekend').closest('[data-testid="timeline-row"]')!);
+      fireEvent.click(screen.getByRole('button', { name: 'Remove Ana' }));
+      expect(events()[uid].participants).toEqual({ s2: participants.s2 });
     });
 
     it('Skip dismisses the prompt and drops its thumbnail', async () => {

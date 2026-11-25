@@ -37,6 +37,14 @@ export function patchEntry(d: any, uid: string, patch: Record<string, unknown>):
   }
 }
 
+/** Take one person off an entry (a wrong face match, or nobody worth keeping). */
+export function removeParticipant(d: any, uid: string, participantId: string): void {
+  const ev = d.events[uid];
+  if (!ev || !ev.participants || !(participantId in ev.participants)) return;
+  delete ev.participants[participantId];
+  if (Object.keys(ev.participants).length === 0) delete ev.participants;
+}
+
 /** Replace `when` or `until` wholesale (null clears it) and the calendar fields derived from it. */
 export function setWhen(
   d: any, uid: string, field: 'when' | 'until', value: FuzzyDate | null, cal: CalendarFields,

@@ -28,6 +28,7 @@ export function PromptCard({ docId, promptKey, prompt, birth, canEdit, onWrite, 
   const extra = (prompt.count ?? photos.length) - 1;
   const cover = prompt.cover ?? photos[0];
   const href = cover ? prompt.links?.[cover]?.href : undefined;
+  const people = Object.values(prompt.participants ?? {}).map(x => x.name).filter((n): n is string => !!n);
   return (
     <div className={card} data-testid="timeline-prompt" data-key={promptKey}>
       <div className="flex gap-3 items-start">
@@ -41,6 +42,7 @@ export function PromptCard({ docId, promptKey, prompt, birth, canEdit, onWrite, 
             {formatFuzzy(prompt.when, birth)}{prompt.until ? ` – ${formatFuzzy(prompt.until, birth)}` : ''}
           </div>
           {prompt.location && <div className="text-muted-foreground">{prompt.location}</div>}
+          {people.length > 0 && <div className="text-muted-foreground" data-testid="prompt-people">With {people.join(', ')}</div>}
           {extra > 0 && <div className="text-muted-foreground">+{extra} more photo{extra === 1 ? '' : 's'}</div>}
           <div className="mt-1">What was happening here?</div>
         </div>

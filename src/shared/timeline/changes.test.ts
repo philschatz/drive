@@ -121,6 +121,18 @@ describe('timeline changes, rebuilt as the worker rebuilds them', () => {
     expect(errors(doc)).toEqual([]);
   });
 
+  it('removeParticipant takes one person off, and the map with the last one', () => {
+    const two = { a: { '@type': 'Participant', name: 'Ana' }, b: { '@type': 'Participant', name: 'Ben' } } as any;
+    let doc = run(fresh(), changes.addEntry, 'e', ev('Picnic', { participants: two }));
+    doc = run(doc, changes.removeParticipant, 'e', 'a');
+    expect(plain(doc).events.e.participants).toEqual({ b: { '@type': 'Participant', name: 'Ben' } });
+    doc = run(doc, changes.removeParticipant, 'e', 'gone');
+    doc = run(doc, changes.removeParticipant, 'missing-entry', 'b');
+    doc = run(doc, changes.removeParticipant, 'e', 'b');
+    expect(plain(doc).events.e.participants).toBeUndefined();
+    expect(errors(doc)).toEqual([]);
+  });
+
   it('birth and rename', () => {
     let doc = run(fresh(), changes.setBirth, '1987-03-04');
     doc = run(doc, changes.rename, 'My life');

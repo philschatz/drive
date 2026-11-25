@@ -20,6 +20,7 @@ describe('Timeline schema', () => {
         a: entry({
           description: 'Long drive.', location: 'Houston', coordinates: 'geo:29.76,-95.37',
           recall: 'hazy', revisit: 'ask Mom', settled: true, rel: { b: 'after' },
+          participants: { js1: { '@type': 'Participant', name: 'Ana' } },
           links: { pq1: { '@type': 'Link', href: 'https://photos.example/library/browse?view=cards&q=uid:pq1', display: 'thumbnail', contentType: 'image/jpeg' } },
         }),
         b: entry({ title: 'High school', chapter: 'pursuit', when: { earliest: '2001', latest: '2001' }, until: { earliest: '2005', latest: '2005' }, start: '2001-07-02', duration: 'P1461D' }),
@@ -27,7 +28,8 @@ describe('Timeline schema', () => {
         undated: { '@type': 'Event', title: 'A dog called Max' },
       },
       prompts: {
-        'photo-pq1': { source: 'photos', when: { earliest: '2010-06-12', latest: '2010-06-12' }, cover: 'pq1', count: 12, added: '2026-11-17T10:00:00.000Z' },
+        'photo-pq1': { source: 'photos', when: { earliest: '2010-06-12', latest: '2010-06-12' }, cover: 'pq1', count: 12, added: '2026-11-17T10:00:00.000Z',
+          participants: { js1: { '@type': 'Participant', name: 'Ana', kind: 'individual' } } },
         'gap-1': { source: 'gap', when: { earliest: '1995', latest: '2000' }, added: '2026-11-17T10:00:00.000Z', dismissed: true },
         'gap-2': { source: 'gap', chapter: 'place', when: { earliest: '2001-07' }, until: { latest: '2004-06' }, added: '2026-11-17T10:00:00.000Z', dismissed: true },
       },

@@ -87,6 +87,8 @@ export interface EntryEditorProps {
   /** A chapter's "Add a memory during this chapter". */
   onAddDuring?: (chapterUid: string) => void;
   onPatch: (uid: string, patch: EntryPatch) => void;
+  /** Take one person off a saved entry. */
+  onRemoveParticipant?: (uid: string, participantId: string) => void;
   onSetDate: (uid: string, field: 'when' | 'until', value: FuzzyDate | null) => void;
   onDelete: (uid: string) => void;
   onPinDown: (uid: string) => void;
@@ -132,6 +134,7 @@ export function EntryEditor(p: EntryEditorProps) {
   };
 
   const photoIds = Object.keys(entry.links ?? {});
+  const people = Object.entries(entry.participants ?? {});
   const conflicts = bounds?.conflicts ?? [];
 
   const properties: PropertyDef[] = useMemo(() => [
@@ -364,7 +367,7 @@ export function EntryEditor(p: EntryEditorProps) {
     },
   ], [uid, isNew, entry, title, birth, whenHint, untilHint, focusField, blurField, chapters, during.join('|'), p.duringError]);
 
-  const banner = (photoIds.length > 0 || conflicts.length > 0) ? (
+  const banner = (photoIds.length > 0 || people.length > 0 || conflicts.length > 0) ? (
     <div className="flex flex-col gap-2">
       {photoIds.length > 0 && (
         <div className="flex gap-2 overflow-x-auto" data-testid="tl-photos">
@@ -376,6 +379,21 @@ export function EntryEditor(p: EntryEditorProps) {
               </a>
             );
           })}
+        </div>
+      )}
+      {people.length > 0 && (
+        <div className="flex flex-wrap gap-2 items-center text-sm" data-testid="tl-people">
+          <span className="text-muted-foreground">With</span>
+          {people.map(([pid, person]) => (
+            <span key={pid} data-testid="tl-person" className="rounded-full border px-2 py-0.5 flex items-center gap-1">
+              {person.name || 'Someone'}
+              {canEdit && !isNew && p.onRemoveParticipant && (
+                <button type="button" aria-label={`Remove ${person.name || 'this person'}`} data-testid="tl-person-remove"
+                  className="material-symbols-outlined text-[16px] leading-none"
+                  onClick={() => p.onRemoveParticipant!(uid, pid)}>close</button>
+              )}
+            </span>
+          ))}
         </div>
       )}
       {conflicts.map(c => (
