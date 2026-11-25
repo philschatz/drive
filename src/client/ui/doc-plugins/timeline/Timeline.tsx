@@ -187,11 +187,14 @@ export function Timeline({ docId, readOnly }: { docId?: string; rest?: string; r
     setEditor({ uid: generateUid(), entry: ctx.entry ?? blank(), isNew: true, fresh: editorRef.current?.fresh, ...ctx } as EditorState);
   }, []);
 
-  const createEntry = useCallback((uid: string, title: string, viaEnter: boolean, kind?: ChapterKind) => {
+  const createEntry = useCallback((uid: string, title: string, viaEnter: boolean, kind?: ChapterKind, emotions?: string[]) => {
     const ed = editorRef.current;
     if (!ed || ed.uid !== uid || !canEditRef.current) return;
     const d = docRef.current;
-    let entry: TimelineEvent = clean({ ...ed.entry, title, ...(kind ? { chapter: kind } : {}) });
+    let entry: TimelineEvent = clean({
+      ...ed.entry, title, ...(kind ? { chapter: kind } : {}),
+      ...(emotions?.length ? { emotions: Object.fromEntries(emotions.map(k => [k, true as const])) } : {}),
+    });
     if (ed.insert) {
       const p = placeBetween(d, uid, ed.insert.earlier, ed.insert.later, today, entry);
       if (p.ok) {

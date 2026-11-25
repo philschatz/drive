@@ -69,6 +69,26 @@ describe('Timeline container', () => {
     expect(writes).toHaveBeenCalledTimes(2);
   });
 
+  it('a new entry can say how it felt: picked with the title, written in the one change that creates it', async () => {
+    await renderTimeline(base());
+    fireEvent.click(document.querySelector('md-fab')!);
+    fireEvent.input(screen.getByTestId('tl-title'), { target: { value: 'First day at Acme' } });
+    fireEvent.click(screen.getByTestId('tl-emotion-anticipatory:apprehensive'));
+    fireEvent.click(screen.getByTestId('tl-emotion-self-evaluative:imposter'));
+    fireEvent.input(screen.getByTestId('tl-emotion-own'), { target: { value: 'excited' } });
+    fireEvent.click(screen.getByTestId('tl-emotion-add'));
+    fireEvent.keyDown(screen.getByTestId('tl-title'), { key: 'Enter' });
+    expect(writes).toHaveBeenCalledTimes(1);
+    expect((Object.values(events())[0] as any).emotions).toEqual({ 'anticipatory:apprehensive': true, 'self-evaluative:imposter': true, excited: true });
+    // The next blank entry starts with nothing picked; one without feelings has no emotions field.
+    expect(screen.getByTestId('tl-emotion-anticipatory:apprehensive').getAttribute('aria-pressed')).toBe('false');
+    fireEvent.input(screen.getByTestId('tl-title'), { target: { value: 'Lunch' } });
+    fireEvent.keyDown(screen.getByTestId('tl-title'), { key: 'Enter' });
+    close();
+    const lunch = Object.values(events()).find((e: any) => e.title === 'Lunch') as any;
+    expect(lunch.emotions).toBeUndefined();
+  });
+
   it('the When pane writes the fuzzy date and the calendar start in one change', async () => {
     await renderTimeline(base({ events: { a: ev('Moved') } }));
     tap(screen.getByText('Moved').closest('[data-testid="timeline-row"]')!);

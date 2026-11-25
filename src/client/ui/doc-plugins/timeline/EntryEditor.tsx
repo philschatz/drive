@@ -28,9 +28,8 @@ import { Thumb } from './Thumb';
 import { mapUrl, geoText } from './map-link';
 import { FuzzyDatePane as FuzzyDatePaneFor, ENDED_UNKNOWN } from './FuzzyDatePane';
 import { CHAPTER_KIND_META } from './chapter-kinds';
-import {
-  GENERIC_EMOTIONS, EMOTION_GROUPS, VOCABULARY_KEYS, normalizeEmotion, emotionLabel, sortEmotions,
-} from '../../../../shared/timeline/emotions';
+import { emotionLabel, sortEmotions } from '../../../../shared/timeline/emotions';
+import { EmotionPicker } from './EmotionPicker';
 
 /** Editor input id → the entry property it edits (presence paths). */
 export const FIELD_TO_PROP: Record<string, string> = {
@@ -82,7 +81,7 @@ export interface EntryEditorProps {
   /** The pane to open into, for an existing entry (e.g. "Widen its date"). */
   initialPane?: string | null;
   /** A new entry's title (and a new chapter's kind): creates it. `viaEnter` chains to another new entry. */
-  onCreate: (uid: string, title: string, viaEnter: boolean, kind?: ChapterKind) => void;
+  onCreate: (uid: string, title: string, viaEnter: boolean, kind?: ChapterKind, emotions?: string[]) => void;
   /** Every chapter, the likeliest for this entry first (the During pane). */
   chapters?: ChapterOption[];
   /** Why ticking these chapters would contradict the entry's dates, or null. */
@@ -151,30 +150,39 @@ export function EntryEditor(p: EntryEditorProps) {
       icon: 'edit',
       summary: () => title,
       transactional: true,
-      render: ({ back }) => isNew && isChapterEntry ? (
-        <GroupEditor<{ kind: ChapterKind; title: string }>
+      render: ({ back }) => isNew ? (
+        // A new entry (or chapter) is created on Save, with how it felt if picked here.
+        <GroupEditor<{ kind?: ChapterKind; title: string; emotions: string[] }>
           key={uid}
           data-testid="tl-title"
-          value={{ kind: entry.chapter!, title }}
+          value={{ kind: entry.chapter, title, emotions: Object.keys(entry.emotions ?? {}) }}
           validate={v => !!v.title.trim()}
           onCancel={back}
           onSave={v => {
             const enter = viaEnter.current;
             viaEnter.current = false;
             const t = v.title.trim();
+            // Clear before the parent swaps the uid: the keyed remount would
+            // otherwise seed the next entry's draft from this title.
             if (enter) setTitle(''); else setTitle(t);
-            p.onCreate(uid, t, enter, v.kind);
+            p.onCreate(uid, t, enter, isChapterEntry ? v.kind : undefined, v.emotions);
             if (!enter) back();
           }}
         >
           {({ draft, patch, save }) => (
             <div className="flex flex-col gap-3">
-              <MdSelect label="What kind of chapter?" data-testid="tl-chapter-kind" value={draft.kind}
-                options={NEW_KIND_OPTIONS} onValueChange={v => patch({ kind: v as ChapterKind })} />
-              <MdTextField label="Name this chapter" supportingText="e.g. Chicago apartment, Dating Jamie, Acme, The pandemic"
+              {isChapterEntry && (
+                <MdSelect label="What kind of chapter?" data-testid="tl-chapter-kind" value={draft.kind ?? ''}
+                  options={NEW_KIND_OPTIONS} onValueChange={v => patch({ kind: v as ChapterKind })} />
+              )}
+              <MdTextField label={isChapterEntry ? 'Name this chapter' : 'What happened?'}
+                supportingText={isChapterEntry ? 'e.g. Chicago apartment, Dating Jamie, Acme, The pandemic' : undefined}
                 data-testid="tl-title" value={draft.title} onInput={v => patch({ title: v })}
                 onFocus={() => focusField('tl-title')} onBlur={blurField}
                 onEnter={() => { viaEnter.current = true; save(); }} />
+              <p className="text-sm text-muted-foreground">How did it feel? (optional)</p>
+              <EmotionPicker value={draft.emotions} onChange={emotions => patch({ emotions })}
+                onFocus={() => focusField('tl-emotions')} onBlur={blurField} />
             </div>
           )}
         </GroupEditor>
@@ -294,58 +302,23 @@ export function EntryEditor(p: EntryEditorProps) {
       render: ({ back }) => {
         const saved = Object.keys(entry.emotions ?? {});
         return (
-          <GroupEditor<{ set: string[]; own: string }>
+          <GroupEditor<{ set: string[] }>
             key={uid}
             data-testid="tl-emotions"
-            value={{ set: saved, own: '' }}
+            value={{ set: saved }}
             onCancel={back}
             onSave={v => {
               p.onSetEmotions?.(uid, v.set.filter(k => !saved.includes(k)), saved.filter(k => !v.set.includes(k)));
               back();
             }}
           >
-            {({ draft, patch }) => {
-              const toggle = (k: string) => patch({ set: draft.set.includes(k) ? draft.set.filter(x => x !== k) : [...draft.set, k] });
-              const chip = (k: string, label: string) => {
-                const on = draft.set.includes(k);
-                return (
-                  <button key={k} type="button" data-testid={`tl-emotion-${k}`} aria-pressed={on} onClick={() => toggle(k)}
-                    className={'inline-flex items-center rounded-full px-3 h-8 md-label-large state-layer border' +
-                      (on ? ' bg-secondary-container text-on-secondary-container border-transparent font-semibold' : ' text-muted-foreground')}>
-                    {label}
-                  </button>
-                );
-              };
-              const own = sortEmotions(draft.set.filter(k => !VOCABULARY_KEYS.includes(k)));
-              const typed = normalizeEmotion(draft.own);
-              const add = () => { if (typed) patch({ set: draft.set.includes(typed) ? draft.set : [...draft.set, typed], own: '' }); };
-              const group = (title: string, chips: preact.ComponentChildren) => (
-                <section className="flex flex-col gap-1.5">
-                  <h3 className="text-xs uppercase tracking-wide text-muted-foreground">{title}</h3>
-                  <div className="flex flex-wrap gap-1.5">{chips}</div>
-                </section>
-              );
-              return (
-                <div className="flex flex-col gap-3">
-                  <p className="text-sm text-muted-foreground">How did it feel? Pick as many as fit, broad or nuanced.</p>
-                  {group('General', GENERIC_EMOTIONS.map(e => chip(e, emotionLabel(e))))}
-                  {EMOTION_GROUPS.map(g => <div key={g.key}>{group(g.label, g.emotions.map(e => chip(`${g.key}:${e}`, emotionLabel(e))))}</div>)}
-                  {own.length > 0 && group('Your own', own.map(k => chip(k, k)))}
-                  <div className="flex items-end gap-2">
-                    <div className="flex-1">
-                      <MdTextField label="Add your own, e.g. relational:left-out" data-testid="tl-emotion-own" value={draft.own}
-                        onInput={v => patch({ own: v })} onEnter={add}
-                        onFocus={() => focusField('tl-emotions')} onBlur={blurField} />
-                    </div>
-                    <button type="button" data-testid="tl-emotion-add" disabled={!typed} onClick={add}
-                      className="h-10 px-3 rounded-full text-primary md-label-large state-layer disabled:opacity-40">Add</button>
-                  </div>
-                  {draft.own.trim() && !typed && (
-                    <p className="text-sm text-error" data-testid="tl-emotion-invalid">Up to three parts separated by ":", e.g. temporal:nostalgic:for-college</p>
-                  )}
-                </div>
-              );
-            }}
+            {({ draft, patch }) => (
+              <div className="flex flex-col gap-3">
+                <p className="text-sm text-muted-foreground">How did it feel? Pick as many as fit, broad or nuanced.</p>
+                <EmotionPicker value={draft.set} onChange={set => patch({ set })}
+                  onFocus={() => focusField('tl-emotions')} onBlur={blurField} />
+              </div>
+            )}
           </GroupEditor>
         );
       },
