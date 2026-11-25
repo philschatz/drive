@@ -47,6 +47,7 @@ export function CalendarSettings({ opened, docId, name, description, color, onCl
   const properties: PropertyDef[] = [
     {
       id: 'cs-name',
+      prop: null,
       label: 'Name',
       icon: 'label',
       summary: () => localName,
@@ -72,6 +73,7 @@ export function CalendarSettings({ opened, docId, name, description, color, onCl
     },
     {
       id: 'cs-color',
+      prop: null,
       label: 'Color',
       icon: 'palette',
       summary: () => localColor,
@@ -89,6 +91,7 @@ export function CalendarSettings({ opened, docId, name, description, color, onCl
     },
     {
       id: 'cs-desc',
+      prop: null,
       label: 'Description',
       icon: 'notes',
       summary: () => localDesc,
@@ -121,6 +124,7 @@ export function CalendarSettings({ opened, docId, name, description, color, onCl
       open={opened}
       title="Calendar Settings"
       data-testid="calendar-settings"
+      presence={null}
       properties={properties}
       onClose={onClose}
       // No flushOnClose: name/description are transactional, and the colour swatch

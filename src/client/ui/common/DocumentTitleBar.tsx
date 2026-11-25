@@ -2,7 +2,7 @@ import type { ComponentChildren } from 'preact';
 import { useRef, useState } from 'preact/hooks';
 import { ConnectionStatus } from './ConnectionStatus';
 import { RenameSheet } from './RenameSheet';
-import { type PresenceState } from './presence';
+import { peerDisplayName, usePresence, type PresenceState } from './presence';
 import { useAccess } from './useAccess';
 import { useHideOnScroll } from './useHideOnScroll';
 import { sourceUrl, sharePath, shareUrl } from './doc-urls';
@@ -13,6 +13,12 @@ interface PeerLike {
   peerId: string;
   /** Decrypted presence value, if any — carries the peer's user-group id. */
   value?: PresenceState | null;
+}
+
+/** The default dot tooltip: who it is, and whether they have something open. */
+function defaultPeerTitle(peer: PeerLike): string {
+  const name = peerDisplayName(peer.peerId, peer.value?.userGroupId);
+  return peer.value?.focusedField ? `${name} (editing)` : name;
 }
 
 /** Extra action contributed by an editor to the overflow (kebab) menu. */
@@ -112,6 +118,10 @@ export function BarIconButton({
  * down reveals it in every document type — including ones not written yet —
  * without each editor wiring that up. A bar that does not position itself
  * (`sticky={false}`) doesn't translate either; that layout owns its hiding.
+ *
+ * Presence is the same kind of default: given a `docId`, the bar lists the
+ * document's peers itself (from the shared presence store), so an editor shows
+ * who else is here without subscribing to anything.
  */
 export function DocumentTitleBar<P extends PeerLike>({
   icon,
@@ -119,8 +129,8 @@ export function DocumentTitleBar<P extends PeerLike>({
   titleEditable = false,
   onRename,
   docId,
-  peers = [],
-  peerTitle,
+  peers: peersProp,
+  peerTitle = defaultPeerTitle,
   showSourceLink = true,
   sourcePath,
   onToggleHistory,
@@ -145,7 +155,11 @@ export function DocumentTitleBar<P extends PeerLike>({
   /** Commit a new document name (from the rename sheet). */
   onRename?: (value: string) => void;
   docId?: string;
+  /** Peers to list instead of the document's own — for a bar that is not about
+   * one document's presence. Omit it and the bar reads them from `docId`. */
   peers?: P[];
+  /** Dot tooltip. Defaults to the peer's name, plus "(editing)" while they have
+   * something focused; override where a focused path does not mean editing. */
   peerTitle?: (peer: P) => string;
   showSourceLink?: boolean;
   /** Automerge path to the currently focused node — appended to Edit Source URL. */
@@ -175,6 +189,10 @@ export function DocumentTitleBar<P extends PeerLike>({
 }) {
   const { access } = useAccess(docId);
   const [renaming, setRenaming] = useState(false);
+  // No docId is passed to the store when the caller supplies the list, so a bar
+  // that brings its own peers does not also hold a document's presence open.
+  const { peerList } = usePresence(peersProp === undefined ? docId : undefined);
+  const peers = peersProp ?? (peerList as unknown as P[]);
   // A bar positioned by someone else's layout (DataGrid's fixed-height flex
   // column) is hidden by that layout too, so it must not also translate itself.
   const autoHidden = useHideOnScroll();

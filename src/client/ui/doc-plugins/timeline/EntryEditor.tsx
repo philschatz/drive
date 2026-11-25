@@ -12,14 +12,13 @@
  * says which chapters it happened in — the order relation `during`, which
  * narrows its date.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'preact/hooks';
-import { PropertySheet, type PropertyDef } from '../../common/PropertySheet';
+import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
+import { PropertySheet, type PropertyDef, type SheetPresence } from '../../common/PropertySheet';
 import { FieldEditor, GroupEditor } from '../../common/FieldEditor';
 import { SheetActions, SheetActionItem } from '../../common/SheetActionItem';
 import { MdTextField } from '@/components/ui/md-text-field';
 import { MdSelect } from '@/components/ui/md-select';
 import { Checkbox } from '@/components/ui/checkbox';
-import type { PeerFieldInfo } from '../../common/presence';
 import { CHAPTER_KINDS, type ChapterKind, type TimelineEvent } from '../../../../shared/schemas/timeline';
 import { isDated } from '../../../../shared/timeline/fuzzy-date';
 import type { EntryBounds } from '../../../../shared/timeline/order';
@@ -30,23 +29,6 @@ import { FuzzyDatePane as FuzzyDatePaneFor, ENDED_UNKNOWN } from './FuzzyDatePan
 import { CHAPTER_KIND_META } from './chapter-kinds';
 import { emotionLabel, sortEmotions } from '../../../../shared/timeline/emotions';
 import { EmotionPicker } from './EmotionPicker';
-
-/** Editor input id → the entry property it edits (presence paths). */
-export const FIELD_TO_PROP: Record<string, string> = {
-  'tl-title': 'title',
-  'tl-when': 'when',
-  'tl-until': 'until',
-  'tl-story': 'description',
-  'tl-place': 'location',
-  'tl-emotions': 'emotions',
-  'tl-recall': 'recall',
-  'tl-revisit': 'revisit',
-  'tl-chapter': 'chapter',
-  'tl-during': 'rel',
-};
-export const PROP_TO_FIELDS: Record<string, string[]> = Object.fromEntries(
-  Object.entries(FIELD_TO_PROP).map(([id, prop]) => [prop, [id]]),
-);
 
 const RECALL_OPTIONS = [
   { value: '', label: 'Not said' },
@@ -100,8 +82,8 @@ export interface EntryEditorProps {
   onPinDown: (uid: string) => void;
   onRemoveConflict: (owner: string, field: 'rel' | 'untilRel', target: string) => void;
   onClose: () => void;
-  onFieldFocus?: (path: (string | number)[] | null) => void;
-  peerFocusedFields?: Record<string, PeerFieldInfo>;
+  /** Where the entry lives (`['events', uid]` in its document), for presence. */
+  presence: SheetPresence | null;
 }
 
 export function EntryEditor(p: EntryEditorProps) {
@@ -116,11 +98,6 @@ export function EntryEditor(p: EntryEditorProps) {
   }, [uid, entry.title]);
   useEffect(() => { if (!isNew) setTitle(entry.title || ''); }, [entry.title, isNew]);
 
-  const focusField = useCallback((id: string) => {
-    const prop = FIELD_TO_PROP[id];
-    if (prop) p.onFieldFocus?.(['events', uid, prop]);
-  }, [uid, p.onFieldFocus]);
-  const blurField = useCallback(() => p.onFieldFocus?.(null), [p.onFieldFocus]);
   const viaEnter = useRef(false);
 
   const range = (r?: { lo: number; hi: number }) => (r ? formatDayRange(r.lo, r.hi) : '');
@@ -146,6 +123,7 @@ export function EntryEditor(p: EntryEditorProps) {
   const properties: PropertyDef[] = useMemo(() => [
     {
       id: 'tl-title',
+      prop: 'title',
       label: isChapterEntry ? 'Name' : 'Title',
       icon: 'edit',
       summary: () => title,
@@ -178,11 +156,9 @@ export function EntryEditor(p: EntryEditorProps) {
               <MdTextField label={isChapterEntry ? 'Name this chapter' : 'What happened?'}
                 supportingText={isChapterEntry ? 'e.g. Chicago apartment, Dating Jamie, Acme, The pandemic' : undefined}
                 data-testid="tl-title" value={draft.title} onInput={v => patch({ title: v })}
-                onFocus={() => focusField('tl-title')} onBlur={blurField}
                 onEnter={() => { viaEnter.current = true; save(); }} />
               <p className="text-sm text-muted-foreground">How did it feel? (optional)</p>
-              <EmotionPicker value={draft.emotions} onChange={emotions => patch({ emotions })}
-                onFocus={() => focusField('tl-emotions')} onBlur={blurField} />
+              <EmotionPicker value={draft.emotions} onChange={emotions => patch({ emotions })} />
             </div>
           )}
         </GroupEditor>
@@ -212,7 +188,6 @@ export function EntryEditor(p: EntryEditorProps) {
         >
           {({ value, onInput, save }) => (
             <MdTextField label={isChapterEntry ? 'Name' : 'What happened?'} data-testid="tl-title" value={value} onInput={onInput}
-              onFocus={() => focusField('tl-title')} onBlur={blurField}
               onEnter={() => { viaEnter.current = true; save(); }} />
           )}
         </FieldEditor>
@@ -220,6 +195,7 @@ export function EntryEditor(p: EntryEditorProps) {
     },
     {
       id: 'tl-when',
+      prop: 'when',
       label: isChapterEntry ? 'Began' : entry.until ? 'From' : 'When',
       icon: 'event',
       hidden: isNew,
@@ -227,12 +203,13 @@ export function EntryEditor(p: EntryEditorProps) {
       summary: whenSummary,
       render: ({ back }) => (
         <FuzzyDatePaneFor idPrefix="tl-when" value={entry.when} birth={birth} hint={whenHint}
-          onCancel={back} onFocus={() => focusField('tl-when')} onBlur={blurField}
+          onCancel={back}
           onSave={v => { p.onSetDate(uid, 'when', v); back(); }} />
       ),
     },
     {
       id: 'tl-until',
+      prop: 'until',
       label: 'Until',
       icon: 'date_range',
       hidden: isNew,
@@ -242,12 +219,13 @@ export function EntryEditor(p: EntryEditorProps) {
         : entry.until ? formatFuzzy(entry.until, birth) : ''),
       render: ({ back }) => (
         <FuzzyDatePaneFor idPrefix="tl-until" value={entry.until} birth={birth} hint={untilHint} ongoing={isChapterEntry}
-          onCancel={back} onFocus={() => focusField('tl-until')} onBlur={blurField}
+          onCancel={back}
           onSave={v => { p.onSetDate(uid, 'until', v); back(); }} />
       ),
     },
     {
       id: 'tl-story',
+      prop: 'description',
       label: 'Story',
       icon: 'notes',
       hidden: isNew,
@@ -257,14 +235,14 @@ export function EntryEditor(p: EntryEditorProps) {
         <FieldEditor key={uid} data-testid="tl-story" value={entry.description ?? ''} onCancel={back}
           onSave={v => { p.onPatch(uid, { description: v.trim() ? v : null }); back(); }}>
           {({ value, onInput }) => (
-            <MdTextField label="Story" type="textarea" rows={8} data-testid="tl-story" value={value} onInput={onInput}
-              onFocus={() => focusField('tl-story')} onBlur={blurField} />
+            <MdTextField label="Story" type="textarea" rows={8} data-testid="tl-story" value={value} onInput={onInput} />
           )}
         </FieldEditor>
       ),
     },
     {
       id: 'tl-place',
+      prop: 'location',
       label: 'Place',
       icon: 'place',
       hidden: isNew,
@@ -286,14 +264,14 @@ export function EntryEditor(p: EntryEditorProps) {
         <FieldEditor key={uid} data-testid="tl-place" value={entry.location ?? ''} onCancel={back}
           onSave={v => { p.onPatch(uid, { location: v.trim() || null }); back(); }}>
           {({ value, onInput, save }) => (
-            <MdTextField label="Place" data-testid="tl-place" value={value} onInput={onInput} onEnter={save}
-              onFocus={() => focusField('tl-place')} onBlur={blurField} />
+            <MdTextField label="Place" data-testid="tl-place" value={value} onInput={onInput} onEnter={save} />
           )}
         </FieldEditor>
       ),
     },
     {
       id: 'tl-emotions',
+      prop: 'emotions',
       label: 'Feelings',
       icon: 'mood',
       hidden: isNew,
@@ -315,8 +293,7 @@ export function EntryEditor(p: EntryEditorProps) {
             {({ draft, patch }) => (
               <div className="flex flex-col gap-3">
                 <p className="text-sm text-muted-foreground">How did it feel? Pick as many as fit, broad or nuanced.</p>
-                <EmotionPicker value={draft.set} onChange={set => patch({ set })}
-                  onFocus={() => focusField('tl-emotions')} onBlur={blurField} />
+                <EmotionPicker value={draft.set} onChange={set => patch({ set })} />
               </div>
             )}
           </GroupEditor>
@@ -325,18 +302,20 @@ export function EntryEditor(p: EntryEditorProps) {
     },
     {
       id: 'tl-recall',
+      prop: 'recall',
       label: 'How well you remember it',
       icon: 'psychology',
       hidden: isNew,
       summary: () => RECALL_OPTIONS.find(o => o.value === (entry.recall ?? ''))?.label.split(' —')[0] ?? '',
       render: ({ back }) => (
         <MdSelect label="How well you remember it" data-testid="tl-recall" value={entry.recall ?? ''}
-          options={RECALL_OPTIONS} onFocus={() => focusField('tl-recall')}
-          onValueChange={v => { p.onPatch(uid, { recall: v || null }); blurField(); back(); }} />
+          options={RECALL_OPTIONS}
+          onValueChange={v => { p.onPatch(uid, { recall: v || null }); back(); }} />
       ),
     },
     {
       id: 'tl-revisit',
+      prop: 'revisit',
       label: 'Revisit later',
       icon: 'flag',
       hidden: isNew,
@@ -358,8 +337,7 @@ export function EntryEditor(p: EntryEditorProps) {
                 Come back to this entry
               </label>
               <MdTextField label="What to add (optional)" data-testid="tl-revisit-note" value={draft.note}
-                onInput={v => patch({ note: v, on: draft.on || !!v.trim() })}
-                onFocus={() => focusField('tl-revisit')} onBlur={blurField} />
+                onInput={v => patch({ note: v, on: draft.on || !!v.trim() })} />
             </div>
           )}
         </GroupEditor>
@@ -367,6 +345,7 @@ export function EntryEditor(p: EntryEditorProps) {
     },
     {
       id: 'tl-during',
+      prop: 'rel',
       label: 'During',
       icon: 'bookmarks',
       hidden: isNew || isChapterEntry || chapters.length === 0,
@@ -413,17 +392,18 @@ export function EntryEditor(p: EntryEditorProps) {
     },
     {
       id: 'tl-chapter',
+      prop: 'chapter',
       label: 'Chapter',
       icon: entry.chapter ? CHAPTER_KIND_META[entry.chapter].icon : 'bookmark',
       hidden: isNew,
       summary: () => (entry.chapter ? CHAPTER_KIND_META[entry.chapter].label : 'Not a chapter'),
       render: ({ back }) => (
         <MdSelect label="A chapter of your life?" data-testid="tl-chapter" value={entry.chapter ?? ''}
-          options={CHAPTER_OPTIONS} onFocus={() => focusField('tl-chapter')}
-          onValueChange={v => { p.onSetChapter?.(uid, (v || null) as ChapterKind | null); blurField(); back(); }} />
+          options={CHAPTER_OPTIONS}
+          onValueChange={v => { p.onSetChapter?.(uid, (v || null) as ChapterKind | null); back(); }} />
       ),
     },
-  ], [uid, isNew, entry, title, birth, whenHint, untilHint, focusField, blurField, chapters, during.join('|'), p.duringError]);
+  ], [uid, isNew, entry, title, birth, whenHint, untilHint, chapters, during.join('|'), p.duringError]);
 
   const banner = (photoIds.length > 0 || people.length > 0 || conflicts.length > 0) ? (
     <div className="flex flex-col gap-2">
@@ -499,7 +479,7 @@ export function EntryEditor(p: EntryEditorProps) {
       open={opened}
       title={isNew ? (isChapterEntry ? 'New chapter' : 'New entry') : (entry.title || (isChapterEntry ? 'Chapter' : 'Entry'))}
       properties={canEdit ? properties : properties.map(d => ({ ...d, render: undefined }))}
-      peerFocusedFields={p.peerFocusedFields}
+      presence={p.presence}
       initialDetailId={isNew ? 'tl-title' : (p.initialPane ?? null)}
       onClose={p.onClose}
       footer={footer}

@@ -10,21 +10,6 @@ export interface EditorState {
   calDocId?: string;
 }
 
-/**
- * Reverse of EventEditor's FIELD_TO_PROP: a document property a peer is focused
- * on → every editor input id that edits it. One property routinely drives several
- * inputs, so the whole cluster lights up (and PropertySheet's grouped rows union
- * them again via `presenceIds`).
- */
-export const PATH_PROP_TO_FIELDS: Record<string, string[]> = {
-  title: ['ed-title'],
-  start: ['ed-date', 'ed-time', 'ed-allday'],
-  duration: ['ed-duration'],
-  recurrenceRule: ['ed-freq', 'ed-interval', 'ed-bydays', 'ed-ends', 'ed-count', 'ed-until'],
-  location: ['ed-location'],
-  description: ['ed-desc'],
-};
-
 export function generateUid() {
   return Date.now() + '-' + Math.random().toString(36).substr(2, 9) + '_automerge';
 }

@@ -3,6 +3,7 @@ import { Suspense } from 'preact/compat';
 import { openDoc, subscribeQuery } from './worker-api';
 import { getDocPlugin } from './doc-plugins';
 import { DocLoader } from './common/useDocument';
+import { ViewingPresence } from './common/presence';
 import { useAccess } from './common/useAccess';
 import { sourceUrl } from './common/doc-urls';
 import { buttonVariants } from '@/components/ui/button';
@@ -94,9 +95,19 @@ function DocViewResolver({ docId, rest }: { docId: string; rest?: string }) {
 
   // Views are code-split (see common/lazy-view.ts); the first visit per
   // type fetches its chunk behind the same spinner.
+  //
+  // <ViewingPresence> is what makes presence the default: it announces that this
+  // device has the document open, whatever the view does or does not do about
+  // it. It sits beside the view rather than above the resolver so it starts once
+  // the document's type and access are known — a document that failed to open,
+  // or that no editor renders, is not announced as being viewed — and outside
+  // the Suspense boundary so a lazy chunk loading does not interrupt it.
   return (
-    <Suspense fallback={spinner}>
-      <plugin.View docId={docId} rest={rest} readOnly={!canEdit} />
-    </Suspense>
+    <>
+      <ViewingPresence docId={docId} />
+      <Suspense fallback={spinner}>
+        <plugin.View docId={docId} rest={rest} readOnly={!canEdit} />
+      </Suspense>
+    </>
   );
 }

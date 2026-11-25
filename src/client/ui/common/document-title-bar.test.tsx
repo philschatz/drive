@@ -8,7 +8,11 @@ jest.mock('./automerge', () => ({
   repo: { peerId: 'self-peer-id' },
 }));
 
+// What the presence store holds for the bar's document (the `mock` prefix lets
+// the hoisted factory below close over it).
+let mockStorePeers: any[] = [];
 jest.mock('./presence', () => ({
+  usePresence: (docId?: string | null) => ({ peers: {}, peerList: docId ? mockStorePeers : [], broadcast: () => {} }),
   peerColor: (id: string) => `#${id.slice(0, 6)}`,
   peerDisplayName: (id: string) => `Peer ${id.slice(0, 8)}`,
   peerIdentityKey: (id: string, ug?: string | null) => ug || id.split('-')[0],
@@ -65,6 +69,7 @@ describe('DocumentTitleBar', () => {
   beforeEach(() => {
     mockUseConnectionStatus.mockReturnValue(true);
     mockAccessReturn = { access: null, canEdit: true, loaded: true };
+    mockStorePeers = [];
   });
 
   it('renders icon and title', () => {
@@ -206,6 +211,30 @@ describe('DocumentTitleBar', () => {
     // Self should be filtered out, so 2 dots
     const dots = document.querySelectorAll('[title^="Peer "]');
     expect(dots.length).toBe(2);
+  });
+
+  // Presence by default: an editor that passes only its docId still shows who
+  // else is on the document.
+  it('lists the document\'s own peers when none are passed', () => {
+    mockStorePeers = [{ peerId: 'aabbcc' }, { peerId: '112233' }];
+    render(<DocumentTitleBar icon="grid" title="Test" docId="doc-1" />);
+    expect(document.querySelectorAll('[title^="Peer "]').length).toBe(2);
+  });
+
+  it('does not read the store when the caller brings its own peers', () => {
+    mockStorePeers = [{ peerId: 'aabbcc' }];
+    render(<DocumentTitleBar icon="grid" title="Test" docId="doc-1" peers={[]} />);
+    expect(document.querySelectorAll('[title^="Peer "]').length).toBe(0);
+  });
+
+  it('says a peer with something focused is editing, by default', () => {
+    mockStorePeers = [
+      { peerId: 'aabbcc', value: { viewing: true, focusedField: ['tasks', 't1'] } },
+      { peerId: '112233', value: { viewing: true, focusedField: null } },
+    ];
+    render(<DocumentTitleBar icon="grid" title="Test" docId="doc-1" />);
+    expect(screen.getByTitle('Peer aabbcc (editing)')).toBeDefined();
+    expect(screen.getByTitle('Peer 112233')).toBeDefined();
   });
 
   it('uses peerTitle for dot tooltips', () => {

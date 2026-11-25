@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo, useCallback } from 'preact/hooks';
+import { useState, useEffect, useRef } from 'preact/hooks';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -6,9 +6,8 @@ import { MdTextField } from '@/components/ui/md-text-field';
 import { MdSelect } from '@/components/ui/md-select';
 import type { CalendarEvent } from '../../../../shared/schemas/calendar';
 import { PropertySheet, SheetActions, SheetActionItem } from '../../common/PropertySheet';
-import type { PropertyDef } from '../../common/PropertySheet';
+import type { PropertyDef, SheetPresence } from '../../common/PropertySheet';
 import { FieldEditor } from '../../common/FieldEditor';
-import type { PeerFieldInfo } from '../../common/presence';
 import { isAllDay, describeRecurrence } from './recurrence';
 
 interface EventEditorProps {
@@ -24,8 +23,8 @@ interface EventEditorProps {
   onDeleteOccurrence: (uid: string, recurrenceDate: string) => void;
   onClose: () => void;
   onEditAll: (uid: string) => void;
-  onFieldFocus?: (path: (string | number)[] | null) => void;
-  peerFocusedFields?: Record<string, PeerFieldInfo>;
+  /** Where the event lives (`['events', uid]` in its calendar's document), for presence. */
+  presence: SheetPresence | null;
   calendars?: { docId: string; name: string; color: string }[];
   calDocId?: string;
   onMoveToCalendar?: (uid: string, data: CalendarEvent, targetDocId: string) => void;
@@ -49,27 +48,14 @@ const END_OPTIONS = [
 ];
 const FREQ_LABELS: Record<string, string> = { daily: 'days', weekly: 'weeks', monthly: 'months', yearly: 'years' };
 
-const FIELD_TO_PROP: Record<string, string> = {
-  'ed-title': 'title',
-  'ed-date': 'start',
-  'ed-time': 'start',
-  'ed-allday': 'start',
-  'ed-duration': 'duration',
-  'ed-freq': 'recurrenceRule',
-  'ed-location': 'location',
-  'ed-desc': 'description',
-};
-
-/**
- * The two grouped property rows. Date / all-day / time / duration are one
+/*
+ * Two of the rows below are grouped. Date / all-day / time / duration are one
  * decision ("when is this?") and all-day is a modality switch, so on separate
  * rows two of them would appear and disappear from the list as you toggle it.
  * The recurrence inputs are meaningless individually and all write one doc
- * property. Presence-wise each row unions its members' field ids, since peers
- * still broadcast at input granularity (see PATH_PROP_TO_FIELDS).
+ * property. For presence each row names the document properties behind it
+ * (`prop`); the sheet announces the open pane and lights a row for any of them.
  */
-const WHEN_FIELDS = ['ed-date', 'ed-time', 'ed-allday', 'ed-duration'];
-const REPEAT_FIELDS = ['ed-freq', 'ed-interval', 'ed-bydays', 'ed-ends', 'ed-count', 'ed-until'];
 
 function dateFrom(start?: string) { return start ? start.substring(0, 10) : ''; }
 function timeFrom(start?: string) { return start && start.length > 10 ? start.substring(11, 16) : ''; }
@@ -80,24 +66,9 @@ function byDayMap(rule?: any): Record<string, boolean> {
   return checked;
 }
 
-export function EventEditor({ uid, event, masterEvent, recurrenceDate, isNew, opened, onSave, onSaveOverride, onDelete, onDeleteOccurrence, onClose, onEditAll, onFieldFocus, peerFocusedFields, calendars, calDocId, onMoveToCalendar }: EventEditorProps) {
+export function EventEditor({ uid, event, masterEvent, recurrenceDate, isNew, opened, onSave, onSaveOverride, onDelete, onDeleteOccurrence, onClose, onEditAll, presence, calendars, calDocId, onMoveToCalendar }: EventEditorProps) {
   const isRecurring = masterEvent && !!masterEvent.recurrenceRule;
   const editingOccurrence = isRecurring && !!recurrenceDate;
-
-  const fieldToPath = useMemo(() => {
-    const map: Record<string, (string | number)[]> = {};
-    for (const [inputId, prop] of Object.entries(FIELD_TO_PROP)) {
-      map[inputId] = ['events', uid, prop];
-    }
-    return map;
-  }, [uid]);
-
-  const focusField = useCallback((fieldId: string) => {
-    if (onFieldFocus && fieldToPath[fieldId]) onFieldFocus(fieldToPath[fieldId]);
-  }, [onFieldFocus, fieldToPath]);
-  const blurField = useCallback(() => {
-    if (onFieldFocus) onFieldFocus(null);
-  }, [onFieldFocus]);
 
   const sourceEvent = editingOccurrence ? masterEvent! : event;
   const currentRule = sourceEvent.recurrenceRule || null;
@@ -260,6 +231,8 @@ export function EventEditor({ uid, event, masterEvent, recurrenceDate, isNew, op
   const properties: PropertyDef[] = [
     {
       id: 'ed-calendar',
+      // Moves the event to another document: not a property at a path of this one.
+      prop: null,
       label: 'Calendar',
       icon: 'calendar_month',
       hidden: !calendars || calendars.length <= 1,
@@ -276,6 +249,7 @@ export function EventEditor({ uid, event, masterEvent, recurrenceDate, isNew, op
     },
     {
       id: 'ed-title',
+      prop: 'title',
       label: 'Title',
       icon: 'edit',
       summary: () => title,
@@ -296,8 +270,6 @@ export function EventEditor({ uid, event, masterEvent, recurrenceDate, isNew, op
               id="ed-title"
               value={value}
               onInput={onInput}
-              onFocus={() => focusField('ed-title')}
-              onBlur={blurField}
               onEnter={save}
             />
           )}
@@ -306,9 +278,10 @@ export function EventEditor({ uid, event, masterEvent, recurrenceDate, isNew, op
     },
     {
       id: 'ed-when',
+      prop: ['start', 'duration'],
+      grouped: true,
       label: 'When',
       icon: 'schedule',
-      presenceIds: WHEN_FIELDS,
       summary: () => whenSummary,
       render: () => (
         <div className="flex flex-col gap-4">
@@ -318,8 +291,6 @@ export function EventEditor({ uid, event, masterEvent, recurrenceDate, isNew, op
             type="date"
             value={date}
             onInput={setDate}
-            onFocus={() => focusField('ed-date')}
-            onBlur={blurField}
             onCommit={v => commit({ date: v })}
           />
 
@@ -337,8 +308,6 @@ export function EventEditor({ uid, event, masterEvent, recurrenceDate, isNew, op
                 setDuration(nextDuration);
                 commit({ allday: checked, duration: nextDuration });
               }}
-              onFocus={() => focusField('ed-allday')}
-              onBlur={blurField}
             />
             <Label>All day</Label>
           </div>
@@ -351,8 +320,6 @@ export function EventEditor({ uid, event, masterEvent, recurrenceDate, isNew, op
                 type="time"
                 value={time}
                 onInput={setTime}
-                onFocus={() => focusField('ed-time')}
-                onBlur={blurField}
                 onCommit={v => commit({ time: v })}
               />
               <MdTextField
@@ -360,8 +327,6 @@ export function EventEditor({ uid, event, masterEvent, recurrenceDate, isNew, op
                 id="ed-duration"
                 value={duration}
                 onInput={setDuration}
-                onFocus={() => focusField('ed-duration')}
-                onBlur={blurField}
                 onCommit={v => commit({ duration: v })}
               />
             </div>
@@ -375,7 +340,8 @@ export function EventEditor({ uid, event, masterEvent, recurrenceDate, isNew, op
       icon: 'repeat',
       // An occurrence override can't change the series' rule.
       hidden: !!editingOccurrence,
-      presenceIds: REPEAT_FIELDS,
+      prop: 'recurrenceRule',
+      grouped: true,
       summary: () => (freq ? describeRecurrence({ frequency: freq, interval, byDay: Object.entries(byDay).filter(([, v]) => v).map(([day]) => ({ day })) }) : 'Never'),
       render: () => (
         <div className="flex flex-col gap-4">
@@ -384,12 +350,10 @@ export function EventEditor({ uid, event, masterEvent, recurrenceDate, isNew, op
             id="ed-freq"
             value={freq || '_none'}
             options={FREQ_OPTIONS}
-            onFocus={() => focusField('ed-freq')}
             onValueChange={v => {
               const next = v === '_none' ? '' : v;
               setFreq(next);
               commit({ freq: next });
-              blurField();
             }}
           />
 
@@ -468,6 +432,7 @@ export function EventEditor({ uid, event, masterEvent, recurrenceDate, isNew, op
     },
     {
       id: 'ed-location',
+      prop: 'location',
       label: 'Location',
       icon: 'location_on',
       summary: () => location,
@@ -485,8 +450,6 @@ export function EventEditor({ uid, event, masterEvent, recurrenceDate, isNew, op
               id="ed-location"
               value={value}
               onInput={onInput}
-              onFocus={() => focusField('ed-location')}
-              onBlur={blurField}
               onEnter={save}
             />
           )}
@@ -495,6 +458,7 @@ export function EventEditor({ uid, event, masterEvent, recurrenceDate, isNew, op
     },
     {
       id: 'ed-desc',
+      prop: 'description',
       label: 'Description',
       icon: 'notes',
       summary: () => description,
@@ -514,8 +478,6 @@ export function EventEditor({ uid, event, masterEvent, recurrenceDate, isNew, op
               rows={4}
               value={value}
               onInput={onInput}
-              onFocus={() => focusField('ed-desc')}
-              onBlur={blurField}
             />
           )}
         </FieldEditor>
@@ -530,7 +492,7 @@ export function EventEditor({ uid, event, masterEvent, recurrenceDate, isNew, op
       data-testid="event-editor"
       contentClassName="panel"
       properties={properties}
-      peerFocusedFields={peerFocusedFields}
+      presence={presence}
       initialDetailId={isNew ? 'ed-title' : null}
       onClose={onClose}
       flushOnClose

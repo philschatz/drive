@@ -1,5 +1,5 @@
 import 'temporal-polyfill/global';
-import { render, screen, fireEvent, waitFor } from '@testing-library/preact';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/preact';
 
 // In-memory + jq mock so the real Kitchen container runs in jsdom. md-* custom
 // elements are NOT registered here, so rows are inert hosts driven by their own
@@ -293,6 +293,56 @@ describe('Kitchen container', () => {
     expect(mock.__getDoc(DOC).recipes['plain-salad'].name).toBe('Plainer Salad');
     // The id is identity — renaming must not move the map key.
     expect(mock.__getDoc(DOC).recipes['plainer-salad']).toBeUndefined();
+  });
+});
+
+// Presence comes from the shared pieces — the route, the title bar and the
+// editor sheet. The one thing the view adds is the recipe being read.
+describe('Kitchen presence', () => {
+  const focused = () => mock.__presenceSent(DOC)?.focusedField;
+
+  beforeEach(() => {
+    mock.__reset();
+    window.location.hash = '';
+    mock.__setDoc(DOC, doc());
+  });
+
+  it('announces the recipe being read, then the field being edited, then the recipe again', async () => {
+    await renderKitchen('plain-salad');
+    expect(mock.__presenceSent(DOC)).toEqual({ viewing: true, focusedField: ['recipes', 'plain-salad'] });
+
+    fireEvent.click(document.querySelector('md-fab')!); // the Edit FAB on the detail page
+    expect(focused()).toEqual(['recipes', 'plain-salad']);
+
+    // Three inputs, three properties, one row: the first is what is announced,
+    // whichever input has focus.
+    fireEvent.click(screen.getByTestId('red-times-row'));
+    expect(focused()).toEqual(['recipes', 'plain-salad', 'prepTime']);
+    fireEvent.focusIn(screen.getByTestId('red-total'));
+    expect(focused()).toEqual(['recipes', 'plain-salad', 'prepTime']);
+
+    fireEvent.click(screen.getByTestId('red-times-cancel'));
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    // The editor is shut but the recipe is still on screen.
+    expect(focused()).toEqual(['recipes', 'plain-salad']);
+  });
+
+  it('announces no path from the recipe list, nor for a recipe not yet created', async () => {
+    await renderKitchen();
+    expect(mock.__presenceSent(DOC)).toEqual({ viewing: true, focusedField: null });
+    fireEvent.click(document.querySelector('md-fab')!); // New recipe
+    expect(screen.getByTestId('red-name')).toBeTruthy();
+    expect(focused()).toBeNull();
+  });
+
+  it('lights the editor row for any property a peer holds behind it', async () => {
+    await renderKitchen('plain-salad');
+    fireEvent.click(document.querySelector('md-fab')!);
+    act(() => mock.__setPresence(DOC, {
+      'alice-drive': { peerId: 'alice-drive', value: { viewing: true, focusedField: ['recipes', 'plain-salad', 'cookTime'], userGroupId: 'alice' } },
+    }));
+    expect(screen.getByTestId('red-times-row').querySelector('[data-testid="peer-dot"]')).toBeTruthy();
+    expect(screen.getByTestId('red-name-row').querySelector('[data-testid="peer-dot"]')).toBeNull();
   });
 });
 

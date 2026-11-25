@@ -27,7 +27,7 @@ import {
   flatTextEditOps, flatTextFromSpans, markersFromSpans,
   type RichTextOp, type RichTextSpan,
 } from '../../../shared/rich-text-ops';
-import { peerDisplayName, usePresence } from '../common/presence';
+import { useFocusPath, usePresence } from '../common/presence';
 import { DocumentTitleBar } from '../common/DocumentTitleBar';
 import type { DocumentHistory } from '../common/useDocumentHistory';
 import { validateDocument } from '../../../shared/schemas';
@@ -118,7 +118,7 @@ export function SourceViewer({ docId, rest, readOnly }: { docId?: string; rest?:
   const [adding, setAdding] = useState(false);
   const { confirm, confirmSheet } = useConfirm();
 
-  const { peers, peerList, broadcast } = usePresence(docLoaded ? docId : undefined);
+  const { peers, peerList } = usePresence(docLoaded ? docId : undefined);
 
   const peerFocusedPaths = useMemo<PeerFocus[]>(() => {
     const result: PeerFocus[] = [];
@@ -274,13 +274,8 @@ export function SourceViewer({ docId, rest, readOnly }: { docId?: string; rest?:
   }, [snapshot]);
 
   // ── Presence ─────────────────────────────────────────────────────────────
-  // Broadcast the field being edited, and clear it when the sheet closes.
-  const editingKey = editing ? editing.path.join('/') : '';
-  useEffect(() => {
-    if (!editing) return;
-    broadcast('focusedField', editing.path);
-    return () => broadcast('focusedField', null);
-  }, [editingKey]);
+  // Announce the field being edited; withdrawn when the sheet closes.
+  useFocusPath(docLoaded ? docId : undefined, editing ? editing.path : null);
 
   // ── Writes ───────────────────────────────────────────────────────────────
 
@@ -415,7 +410,6 @@ export function SourceViewer({ docId, rest, readOnly }: { docId?: string; rest?:
         }}
         docId={docId}
         peers={peerList}
-        peerTitle={(peer) => `${peerDisplayName(peer.peerId, peer.value?.userGroupId)}${peer.value?.focusedField ? ' (editing)' : ''}`}
         showSourceLink={false}
         onToggleHistory={history.toggleHistory}
         historyActive={history.active}

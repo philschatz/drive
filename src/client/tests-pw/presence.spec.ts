@@ -98,7 +98,7 @@ test("a peer's focused field syncs to another peer (decrypted)", async () => {
   const key = JSON.stringify(FOCUS);
 
   // Both peers must have the doc synced/loaded before starting presence — in the
-  // real app the editor renders the doc (loading its handle) before initPresence.
+  // real app the editor renders the doc (loading its handle) before presence starts.
   for (const p of [alice, bob]) {
     await waitFor(
       () => p.call('queryDoc', docId, '.name').then((r) => r.result).catch(() => null),

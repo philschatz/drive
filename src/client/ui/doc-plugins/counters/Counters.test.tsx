@@ -1,5 +1,5 @@
 import 'temporal-polyfill/global';
-import { render, screen, fireEvent, within, waitFor } from '@testing-library/preact';
+import { render, screen, fireEvent, within, waitFor, act } from '@testing-library/preact';
 
 // In-memory + jq mock so the real Counters container runs in jsdom (single
 // browser, no peers). Schedule variety is seeded directly via __setDoc; the
@@ -458,6 +458,54 @@ describe('Counters container', () => {
     expect(badge.textContent).toMatch(/ago$/);
     expect(badge.getAttribute('title')).toBe('completed 2026-07-20 09:00');
     expect(within(rowOf('Never done')).queryByTestId('counter-completed')).toBeNull();
+  });
+});
+
+// Presence comes from the shared pieces — the route, the title bar and the
+// editor sheet — so the container wires none of it. These pin what a peer sees.
+describe('Counters presence', () => {
+  const focused = () => mock.__presenceSent(DOC)?.focusedField;
+  const peerOn = (...path: (string | number)[]) =>
+    act(() => mock.__setPresence(DOC, {
+      'alice-drive': { peerId: 'alice-drive', value: { viewing: true, focusedField: path, userGroupId: 'alice' } },
+    }));
+
+  beforeEach(() => {
+    mock.__reset();
+    mock.__setDoc(DOC, { '@type': 'Calendar+Counters', name: 'C', events: { e1: dailyHabit('Meditate') } });
+  });
+
+  it('announces viewing, then the counter while its editor is open, then the field while its pane is', async () => {
+    render(<Counters docId={DOC} />);
+    await waitFor(() => expect(screen.getByText('Meditate')).toBeTruthy());
+    expect(mock.__presenceSent(DOC)).toEqual({ viewing: true, focusedField: null });
+
+    fireEvent.contextMenu(rowOf('Meditate'));
+    expect(focused()).toEqual(['events', 'e1']);
+
+    // The Repeat pane is several controls behind one property: whichever of
+    // them has focus, a peer sees the rule being edited.
+    fireEvent.click(screen.getByTestId('ced-repeat-row'));
+    expect(focused()).toEqual(['events', 'e1', 'recurrenceRule']);
+    fireEvent.focusIn(screen.getByTestId('ced-interval'));
+    fireEvent.focusOut(screen.getByTestId('ced-interval'));
+    expect(focused()).toEqual(['events', 'e1', 'recurrenceRule']);
+
+    fireEvent.click(screen.getByTestId('ced-repeat-cancel'));
+    expect(focused()).toEqual(['events', 'e1']);
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    expect(focused()).toBeNull();
+  });
+
+  it('shows a peer on the counter they have open and on the field in its editor', async () => {
+    render(<Counters docId={DOC} />);
+    await waitFor(() => expect(screen.getByText('Meditate')).toBeTruthy());
+    peerOn('events', 'e1', 'recurrenceRule');
+    expect(rowOf('Meditate').querySelector('[data-testid="peer-dot"]')).toBeTruthy();
+
+    fireEvent.contextMenu(rowOf('Meditate'));
+    expect(screen.getByTestId('ced-repeat-row').querySelector('[data-testid="peer-dot"]')).toBeTruthy();
+    expect(screen.getByTestId('ced-title-row').querySelector('[data-testid="peer-dot"]')).toBeNull();
   });
 });
 

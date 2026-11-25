@@ -1,33 +1,16 @@
-import { useState, useEffect, useRef, useMemo, useCallback } from 'preact/hooks';
+import { useState, useEffect, useRef } from 'preact/hooks';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Label } from '@/components/ui/label';
 import { MdTextField } from '@/components/ui/md-text-field';
 import { MdSelect } from '@/components/ui/md-select';
 import { showToast } from '@/components/ui/toast';
 import { PropertySheet, SheetActions, SheetActionItem } from '../../common/PropertySheet';
-import type { PropertyDef } from '../../common/PropertySheet';
+import type { PropertyDef, SheetPresence } from '../../common/PropertySheet';
 import { FieldEditor, GroupEditor } from '../../common/FieldEditor';
-import type { PeerFieldInfo } from '../../common/presence';
 import { describeRecurrence } from '../calendar/recurrence';
 import { parseReward, formatReward, windowEndTime, windowDuration, createdStampFor, lastCompletionAnchor } from './occurrences';
 import type { CounterEvent } from '../../../../shared/schemas/counters';
 import type { RecurrenceRule, NDay } from '../../../../shared/schemas/calendar';
-
-/** Editor input id → Automerge doc path (relative props filled with uid below).
- * The recurrence cluster (freq/interval/weekdays) maps to the rule itself. */
-const FIELD_TO_PROP: Record<string, string> = {
-  'ced-title': 'title',
-  'ced-freq': 'recurrenceRule',
-  'ced-interval': 'recurrenceRule',
-  'ced-bydays': 'recurrenceRule',
-  'ced-due': 'start',
-  'ced-time': 'startTime',
-  'ced-end': 'duration',
-  'ced-reward': 'description',
-};
-
-/** The freq/interval/weekday inputs all live behind the one "Repeat" row. */
-const REPEAT_FIELDS = ['ced-freq', 'ced-interval', 'ced-bydays'];
 
 const FREQ_OPTIONS = [
   { value: 'none', label: 'No repeat' },
@@ -102,10 +85,8 @@ interface CounterEditorProps {
   /** End/resume the recurrence (recurring items only). */
   onArchive?: (uid: string) => void;
   onUnarchive?: (uid: string) => void;
-  /** Broadcast which field the local user is editing (per-field presence). */
-  onFieldFocus?: (path: (string | number)[] | null) => void;
-  /** Peers' focused fields keyed by editor input id (see FIELD_TO_PROP). */
-  peerFocusedFields?: Record<string, PeerFieldInfo>;
+  /** Where the counter lives (`['events', uid]` in its document), for presence. */
+  presence: SheetPresence | null;
   /** Ranked existing-item matches for the New-Counter title being typed. */
   suggestCounters?: (query: string) => CounterSuggestion[];
   /** Route the typed/picked title to an existing item instead of creating a
@@ -113,22 +94,7 @@ interface CounterEditorProps {
   onUseExisting?: (uid: string) => UseExistingOutcome | undefined;
 }
 
-export function CounterEditor({ uid, event, isNew, opened, canEdit = true, onSave, onDelete, onShowCompletions, onClose, onAddAnother, onCreated, onArchive, onUnarchive, onFieldFocus, peerFocusedFields, suggestCounters, onUseExisting }: CounterEditorProps) {
-  const fieldToPath = useMemo(() => {
-    const map: Record<string, (string | number)[]> = {};
-    for (const [inputId, prop] of Object.entries(FIELD_TO_PROP)) {
-      map[inputId] = ['events', uid, prop];
-    }
-    return map;
-  }, [uid]);
-
-  const focusField = useCallback((fieldId: string) => {
-    if (onFieldFocus && fieldToPath[fieldId]) onFieldFocus(fieldToPath[fieldId]);
-  }, [onFieldFocus, fieldToPath]);
-  const blurField = useCallback(() => {
-    if (onFieldFocus) onFieldFocus(null);
-  }, [onFieldFocus]);
-
+export function CounterEditor({ uid, event, isNew, opened, canEdit = true, onSave, onDelete, onShowCompletions, onClose, onAddAnother, onCreated, onArchive, onUnarchive, presence, suggestCounters, onUseExisting }: CounterEditorProps) {
   // A non-recurring counter's `start` is its due date — the day it is wanted.
   // (A recurring one's is the schedule anchor, which this pane never shows.)
   // A brand-new counter is a one-off wanted today, so it starts on the to-do
@@ -261,6 +227,7 @@ export function CounterEditor({ uid, event, isNew, opened, canEdit = true, onSav
   const properties: PropertyDef[] = [
     {
       id: 'ced-title',
+      prop: 'title',
       label: 'Title',
       icon: 'edit',
       summary: () => title,
@@ -323,8 +290,6 @@ export function CounterEditor({ uid, event, isNew, opened, canEdit = true, onSav
                 data-testid="ced-title"
                 value={value}
                 onInput={v => { setNotice(null); onInput(v); }}
-                onFocus={() => focusField('ced-title')}
-                onBlur={blurField}
                 onEnter={() => { titleViaEnterRef.current = true; save(); }}
               />
               {isNew && suggestCounters && (
@@ -353,9 +318,11 @@ export function CounterEditor({ uid, event, isNew, opened, canEdit = true, onSav
       // exactly the jitter the property list exists to remove. One draft, so
       // ticking three weekdays is one document change, not three.
       id: 'ced-repeat',
+      // Frequency, interval and weekdays are all the one rule.
+      prop: 'recurrenceRule',
+      grouped: true,
       label: 'Repeat',
       icon: 'repeat',
-      presenceIds: REPEAT_FIELDS,
       transactional: true,
       summary: () =>
         recurring
@@ -384,7 +351,6 @@ export function CounterEditor({ uid, event, isNew, opened, canEdit = true, onSav
                 data-testid="ced-freq"
                 value={draft.frequency}
                 options={FREQ_OPTIONS}
-                onFocus={() => focusField('ced-freq')}
                 onValueChange={v => patch({ frequency: (v || 'none') as any })}
               />
 
@@ -400,8 +366,6 @@ export function CounterEditor({ uid, event, isNew, opened, canEdit = true, onSav
                     const n = parseInt(v, 10);
                     patch({ interval: Number.isFinite(n) && n >= 1 ? n : null });
                   }}
-                  onFocus={() => focusField('ced-interval')}
-                  onBlur={blurField}
                 />
               )}
 
@@ -413,8 +377,6 @@ export function CounterEditor({ uid, event, isNew, opened, canEdit = true, onSav
                       <label key={day} className="flex items-center gap-1 text-sm">
                         <Checkbox
                           checked={draft.byDay.includes(day)}
-                          onFocus={() => focusField('ced-bydays')}
-                          onBlur={blurField}
                           onCheckedChange={(checked: boolean) => {
                             patch({ byDay: checked ? [...draft.byDay, day] : draft.byDay.filter(d => d !== day) });
                           }}
@@ -435,6 +397,7 @@ export function CounterEditor({ uid, event, isNew, opened, canEdit = true, onSav
       // list, and recording a completion clears it again. Hidden for a habit,
       // whose `start` is a schedule anchor the user must not hand-edit.
       id: 'ced-due',
+      prop: 'start',
       label: 'Due',
       icon: 'event',
       hidden: recurring,
@@ -455,8 +418,6 @@ export function CounterEditor({ uid, event, isNew, opened, canEdit = true, onSav
               value={value}
               supportingText="When you want this done. Leave blank to keep it off the to-do list."
               onInput={onInput}
-              onFocus={() => focusField('ced-due')}
-              onBlur={blurField}
             />
           )}
         </FieldEditor>
@@ -464,6 +425,7 @@ export function CounterEditor({ uid, event, isNew, opened, canEdit = true, onSav
     },
     {
       id: 'ced-time',
+      prop: 'startTime',
       label: 'Start time',
       icon: 'schedule',
       hidden: !hasWindow,
@@ -484,8 +446,6 @@ export function CounterEditor({ uid, event, isNew, opened, canEdit = true, onSav
               value={value}
               supportingText="When the window to do this opens each time. Leave blank for all day."
               onInput={onInput}
-              onFocus={() => focusField('ced-time')}
-              onBlur={blurField}
             />
           )}
         </FieldEditor>
@@ -496,6 +456,7 @@ export function CounterEditor({ uid, event, isNew, opened, canEdit = true, onSav
       // window shuts. Moving the start time therefore shifts the whole window;
       // only this pane changes how long it is.
       id: 'ced-end',
+      prop: 'duration',
       label: 'End time',
       icon: 'timelapse',
       hidden: !hasWindow,
@@ -521,8 +482,6 @@ export function CounterEditor({ uid, event, isNew, opened, canEdit = true, onSav
               value={value}
               supportingText="When the window shuts and it counts as missed. Leave blank for the rest of the day."
               onInput={onInput}
-              onFocus={() => focusField('ced-end')}
-              onBlur={blurField}
             />
           )}
         </FieldEditor>
@@ -532,6 +491,7 @@ export function CounterEditor({ uid, event, isNew, opened, canEdit = true, onSav
       // Both halves live in `description`, encoded "<goal>: <reward>" — with no
       // goal it is just a note on the habit.
       id: 'ced-reward',
+      prop: 'description',
       label: 'Reward',
       icon: 'redeem',
       hidden: !recurring,
@@ -560,8 +520,6 @@ export function CounterEditor({ uid, event, isNew, opened, canEdit = true, onSav
                 value={draft.goal}
                 supportingText="How many in a row it takes. Leave blank for a plain note."
                 onInput={v => patch({ goal: v })}
-                onFocus={() => focusField('ced-reward')}
-                onBlur={blurField}
               />
               <MdTextField
                 label="Reward"
@@ -569,8 +527,6 @@ export function CounterEditor({ uid, event, isNew, opened, canEdit = true, onSav
                 value={draft.text}
                 placeholder="Ice cream"
                 onInput={v => patch({ text: v })}
-                onFocus={() => focusField('ced-reward')}
-                onBlur={blurField}
               />
             </div>
           )}
@@ -585,7 +541,7 @@ export function CounterEditor({ uid, event, isNew, opened, canEdit = true, onSav
       title={isNew ? 'New Counter' : 'Edit Counter'}
       data-testid="counter-editor"
       properties={properties}
-      peerFocusedFields={peerFocusedFields}
+      presence={presence}
       initialDetailId={isNew ? 'ced-title' : null}
       onClose={onClose}
       // No flushOnClose: every pane here is transactional and writes on its own

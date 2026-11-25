@@ -77,20 +77,15 @@ describe('PeerDot', () => {
 describe('PresenceDot', () => {
   const info = { color: '#fff', peerId: PEER_A, userGroupId: GROUP };
 
-  it('renders nothing when no peer is on the field', () => {
-    const { container } = render(<PresenceDot fieldId="f-title" peerFocusedFields={{}} />);
+  it('renders nothing when no peer is there', () => {
+    const { container } = render(<PresenceDot peer={undefined} />);
     expect(container.querySelector('[data-testid="peer-dot"]')).toBeNull();
   });
 
   it('uses the peer identity colour and says who is editing', () => {
-    render(<PresenceDot fieldId="f-title" peerFocusedFields={{ 'f-title': info }} />);
+    render(<PresenceDot peer={info} />);
     const dot = screen.getByTestId('peer-dot');
     expect(dot.style.backgroundColor).toBe(rgb(colorForKey(GROUP)));
     expect(dot.title).toContain('is editing');
-  });
-
-  it('lights up for any field in a grouped row', () => {
-    render(<PresenceDot fieldIds={['f-date', 'f-time']} peerFocusedFields={{ 'f-time': info }} />);
-    expect(screen.getByTestId('peer-dot')).toBeDefined();
   });
 });

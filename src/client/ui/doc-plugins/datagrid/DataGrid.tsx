@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'preact/hooks';
 import { updateDoc, getWorkerPeerId, getWorkerUserGroupId } from '../../worker-api';
-import { peerColor, usePresence } from '../../common/presence';
+import { peerColor, useFocusPath, usePresence } from '../../common/presence';
 import { DocumentTitleBar } from '../../common/DocumentTitleBar';
 import { peerDisplayName, type PeerFieldInfo } from '../../common/presence';
 import { useGridCommands, commitReorder, PASTE_FALLBACK_MS, type GridCommandState, type GridCommandContext } from './commands';
@@ -27,7 +27,6 @@ import type { HeaderMenuPage } from './HeaderContextMenu';
 import { useUndoRedo } from '../../common/useUndoRedo';
 import { useDocumentHistory } from '../../common/useDocumentHistory';
 import { useCanEdit } from '../../common/useCanEdit';
-import { useFocusPathSync } from '../../common/useFocusPathSync';
 import { HistorySlider } from '../../common/HistorySlider';
 import { useDocumentValidation } from '../../common/useDocumentValidation';
 import { DocLoader } from '../../common/useDocument';
@@ -93,7 +92,7 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
   const docMetaRef = useRef<{ '@type': string; name: string; sheets: Record<string, { name: string; index: number; hidden?: boolean; rows?: string[]; cols?: string[] }> } | null>(null);
   // Full data for the currently active sheet only
   const activeSheetRef = useRef<any>(null);
-  const { peers, peerList, broadcast } = usePresence(docId);
+  const { peers } = usePresence(docId);
   const validationErrors = useDocumentValidation(docId);
   const { undo, redo, canUndo, canRedo, onHeadsUpdate } = useUndoRedo(docId!);
   const history = useDocumentHistory(docId!);
@@ -959,7 +958,7 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
 
   // Broadcast the selected cell as presence. Only a real cell counts — a
   // sheet-only path (length 2) means nothing is selected, so peers see null.
-  useFocusPathSync(focusPath && focusPath.length > 2 ? focusPath : null, broadcast);
+  useFocusPath(docId, focusPath && focusPath.length > 2 ? focusPath : null);
 
   // Handle sheetId prop changes from back/forward navigation
   useEffect(() => {
@@ -1319,7 +1318,9 @@ export function DataGrid({ docId, sheetId, readOnly }: { docId?: string; sheetId
           document.title = name + ' - Spreadsheet';
         }}
         docId={docId}
-        peers={peerList}
+        // A peer's focused path here is the cell they have selected, not an edit
+        // in progress, so the dots carry the plain name.
+        peerTitle={peer => peerDisplayName(peer.peerId, peer.value?.userGroupId)}
         onToggleHistory={history.toggleHistory}
         historyActive={history.active}
         hasValidationErrors={validationErrors.length > 0}

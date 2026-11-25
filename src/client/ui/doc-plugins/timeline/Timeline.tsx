@@ -12,12 +12,11 @@
  */
 import { useState, useEffect, useRef, useCallback, useMemo } from 'preact/hooks';
 import { subscribeQuery, updateDoc } from '../../worker-api';
-import { peerColor, peerDisplayName, usePresence, type PeerFieldInfo } from '../../common/presence';
+import { useFocusPath, usePeersAt } from '../../common/presence';
 import { DocumentTitleBar } from '../../common/DocumentTitleBar';
 import { useDocumentHistory } from '../../common/useDocumentHistory';
 import { useEditorUndoRedo } from '../../common/useUndoRedo';
 import { useCanEdit } from '../../common/useCanEdit';
-import { useFocusPathSync } from '../../common/useFocusPathSync';
 import { HistorySlider } from '../../common/HistorySlider';
 import { useConfirm } from '../../common/ConfirmSheet';
 import { useDocumentValidation } from '../../common/useDocumentValidation';
@@ -42,7 +41,7 @@ import {
   calendarFields, todayDay, partialOf, parsePartial, bestDay, formatFuzzy, type FuzzyDate,
 } from '../../../../shared/timeline/fuzzy-date';
 import { TimelineList, chapterDates } from './TimelineList';
-import { EntryEditor, PROP_TO_FIELDS, type EntryPatch, type ChapterOption } from './EntryEditor';
+import { EntryEditor, type EntryPatch, type ChapterOption } from './EntryEditor';
 import { chapterColor, CHAPTER_KIND_META } from './chapter-kinds';
 
 /** What a chapter card asks, by kind. */
@@ -114,7 +113,6 @@ export function Timeline({ docId, readOnly }: { docId?: string; rest?: string; r
   const validationErrors = useDocumentValidation(docId);
   const { canEdit, canEditRef, noAccess } = useCanEdit(docId, readOnly, history);
   const { confirm, confirmSheet } = useConfirm();
-  const { peers, peerList, broadcast } = usePresence(docId);
 
   const docRef = useRef({ birth, events, prompts });
   docRef.current = { birth, events, prompts };
@@ -154,33 +152,12 @@ export function Timeline({ docId, readOnly }: { docId?: string; rest?: string; r
   }, [docId]);
 
   // ── Presence ──────────────────────────────────────────────────────────────
-  const [focusedPath, setFocusedPath] = useState<(string | number)[] | null>(null);
-  const focusPath = focusedPath ?? (editor ? ['events', editor.uid] : undefined);
-  useEffect(() => { if (!editor) setFocusedPath(null); }, [editor]);
-  useFocusPathSync(focusPath, broadcast);
-
-  const peerEditing = useMemo(() => {
-    const out: Record<string, PeerFieldInfo> = {};
-    for (const peer of Object.values(peers)) {
-      const pf = peer.value?.focusedField;
-      if (pf && pf[0] === 'events' && pf[1]) {
-        out[pf[1] as string] = { color: peerColor(peer.peerId, peer.value?.userGroupId), peerId: peer.peerId, userGroupId: peer.value?.userGroupId };
-      }
-    }
-    return out;
-  }, [peers]);
-  const peerFocusedFields = useMemo(() => {
-    const out: Record<string, PeerFieldInfo> = {};
-    if (!editor) return out;
-    for (const peer of Object.values(peers)) {
-      const pf = peer.value?.focusedField;
-      if (!pf || pf[0] !== 'events' || pf[1] !== editor.uid || pf.length < 3) continue;
-      for (const id of PROP_TO_FIELDS[pf[2] as string] ?? []) {
-        out[id] = { color: peerColor(peer.peerId, peer.value?.userGroupId), peerId: peer.peerId, userGroupId: peer.value?.userGroupId };
-      }
-    }
-    return out;
-  }, [peers, editor]);
+  // Not wired here: the route announces viewing, the title bar lists who is on
+  // the timeline, and the entry editor's sheet announces the open entry and
+  // pane. This view adds the dot on a row a peer has open, and the one edit that
+  // has no entry behind it — the birth date, which lives at the document root.
+  const peerEditing = usePeersAt(docId, ['events']);
+  useFocusPath(docId, birthOpen ? ['birth'] : null, 'item');
 
   // ── Entries ───────────────────────────────────────────────────────────────
   const openNew = useCallback((ctx: Partial<EditorState> = {}) => {
@@ -405,8 +382,6 @@ export function Timeline({ docId, readOnly }: { docId?: string; rest?: string; r
           write(changes.rename, next);
         }}
         docId={docId}
-        peers={peerList}
-        peerTitle={peer => `${peerDisplayName(peer.peerId, peer.value?.userGroupId)}${peer.value?.focusedField ? ' (editing)' : ''}`}
         onToggleHistory={history.toggleHistory}
         historyActive={history.active}
         onUndo={canEdit ? undo : undefined}
@@ -414,7 +389,7 @@ export function Timeline({ docId, readOnly }: { docId?: string; rest?: string; r
         canUndo={canUndo}
         canRedo={canRedo}
         hasValidationErrors={validationErrors.length > 0}
-        sourcePath={focusPath}
+        sourcePath={editor ? ['events', editor.uid] : undefined}
         action={canEdit && tab === 'timeline'
           ? { icon: 'swap_vert', label: arranging ? 'Done arranging' : 'Arrange', active: arranging, onSelect: () => setArranging(a => !a) }
           : undefined}
@@ -537,8 +512,7 @@ export function Timeline({ docId, readOnly }: { docId?: string; rest?: string; r
         onPinDown={uid => { setEditor(null); setPinTarget({ uid, end: 'start' }); setTab('pin'); }}
         onRemoveConflict={removeRelation}
         onClose={() => setEditor(null)}
-        onFieldFocus={setFocusedPath}
-        peerFocusedFields={peerFocusedFields}
+        presence={editor ? { docId, path: ['events', editor.uid] } : null}
       />
 
       <FieldSheet

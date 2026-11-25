@@ -12,11 +12,9 @@ import {
   GENERIC_EMOTIONS, EMOTION_GROUPS, VOCABULARY_KEYS, normalizeEmotion, emotionLabel, sortEmotions,
 } from '../../../../shared/timeline/emotions';
 
-export function EmotionPicker({ value, onChange, onFocus, onBlur }: {
+export function EmotionPicker({ value, onChange }: {
   value: string[];
   onChange: (next: string[]) => void;
-  onFocus?: () => void;
-  onBlur?: () => void;
 }) {
   const [own, setOwn] = useState('');
   const toggle = (k: string) => onChange(value.includes(k) ? value.filter(x => x !== k) : [...value, k]);
@@ -53,7 +51,7 @@ export function EmotionPicker({ value, onChange, onFocus, onBlur }: {
       <div className="flex items-end gap-2">
         <div className="flex-1">
           <MdTextField label="Add your own, e.g. relational:left-out" data-testid="tl-emotion-own" value={own}
-            onInput={v => setOwn(v)} onEnter={add} onFocus={onFocus} onBlur={onBlur} />
+            onInput={v => setOwn(v)} onEnter={add} />
         </div>
         <button type="button" data-testid="tl-emotion-add" disabled={!typed} onClick={add}
           className="h-10 px-3 rounded-full text-primary md-label-large state-layer disabled:opacity-40">Add</button>

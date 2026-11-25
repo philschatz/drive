@@ -283,7 +283,7 @@ export function MarkerSheet({
     if (marker.kind === 'block') {
       return [
         {
-          id: 'mk-type', label: 'Block type', icon: 'format_paragraph', transactional: true,
+          id: 'mk-type', prop: null, label: 'Block type', icon: 'format_paragraph', transactional: true,
           summary: () => marker.block.type,
           render: textPane('Block type', marker.block.type, (raw, back) => {
             const type = raw.replace(/^¶\s*/, '').trim();
@@ -292,7 +292,7 @@ export function MarkerSheet({
           }, { supportingText: 'paragraph, heading, unordered-list-item, …' }),
         },
         {
-          id: 'mk-index', label: 'Position', icon: 'my_location', transactional: true,
+          id: 'mk-index', prop: null, label: 'Position', icon: 'my_location', transactional: true,
           summary: () => `${marker.index} of ${textLength}`,
           render: textPane('Position', String(marker.index), (raw, back) => {
             const n = position(raw, textLength);
@@ -303,7 +303,7 @@ export function MarkerSheet({
         {
           // A block's nesting depth IS its parents chain, so leaving it out would
           // hide the entire encoding of a nested list.
-          id: 'mk-parents', label: 'Parents', icon: 'account_tree', transactional: true,
+          id: 'mk-parents', prop: null, label: 'Parents', icon: 'account_tree', transactional: true,
           summary: () => JSON.stringify(marker.block.parents ?? []),
           render: textPane('Parents', JSON.stringify(marker.block.parents ?? []), (raw, back) => {
             let parents: any;
@@ -313,7 +313,7 @@ export function MarkerSheet({
           }, { supportingText: 'The nesting chain, as a JSON array of block types' }),
         },
         {
-          id: 'mk-attrs', label: 'Attrs', icon: 'tune', transactional: true,
+          id: 'mk-attrs', prop: null, label: 'Attrs', icon: 'tune', transactional: true,
           summary: () => JSON.stringify(marker.block.attrs ?? {}),
           render: textPane('Attrs', JSON.stringify(marker.block.attrs ?? {}), (raw, back) => {
             let attrs: any;
@@ -327,7 +327,7 @@ export function MarkerSheet({
 
     return [
       {
-        id: 'mk-name', label: 'Mark name', icon: 'label', transactional: true,
+        id: 'mk-name', prop: null, label: 'Mark name', icon: 'label', transactional: true,
         summary: () => marker.name,
         render: textPane('Mark name', marker.name, (raw, back) => {
           const name = raw.trim();
@@ -336,7 +336,7 @@ export function MarkerSheet({
         }, { supportingText: 'strong, em, link, …' }),
       },
       {
-        id: 'mk-range', label: 'Range', icon: 'straighten', transactional: true,
+        id: 'mk-range', prop: null, label: 'Range', icon: 'straighten', transactional: true,
         summary: () => `[${marker.start}, ${marker.end})`,
         // One draft over both ends, so widening a mark is a single change.
         render: ({ back }) => (
@@ -368,7 +368,7 @@ export function MarkerSheet({
         ),
       },
       {
-        id: 'mk-value', label: 'Value', icon: 'data_object', transactional: true,
+        id: 'mk-value', prop: null, label: 'Value', icon: 'data_object', transactional: true,
         summary: () => (typeof marker.value === 'string' ? marker.value : JSON.stringify(marker.value)),
         render: textPane(
           'Value',
@@ -387,6 +387,8 @@ export function MarkerSheet({
       open={open}
       title={`${footnoteLabel(index)} · ${markerHeadline(marker)}`}
       data-testid="marker-sheet"
+      // A marker is a range over rich text, not a property at a document path.
+      presence={null}
       properties={editable ? properties : properties.map(p => ({ ...p, render: undefined }))}
       onClose={onClose}
       banner={error ? (

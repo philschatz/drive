@@ -3,27 +3,10 @@ import { Temporal } from 'temporal-polyfill';
 import { MdTextField } from '@/components/ui/md-text-field';
 import { Button } from '@/components/ui/button';
 import { PropertySheet, SheetActions, SheetActionItem } from '../../common/PropertySheet';
-import type { PropertyDef } from '../../common/PropertySheet';
+import type { PropertyDef, SheetPresence } from '../../common/PropertySheet';
 import { FieldEditor, GroupEditor } from '../../common/FieldEditor';
-import type { PeerFieldInfo } from '../../common/presence';
 import type { KitchenRecipe } from '../../../../shared/schemas/kitchen';
 import { parseIngredient, formatIngredient } from './ingredients';
-
-export const RECIPE_FIELD_TO_PROP: Record<string, string> = {
-  'red-name': 'name',
-  'red-desc': 'description',
-  'red-yield': 'recipeYield',
-  'red-prep': 'prepTime',
-  'red-cook': 'cookTime',
-  'red-total': 'totalTime',
-  'red-category': 'recipeCategory',
-  'red-cuisine': 'recipeCuisine',
-  'red-ingredients': 'recipeIngredient',
-  'red-instructions': 'recipeInstructions',
-  'red-supply': 'supply',
-  'red-tool': 'tool',
-  'red-methods': 'cookingMethod',
-};
 
 const minutesFromIso = (iso: string | undefined): string => {
   if (!iso) return '';
@@ -83,8 +66,7 @@ const fieldsFrom = (recipe: KitchenRecipe | null): Fields => ({
  * before that discards the draft; there is deliberately no quick-add.
  */
 export function RecipeEditor({
-  opened, id, recipe, onCreate, onSave, onDelete, onClose,
-  onFieldFocus, editingPathBase, peerFocusedFields,
+  opened, id, recipe, onCreate, onSave, onDelete, onClose, presence,
 }: {
   opened: boolean;
   /** null = create mode. */
@@ -94,10 +76,9 @@ export function RecipeEditor({
   onSave: (id: string, recipe: KitchenRecipe) => void;
   onDelete: (id: string) => void;
   onClose: () => void;
-  onFieldFocus?: (path: (string | number)[] | null) => void;
-  /** ['recipes', id] while editing; null while creating (nothing to point at). */
-  editingPathBase?: (string | number)[] | null;
-  peerFocusedFields?: Record<string, PeerFieldInfo>;
+  /** Where the recipe lives (`['recipes', id]` in its document), for presence;
+   * null while creating — there is nothing in the document to point at yet. */
+  presence: SheetPresence | null;
 }) {
   const isNew = id === null;
   const [fields, setFields] = useState<Fields>(() => fieldsFrom(recipe));
@@ -125,11 +106,6 @@ export function RecipeEditor({
       return next;
     });
   }, [id, recipe]);
-
-  const focusField = useCallback((fieldId: string) => {
-    if (onFieldFocus && editingPathBase) onFieldFocus([...editingPathBase, RECIPE_FIELD_TO_PROP[fieldId]]);
-  }, [onFieldFocus, editingPathBase]);
-  const blurField = useCallback(() => onFieldFocus?.(null), [onFieldFocus]);
 
   /** The complete recipe the current fields describe. Unedited properties
    * (url, image, keywords) ride through from the saved recipe. Cleared optional
@@ -178,11 +154,13 @@ export function RecipeEditor({
   };
   const missing = missingForCreate(fields);
 
+  /** A one-field pane. `prop` is the recipe property it edits (for presence). */
   const textPane = (
-    fieldId: string, label: string, icon: string, key: keyof Fields,
+    fieldId: string, prop: string, label: string, icon: string, key: keyof Fields,
     opts: { required?: boolean; textarea?: boolean; rows?: number; summary?: () => string } = {},
   ): PropertyDef => ({
     id: fieldId,
+    prop,
     label,
     icon,
     summary: opts.summary ?? (() => fields[key]),
@@ -202,8 +180,6 @@ export function RecipeEditor({
             data-testid={fieldId}
             value={value}
             onInput={onInput}
-            onFocus={() => focusField(fieldId)}
-            onBlur={blurField}
             {...(opts.textarea
               ? { type: 'textarea' as const, rows: opts.rows ?? 6 }
               : { onEnter: save })}
@@ -219,13 +195,14 @@ export function RecipeEditor({
   };
 
   const properties: PropertyDef[] = [
-    textPane('red-name', 'Name', 'edit', 'name', { required: true }),
-    textPane('red-desc', 'Description', 'notes', 'description', { required: true, textarea: true, rows: 3 }),
+    textPane('red-name', 'name', 'Name', 'edit', 'name', { required: true }),
+    textPane('red-desc', 'description', 'Description', 'notes', 'description', { required: true, textarea: true, rows: 3 }),
     {
       id: 'red-times',
+      prop: ['prepTime', 'cookTime', 'totalTime'],
+      grouped: true,
       label: 'Time',
       icon: 'schedule',
-      presenceIds: ['red-prep', 'red-cook', 'red-total'],
       summary: () => {
         const parts = [];
         if (fields.prepMin) parts.push(`${fields.prepMin} min prep`);
@@ -254,8 +231,6 @@ export function RecipeEditor({
                   data-testid={fid}
                   value={draft[key]}
                   onInput={v => patch({ [key]: v } as any)}
-                  onFocus={() => focusField(fid)}
-                  onBlur={blurField}
                 />
               ))}
             </div>
@@ -263,26 +238,26 @@ export function RecipeEditor({
         </GroupEditor>
       ),
     },
-    textPane('red-yield', 'Servings', 'group', 'yieldStr', { required: true }),
-    textPane('red-category', 'Category', 'category', 'category'),
-    textPane('red-cuisine', 'Cuisine', 'public', 'cuisine'),
-    textPane('red-ingredients', 'Ingredients', 'grocery', 'ingredientsText', {
+    textPane('red-yield', 'recipeYield', 'Servings', 'group', 'yieldStr', { required: true }),
+    textPane('red-category', 'recipeCategory', 'Category', 'category', 'category'),
+    textPane('red-cuisine', 'recipeCuisine', 'Cuisine', 'public', 'cuisine'),
+    textPane('red-ingredients', 'recipeIngredient', 'Ingredients', 'grocery', 'ingredientsText', {
       required: true, textarea: true, rows: 10,
       summary: () => lineCount(fields.ingredientsText, 'ingredient'),
     }),
-    textPane('red-instructions', 'Instructions', 'list_alt', 'instructionsText', {
+    textPane('red-instructions', 'recipeInstructions', 'Instructions', 'list_alt', 'instructionsText', {
       required: true, textarea: true, rows: 10,
       summary: () => lineCount(fields.instructionsText, 'step'),
     }),
-    textPane('red-supply', 'Pantry staples', 'kitchen', 'supplyText', {
+    textPane('red-supply', 'supply', 'Pantry staples', 'kitchen', 'supplyText', {
       textarea: true, rows: 5,
       summary: () => lineCount(fields.supplyText, 'staple'),
     }),
-    textPane('red-tool', 'Tools', 'handyman', 'toolText', {
+    textPane('red-tool', 'tool', 'Tools', 'handyman', 'toolText', {
       textarea: true, rows: 5,
       summary: () => lineCount(fields.toolText, 'tool'),
     }),
-    textPane('red-methods', 'Techniques', 'school', 'methodsText', {
+    textPane('red-methods', 'cookingMethod', 'Techniques', 'school', 'methodsText', {
       textarea: true, rows: 5,
       summary: () => lineCount(fields.methodsText, 'technique'),
     }),
@@ -294,7 +269,7 @@ export function RecipeEditor({
       title={isNew ? 'New recipe' : 'Edit recipe'}
       data-testid="recipe-editor"
       properties={properties}
-      peerFocusedFields={peerFocusedFields}
+      presence={presence}
       initialDetailId={isNew ? 'red-name' : null}
       onClose={onClose}
       footer={isNew ? (

@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor } from '@testing-library/preact';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/preact';
 
 // Back the worker API with the in-memory + jq mock so the real Tasks container
 // runs in jsdom (single browser, no peers). The md-* custom elements are NOT
@@ -253,3 +253,50 @@ describe('history mode highlights', () => {
     expect(scrolled).toHaveBeenCalledTimes(1);
   });
 });
+
+// Presence comes from the shared pieces — the route, the title bar and the
+// editor sheet — so the container wires none of it. These pin what a peer sees.
+describe('Tasks presence', () => {
+  const focused = () => mock.__presenceSent(DOC)?.focusedField;
+  const peerOn = (...path: (string | number)[]) =>
+    act(() => mock.__setPresence(DOC, {
+      'alice-drive': { peerId: 'alice-drive', value: { viewing: true, focusedField: path, userGroupId: 'alice' } },
+    }));
+
+  beforeEach(() => {
+    mock.__reset();
+    mock.__setDoc(DOC, {
+      '@type': 'TaskList', name: 'Test Tasks',
+      tasks: { t1: { '@type': 'Task', title: 'Buy milk', progress: 'needs-action' } },
+    });
+  });
+
+  it('announces viewing, then the task while its editor is open, then the field while its pane is', async () => {
+    render(<Tasks docId={DOC} />);
+    await screen.findByText('Buy milk');
+    expect(mock.__presenceSent(DOC)).toEqual({ viewing: true, focusedField: null });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Buy milk' }));
+    expect(focused()).toEqual(['tasks', 't1']);
+
+    fireEvent.click(screen.getByTestId('ted-due-row'));
+    expect(focused()).toEqual(['tasks', 't1', 'due']);
+    fireEvent.click(screen.getByTestId('ted-due-cancel'));
+    expect(focused()).toEqual(['tasks', 't1']);
+
+    closeSheet();
+    expect(focused()).toBeNull();
+  });
+
+  it('shows a peer on the task they have open and on the field in its editor', async () => {
+    render(<Tasks docId={DOC} />);
+    await screen.findByText('Buy milk');
+    peerOn('tasks', 't1', 'due');
+    expect(rowOf('Buy milk').querySelector('[data-testid="peer-dot"]')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit Buy milk' }));
+    expect(screen.getByTestId('ted-due-row').querySelector('[data-testid="peer-dot"]')).toBeTruthy();
+    expect(screen.getByTestId('ted-title-row').querySelector('[data-testid="peer-dot"]')).toBeNull();
+  });
+});
+

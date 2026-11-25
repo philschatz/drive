@@ -26,7 +26,7 @@ const PARTIAL_HINT = 'YYYY, YYYY-MM or YYYY-MM-DD';
 export const ENDED_UNKNOWN = 'Ended — not sure when';
 
 export function FuzzyDatePane({
-  idPrefix, value, birth, hint, onSave, onCancel, onFocus, onBlur, allowAge = true, ongoing = false,
+  idPrefix, value, birth, hint, onSave, onCancel, allowAge = true, ongoing = false,
 }: {
   /** 'tl-when' / 'tl-until': testids and ids, kept apart so the two panes never share a draft. */
   idPrefix: string;
@@ -37,8 +37,6 @@ export function FuzzyDatePane({
   /** null = clear the date. */
   onSave: (value: FuzzyDate | null) => void;
   onCancel: () => void;
-  onFocus: () => void;
-  onBlur: () => void;
   allowAge?: boolean;
   /** A chapter's end: offer "Still going". */
   ongoing?: boolean;
@@ -65,31 +63,30 @@ export function FuzzyDatePane({
     >
       {({ draft, patch }) => {
         const result = fromDraft(draft, birth);
-        const common = { onFocus, onBlur };
         const year = (label = 'Year') => (
           <MdTextField label={label} type="number" data-testid={field('year')} value={draft.year}
-            onInput={v => patch({ year: v })} {...common} />
+            onInput={v => patch({ year: v })} />
         );
         return (
           <div className="flex flex-col gap-3" data-testid={`${idPrefix}-pane`}>
             {hint && <p className="text-sm text-muted-foreground" data-testid={field('hint')}>{hint}</p>}
             <MdSelect label="How precise?" data-testid={field('kind')} value={draft.kind} options={options}
-              onValueChange={v => patch({ kind: v as PresetKind })} {...common} />
+              onValueChange={v => patch({ kind: v as PresetKind })} />
             {draft.kind === 'day' && (
               <MdTextField label="Date" type="date" data-testid={field('day')} value={draft.day}
-                onInput={v => patch({ day: v })} {...common} />
+                onInput={v => patch({ day: v })} />
             )}
             {draft.kind === 'month' && (
               <div className="flex gap-2">
                 <MdSelect label="Month" data-testid={field('month')} value={draft.month} options={MONTH_OPTIONS}
-                  onValueChange={v => patch({ month: v })} {...common} />
+                  onValueChange={v => patch({ month: v })} />
                 {year()}
               </div>
             )}
             {draft.kind === 'season' && (
               <div className="flex gap-2">
                 <MdSelect label="Season" data-testid={field('season')} value={draft.season} options={SEASON_OPTIONS}
-                  onValueChange={v => patch({ season: v as Season })} {...common} />
+                  onValueChange={v => patch({ season: v as Season })} />
                 {year()}
               </div>
             )}
@@ -99,20 +96,20 @@ export function FuzzyDatePane({
               <div className="flex gap-2">
                 {year()}
                 <MdTextField label="Give or take (years)" type="number" min={1} data-testid={field('spread')}
-                  value={draft.spread} onInput={v => patch({ spread: v })} {...common} />
+                  value={draft.spread} onInput={v => patch({ spread: v })} />
               </div>
             )}
             {draft.kind === 'age' && (
               <MdTextField label="Your age" type="number" min={0} data-testid={field('age')} value={draft.age}
-                onInput={v => patch({ age: v })} {...common} />
+                onInput={v => patch({ age: v })} />
             )}
             {(draft.kind === 'between' || draft.kind === 'after') && (
               <MdTextField label={draft.kind === 'after' ? 'After' : 'From'} supportingText={PARTIAL_HINT}
-                data-testid={field('from')} value={draft.from} onInput={v => patch({ from: v })} {...common} />
+                data-testid={field('from')} value={draft.from} onInput={v => patch({ from: v })} />
             )}
             {(draft.kind === 'between' || draft.kind === 'before') && (
               <MdTextField label={draft.kind === 'before' ? 'Before' : 'To'} supportingText={PARTIAL_HINT}
-                data-testid={field('to')} value={draft.to} onInput={v => patch({ to: v })} {...common} />
+                data-testid={field('to')} value={draft.to} onInput={v => patch({ to: v })} />
             )}
             <p className="text-sm" data-testid={field('preview')}>
               {result === null ? <span className="text-muted-foreground">Incomplete</span>

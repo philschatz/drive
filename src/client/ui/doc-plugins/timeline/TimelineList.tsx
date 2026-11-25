@@ -190,7 +190,7 @@ export function TimelineList(p: TimelineListProps) {
         }}
         end={
           <span className="flex items-center gap-1">
-            {peer && <PresenceDot fieldId={uid} peerFocusedFields={p.peerEditing} />}
+            <PresenceDot peer={peer} />
             {b.conflicts.length > 0 && <span className="material-symbols-outlined text-error text-lg" title="Conflicting answers">error</span>}
             {ev.revisit !== undefined && <span className="material-symbols-outlined text-lg" title="Revisit later">flag</span>}
             {movable && (

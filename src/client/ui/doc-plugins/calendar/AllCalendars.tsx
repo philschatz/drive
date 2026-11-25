@@ -1,9 +1,8 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'preact/hooks';
 import '@schedule-x/theme-default/dist/index.css';
 import './calendar.css';
-import type { PeerState } from '../../common/automerge';
 import { openDoc, subscribeQuery, updateDoc, queryDoc, deepAssign, fetchDocList } from '../../worker-api';
-import { initPresence, colorForKey, type PresenceState } from '../../common/presence';
+import { ViewingPresence, colorForKey } from '../../common/presence';
 import { DocumentTitleBar } from '../../common/DocumentTitleBar';
 import { onThemeChange } from '../../common/theme';
 import type { CalendarEvent } from '../../../../shared/schemas/calendar';
@@ -15,7 +14,6 @@ import { CalendarSettings } from './CalendarSettings';
 import { calendarQuery, expandRange } from './calendar-query';
 import { useCalendarEditor } from './useCalendarEditor';
 import { useEventMutations } from './useEventMutations';
-import { usePeerFocusedFields } from './usePeerFocusedFields';
 import { getInitialDateRange, makeSXCallbacks } from './calendar-utils';
 
 interface LoadedCalendar {
@@ -39,7 +37,6 @@ export function AllCalendars({ path }: { path?: string }) {
   const [calendars, setCalendars] = useState<LoadedCalendar[]>([]);
   const [status, setStatus] = useState('Loading calendars...');
   const [settingsDocId, setSettingsDocId] = useState<string | null>(null);
-  const [peerStates, setPeerStates] = useState<Record<string, PeerState<PresenceState>>>({});
 
   const calendarsRef = useRef<LoadedCalendar[]>([]);
   calendarsRef.current = calendars;
@@ -48,7 +45,6 @@ export function AllCalendars({ path }: { path?: string }) {
   const queryRangeRef = useRef({ start: '', end: '' });
   const eventsPluginRef = useRef<any>(null);
   const calendarSXRef = useRef<any>(null);
-  const presenceMapRef = useRef<Map<string, { broadcast: (key: keyof PresenceState, value: any) => void; cleanup: () => void }>>(new Map());
 
   const findCalendar = useCallback((docId: string) => {
     return calendarsRef.current.find(c => c.docId === docId) || null;
@@ -68,7 +64,6 @@ export function AllCalendars({ path }: { path?: string }) {
 
   const { editorState, setEditorState, editorStateRef, openEditor, refreshEditorFromEvents } = useCalendarEditor(getEvents);
   const mutations = useEventMutations(setEditorState);
-  const peerFocusedFields = usePeerFocusedFields(peerStates, editorState);
 
   const refreshCalendar = useCallback(() => {
     const range = currentRangeRef.current;
@@ -118,22 +113,6 @@ export function AllCalendars({ path }: { path?: string }) {
     if (editorState?.calDocId) return editorState.calDocId;
     return calendars[0]?.docId || '';
   }, [editorState, calendars]);
-
-  // Broadcast presence focus field changes
-  useEffect(() => {
-    if (!editorState) {
-      for (const { broadcast } of presenceMapRef.current.values()) {
-        broadcast('focusedField', null);
-      }
-    }
-  }, [editorState]);
-
-  const handleFieldFocus = useCallback((path: (string | number)[] | null) => {
-    const es = editorStateRef.current;
-    if (!es) return;
-    const entry = presenceMapRef.current.get(es.calDocId!);
-    entry?.broadcast('focusedField', path);
-  }, [editorStateRef]);
 
   const calendarListForEditor = useMemo(() => {
     return calendars.map(c => ({ docId: c.docId, name: c.name, color: c.color }));
@@ -188,29 +167,6 @@ export function AllCalendars({ path }: { path?: string }) {
       calendarsRef.current = loaded;
       setStatus('');
       document.title = 'All Calendars';
-
-      // Set up presence for each calendar
-      for (const cal of loaded) {
-        const { broadcast, cleanup } = initPresence<PresenceState>(
-          cal.docId,
-          () => ({ viewing: true, focusedField: null }),
-          (states) => {
-            if (!mounted) return;
-            // Merge peer states from all calendars
-            setPeerStates(prev => {
-              const next = { ...prev };
-              for (const key of Object.keys(next)) {
-                if (key.startsWith(cal.docId + ':')) delete next[key];
-              }
-              for (const [key, val] of Object.entries(states)) {
-                next[cal.docId + ':' + key] = val;
-              }
-              return next;
-            });
-          },
-        );
-        presenceMapRef.current.set(cal.docId, { broadcast, cleanup });
-      }
 
       // Initialize schedule-x calendar
       const sources: CalendarSource[] = loaded.map(c => ({
@@ -304,8 +260,6 @@ export function AllCalendars({ path }: { path?: string }) {
       for (const unsub of unsubscribes) unsub();
       calendarSXRef.current?.destroy();
       calendarSXRef.current = null;
-      for (const { cleanup } of presenceMapRef.current.values()) cleanup();
-      presenceMapRef.current.clear();
     };
   }, [openEditor, refreshCalendar, findCalendar, refreshEditorFromEvents]);
 
@@ -331,6 +285,10 @@ export function AllCalendars({ path }: { path?: string }) {
         ))}
       </div>
       {status && <p className="text-sm text-muted-foreground my-1">{status}</p>}
+      {/* This page has every calendar open at once, so it is viewing each of
+          them: one announcement per document, through the same store the
+          single-calendar route uses. */}
+      {calendars.map(c => <ViewingPresence key={c.docId} docId={c.docId} />)}
       <div id="sx-cal" />
       <EventEditor
         uid={editorState?.uid || ''}
@@ -352,8 +310,8 @@ export function AllCalendars({ path }: { path?: string }) {
           const master = cal.events[uid];
           if (master) openEditor(uid, master, null, null, es.calDocId);
         }}
-        onFieldFocus={handleFieldFocus}
-        peerFocusedFields={peerFocusedFields}
+        // The event's own calendar is the document its presence belongs to.
+        presence={editorState && activeCalDocId ? { docId: activeCalDocId, path: ['events', editorState.uid] } : null}
         calendars={calendarListForEditor}
         calDocId={activeCalDocId}
         onMoveToCalendar={moveEvent}

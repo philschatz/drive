@@ -2,12 +2,10 @@ import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
 import '@schedule-x/theme-default/dist/index.css';
 import './calendar.css';
 import { subscribeQuery, updateDoc, deepAssign } from '../../worker-api';
-import { peerDisplayName, usePresence } from '../../common/presence';
 import { DocumentTitleBar } from '../../common/DocumentTitleBar';
 import { useDocumentHistory } from '../../common/useDocumentHistory';
 import { useEditorUndoRedo } from '../../common/useUndoRedo';
 import { useCanEdit } from '../../common/useCanEdit';
-import { useFocusPathSync } from '../../common/useFocusPathSync';
 import { onThemeChange } from '../../common/theme';
 import { HistorySlider } from '../../common/HistorySlider';
 import type { CalendarEvent } from '../../../../shared/schemas/calendar';
@@ -25,7 +23,6 @@ import { DocLoader } from '../../common/useDocument';
 import { calendarQuery, expandRange } from './calendar-query';
 import { useCalendarEditor } from './useCalendarEditor';
 import { useEventMutations } from './useEventMutations';
-import { usePeerFocusedFields } from './usePeerFocusedFields';
 import { getInitialDateRange, makeSXCallbacks } from './calendar-utils';
 import { HEX_COLOR_RE } from '../../../../shared/schemas/core';
 
@@ -74,8 +71,6 @@ function CalendarInner({ docId, readOnly, initialEventId }: { docId: string; rea
   const getEvents = useCallback(() => eventsRef.current, []);
   const { editorState, setEditorState, openEditor, refreshEditorFromEvents } = useCalendarEditor(getEvents);
   const mutations = useEventMutations(setEditorState);
-  const { peers, peerList, broadcast } = usePresence(docId);
-  const peerFocusedFields = usePeerFocusedFields(peers, editorState);
 
   const refreshCalendar = useCallback(() => {
     const range = currentRangeRef.current;
@@ -91,18 +86,6 @@ function CalendarInner({ docId, readOnly, initialEventId }: { docId: string; rea
       eventsPluginRef.current.set(sxEvents);
     }
   }, []);
-
-  // Automerge path to the focused field (drives presence, URL, and Edit Source link)
-  const [focusedPath, setFocusedPath] = useState<(string | number)[] | null>(null);
-  const focusPath: (string | number)[] | undefined = focusedPath ?? (editorState ? ['events', editorState.uid] : undefined);
-
-  const handleFieldFocus = useCallback((path: (string | number)[] | null) => {
-    setFocusedPath(path);
-  }, []);
-
-  // Clear a stale field focus when the editor closes; sync presence.
-  useEffect(() => { if (!editorState) setFocusedPath(null); }, [editorState]);
-  useFocusPathSync(focusPath, broadcast);
 
   // History mode: tint what the version on screen did to each event, bring the
   // ones it removed back as ghosts (drawn, never opened or dragged), move the
@@ -236,8 +219,6 @@ function CalendarInner({ docId, readOnly, initialEventId }: { docId: string; rea
           document.title = name + ' - Calendar';
         }}
         docId={docId}
-        peers={peerList}
-        peerTitle={(peer) => `${peerDisplayName(peer.peerId, peer.value?.userGroupId)}${peer.value?.focusedField ? ' (editing)' : ''}`}
         onToggleHistory={history.toggleHistory}
         historyActive={history.active}
         onUndo={canEdit ? undo : undefined}
@@ -245,7 +226,7 @@ function CalendarInner({ docId, readOnly, initialEventId }: { docId: string; rea
         canUndo={canUndo}
         canRedo={canRedo}
         hasValidationErrors={validationErrors.length > 0}
-        sourcePath={focusPath}
+        sourcePath={editorState ? ['events', editorState.uid] : undefined}
         overflow={canEdit
           ? [{ icon: 'palette', label: 'Calendar settings', onSelect: () => setCalSettingsOpen(true) }]
           : []}
@@ -293,8 +274,10 @@ function CalendarInner({ docId, readOnly, initialEventId }: { docId: string; rea
           const master = eventsRef.current[uid];
           if (master) openEditor(uid, master, null, null);
         }}
-        onFieldFocus={handleFieldFocus}
-        peerFocusedFields={peerFocusedFields}
+        // Presence needs nothing else from this view: the route announces
+        // viewing, the title bar lists who is here, and the editor's sheet
+        // announces the open event and pane.
+        presence={editorState ? { docId, path: ['events', editorState.uid] } : null}
       />
       </div>
     </div>

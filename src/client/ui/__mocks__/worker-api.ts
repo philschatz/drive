@@ -144,8 +144,10 @@ function resolveCursors(docId: string, path: (string | number)[]): Record<string
   return out;
 }
 
-// Presence: subscribable so container tests can inject peers (__setPresence).
+// Presence: subscribable so container tests can inject peers (__setPresence), and
+// recorded so they can assert what this client announced (__presenceSent).
 const presenceSubs = new Map<string, Set<(peers: Record<string, any>) => void>>();
+const presenceCalls = new Map<string, Record<string, any>[]>();
 
 /** Marker so a test can prove it got THIS module and not the real worker-api. */
 export const __isMock = true;
@@ -156,6 +158,7 @@ export function __reset(): void {
   querySubs.clear();
   spansStore.clear();
   presenceSubs.clear();
+  presenceCalls.clear();
   cursors.clear();
   cursorSubs.clear();
   versions.clear();
@@ -174,6 +177,16 @@ export function __reset(): void {
 /** Push a presence peer map ({ peerId: { peerId, value } }) to subscribers. */
 export function __setPresence(docId: string, peers: Record<string, any>): void {
   for (const cb of presenceSubs.get(docId) ?? []) cb(peers);
+}
+/** Every setPresence patch this client sent for a doc, in order. */
+export function __presenceCalls(docId: string): Record<string, any>[] {
+  return presenceCalls.get(docId) ?? [];
+}
+/** What this client is announcing for a doc: its patches merged, as the engine
+ *  merges them. Undefined until something has been sent. */
+export function __presenceSent(docId: string): Record<string, any> | undefined {
+  const calls = presenceCalls.get(docId);
+  return calls?.length ? Object.assign({}, ...calls) : undefined;
 }
 /** Seed rich-text spans for a Peritext field (and its flat-text mirror). */
 export function __setSpans(docId: string, path: (string | number)[], spans: RichTextSpan[]): void {
@@ -409,7 +422,11 @@ export function subscribePresence(docId: string, cb: (peers: Record<string, any>
   subs.add(cb);
   return () => { subs!.delete(cb); };
 }
-export function setPresence(): void {}
+export function setPresence(docId: string, state: Record<string, any>): void {
+  let calls = presenceCalls.get(docId);
+  if (!calls) { calls = []; presenceCalls.set(docId, calls); }
+  calls.push(JSON.parse(JSON.stringify(state)));
+}
 
 /**
  * Mint cursor tokens for flat-text positions (see the MockCursor notes above).

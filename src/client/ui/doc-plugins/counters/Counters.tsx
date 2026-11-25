@@ -1,12 +1,11 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'preact/hooks';
 import { subscribeQuery, updateDoc } from '../../worker-api';
-import { peerColor, peerDisplayName, usePresence, type PeerFieldInfo } from '../../common/presence';
+import { usePeersAt, type PeerFieldInfo } from '../../common/presence';
 import { PresenceDot } from '../../common/PeerDot';
 import { DocumentTitleBar } from '../../common/DocumentTitleBar';
 import { useDocumentHistory } from '../../common/useDocumentHistory';
 import { useEditorUndoRedo } from '../../common/useUndoRedo';
 import { useCanEdit } from '../../common/useCanEdit';
-import { useFocusPathSync } from '../../common/useFocusPathSync';
 import { HistorySlider } from '../../common/HistorySlider';
 import { useRevealChange } from '../../common/useRevealChange';
 import { itemChanges, removedItems, withGhosts, type ChangeKind } from '../../../../shared/version-changes';
@@ -60,17 +59,6 @@ const STATUS_LABELS: Record<CounterStatus, string> = {
  */
 const SECTION_LABELS: Record<CounterStatus, string> = { ...STATUS_LABELS, due: 'To do' };
 const NO_GHOSTS: ReadonlySet<string> = new Set();
-
-/** Which editor inputs highlight when a peer focuses a given event property.
- * The recurrence-rule cluster (freq/interval/weekdays) shares one doc path. */
-const PATH_PROP_TO_FIELDS: Record<string, string[]> = {
-  title: ['ced-title'],
-  start: ['ced-due'],
-  startTime: ['ced-time'],
-  duration: ['ced-end'],
-  description: ['ced-reward'],
-  recurrenceRule: ['ced-freq', 'ced-interval', 'ced-bydays'],
-};
 
 function generateUid() {
   return Date.now() + '-' + Math.random().toString(36).substr(2, 9);
@@ -316,7 +304,7 @@ function CounterListItem({ uid, ev, status, streak, reward, dueAt, canEdit, peer
                 </Badge>
               )
             : clickCount > 0 && <Badge variant="outline" title={`${clickCount} recorded`}>{clickCount}×</Badge>}
-          <PresenceDot fieldId={uid} peerFocusedFields={peerEditingEvents} />
+          <PresenceDot peer={peerEditingEvents[uid]} />
         </>
       }
     >
@@ -361,7 +349,6 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
   const validationErrors = useDocumentValidation(docId);
   const { canEdit, canEditRef, noAccess } = useCanEdit(docId, readOnly, history);
   const { confirm, confirmSheet } = useConfirm();
-  const { peers, peerList, broadcast } = usePresence(docId);
   const editorStateRef = useRef(editorState);
   editorStateRef.current = editorState;
   // The mutations below need the current event to compute anchors before handing
@@ -604,18 +591,6 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
     setEditorState({ uid: uid!, event: event!, isNew });
   }, []);
 
-  // Automerge path to the focused field (drives presence, URL, and Edit Source link)
-  const [focusedPath, setFocusedPath] = useState<(string | number)[] | null>(null);
-  const focusPath: (string | number)[] | undefined = focusedPath ?? (editorState ? ['events', editorState.uid] : undefined);
-
-  const handleFieldFocus = useCallback((path: (string | number)[] | null) => {
-    setFocusedPath(path);
-  }, []);
-
-  // Clear a stale field focus when the editor closes; sync presence.
-  useEffect(() => { if (!editorState) setFocusedPath(null); }, [editorState]);
-  useFocusPathSync(focusPath, broadcast);
-
   useEffect(() => {
     if (!docId) return;
     let mounted = true;
@@ -654,37 +629,10 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
     return () => { mounted = false; unsubscribe(); };
   }, [docId]);
 
-  const peerEditingEvents = useMemo(() => {
-    const result: Record<string, PeerFieldInfo> = {};
-    for (const peer of Object.values(peers)) {
-      const pf = peer.value?.focusedField;
-      if (pf && pf[0] === 'events' && pf[1]) {
-        const userGroupId = peer.value?.userGroupId;
-        result[pf[1] as string] = { color: peerColor(peer.peerId, userGroupId), peerId: peer.peerId, userGroupId };
-      }
-    }
-    return result;
-  }, [peers]);
-
-  // Per-field presence inside the open editor: map peers' focused doc paths
-  // (['events', uid, prop]) onto the editor's input ids (mirrors Tasks).
-  const peerFocusedFields = useMemo(() => {
-    const result: Record<string, PeerFieldInfo> = {};
-    if (!editorState) return result;
-    for (const peer of Object.values(peers)) {
-      const pf = peer.value?.focusedField;
-      if (!pf || pf.length < 3) continue;
-      if (pf[0] !== 'events' || pf[1] !== editorState.uid) continue;
-      const prop = pf[2] as string;
-      const inputIds = PATH_PROP_TO_FIELDS[prop];
-      if (inputIds) {
-        const userGroupId = peer.value?.userGroupId;
-        const info = { color: peerColor(peer.peerId, userGroupId), peerId: peer.peerId, userGroupId };
-        for (const id of inputIds) result[id] = info;
-      }
-    }
-    return result;
-  }, [peers, editorState]);
+  // Presence is not wired here: the route announces viewing, the title bar
+  // lists who is on the document, and the editor sheet announces the open
+  // counter and field. All this view adds is the dot on a row a peer has open.
+  const peerEditingEvents = usePeersAt(docId, ['events']);
 
   // History mode: what the version on screen did to each counter, and the ones
   // it removed put back as ghosts — the common case here, since completing a
@@ -752,8 +700,6 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
           document.title = name + ' - Counters';
         }}
         docId={docId}
-        peers={peerList}
-        peerTitle={(peer) => `${peerDisplayName(peer.peerId, peer.value?.userGroupId)}${peer.value?.focusedField ? ' (editing)' : ''}`}
         onToggleHistory={history.toggleHistory}
         historyActive={history.active}
         onUndo={canEdit ? undo : undefined}
@@ -761,7 +707,7 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
         canUndo={canUndo}
         canRedo={canRedo}
         hasValidationErrors={validationErrors.length > 0}
-        sourcePath={focusPath}
+        sourcePath={editorState ? ['events', editorState.uid] : undefined}
         action={{ icon: 'bar_chart', label: 'Chart', onSelect: () => setChartOpen(true) }}
       />
       <HistorySlider history={history} />
@@ -888,8 +834,7 @@ export function Counters({ docId, rest, readOnly }: { docId?: string; rest?: str
         onCreated={() => setEditorState(prev => (prev ? { ...prev, isNew: false } : prev))}
         onArchive={archiveCounter}
         onUnarchive={unarchiveCounter}
-        onFieldFocus={handleFieldFocus}
-        peerFocusedFields={peerFocusedFields}
+        presence={editorState ? { docId, path: ['events', editorState.uid] } : null}
         suggestCounters={canEdit ? suggestCounters : undefined}
         onUseExisting={useExistingCounter}
       />

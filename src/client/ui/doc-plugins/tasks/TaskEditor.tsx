@@ -1,13 +1,12 @@
-import { useState, useEffect, useRef, useMemo, useCallback } from 'preact/hooks';
+import { useState, useEffect, useRef } from 'preact/hooks';
 import { MdTextField } from '@/components/ui/md-text-field';
 import { MdSelect } from '@/components/ui/md-select';
 import { MdSlider } from '@/components/ui/md-slider';
 import { Button } from '@/components/ui/button';
 import type { Task } from '../../../../shared/schemas/tasks';
 import { PropertySheet, SheetActions, SheetActionItem } from '../../common/PropertySheet';
-import type { PropertyDef } from '../../common/PropertySheet';
+import type { PropertyDef, SheetPresence } from '../../common/PropertySheet';
 import { FieldEditor } from '../../common/FieldEditor';
-import type { PeerFieldInfo } from '../../common/presence';
 
 interface TaskEditorProps {
   uid: string;
@@ -19,17 +18,9 @@ interface TaskEditorProps {
   onClose: () => void;
   /** Rapid entry: after saving a NEW task via Enter, reopen a fresh blank one. */
   onAddAnother?: () => void;
-  onFieldFocus?: (path: (string | number)[] | null) => void;
-  peerFocusedFields?: Record<string, PeerFieldInfo>;
+  /** Where the task lives (`['tasks', uid]` in its document), for presence. */
+  presence: SheetPresence | null;
 }
-
-const FIELD_TO_PROP: Record<string, string> = {
-  'ted-title': 'title',
-  'ted-due': 'due',
-  'ted-priority': 'priority',
-  'ted-progress': 'progress',
-  'ted-desc': 'description',
-};
 
 const PROGRESS_OPTIONS = [
   { value: 'needs-action', label: 'Needs action' },
@@ -39,22 +30,7 @@ const PROGRESS_OPTIONS = [
   { value: 'cancelled', label: 'Cancelled' },
 ];
 
-export function TaskEditor({ uid, task, isNew, opened, onSave, onDelete, onClose, onAddAnother, onFieldFocus, peerFocusedFields }: TaskEditorProps) {
-  const fieldToPath = useMemo(() => {
-    const map: Record<string, (string | number)[]> = {};
-    for (const [inputId, prop] of Object.entries(FIELD_TO_PROP)) {
-      map[inputId] = ['tasks', uid, prop];
-    }
-    return map;
-  }, [uid]);
-
-  const focusField = useCallback((fieldId: string) => {
-    if (onFieldFocus && fieldToPath[fieldId]) onFieldFocus(fieldToPath[fieldId]);
-  }, [onFieldFocus, fieldToPath]);
-  const blurField = useCallback(() => {
-    if (onFieldFocus) onFieldFocus(null);
-  }, [onFieldFocus]);
-
+export function TaskEditor({ uid, task, isNew, opened, onSave, onDelete, onClose, onAddAnother, presence }: TaskEditorProps) {
   const [title, setTitle] = useState(task.title || '');
   const [due, setDue] = useState(task.due ? task.due.substring(0, 10) : '');
   const [priority, setPriority] = useState(task.priority || 0);
@@ -115,6 +91,7 @@ export function TaskEditor({ uid, task, isNew, opened, onSave, onDelete, onClose
   const properties: PropertyDef[] = [
     {
       id: 'ted-title',
+      prop: 'title',
       label: 'Title',
       icon: 'edit',
       summary: () => title,
@@ -149,8 +126,6 @@ export function TaskEditor({ uid, task, isNew, opened, onSave, onDelete, onClose
               data-testid="ted-title"
               value={value}
               onInput={onInput}
-              onFocus={() => focusField('ted-title')}
-              onBlur={blurField}
               onEnter={save}
             />
           )}
@@ -159,6 +134,7 @@ export function TaskEditor({ uid, task, isNew, opened, onSave, onDelete, onClose
     },
     {
       id: 'ted-due',
+      prop: 'due',
       label: 'Due date',
       icon: 'event',
       summary: () => due,
@@ -177,8 +153,6 @@ export function TaskEditor({ uid, task, isNew, opened, onSave, onDelete, onClose
               data-testid="ted-due"
               value={value}
               onInput={onInput}
-              onFocus={() => focusField('ted-due')}
-              onBlur={blurField}
             />
           )}
         </FieldEditor>
@@ -186,6 +160,7 @@ export function TaskEditor({ uid, task, isNew, opened, onSave, onDelete, onClose
     },
     {
       id: 'ted-priority',
+      prop: 'priority',
       label: 'Priority',
       icon: 'flag',
       summary: () => (priority ? String(priority) : ''),
@@ -221,8 +196,6 @@ export function TaskEditor({ uid, task, isNew, opened, onSave, onDelete, onClose
                 value={parseInt(value) || 5}
                 supportingText="9 is highest, 1 is lowest"
                 onInput={v => onInput(String(v))}
-                onFocus={() => focusField('ted-priority')}
-                onBlur={blurField}
               />
               <div className="mt-3">
                 {/* Clearing bypasses the draft: an immediate commit like the
@@ -242,6 +215,7 @@ export function TaskEditor({ uid, task, isNew, opened, onSave, onDelete, onClose
     },
     {
       id: 'ted-progress',
+      prop: 'progress',
       label: 'Progress',
       icon: 'donut_large',
       summary: () => progressLabel,
@@ -252,12 +226,10 @@ export function TaskEditor({ uid, task, isNew, opened, onSave, onDelete, onClose
           value={progress}
           options={PROGRESS_OPTIONS}
           // No commit-on-blur: opening the menu blurs the host (see md-select).
-          onFocus={() => focusField('ted-progress')}
           onValueChange={v => {
             const next = (v || 'needs-action') as NonNullable<Task['progress']>;
             setProgress(next);
             commit({ progress: next });
-            blurField();
             back();
           }}
         />
@@ -265,6 +237,7 @@ export function TaskEditor({ uid, task, isNew, opened, onSave, onDelete, onClose
     },
     {
       id: 'ted-desc',
+      prop: 'description',
       label: 'Description',
       icon: 'notes',
       summary: () => description,
@@ -284,8 +257,6 @@ export function TaskEditor({ uid, task, isNew, opened, onSave, onDelete, onClose
               data-testid="ted-desc"
               value={value}
               onInput={onInput}
-              onFocus={() => focusField('ted-desc')}
-              onBlur={blurField}
             />
           )}
         </FieldEditor>
@@ -299,7 +270,7 @@ export function TaskEditor({ uid, task, isNew, opened, onSave, onDelete, onClose
       title={isNew ? 'New Task' : 'Edit Task'}
       data-testid="task-editor"
       properties={properties}
-      peerFocusedFields={peerFocusedFields}
+      presence={presence}
       // A blank task has nothing to list, so start in the title field — which is
       // also what makes Enter-to-add-another a continuous flow.
       initialDetailId={isNew ? 'ted-title' : null}

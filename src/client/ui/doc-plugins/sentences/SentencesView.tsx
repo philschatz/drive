@@ -5,12 +5,11 @@ import {
   getWorkerPeerId, getWorkerUserGroupId,
   type RichTextOp, type RichTextSpan,
 } from '../../worker-api';
-import { peerColor, peerDisplayName, peerIdentityKey, usePresence } from '../../common/presence';
+import { peerColor, peerDisplayName, peerIdentityKey, useFocusPath, usePresence } from '../../common/presence';
 import { DocumentTitleBar } from '../../common/DocumentTitleBar';
 import { useDocumentHistory } from '../../common/useDocumentHistory';
 import { useEditorUndoRedo } from '../../common/useUndoRedo';
 import { useCanEdit } from '../../common/useCanEdit';
-import { useFocusPathSync } from '../../common/useFocusPathSync';
 import { useKeyboardInset } from '../../common/useKeyboardInset';
 import { useDocumentValidation } from '../../common/useDocumentValidation';
 import { HistorySlider } from '../../common/HistorySlider';
@@ -44,7 +43,7 @@ export function SentencesView({ docId, readOnly }: { docId?: string; rest?: stri
   const { undo, redo, canUndo, canRedo, onHeads } = useEditorUndoRedo(docId!, history);
   const validationErrors = useDocumentValidation(docId);
   const { canEdit, canEditRef, noAccess } = useCanEdit(docId, readOnly, history);
-  const { peers, peerList, broadcast } = usePresence(docId);
+  const { peers } = usePresence(docId);
   const keyboardInset = useKeyboardInset();
   // History mode: the text ranges the version on screen changed, which the
   // editor draws as an overlay (memoized — a new array means "reveal again").
@@ -220,7 +219,7 @@ export function SentencesView({ docId, readOnly }: { docId?: string; rest?: stri
   // Only a real caret is broadcast: `selState` (and so `cursorPath`) exists only
   // once the user has put a selection inside the editor, so merely having an
   // editable document open does not show up to peers as "(editing)".
-  useFocusPathSync(cursorPath, broadcast);
+  useFocusPath(docId, cursorPath);
 
   // Peers whose presence carries a cursor pair, one entry per user (a user's
   // several devices collapse to one identity; own devices are skipped). Derived
@@ -321,8 +320,6 @@ export function SentencesView({ docId, readOnly }: { docId?: string; rest?: stri
           document.title = next + ' - Sentences';
         }}
         docId={docId}
-        peers={peerList}
-        peerTitle={(peer) => `${peerDisplayName(peer.peerId, peer.value?.userGroupId)}${peer.value?.focusedField ? ' (editing)' : ''}`}
         onToggleHistory={history.toggleHistory}
         historyActive={history.active}
         onUndo={canEdit ? undo : undefined}

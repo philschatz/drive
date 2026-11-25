@@ -1,13 +1,12 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'preact/hooks';
 import './tasks.css';
 import { subscribeQuery, updateDoc, deepAssign } from '../../worker-api';
-import { peerColor, peerDisplayName, usePresence, type PeerFieldInfo } from '../../common/presence';
+import { usePeersAt, type PeerFieldInfo } from '../../common/presence';
 import { PresenceDot } from '../../common/PeerDot';
 import { DocumentTitleBar } from '../../common/DocumentTitleBar';
 import { useDocumentHistory } from '../../common/useDocumentHistory';
 import { useEditorUndoRedo } from '../../common/useUndoRedo';
 import { useCanEdit } from '../../common/useCanEdit';
-import { useFocusPathSync } from '../../common/useFocusPathSync';
 import { HistorySlider } from '../../common/HistorySlider';
 import { useRevealChange } from '../../common/useRevealChange';
 import { itemChanges, removedItems, withGhosts, type ChangeKind } from '../../../../shared/version-changes';
@@ -26,14 +25,6 @@ interface EditorState {
 }
 
 const TASKS_QUERY = '{ tasks: (.tasks // {}), name: (.name // "Tasks") }';
-
-const PATH_PROP_TO_FIELDS: Record<string, string[]> = {
-  title: ['ted-title'],
-  due: ['ted-due'],
-  priority: ['ted-priority'],
-  progress: ['ted-progress'],
-  description: ['ted-desc'],
-};
 
 const NO_GHOSTS: ReadonlySet<string> = new Set();
 
@@ -114,7 +105,7 @@ function TaskListItem({ uid, task, canEdit, peerEditingTasks, onToggle, onEdit, 
         <>
           {task.due && <Badge variant="secondary">{task.due.substring(0, 10)}</Badge>}
           {task.priority ? <Badge variant="default">P{task.priority}</Badge> : null}
-          <PresenceDot fieldId={uid} peerFocusedFields={peerEditingTasks} />
+          <PresenceDot peer={peerEditingTasks[uid]} />
         </>
       }
     >
@@ -154,7 +145,6 @@ export function Tasks({ docId, rest, readOnly }: { docId?: string; rest?: string
   const { undo, redo, canUndo, canRedo, onHeads } = useEditorUndoRedo(docId!, history);
   const validationErrors = useDocumentValidation(docId);
   const { canEdit, canEditRef, noAccess } = useCanEdit(docId, readOnly, history);
-  const { peers, peerList, broadcast } = usePresence(docId);
   const editorStateRef = useRef(editorState);
   editorStateRef.current = editorState;
   const pendingTaskIdRef = useRef(taskId);
@@ -214,35 +204,10 @@ export function Tasks({ docId, rest, readOnly }: { docId?: string; rest?: string
     updateDoc(docId, (d, uid, newProgress) => { d.tasks[uid].progress = newProgress; }, uid, newProgress);
   }, [docId]);
 
-  // Automerge path to the focused field (drives presence, URL, and Edit Source link)
-  const [focusedPath, setFocusedPath] = useState<(string | number)[] | null>(null);
-  const focusPath: (string | number)[] | undefined = focusedPath ?? (editorState ? ['tasks', editorState.uid] : undefined);
-
-  const handleFieldFocus = useCallback((path: (string | number)[] | null) => {
-    setFocusedPath(path);
-  }, []);
-
-  // Clear a stale field focus when the editor closes; sync presence.
-  useEffect(() => { if (!editorState) setFocusedPath(null); }, [editorState]);
-  useFocusPathSync(focusPath, broadcast);
-
-  const peerFocusedFields = useMemo(() => {
-    const result: Record<string, PeerFieldInfo> = {};
-    if (!editorState) return result;
-    for (const peer of Object.values(peers)) {
-      const pf = peer.value?.focusedField;
-      if (!pf || pf.length < 3) continue;
-      if (pf[0] !== 'tasks' || pf[1] !== editorState.uid) continue;
-      const prop = pf[2] as string;
-      const inputIds = PATH_PROP_TO_FIELDS[prop];
-      if (inputIds) {
-        const userGroupId = peer.value?.userGroupId;
-        const info = { color: peerColor(peer.peerId, userGroupId), peerId: peer.peerId, userGroupId };
-        for (const id of inputIds) result[id] = info;
-      }
-    }
-    return result;
-  }, [peers, editorState]);
+  // Presence is not wired here: the route announces viewing, the title bar
+  // lists who is on the list, and the editor sheet announces the open task and
+  // field. All this view adds is the dot on a row a peer has open.
+  const peerEditingTasks = usePeersAt(docId, ['tasks']);
 
   useEffect(() => {
     if (!docId) return;
@@ -288,17 +253,6 @@ export function Tasks({ docId, rest, readOnly }: { docId?: string; rest?: string
     };
   }, [docId]);
 
-  const peerEditingTasks = useMemo(() => {
-    const result: Record<string, PeerFieldInfo> = {};
-    for (const peer of Object.values(peers)) {
-      const pf = peer.value?.focusedField;
-      if (pf && pf[0] === 'tasks' && pf[1]) {
-        const userGroupId = peer.value?.userGroupId;
-        result[pf[1] as string] = { color: peerColor(peer.peerId, userGroupId), peerId: peer.peerId, userGroupId };
-      }
-    }
-    return result;
-  }, [peers]);
   // History mode: what the version on screen did to each task, and the tasks it
   // removed put back as ghosts — for display only; every action above works on
   // the real `tasks`.
@@ -326,8 +280,6 @@ export function Tasks({ docId, rest, readOnly }: { docId?: string; rest?: string
           document.title = name + ' - Tasks';
         }}
         docId={docId}
-        peers={peerList}
-        peerTitle={(peer) => `${peerDisplayName(peer.peerId, peer.value?.userGroupId)}${peer.value?.focusedField ? ' (editing)' : ''}`}
         onToggleHistory={history.toggleHistory}
         historyActive={history.active}
         onUndo={canEdit ? undo : undefined}
@@ -335,7 +287,7 @@ export function Tasks({ docId, rest, readOnly }: { docId?: string; rest?: string
         canUndo={canUndo}
         canRedo={canRedo}
         hasValidationErrors={validationErrors.length > 0}
-        sourcePath={focusPath}
+        sourcePath={editorState ? ['tasks', editorState.uid] : undefined}
         // Only offered when there's something finished to clear out.
         action={canEdit && hasCompleted ? {
           icon: 'delete_sweep',
@@ -387,8 +339,7 @@ export function Tasks({ docId, rest, readOnly }: { docId?: string; rest?: string
         onDelete={deleteTask}
         onClose={() => setEditorState(null)}
         onAddAnother={() => openEditor(null, null)}
-        onFieldFocus={handleFieldFocus}
-        peerFocusedFields={peerFocusedFields}
+        presence={editorState ? { docId, path: ['tasks', editorState.uid] } : null}
       />
 
     </>

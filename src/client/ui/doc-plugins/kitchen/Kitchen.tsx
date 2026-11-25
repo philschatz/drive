@@ -1,11 +1,10 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'preact/hooks';
 import { subscribeQuery, updateDoc } from '../../worker-api';
-import { peerColor, peerDisplayName, usePresence, type PeerFieldInfo } from '../../common/presence';
+import { useFocusPath } from '../../common/presence';
 import { DocumentTitleBar } from '../../common/DocumentTitleBar';
 import { useDocumentHistory } from '../../common/useDocumentHistory';
 import { useEditorUndoRedo } from '../../common/useUndoRedo';
 import { useCanEdit } from '../../common/useCanEdit';
-import { useFocusPathSync } from '../../common/useFocusPathSync';
 import { HistorySlider } from '../../common/HistorySlider';
 import { useRevealChange } from '../../common/useRevealChange';
 import { itemChanges, removedItems, withGhosts, type ChangeKind } from '../../../../shared/version-changes';
@@ -28,16 +27,10 @@ import { RecipeList } from './RecipeList';
 import { InventoryTab } from './InventoryTab';
 import { ShoppingList } from './ShoppingList';
 import { RecipeDetail, lineKey } from './RecipeDetail';
-import { RecipeEditor, RECIPE_FIELD_TO_PROP } from './RecipeEditor';
+import { RecipeEditor } from './RecipeEditor';
 
 const KITCHEN_QUERY =
   '{ name: (.name // "Kitchen"), recipes: (.recipes // {}), inventory: (.inventory // {}), cookLog: (.cookLog // {}), shopping: (.shopping // {}) }';
-
-const PATH_PROP_TO_FIELDS: Record<string, string[]> = Object.entries(RECIPE_FIELD_TO_PROP)
-  .reduce((acc, [fieldId, prop]) => {
-    (acc[prop] ??= []).push(fieldId);
-    return acc;
-  }, {} as Record<string, string[]>);
 
 const nowIso = () => new Date().toISOString();
 
@@ -67,7 +60,6 @@ export function Kitchen({ docId, recipeId, readOnly }: {
   const { undo, redo, canUndo, canRedo, onHeads } = useEditorUndoRedo(docId!, history);
   const validationErrors = useDocumentValidation(docId);
   const { canEdit, canEditRef, noAccess } = useCanEdit(docId, readOnly, history);
-  const { peers, peerList, broadcast } = usePresence(docId);
   const editorRef = useRef(editor);
   editorRef.current = editor;
   const shoppingRef = useRef(shopping);
@@ -232,30 +224,14 @@ export function Kitchen({ docId, recipeId, readOnly }: {
   }, [docId, recipes, saveRecipe]);
 
   // ------------------------------------------------------------------
-  // Presence: what is being viewed/edited, and which editor fields peers hold.
+  // Presence. The route announces viewing, the title bar lists who is here and
+  // the editor sheet announces the recipe and field being edited; the one thing
+  // only this view knows is which recipe is merely being *read*.
   // ------------------------------------------------------------------
 
-  const [focusedPath, setFocusedPath] = useState<(string | number)[] | null>(null);
-  const focusPath: (string | number)[] | undefined =
-    focusedPath ??
-    (editor?.id ? ['recipes', editor.id] : recipeId ? ['recipes', recipeId] : undefined);
-  useEffect(() => { if (!editor) setFocusedPath(null); }, [editor]);
-  useFocusPathSync(focusPath, broadcast);
-
-  const peerFocusedFields = useMemo(() => {
-    const result: Record<string, PeerFieldInfo> = {};
-    if (!editor?.id) return result;
-    for (const peer of Object.values(peers)) {
-      const pf = peer.value?.focusedField;
-      if (!pf || pf.length < 3 || pf[0] !== 'recipes' || pf[1] !== editor.id) continue;
-      const inputIds = PATH_PROP_TO_FIELDS[pf[2] as string];
-      if (!inputIds) continue;
-      const userGroupId = peer.value?.userGroupId;
-      const info = { color: peerColor(peer.peerId, userGroupId), peerId: peer.peerId, userGroupId };
-      for (const fieldId of inputIds) result[fieldId] = info;
-    }
-    return result;
-  }, [peers, editor]);
+  useFocusPath(docId, recipeId ? ['recipes', recipeId] : null);
+  const openPath: (string | number)[] | undefined =
+    editor?.id ? ['recipes', editor.id] : recipeId ? ['recipes', recipeId] : undefined;
 
   // ------------------------------------------------------------------
   // History mode: what the version on screen did to each recipe, shopping line
@@ -349,8 +325,6 @@ export function Kitchen({ docId, recipeId, readOnly }: {
           titleEditable={canEdit}
           onRename={rename}
           docId={docId}
-          peers={peerList}
-          peerTitle={peer => `${peerDisplayName(peer.peerId, peer.value?.userGroupId)}${peer.value?.focusedField ? ' (editing)' : ''}`}
           onToggleHistory={history.toggleHistory}
           historyActive={history.active}
           onUndo={canEdit ? undo : undefined}
@@ -358,7 +332,7 @@ export function Kitchen({ docId, recipeId, readOnly }: {
           canUndo={canUndo}
           canRedo={canRedo}
           hasValidationErrors={validationErrors.length > 0}
-          sourcePath={focusPath}
+          sourcePath={openPath}
         />
         <HistorySlider history={history} />
         <div
@@ -469,9 +443,7 @@ export function Kitchen({ docId, recipeId, readOnly }: {
           onSave={saveRecipe}
           onDelete={deleteRecipe}
           onClose={() => setEditor(null)}
-          onFieldFocus={setFocusedPath}
-          editingPathBase={editor?.id ? ['recipes', editor.id] : null}
-          peerFocusedFields={peerFocusedFields}
+          presence={editor?.id ? { docId, path: ['recipes', editor.id] } : null}
         />
       </>
     </DocLoader>

@@ -55,29 +55,17 @@ export function PeerDot({ identityKey, online = true, direct = false, label, siz
 
 
 /**
- * The "a peer is editing this" dot for a single form field or property row.
- *
- * Pass `fieldId` for one field, or `fieldIds` for a row that stands in for a
- * group of them (PropertySheet's grouped rows — a calendar event's "When" row
- * covers ed-date/ed-time/ed-allday/ed-duration). Broadcast granularity is
- * unchanged either way: peers still announce a document path, and the container's
- * PATH_PROP_TO_FIELDS map fans that out to input ids.
+ * The "a peer is editing this" dot for a row or a field: pass the peer that is
+ * there (from `usePeersAt`), or nothing, in which case it renders nothing.
  */
-export function PresenceDot({ fieldId, fieldIds, peerFocusedFields }: {
-  fieldId?: string;
-  fieldIds?: string[];
-  peerFocusedFields?: Record<string, PeerFieldInfo>;
-}) {
+export function PresenceDot({ peer }: { peer?: PeerFieldInfo | null }) {
   const transports = usePeerTransports();
-  const info = fieldId
-    ? peerFocusedFields?.[fieldId]
-    : (fieldIds ?? []).map(id => peerFocusedFields?.[id]).find(Boolean);
-  if (!info) return null;
+  if (!peer) return null;
   return (
     <PeerDot
-      identityKey={peerIdentityKey(info.peerId, info.userGroupId)}
-      direct={transports[info.peerId] === 'direct'}
-      label={`${peerDisplayName(info.peerId, info.userGroupId)} is editing`}
+      identityKey={peerIdentityKey(peer.peerId, peer.userGroupId)}
+      direct={transports[peer.peerId] === 'direct'}
+      label={`${peerDisplayName(peer.peerId, peer.userGroupId)} is editing`}
     />
   );
 }

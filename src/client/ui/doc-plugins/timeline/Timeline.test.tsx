@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, within, waitFor, cleanup } from '@testing-library/preact';
+import { render, screen, fireEvent, within, waitFor, cleanup, act } from '@testing-library/preact';
 
 // The real Timeline container on the in-memory + jq worker-api mock. md-*
 // elements are unregistered under jsdom, so MdSelect is a native <select> and
@@ -602,3 +602,94 @@ describe('Timeline container', () => {
     expect(screen.queryByTitle('Arrange')).toBeNull();
   });
 });
+
+// Presence comes from the shared pieces — the route, the title bar and the
+// editor sheet — so no control here is wired for it by hand. That used to leave
+// holes: a pane's checkboxes, chips and selects announced nothing.
+describe('Timeline presence', () => {
+  const focused = () => mock.__presenceSent(DOC)?.focusedField;
+  const peerOn = (...path: (string | number)[]) =>
+    act(() => mock.__setPresence(DOC, {
+      'alice-drive': { peerId: 'alice-drive', value: { viewing: true, focusedField: path, userGroupId: 'alice' } },
+    }));
+  const openEntry = (title: string) => tap(screen.getByText(title).closest('[data-testid="timeline-row"]')!);
+  const life = () => base({
+    events: {
+      home: ev('Chicago', { chapter: 'place', when: year(2005) }),
+      a: ev('Moved', { when: year(2010) }),
+    },
+  });
+
+  beforeEach(() => { mock.__reset(); __clearThumbCache(); });
+
+  it('announces viewing, then the entry while its editor is open, then the field while its pane is', async () => {
+    await renderTimeline(life());
+    expect(mock.__presenceSent(DOC)).toEqual({ viewing: true, focusedField: null });
+
+    openEntry('Moved');
+    expect(focused()).toEqual(['events', 'a']);
+    fireEvent.click(screen.getByTestId('tl-story-row'));
+    expect(focused()).toEqual(['events', 'a', 'description']);
+    fireEvent.click(screen.getByTestId('tl-story-cancel'));
+    expect(focused()).toEqual(['events', 'a']);
+    close();
+    expect(focused()).toBeNull();
+  });
+
+  it('the During pane announces the relation being edited', async () => {
+    await renderTimeline(life());
+    openEntry('Moved');
+    fireEvent.click(screen.getByTestId('tl-during-row'));
+    expect(focused()).toEqual(['events', 'a', 'rel']);
+    fireEvent.click(screen.getByTestId('tl-during-home'));
+    expect(focused()).toEqual(['events', 'a', 'rel']);
+  });
+
+  it('the Feelings pane stays announced while chips are tapped', async () => {
+    await renderTimeline(life());
+    openEntry('Moved');
+    fireEvent.click(screen.getByTestId('tl-emotions-row'));
+    fireEvent.blur(screen.getByTestId('tl-emotion-own'));
+    fireEvent.click(screen.getByTestId('tl-emotion-sad'));
+    expect(focused()).toEqual(['events', 'a', 'emotions']);
+  });
+
+  it('the Revisit pane stays announced when the box is ticked', async () => {
+    await renderTimeline(life());
+    openEntry('Moved');
+    fireEvent.click(screen.getByTestId('tl-revisit-row'));
+    fireEvent.blur(screen.getByTestId('tl-revisit-note'));
+    fireEvent.click(screen.getByTestId('tl-revisit-on'));
+    expect(focused()).toEqual(['events', 'a', 'revisit']);
+  });
+
+  it('a new chapter stays announced while its kind is being chosen', async () => {
+    await renderTimeline(life());
+    fireEvent.click(screen.getByTitle('New chapter'));
+    fireEvent.blur(screen.getByTestId('tl-title'));
+    fireEvent.input(screen.getByTestId('tl-chapter-kind'), { target: { value: 'people' } });
+    expect(focused()).toHaveLength(3);
+    expect(focused().slice(-1)).toEqual(['title']);
+  });
+
+  it('the birth-date sheet announces the birth date, and withdraws it on close', async () => {
+    await renderTimeline(life());
+    fireEvent.click(screen.getByTitle(/^Birth date/));
+    expect(screen.getByTestId('timeline-birth-input')).toBeTruthy();
+    expect(focused()).toEqual(['birth']);
+    fireEvent.click(screen.getByTestId('timeline-birth-cancel'));
+    expect(focused()).toBeNull();
+  });
+
+  it('shows a peer on the entry they have open and on the field in its editor', async () => {
+    await renderTimeline(life());
+    peerOn('events', 'a', 'rel');
+    const row = screen.getByText('Moved').closest('[data-testid="timeline-row"]') as HTMLElement;
+    expect(row.querySelector('[data-testid="peer-dot"]')).toBeTruthy();
+
+    openEntry('Moved');
+    expect(screen.getByTestId('tl-during-row').querySelector('[data-testid="peer-dot"]')).toBeTruthy();
+    expect(screen.getByTestId('tl-title-row').querySelector('[data-testid="peer-dot"]')).toBeNull();
+  });
+});
+

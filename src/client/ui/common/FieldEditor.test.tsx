@@ -104,7 +104,7 @@ describe('FieldEditor', () => {
     expect((screen.getByTestId('f-input') as HTMLInputElement).value).toBe('');
   });
 
-  it('blurs the focused control before committing, so presence clears', () => {
+  it('blurs the focused control before committing', () => {
     const events: string[] = [];
     render(
       <FieldEditor

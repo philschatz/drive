@@ -65,11 +65,13 @@ export function FieldEditor({
 
   const save = useCallback(() => {
     if (validate && !validate(draft)) return;
-    // Blur before writing, for the mirror of the reason PropertySheet's
-    // `flushOnClose` blurs before closing: Chrome fires no `focusout` when a
-    // focused element is simply unmounted, so the control's onBlur — which clears
-    // this peer's presence — would never run and the dot would stick on a field
-    // nobody is in. These fields carry no `onCommit`, so the blur writes nothing.
+    // Blur before writing. Chrome fires no `focusout` when a focused element is
+    // simply unmounted, so without this the control would leave the document
+    // still focused. That used to matter for presence (the control's onBlur
+    // cleared this peer's dot); presence is the sheet's job now and no longer
+    // depends on it. It stays because dropping it would change what happens to
+    // focus — and to a phone's soft keyboard — on Save, which has not been
+    // checked on a device. These fields carry no `onCommit`, so it writes nothing.
     (document.activeElement as HTMLElement | null)?.blur?.();
     onSave(draft);
   }, [draft, onSave, validate]);
