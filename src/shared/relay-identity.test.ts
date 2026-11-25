@@ -16,7 +16,9 @@ import { createHash } from 'node:crypto';
 import { ed25519 } from '@noble/curves/ed25519';
 import { initKeyhiveWasm } from '@automerge/automerge-repo-keyhive';
 import { Identifier } from '@keyhive/keyhive/slim';
-import { RELAY_PEER_ID, RELAY_PEER_ID_LABEL, isRelayWatchFrame, buildRelayWatchFrame } from './relay-identity';
+import {
+  RELAY_PEER_ID, RELAY_PEER_ID_LABEL, isRelayWatchFrame, buildRelayWatchFrame, isRelayTokenFrame, buildRelayTokenFrame,
+} from './relay-identity';
 
 initKeyhiveWasm();
 
@@ -105,5 +107,23 @@ describe('buildRelayWatchFrame', () => {
     const a = buildRelayWatchFrame('gMe', ['gB', 'gA']);
     const b = buildRelayWatchFrame('gMe', ['gA', 'gB']);
     expect(JSON.stringify(a)).toBe(JSON.stringify(b));
+  });
+});
+
+describe('the token declaration', () => {
+  it('is recognised by its version, and is not the older group-id form', () => {
+    const frame = buildRelayTokenFrame(['b', 'a']);
+    expect(isRelayTokenFrame(frame)).toBe(true);
+    expect(isRelayWatchFrame(frame)).toBe(false);
+    expect(isRelayTokenFrame({ type: 'watch', group: 'g1', watch: [] })).toBe(false);
+    expect(isRelayTokenFrame({ type: 'watch', v: 2 })).toBe(false);
+    expect(isRelayTokenFrame({ type: 'watch', v: 2, tokens: 'a' })).toBe(false);
+    expect(isRelayTokenFrame({ type: 'join', v: 2, tokens: [] })).toBe(false);
+    expect(isRelayTokenFrame(null)).toBe(false);
+  });
+
+  it('is the same frame for the same tokens: deduplicated and sorted', () => {
+    expect(buildRelayTokenFrame(['b', 'a', 'b'])).toEqual({ type: 'watch', v: 2, tokens: ['a', 'b'] });
+    expect(JSON.stringify(buildRelayTokenFrame(new Set(['z', 'y'])))).toBe(JSON.stringify(buildRelayTokenFrame(['y', 'z'])));
   });
 });

@@ -3,7 +3,10 @@ import { WebSocket, WebSocketServer } from 'ws';
 import { Encoder, decode } from 'cbor-x';
 import { logMessage, shortId } from './describe-message';
 import { createLogger } from '../shared/logger';
-import { RELAY_PEER_ID, RELAY_LEAVE, RELAY_WATCH, isRelayWatchFrame } from '../shared/relay-identity';
+import {
+  RELAY_PEER_ID, RELAY_LEAVE, RELAY_WATCH, RELAY_MAX_TOKENS, RELAY_MAX_TOKEN_LENGTH,
+  isRelayWatchFrame, isRelayTokenFrame,
+} from '../shared/relay-identity';
 import { RDV_SUB, RDV_UNSUB, RDV_MSG, RDV_PEER } from '../shared/rendezvous-protocol';
 import { WRTC_SIGNAL } from '../shared/webrtc-signal';
 
@@ -58,13 +61,12 @@ function clientIp(request?: IncomingMessage): string | undefined {
  * When a peer connects the relay:
  *  1. Completes the automerge-repo peer handshake (join → peer ack). A bare
  *     join announces nobody.
- *  2. Waits for the client's `watch` declaration (RELAY_WATCH): its own
- *     user-group id plus the group ids it knows (friends + doc co-members).
+ *  2. Waits for the client's `watch` declaration (RELAY_WATCH): a list of
+ *     opaque discovery tokens.
  *  3. Introduces two sockets (the same symmetric "peer" frames as the
- *     handshake) only when they announce the same group — one user's devices —
- *     or when each one's watch list names the other's group (mutual friends).
- *     A later watch update that withdraws the match dissolves the pair with
- *     synthetic "leave" frames.
+ *     handshake) only when they present a token in common. A later
+ *     declaration that withdraws the match dissolves the pair with synthetic
+ *     "leave" frames.
  *
  * After discovery, messages are forwarded verbatim, but only between sockets
  * that have been introduced:
@@ -87,64 +89,51 @@ function clientIp(request?: IncomingMessage): string | undefined {
  * Automerge messages. The relay still routes them; current clients ignore
  * them, and send such a client nothing but handshake frames it cannot answer.)
  *
- * ── Discovery privacy: current limits, and the planned HMAC-token fix ──────
+ * ── Discovery: what the relay is told, and what it is not ─────────────────
  *
- * `group` and `watch` are self-asserted routing hints, exactly like peerIds:
- * nothing proves a socket belongs to the group it announces. Group ids are
- * unguessable (32-byte keys), so a true stranger can name nobody — but anyone
- * who ever LEARNED a group id (an ex-friend; anyone once shown a contact
- * bundle) can announce it as their own group, or impersonate a group that two
- * victims mutually watch, and get introduced at the transport level. They
- * gain a live connection and the target's online status. (They no longer gain
- * its network addresses: a direct connection is negotiated inside the secure
- * channel, and only with a device the target is related to.)
+ * A token is `HMAC(secret, the UTC day)` over a secret the relay never sees
+ * (src/shared/discovery-tokens.ts): one that two devices derive from each
+ * other's keys, each by itself. The relay matches tokens by string equality
+ * and decrypts nothing. So it is not told any group id or
+ * friend list, cannot tell what a token is for, and cannot recognise
+ * tomorrow's tokens as today's device's — clients present today's and
+ * yesterday's, which bridges midnight and clock skew.
  *
- * That is all an introduced impostor gains. To the relay a peerId is still
- * self-asserted, but to a client it no longer is: the secure channel announces
- * a peer to the layers above only after it has signed a fresh key exchange
- * with the device key its peerId names. Something introduced under a member's
- * peerId without that key is sent handshake frames and nothing else — no
- * document, no keyhive state, no presence
- * (tests/e2ee-access.test.ts, "under a member's peerId").
+ * Possession is the proof. Presenting a token takes the secret behind it,
+ * which takes the private key of one of the two devices: knowing someone's
+ * group id, or their device's public key, introduces nobody.
  *
- * The agreed fix is daily HMAC rendezvous tokens, deferred until DriveSettings
- * is something every device reliably has:
+ * What the relay does see: who is connected and under which peer id (which
+ * names a device key), which sockets it introduced — that is the routing it
+ * does — how many tokens each presents, and the size and timing of frames.
  *
- *  - Each socket presents opaque tokens `HMAC(secret, 'relay-discovery:' +
- *    utcDay)` — one per secret it holds — and the relay introduces sockets
- *    sharing at least one token, by pure string equality. It decrypts nothing
- *    and learns nothing durable: no group ids, no social-graph shape, and
- *    tokens are unlinkable across days. Presenting today's AND yesterday's
- *    token bridges midnight rollover and clock skew.
- *  - The secrets: a per-group "discovery secret" proving own-device
- *    membership (stored in the keyhive-encrypted DriveSettings doc and handed
- *    to a brand-new device inside the device-link rendezvous payload), and a
- *    per-friendship "pair secret" exchanged inside the contact bundle.
- *    Possession IS the proof, so mutuality stops being an honor-system rule;
- *    removing a device and rotating the stored secret locks that device out
- *    at the next daily rotation.
- *  - Why HMAC over a STORED secret rather than "encrypt today's date with the
- *    current group key": CGKA keys advance per epoch, so a device that was
- *    offline holds an older epoch and would compute a mismatched token — yet
- *    it needs to be paired before it can sync up to the current epoch.
- *    Proof-of-latest-key deadlocks bootstrap; a stable stored secret has no
- *    epoch race.
- *  - Why deferred: the discovery secret and every friendship pair secret must
- *    be computable on ALL of a user's devices, which makes the synced
- *    DriveSettings doc (plus one field in the device-link payload and the
- *    contact bundle) a hard dependency of transport bootstrap. Not ready to
- *    commit to that yet.
+ * To a client, an introduction proves nothing by itself either: the secure
+ * channel announces a peer to the layers above only after it has signed a
+ * fresh key exchange with the device key its peerId names. Something
+ * introduced under a member's peerId without that key is sent handshake frames
+ * and nothing else — no document, no keyhive state, no presence
+ * (tests/e2ee-access.test.ts, "under a member's peerId"), and no network
+ * addresses (a direct connection is negotiated inside the secure channel, and
+ * only with a device the target is related to).
+ *
+ * Older clients declare their user-group id and the group ids they know, in
+ * the clear (`RelayWatchFrame`). Two such sockets are still matched with each
+ * other — same group, or each naming the other's — so devices not yet updated
+ * keep working among themselves. A socket declaring one form is never matched
+ * with a socket declaring the other. Remove this once no such client is left.
  *
  * Threat model: the relay is exposed to the public internet and every client
  * is untrusted. Malformed frames must be dropped (never crash the process),
- * peerIds and group ids are unauthenticated routing hints (anyone can claim
- * any id), and per-connection resource use must stay bounded.
+ * peerIds are unauthenticated routing hints (anyone can claim any id), and
+ * per-connection resource use must stay bounded.
  */
 export class WebSocketRelay {
   private sockets = new Map<string, WebSocket>();
-  /** Announced own user-group id per joined socket (from its watch frame). */
+  /** Discovery tokens each joined socket presents (from its watch frame). */
+  private tokens = new Map<WebSocket, Set<string>>();
+  /** Older clients only: announced own user-group id per joined socket. */
   private groups = new Map<WebSocket, string>();
-  /** User-group ids each joined socket declared it knows (from its watch frame). */
+  /** Older clients only: user-group ids each joined socket declared it knows. */
   private watches = new Map<WebSocket, Set<string>>();
   /** peerIds each socket has been introduced to — the only peers it may route to. */
   private introduced = new Map<WebSocket, Set<string>>();
@@ -238,6 +227,7 @@ export class WebSocketRelay {
         clearInterval(this.heartbeatTimer);
         this.heartbeatTimer = null;
       }
+      this.tokens.delete(ws);
       this.groups.delete(ws);
       this.watches.delete(ws);
       this.versions.delete(ws);
@@ -346,11 +336,25 @@ export class WebSocketRelay {
       // untrusted strings used as Map keys, and the list length is capped so a
       // hostile frame can't balloon per-socket state.
       if (!myPeerId || this.sockets.get(myPeerId) !== ws) return;
+      if (isRelayTokenFrame(message)) {
+        const saneToken = (s: unknown) => typeof s === 'string' && s.length > 0 && (s as string).length <= RELAY_MAX_TOKEN_LENGTH;
+        if (message.tokens.length > RELAY_MAX_TOKENS || !message.tokens.every(saneToken)) return;
+        // Logged by count: the tokens are not secret from the relay, but there
+        // is no reason for them to sit in a log either.
+        logMessage('←', myPeerId, { type: message.type, v: 2, tokens: message.tokens.length });
+        this.tokens.set(ws, new Set(message.tokens));
+        // Each declaration replaces the last, whichever form that was.
+        this.groups.delete(ws);
+        this.watches.delete(ws);
+        this.reevaluatePairs(ws, myPeerId);
+        return;
+      }
       if (!isRelayWatchFrame(message)) return;
       const saneId = (s: unknown) => typeof s === 'string' && s.length > 0 && (s as string).length <= 256;
       if (!saneId(message.group)) return;
       if (message.watch.length > 1024 || !message.watch.every(saneId)) return;
       logMessage('←', myPeerId, message);
+      this.tokens.delete(ws);
       this.groups.set(ws, message.group);
       this.watches.set(ws, new Set(message.watch));
       this.reevaluatePairs(ws, myPeerId);
@@ -390,12 +394,20 @@ export class WebSocketRelay {
   }
 
   /**
-   * Discovery rule (see the class doc comment): one user's devices always pair
-   * (same announced group); different users pair only when each side's watch
-   * list names the other's group. Everything here is self-asserted — see the
-   * "Discovery privacy" section above for what that does and doesn't protect.
+   * Discovery rule (see the class doc comment): two sockets pair when they
+   * present a token in common. Two sockets of older clients pair by group id
+   * instead — the same announced group, or each side's watch list naming the
+   * other's. A socket of one kind never pairs with a socket of the other.
    */
   private shouldPair(a: WebSocket, b: WebSocket): boolean {
+    const tokensA = this.tokens.get(a);
+    const tokensB = this.tokens.get(b);
+    if (tokensA || tokensB) {
+      if (!tokensA || !tokensB) return false;
+      const [few, many] = tokensA.size <= tokensB.size ? [tokensA, tokensB] : [tokensB, tokensA];
+      for (const token of few) if (many.has(token)) return true;
+      return false;
+    }
     const groupA = this.groups.get(a);
     const groupB = this.groups.get(b);
     if (groupA === undefined || groupB === undefined) return false;

@@ -20,7 +20,9 @@ import {
   RDV_SUB, RDV_UNSUB, RDV_MSG, RDV_PEER,
   type RendezvousStatus,
 } from './rendezvous-protocol';
-import { buildRelayWatchFrame } from './relay-identity';
+import { buildRelayTokenFrame, RELAY_MAX_TOKENS } from './relay-identity';
+import { readLinkedDevices, pendingLinkedDevices } from './discovery-tokens';
+import { KEYS } from './storage-keys';
 import { errMsg } from './keyhive-ops';
 import type { EngineCore } from './drive-engine';
 import type { EngineSettingsSurface } from './engine-settings';
@@ -102,6 +104,8 @@ export function EngineRendezvous<C extends EngineRendezvousCtor>(Base: C):
     /** Serialized last-sent RELAY_WATCH frame (diff guard) and its debounce timer. */
     lastRelayWatch: string | null = null;
     protected relayWatchTimer: ReturnType<typeof setTimeout> | null = null;
+    /** Re-declares a few times a day: the tokens are per UTC day. */
+    protected relayWatchDaily: ReturnType<typeof setInterval> | null = null;
 
     // The core's late-bound hook into this module (field initializer — see
     // engine-settings.ts for why the mixins avoid constructors).
@@ -111,13 +115,24 @@ export function EngineRendezvous<C extends EngineRendezvousCtor>(Base: C):
     // ── Relay discovery declaration (RELAY_WATCH) ───────────────────────────────
 
     /**
-     * Recompute and (re)send the relay discovery declaration: this device's own
-     * user-group id plus every group it knows (friends roster + doc co-member
-     * groups). The relay introduces only mutually-declared peers — see
-     * WebSocketRelay's doc comment for the rules, the limits of self-asserted
-     * group ids, and the planned HMAC-token upgrade — so keeping this fresh is
-     * what makes friends discoverable at all. Debounced + diffed, so it is cheap
-     * to schedule from every roster-affecting site.
+     * Remember the other device of a link just made (discovery-tokens.ts
+     * `LinkedDevices`): until keyhive lists it, this is what gets the two
+     * introduced — and being introduced is how the group reaches the new one.
+     */
+    private async rememberLinkedDevice(agentId: string): Promise<void> {
+      const linked = readLinkedDevices(await this.host.kv.get(KEYS.linkedDevices));
+      linked[agentId] = Date.now();
+      await this.host.kv.set(KEYS.linkedDevices, linked);
+      this.scheduleRelayWatchRefresh();
+    }
+
+    /**
+     * Recompute and (re)send the relay discovery declaration: the tokens this
+     * device presents to be introduced to the devices it is related to
+     * (discovery-tokens.ts). The relay introduces only sockets presenting a
+     * token in common, so keeping this fresh is what makes anyone reachable at
+     * all. Debounced + diffed, so it is cheap to schedule from every site that
+     * changes who this device is related to.
      */
     scheduleRelayWatchRefresh(): void {
       // Every roster-affecting site calls this, so it is also where the cached
@@ -136,14 +151,27 @@ export function EngineRendezvous<C extends EngineRendezvousCtor>(Base: C):
     async refreshRelayWatch(): Promise<void> {
       if (!this.khOps) return;
       try {
-        const group = await this.khOps.getUserGroupId();
-        if (!group) return; // no user group yet — nothing to declare, nobody to pair with
-        const friendGroupIds = Object.keys(this.driveSettingsDoc()?.friends ?? {});
-        const known = await this.khOps.getKnownFriends(undefined, friendGroupIds);
-        const frame = buildRelayWatchFrame(
-          group,
-          known.filter((m) => m.type === 'group' && !m.isMe).map((m) => m.agentId),
-        );
+        if (!this.khRepo) return;
+        // Devices remembered from a link, for as long as keyhive does not list them.
+        const related = await this.khRepo.relations.get();
+        const stored = readLinkedDevices(await this.host.kv.get(KEYS.linkedDevices));
+        const linked = pendingLinkedDevices(stored, (key) => related.has(key), Date.now());
+        if (Object.keys(linked).length !== Object.keys(stored).length) await this.host.kv.set(KEYS.linkedDevices, linked);
+        const frame = buildRelayTokenFrame(await this.khRepo.discoveryTokens(Object.keys(linked)));
+        // Related to nobody (a device with no user group yet): nothing to declare.
+        if (frame.tokens.length === 0 && this.lastRelayWatch === null) return;
+        if (frame.tokens.length > RELAY_MAX_TOKENS) {
+          // The relay refuses a longer list outright. Two tokens per related
+          // device: this is thousands of devices, and not expected.
+          log.warn(`${frame.tokens.length} discovery tokens is over the relay's limit of ${RELAY_MAX_TOKENS}; some devices will not be met`);
+          frame.tokens.length = RELAY_MAX_TOKENS;
+        }
+        if (!this.relayWatchDaily) {
+          // Today's and yesterday's tokens are declared, so a declaration is good
+          // for a day; looking again every few hours keeps it so.
+          this.relayWatchDaily = setInterval(() => { void this.refreshRelayWatch(); }, 6 * 3_600_000);
+          (this.relayWatchDaily as any).unref?.();
+        }
         const serialized = JSON.stringify(frame);
         if (serialized === this.lastRelayWatch) return;
         this.lastRelayWatch = serialized;
@@ -308,6 +336,9 @@ export function EngineRendezvous<C extends EngineRendezvousCtor>(Base: C):
           if (!verdict) return; // not the answer; keep waiting for it
           if (verdict === 'declined') throw new Error('Your other device did not accept this link.');
           const { agentId, groupId, deviceName: hostDeviceName, settingsDocId } = host!;
+          // Adopting the group waits for it to arrive from the other device,
+          // which the relay has to introduce first: remember that device now.
+          await this.rememberLinkedDevice(agentId);
           await this.khOps!.linkDevice(agentId, groupId);
           await this.khOps!.ensureUserGroup({ create: true });
           if (settingsDocId) {
@@ -513,6 +544,10 @@ export function EngineRendezvous<C extends EngineRendezvousCtor>(Base: C):
                     this.closeRdv(rendezvousId);
                     return;
                   }
+                  // If the two had a group each, this device may be the one that
+                  // adopts the other's, and waits for it to arrive: remember the
+                  // other device first (see rememberLinkedDevice).
+                  await this.rememberLinkedDevice(result.agentId);
                   await this.khOps!.linkDevice(result.agentId, peerGroupId ?? null);
                   // We (the host) hold the shared settings doc locally, so record BOTH
                   // device names here: the joiner's, and our own (its default name),

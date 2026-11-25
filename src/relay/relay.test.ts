@@ -42,7 +42,12 @@ function join(relay: WebSocketRelay, peerId: string): FakeSocket {
   return ws;
 }
 
-/** Send a discovery declaration: own group + the groups this socket knows. */
+/** Declare discovery tokens, as a current client does. */
+function present(ws: FakeSocket, tokens: string[]): void {
+  ws.frame({ type: 'watch', v: 2, tokens });
+}
+
+/** The declaration of a client from before tokens: own group + the groups this socket knows. */
 function watch(ws: FakeSocket, group: string, watchList: string[] = []): void {
   ws.frame({ type: 'watch', group, watch: watchList });
 }
@@ -299,7 +304,7 @@ describe('peer departure', () => {
   });
 });
 
-describe('watch-scoped discovery', () => {
+describe('discovery by group id (clients from before tokens)', () => {
   it('never introduces watch-less strangers, and drops their traffic', () => {
     const relay = new WebSocketRelay();
     const alice = join(relay, 'alice');
@@ -431,6 +436,137 @@ describe('watch-scoped discovery', () => {
     watch(fresh, 'gA', ['gB']);
     expect(sentOfType(bob, 'peer').map((m) => m.senderId)).toContain('alice');
     expect(sentOfType(fresh, 'peer').map((m) => m.senderId)).toContain('bob');
+  });
+});
+
+describe('discovery by token', () => {
+  const peersOf = (ws: FakeSocket) => sentOfType(ws, 'peer').map((m) => m.senderId).filter((id) => id !== undefined);
+  const introducedTo = (ws: FakeSocket, other: string) => peersOf(ws).includes(other);
+
+  it('introduces two sockets that present a token in common, and only those', () => {
+    const relay = new WebSocketRelay();
+    const alice = join(relay, 'alice');
+    const bob = join(relay, 'bob');
+    const carol = join(relay, 'carol');
+    present(alice, ['t-ab', 't-a-only']);
+    present(bob, ['t-b-only', 't-ab']);
+    present(carol, ['t-c-only']);
+
+    expect(introducedTo(alice, 'bob')).toBe(true);
+    expect(introducedTo(bob, 'alice')).toBe(true);
+    expect(introducedTo(carol, 'alice') || introducedTo(carol, 'bob')).toBe(false);
+    expect(introducedTo(alice, 'carol') || introducedTo(bob, 'carol')).toBe(false);
+
+    // Routing follows the introduction, as before.
+    bob.send.mockClear();
+    carol.send.mockClear();
+    alice.frame({ type: 'sync', senderId: 'alice', targetId: 'bob', data: new Uint8Array([1]) });
+    alice.frame({ type: 'sync', senderId: 'alice', targetId: 'carol', data: new Uint8Array([1]) });
+    expect(bob.send).toHaveBeenCalledTimes(1);
+    expect(carol.send).not.toHaveBeenCalled();
+  });
+
+  it('a socket presenting nothing, or nothing in common, meets nobody', () => {
+    const relay = new WebSocketRelay();
+    const alice = join(relay, 'alice');
+    const bob = join(relay, 'bob');
+    present(alice, ['t-a']);
+    present(bob, []);
+    expect(sentTypes(alice)).toEqual(['peer']); // own ack only
+    expect(sentTypes(bob)).toEqual(['peer']);
+  });
+
+  it('re-presenting the same tokens does not re-introduce', () => {
+    const relay = new WebSocketRelay();
+    const alice = join(relay, 'alice');
+    const bob = join(relay, 'bob');
+    present(alice, ['t']);
+    present(bob, ['t']);
+    present(alice, ['t']);
+    present(bob, ['t', 'another']);
+    expect(peersOf(alice).filter((id) => id === 'bob')).toHaveLength(1);
+    expect(peersOf(bob).filter((id) => id === 'alice')).toHaveLength(1);
+  });
+
+  it('withdrawing the shared token dissolves the pair with leaves both ways; yesterday\'s token still bridges a day', () => {
+    const relay = new WebSocketRelay();
+    const alice = join(relay, 'alice');
+    const bob = join(relay, 'bob');
+    present(alice, ['monday', 'sunday']);
+    present(bob, ['monday', 'sunday']);
+    // alice's clock rolls over first: they still share monday's.
+    present(alice, ['tuesday', 'monday']);
+    expect(sentOfType(alice, 'leave')).toEqual([]);
+    expect(sentOfType(bob, 'leave')).toEqual([]);
+    // Two days apart they share nothing.
+    present(alice, ['wednesday', 'tuesday']);
+    expect(sentOfType(alice, 'leave').map((m) => m.senderId)).toEqual(['bob']);
+    expect(sentOfType(bob, 'leave').map((m) => m.senderId)).toEqual(['alice']);
+    alice.send.mockClear();
+    bob.frame({ type: 'sync', senderId: 'bob', targetId: 'alice', data: new Uint8Array([1]) });
+    expect(alice.send).not.toHaveBeenCalled();
+  });
+
+  it('never matches a token client with a group-id client, whatever strings they send', () => {
+    const relay = new WebSocketRelay();
+    const current = join(relay, 'current');
+    const older = join(relay, 'older');
+    const older2 = join(relay, 'older2');
+    // The same string as a token and as a group id: not a match.
+    present(current, ['gMe']);
+    watch(older, 'gMe', ['gMe']);
+    expect(introducedTo(current, 'older')).toBe(false);
+    expect(introducedTo(older, 'current')).toBe(false);
+    // Two older clients still find each other.
+    watch(older2, 'gMe', []);
+    expect(introducedTo(older, 'older2')).toBe(true);
+    expect(introducedTo(current, 'older2')).toBe(false);
+  });
+
+  it('a client that updates takes its new declaration with it: the old one is forgotten', () => {
+    const relay = new WebSocketRelay();
+    const phone = join(relay, 'phone');
+    const laptop = join(relay, 'laptop');
+    watch(phone, 'gMe', []);
+    watch(laptop, 'gMe', []);
+    expect(introducedTo(phone, 'laptop')).toBe(true);
+    // The laptop reloads into the new build (same socket here, for the test's sake).
+    present(laptop, ['t']);
+    expect(sentOfType(phone, 'leave').map((m) => m.senderId)).toEqual(['laptop']);
+    // And back again is a group-id client again, with no tokens left over.
+    present(phone, ['t']);
+    expect(peersOf(phone).filter((id) => id === 'laptop')).toHaveLength(2);
+    watch(laptop, 'gMe', []);
+    expect(sentOfType(phone, 'leave').map((m) => m.senderId)).toEqual(['laptop', 'laptop']);
+  });
+
+  it('drops malformed or out-of-bounds token frames without crashing, keeping the last good one', () => {
+    const relay = new WebSocketRelay();
+    const alice = join(relay, 'alice');
+    const bob = join(relay, 'bob');
+    present(alice, ['t']);
+    present(bob, ['t']);
+    expect(introducedTo(alice, 'bob')).toBe(true);
+    const bad: unknown[] = [
+      { type: 'watch', v: 2, tokens: 'not-an-array' },
+      { type: 'watch', v: 2, tokens: [7] },
+      { type: 'watch', v: 2, tokens: [''] },
+      { type: 'watch', v: 2, tokens: ['x'.repeat(65)] },
+      { type: 'watch', v: 2, tokens: Array.from({ length: 4097 }, (_, i) => `t${i}`) },
+      { type: 'watch', v: 3, tokens: ['t'] },
+    ];
+    for (const frame of bad) expect(() => bob.frame(frame)).not.toThrow();
+    expect(sentOfType(alice, 'leave')).toEqual([]);
+  });
+
+  it('ignores tokens from a socket that has not joined, or was replaced', () => {
+    const relay = new WebSocketRelay();
+    const alice = join(relay, 'alice');
+    present(alice, ['t']);
+    const lurker = connect(relay);
+    present(lurker, ['t']);
+    expect(sentTypes(alice)).toEqual(['peer']);
+    expect(lurker.send).not.toHaveBeenCalled();
   });
 });
 

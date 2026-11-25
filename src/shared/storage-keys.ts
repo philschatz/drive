@@ -43,6 +43,13 @@ export const KEYS = {
    */
   lastViewedHeads: 'data:last-viewed-heads',
   /**
+   * The devices this one was linked with that keyhive does not list yet
+   * (`LinkedDevices`, discovery-tokens.ts): what lets the two devices of a
+   * link find each other at the relay before the group has synced. Entries
+   * leave by themselves; usually empty.
+   */
+  linkedDevices: 'data:auth:linked-devices',
+  /**
    * Written once by the keyhive-format reset (keyhive-format.ts): what the home
    * list, the settings value and the user-group id were *before* the reset
    * cleared them. The old documents' storage chunks are left on disk, and this

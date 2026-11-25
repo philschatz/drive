@@ -11,7 +11,7 @@
  */
 import type { SettingName, SettingsSchema } from './storage-keys';
 import type { WorkerToMain } from './worker-protocol';
-import type { RelayWatchFrame } from './relay-identity';
+import type { RelayTokenFrame } from './relay-identity';
 
 /**
  * The persistence surface the engine needs (the browser gets this from
@@ -33,7 +33,7 @@ export interface KVStore {
  *  rendezvous control/data, or the relay discovery declaration (RELAY_WATCH). */
 export type OverlayFrame =
   | { type: string; rendezvousId: string; data?: Uint8Array }
-  | RelayWatchFrame;
+  | RelayTokenFrame;
 
 /**
  * Transport abstraction. The host owns the actual socket and the automerge-repo

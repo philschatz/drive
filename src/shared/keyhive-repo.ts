@@ -58,6 +58,7 @@ import type { RelatedDevice } from './keyhive-types';
 import { agentIdOfPeerId } from './peer-id';
 import { RELAY_PEER_ID } from './relay-identity';
 import { WRTC_SIGNAL } from './webrtc-signal';
+import { agreementKeyOf, makeDiscoveryTokenBuilder } from './discovery-tokens';
 import { isWebRTCSignal, type WebRTCRelayAdapter } from './webrtc-relay-adapter';
 import { ensureKeyhiveStorageUsable } from './keyhive-format';
 import { makeSecureChannelAdapter, type SecureChannelControl, type SecureChannelTimings } from './secure-channel';
@@ -171,6 +172,12 @@ export interface KeyhiveRepo {
    * change it that keyhive itself does not announce (the friend roster).
    */
   relations: { get(): Promise<Map<string, RelatedDevice>>; invalidate(): void };
+  /**
+   * What this device presents to the relay to be introduced (discovery-tokens.ts):
+   * tokens for every related device, and for the devices named besides — the
+   * other device of a link keyhive does not list yet.
+   */
+  discoveryTokens(alsoDeviceKeys?: Iterable<string>, now?: number): Promise<string[]>;
   /**
    * Stop the hive (its sync timers, its network adapter) and shut the Repo
    * down, flushing storage. Nothing here is usable afterwards. The app never
@@ -604,6 +611,16 @@ export async function createKeyhiveRepo(opts: CreateKeyhiveRepoOptions): Promise
     };
   }
 
+  // ── Discovery (discovery-tokens.ts) ────────────────────────────────────────
+  // The tokens this device presents to the relay: one pair of them per related
+  // device, from a secret the two derive from each other's keys.
+  const agreementKey = devicePrivateKey.then(agreementKeyOf);
+  // Without it there are no pair secrets, and this device would meet nobody.
+  agreementKey.catch((err) => log.error('the device key cannot be used for discovery:', err));
+  const tokenBuilder = makeDiscoveryTokenBuilder(agreementKey);
+  const discoveryTokens = async (alsoDeviceKeys: Iterable<string> = [], now?: number): Promise<string[]> =>
+    tokenBuilder.tokens([...(await relations.get()).keys(), ...alsoDeviceKeys], now);
+
   // Save the full keyhive archive (debounced) after every keyhive event.
   //
   // The bridge writes each event to storage as it is emitted, and the prekey
@@ -676,6 +693,7 @@ export async function createKeyhiveRepo(opts: CreateKeyhiveRepoOptions): Promise
   return {
     decodeHeads: (heads: string[]) => repoModule.decodeHeads(heads),
     repo, khOps, integration, bridge,
-    Automerge, Presence, amDocIdFromBytes, khDocIdFromAm, setNextDocId, channel: secure.channel, links, relations, close,
+    Automerge, Presence, amDocIdFromBytes, khDocIdFromAm, setNextDocId, channel: secure.channel, links, relations,
+    discoveryTokens, close,
   };
 }

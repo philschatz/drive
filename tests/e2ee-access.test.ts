@@ -159,8 +159,13 @@ describe('who a document reaches', () => {
     const { docId, handle } = await createSharedDoc(alice, bob, { note: 'MARKER-for-the-real-bob-5512' });
     await openDoc(bob, docId);
 
-    // bob goes offline; the impostor takes his place at the relay, peerId and group and all.
+    // bob goes offline; the impostor takes his place at the relay: his peerId,
+    // and the tokens he declared. Knowing bob's group id would get it nowhere
+    // (tests/e2ee-discovery.test.ts) — the tokens are what someone who had
+    // watched the relay's traffic today, or the relay itself, could replay.
     const bobsPeerId = bob.peerId;
+    const bobsTokens = bob.declaredTokens();
+    expect(bobsTokens.length).toBeGreaterThan(0);
     await bob.close();
     await waitFor(() => !alice.connectedPeerIds().includes(bobsPeerId), 'alice to see bob leave');
 
@@ -169,7 +174,7 @@ describe('who a document reaches', () => {
     await new Promise<void>((resolve, reject) => { socket.once('open', () => resolve()); socket.once('error', reject); });
     socket.on('message', (raw: Buffer) => { try { received.push(decode(new Uint8Array(raw))); } catch { /* ignore */ } });
     socket.send(cbor.encode({ type: 'join', senderId: bobsPeerId, supportedProtocolVersions: ['1'] }));
-    socket.send(cbor.encode({ type: 'watch', group: bob.groupId, watch: [alice.groupId, carol.groupId] }));
+    socket.send(cbor.encode({ type: 'watch', v: 2, tokens: bobsTokens }));
     try {
       // The relay believes it: alice is introduced to "bob" again.
       await waitFor(() => received.some((m) => m.type === 'peer' && m.senderId === alice.peerId), 'the relay to introduce alice to the impostor');

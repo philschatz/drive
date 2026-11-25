@@ -75,20 +75,27 @@ describe('direct connections', () => {
 
   maybeIt('negotiates with nothing it is not related to: no key, or a key of its own', async () => {
     const alice = await start('alice');
-    alice.watch([]);
+    const bob = await start('bob');
+    await befriend(alice, bob);
+    // What gets something introduced to alice is a token she declares — she
+    // has one for bob's device. These two hold no secret of hers; they replay
+    // her declaration, as something that had watched the relay's traffic
+    // today — or the relay — could.
+    await waitFor(() => alice.declaredTokens().length > 0, 'alice to declare herself');
+    const stolen = { type: 'watch', v: 2, tokens: alice.declaredTokens() };
 
-    // Something that holds no key at all, and only knows alice's group id.
+    // Something that holds no key at all.
     const received: any[] = [];
     const sock = new WebSocket(relay.url);
     await new Promise<void>((resolve) => sock.on('open', () => resolve()));
     sock.on('message', (raw: Buffer) => { try { received.push(decode(new Uint8Array(raw))); } catch { /* not a frame */ } });
     sock.send(cbor.encode({ type: 'join', senderId: `${'z'.repeat(43)}=-nokey`, peerMetadata: {}, supportedProtocolVersions: ['1'] }));
     await sleep(200);
-    sock.send(cbor.encode({ type: 'watch', group: alice.groupId, watch: [] }));
+    sock.send(cbor.encode(stolen));
 
-    // A real device with a key of its own, announcing alice's group as its own.
+    // A real device with a key of its own, presenting alice's tokens as its own.
     const mallory = await start('mallory');
-    mallory.sendRelayFrame({ type: 'watch', group: alice.groupId, watch: [] });
+    mallory.sendRelayFrame(stolen);
     await waitFor(
       () => alice.kr.channel.describe().some((p) => p.peerId === mallory.peerId && p.state === 'secure'),
       'mallory to prove its own key to alice');
@@ -100,9 +107,11 @@ describe('direct connections', () => {
     await waitFor(() => fromMallory() > before, 'mallory\'s offer to cross the relay');
     await sleep(2_000);
 
-    // Alice's RTC stack was never touched: nothing asked it to connect, and
-    // nothing handed it a signal. So no candidate of hers was ever produced.
-    expect(alice.directAttempts()).toEqual([]);
+    // Alice's RTC stack was never touched on their account: nothing asked it
+    // to connect to either, and nothing handed it a signal from either. So no
+    // candidate of hers was ever produced for them. (bob, her friend, is
+    // another matter.)
+    expect(alice.directAttempts().filter((peerId) => peerId !== bob.peerId)).toEqual([]);
     expect(alice.transportOf(mallory.peerId)).toBe('relay');
     expect(received.filter((m) => m?.type === 'wrtc-signal')).toEqual([]);
     expect(received.some((m) => m?.type === 'peer')).toBe(true); // it WAS introduced

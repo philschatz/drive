@@ -12,6 +12,7 @@
  */
 import { DriveEngine } from '../src/shared/drive-engine';
 import { RDV_SUB, RDV_UNSUB, RDV_MSG, RDV_PEER } from '../src/shared/rendezvous-protocol';
+import { KEYS } from '../src/shared/storage-keys';
 
 const tick = (ms = 0) => new Promise<void>((r) => setTimeout(r, ms));
 async function waitFor(check: () => boolean, what: string): Promise<void> {
@@ -61,16 +62,31 @@ interface Device {
   adoptDriveSettingsDoc: jest.Mock;
   status(rendezvousId: string): string[];
   last(rendezvousId: string, status: string): any;
+  /** The devices it remembers from a link (what it will present a token for at the relay). */
+  remembered(): Record<string, number>;
+  /** 'remembered' and 'linked', in the order they happened. */
+  order: string[];
 }
 
 function makeDevice(relay: ReturnType<typeof makeRelay>, name: string, groupId: string | null): Device {
   const events: any[] = [];
+  const kv = new Map<string, any>();
   const engine: any = new DriveEngine({
     emit: (e: any) => events.push(e),
     network: { sendOverlayFrame: (frame: any) => relay.handle(device, frame) },
+    kv: {
+      get: async (k: string) => kv.get(k) ?? null,
+      set: async (k: string, v: any) => {
+        if (k === KEYS.linkedDevices) order.push('remembered');
+        kv.set(k, structuredClone(v));
+      },
+      del: async (k: string) => { kv.delete(k); },
+    },
   } as any);
   const agentId = `agent-${name}`;
+  const order: string[] = [];
   const linkDevice = jest.fn(async (_agentId: string, peerGroupId?: string | null) => {
+    order.push('linked');
     groupId = groupId ?? peerGroupId ?? null;
     return { userGroupId: groupId, linked: true };
   });
@@ -98,6 +114,8 @@ function makeDevice(relay: ReturnType<typeof makeRelay>, name: string, groupId: 
     name, agentId, engine, events, linkDevice, putDeviceName, adoptDriveSettingsDoc,
     status: (rid) => rdvEvents(rid).map((e) => e.status),
     last: (rid, status) => rdvEvents(rid).filter((e) => e.status === status).at(-1),
+    remembered: () => kv.get(KEYS.linkedDevices) ?? {},
+    order,
   };
   return device;
 }
@@ -144,6 +162,9 @@ describe('linking a device', () => {
 
   it('links both ways once the person confirms', async () => {
     const { relay, laptop, phone, rendezvousId, joining, answer } = await untilAsked();
+    // Asked, not answered: neither presents anything for the other yet.
+    expect(laptop.remembered()).toEqual({});
+    expect(phone.remembered()).toEqual({});
     await answer(true);
     await expect(joining).resolves.toEqual({ ok: true });
 
@@ -155,6 +176,13 @@ describe('linking a device', () => {
     expect(laptop.putDeviceName).toHaveBeenCalledWith(laptop.agentId, 'Laptop');
     expect(laptop.status(rendezvousId).at(-1)).toBe('linked');
     expect(phone.status(rendezvousId).at(-1)).toBe('linked');
+    // Each remembers the other from the link — which is how the relay will
+    // introduce them before the group has reached the phone — and did so
+    // before it asked keyhive to link.
+    expect(Object.keys(laptop.remembered())).toEqual([phone.agentId]);
+    expect(Object.keys(phone.remembered())).toEqual([laptop.agentId]);
+    expect(laptop.order).toEqual(['remembered', 'linked']);
+    expect(phone.order).toEqual(['remembered', 'linked']);
     // Both have left the topic, and neither keeps a session.
     expect(relay.on(rendezvousId)).toEqual([]);
     expect(laptop.engine.rdvSessions.size + phone.engine.rdvSessions.size).toBe(0);
@@ -169,6 +197,9 @@ describe('linking a device', () => {
     expect(phone.adoptDriveSettingsDoc).not.toHaveBeenCalled();
     expect(phone.status(rendezvousId).at(-1)).toBe('error');
     expect(relay.on(rendezvousId)).toEqual([]);
+    // Neither will present anything for the other at the relay.
+    expect(laptop.remembered()).toEqual({});
+    expect(phone.remembered()).toEqual({});
     // The answer was final: saying yes afterwards does nothing.
     await answer(true);
     expect(laptop.linkDevice).not.toHaveBeenCalled();

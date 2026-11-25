@@ -202,6 +202,7 @@ export async function resetKeyhiveState(
     }
 
     await kv.del(KEYS.userGroupId);
+    await kv.del(KEYS.linkedDevices);
     if (settings && typeof settings === 'object') {
       const blob = settings as { deviceNames?: Record<string, string> };
       await kv.set(KEYS.driveSettings, {

@@ -29,7 +29,8 @@ import { WebSocketRelay, createRelayWebSocketServer } from '../../src/relay/rela
 import { createKeyhiveRepo, type KeyhiveRepo } from '../../src/shared/keyhive-repo';
 import { installOverlayIntercept, makeOverlayFrameSender } from '../../src/shared/relay-overlay';
 import { makeWebRTCRelayAdapter } from '../../src/shared/webrtc-relay-adapter';
-import { RELAY_PEER_ID, buildRelayWatchFrame } from '../../src/shared/relay-identity';
+import { RELAY_PEER_ID, buildRelayTokenFrame, type RelayTokenFrame } from '../../src/shared/relay-identity';
+import { pendingLinkedDevices, type LinkedDevices } from '../../src/shared/discovery-tokens';
 import { startWebRTCBridgeCore } from '../../src/shared/webrtc-bridge-core';
 import { createWeriftPeerConnection } from '../../src/cli/werift-rtc';
 import type { MemberRole } from '../../src/shared/keyhive-types';
@@ -126,8 +127,24 @@ export interface HarnessPeer {
   storage: MemStorage;
   /** The user's keyhive user-group id (base64) — what a friend shares a document with. */
   groupId: string;
-  /** Tell the relay who this peer is and whose devices it wants to be introduced to. */
+  /**
+   * Set this peer's friend roster and declare itself to the relay, as the
+   * engine's `refreshRelayWatch` does: the discovery tokens for every device it
+   * is related to (its own, the roster's, the co-members of its documents) and
+   * for a device it was just linked with. Declared again by itself whenever
+   * keyhive learns something, since that can change who it is related to.
+   */
   watch(knownGroupIds: string[]): void;
+  /** The groups this peer last named as its friends. */
+  watching(): string[];
+  /** The tokens this peer last declared to the relay. */
+  declaredTokens(): string[];
+  /** The devices this one was linked with that keyhive does not list yet (what the engine keeps in its store). */
+  linkedDevices(): LinkedDevices;
+  /** Remember the other device of a link just made, as the engine does when a link is accepted. */
+  rememberLinkedDevice(agentId: string): void;
+  /** Remove one of this user's devices from the user's group, as Settings → Devices does. */
+  removeDevice(device: HarnessPeer): Promise<void>;
   /** PeerIds the Repo currently lists as connected, minus the relay itself. */
   connectedPeerIds(): string[];
   /** Cut this peer's relay socket; the adapter reconnects on its own, as after a network blip. */
@@ -166,6 +183,12 @@ export interface StartPeerOptions {
    * loopback), as the CLI does. Without it a peer can never leave the relay.
    */
   webrtc?: boolean;
+  /**
+   * Start as a new device of that peer's user: linked into its user group the
+   * way the QR device link does it (engine-rendezvous.ts), with the contact
+   * cards handed over directly. The two are then one user with two devices.
+   */
+  deviceOf?: HarnessPeer;
 }
 
 export async function startPeer(name: string, relayUrl: string, opts: StartPeerOptions = {}): Promise<HarnessPeer> {
@@ -208,7 +231,20 @@ export async function startPeer(name: string, relayUrl: string, opts: StartPeerO
   // is per socket, so the declaration is sent again, and sessions made over the
   // previous socket end (the relay re-introduces the peers).
   let kr: KeyhiveRepo | null = null;
-  let declared: ReturnType<typeof buildRelayWatchFrame> | null = null;
+  let declared: RelayTokenFrame | null = null;
+  // Devices remembered from a link, which the engine keeps in its key-value store.
+  let linked: LinkedDevices = { ...(opts.reloadOf?.linkedDevices() ?? {}) };
+  let watching = false;
+  // What the engine's refreshRelayWatch does: declare the tokens, if they changed.
+  const declare = async (): Promise<void> => {
+    if (!watching || !kr) return;
+    const related = await kr.relations.get();
+    linked = pendingLinkedDevices(linked, (key) => related.has(key), Date.now());
+    const frame = buildRelayTokenFrame(await kr.discoveryTokens(Object.keys(linked)));
+    if (JSON.stringify(frame) === JSON.stringify(declared)) return;
+    declared = frame;
+    sendOverlayFrame(frame);
+  };
   // The friend roster, which the engine keeps in its settings: the groups this
   // peer was last told to watch.
   let roster: string[] = [];
@@ -240,24 +276,63 @@ export async function startPeer(name: string, relayUrl: string, opts: StartPeerO
     getUserGroupId: async () => userGroupId,
     setUserGroupId: async (id) => { userGroupId = id; },
     friendGroupIds: () => roster,
+    // Keyhive learned something: who this device is related to may have changed.
+    onBeforeShareConfigChanged: () => { kr?.relations.invalidate(); void declare(); },
     ...timings,
   });
   const booted = kr;
-  const groupId = await booted.khOps.ensureUserGroup({ create: true });
+  let groupId: string | null;
+  if (opts.deviceOf) {
+    const first = opts.deviceOf;
+    await adapter.whenReady();
+    const mine = await first.kr.khOps.receiveContactCard(await booted.khOps.getContactCard());
+    const theirs = await booted.khOps.receiveContactCard(await first.kr.khOps.getContactCard());
+    // Each remembers the other from the link: presenting that pair's token is
+    // how the relay comes to introduce the two before keyhive lists them.
+    first.rememberLinkedDevice(mine.agentId);
+    linked[theirs.agentId] = Date.now();
+    watching = true;
+    await declare();
+    // The first device (the group's admin) adds this one; this one adopts the
+    // group, which waits for the group's operations to arrive.
+    await first.kr.khOps.linkDevice(mine.agentId, first.groupId);
+    const { userGroupId: adopted } = await booted.khOps.linkDevice(theirs.agentId, first.groupId);
+    groupId = adopted;
+    first.kr.relations.invalidate();
+    booted.relations.invalidate();
+  } else {
+    groupId = await booted.khOps.ensureUserGroup({ create: true });
+    await adapter.whenReady();
+  }
   if (!groupId) throw new Error(`${name}: no user group`);
-  await adapter.whenReady();
+  const ownGroupId = groupId;
 
   return {
     name,
     kr: booted,
     peerId: booted.repo.peerId,
     storage,
-    groupId,
+    groupId: ownGroupId,
     watch: (knownGroupIds) => {
       roster = [...knownGroupIds];
+      watching = true;
       booted.relations.invalidate();
-      declared = buildRelayWatchFrame(groupId, knownGroupIds);
-      sendOverlayFrame(declared);
+      void declare();
+    },
+    watching: () => [...roster],
+    declaredTokens: () => [...(declared?.tokens ?? [])],
+    linkedDevices: () => ({ ...linked }),
+    rememberLinkedDevice: (agentId) => {
+      linked[agentId] = Date.now();
+      watching = true;
+      booted.relations.invalidate();
+      void declare();
+    },
+    removeDevice: async (device) => {
+      const { agentId } = await device.kr.khOps.getIdentity();
+      await booted.khOps.removeDeviceFromGroup(agentId);
+      booted.relations.invalidate();
+      void declare();
     },
     connectedPeerIds: () => (booted.repo.peers as string[]).filter((id) => id !== RELAY_PEER_ID),
     dropSocket: () => ws.socket?.close(),

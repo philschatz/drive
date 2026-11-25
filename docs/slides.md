@@ -111,9 +111,9 @@ Links
 
 
 <!--
-- Each device declares its own user group plus the groups it knows (friends, doc co-members); the relay only introduces same-group devices and mutual watchers
+- Each device presents opaque daily tokens — one per related device, from a secret the two derive from each other's keys; the relay only introduces sockets presenting a token in common
 - Un-friending withdraws the match and the relay dissolves the pair — strangers sharing a relay never learn of each other
-- Group ids are self-asserted routing hints today; the HMAC daily token is designed and deferred
+- The relay is told no group id or friend list, and cannot link today's tokens to tomorrow's
 -->
 
 ---

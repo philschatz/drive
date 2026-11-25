@@ -49,18 +49,45 @@ export function isRelayLeaveFrame(decoded: any): decoded is { type: 'leave'; sen
 
 /**
  * Relay-protocol extension: a client's discovery declaration, sent right after
- * `join` and re-sent whenever the socket reopens or the roster changes (each
- * frame fully replaces the previous one). The relay introduces two sockets to
- * each other only when they announce the same `group` (one user's devices) or
- * when each one's `watch` names the other's `group` (mutual friends) — it
- * never announces peers beyond that, so strangers sharing a relay stay
- * invisible to each other. A device with no user group yet has nothing to
- * announce and simply doesn't send the frame (it can never pair anyway).
- * See the WebSocketRelay doc comment for the discovery rules and the known
- * limits of self-asserted group ids.
+ * `join` and re-sent whenever the socket reopens or what it declares changes
+ * (each frame fully replaces the previous one). The relay introduces two
+ * sockets to each other only when their declarations match — it never
+ * announces peers beyond that, so strangers sharing a relay stay invisible to
+ * each other. A device with nothing to declare sends no frame.
+ *
+ * Two forms share the frame type:
+ * - **Tokens** (`RelayTokenFrame`, `v: 2`): opaque daily tokens derived from
+ *   secrets the relay never sees (discovery-tokens.ts). Two sockets match when
+ *   they present a token in common. This is what current clients send.
+ * - **Group ids** (`RelayWatchFrame`): the sender's user-group id and the group
+ *   ids it knows, in the clear. What clients sent before tokens; the relay
+ *   still matches two such sockets with each other, for one release, so that
+ *   devices not yet updated keep finding one another. It never matches one
+ *   form with the other.
  */
 export const RELAY_WATCH = 'watch';
 
+/** Upper bounds the relay enforces on a token declaration. */
+export const RELAY_MAX_TOKENS = 4096;
+export const RELAY_MAX_TOKEN_LENGTH = 64;
+
+export interface RelayTokenFrame {
+  type: typeof RELAY_WATCH;
+  v: 2;
+  /** Today's and yesterday's discovery tokens (discovery-tokens.ts), sorted. */
+  tokens: string[];
+}
+
+export function isRelayTokenFrame(decoded: any): decoded is RelayTokenFrame {
+  return decoded?.type === RELAY_WATCH && decoded.v === 2 && Array.isArray(decoded.tokens);
+}
+
+/** The declaration for a set of tokens: deduplicated and sorted, so the same set is the same frame. */
+export function buildRelayTokenFrame(tokens: Iterable<string>): RelayTokenFrame {
+  return { type: RELAY_WATCH, v: 2, tokens: [...new Set(tokens)].sort() };
+}
+
+/** The group-id declaration of clients from before tokens. Current clients never send it. */
 export interface RelayWatchFrame {
   type: typeof RELAY_WATCH;
   /** Sender's own keyhive user-group id (base64). */
@@ -76,9 +103,8 @@ export function isRelayWatchFrame(decoded: any): decoded is RelayWatchFrame {
 }
 
 /**
- * Build the discovery declaration from the group ids the engine knows: dedupe,
- * drop self and empties, and sort — a stable serialization is what makes the
- * engine's sent-frame diff guard meaningful.
+ * Build the group-id declaration an older client sends: dedupe, drop self and
+ * empties, and sort. Kept for the relay's tests of that form.
  */
 export function buildRelayWatchFrame(group: string, knownGroupIds: Iterable<string>): RelayWatchFrame {
   const watch = [...new Set(knownGroupIds)].filter((g) => !!g && g !== group).sort();
